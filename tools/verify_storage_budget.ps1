@@ -59,6 +59,8 @@ foreach($required in @(
     'paging-write-evidence',
     'create-completion-evidence',
     'rename-completion-evidence',
+    'restart-create-evidence',
+    'restart-rename-evidence',
     'gate-event:'
 )){
     if($gateText -notmatch [regex]::Escape($required)){throw "Gate storage-budget invariant missing: $required"}

@@ -1,3 +1,18 @@
+# RansomGuard 0.7.21.0
+
+- Bumped the Engineering LAB minifilter wire protocol to v13.
+- Added an event-bound containment flag on RG_GATE_REPLY: containment can be requested only on the reply for an already preserved gate event.
+- The driver binds the exact FltGetRequestorProcess(Data) PEPROCESS for that IRP before allowing the preserved operation to continue; no second PID lookup is used for the transition.
+- Unknown reply flags and containment flags attached to denied/unpreserved operations are rejected fail-closed.
+- Added no-reply ContainmentActivated kernel evidence correlated to the exact gate sequence.
+- Added a write-through SHA-256 hash-chained containment journal with durable Requested and KernelActive phases, including process creation time, trigger counters, path, event type and preservation decision.
+- GateClient can explicitly authorize a LAB transition target with --contain-after-pid, while holding the exact process handle open to prevent silent PID-reuse authorization.
+- Transition thresholds are bounded and explicit; default LAB values are four preserved mutation events across two distinct paths. Pre-armed --contain-pid and event-bound transition modes are mutually exclusive.
+- A session with a containment request but no matching kernel-active receipt is marked Faulted rather than cleanly Completed.
+- Added rollback journal tests and a disposable-VM scenario proving preserved mutations reach the threshold, the exact requestor is latched, the next mutation is denied, and the request/activation evidence chain is durable.
+- Ordinary product service behavior remains AuditOnly; production detector-to-containment authorization is not enabled.
+- Bumped userspace/LAB and driver package version to 0.7.21.0.
+
 # RansomGuard 0.7.20.0
 
 - Added minifilter protocol v12 with an explicit LAB-only atomic activation-and-containment command.

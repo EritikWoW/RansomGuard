@@ -1,4 +1,4 @@
-# RansomGuard minifilter engineering lab — v0.7.17.0
+# RansomGuard minifilter engineering lab — v0.7.18.0
 
 The minifilter has two mutually exclusive user-mode connection modes:
 
@@ -9,13 +9,13 @@ The minifilter has two mutually exclusive user-mode connection modes:
 The LAB Gate exists to validate preservation ordering. It is **not** a production driver configuration.
 Do not load it on a primary workstation and do not point it at real documents.
 
-On startup, v0.7.17.0 also scans older pending CREATE/RENAME intents under the same LAB root and appends conservative restart evidence (path state + FILE_ID_INFO when available). This evidence is diagnostic/recovery input only and never substitutes for the original kernel completion event.
+On startup, v0.7.18.0 also scans older pending CREATE/RENAME intents under the same LAB root and appends conservative restart evidence (path state + FILE_ID_INFO when available). This evidence is diagnostic/recovery input only and never substitutes for the original kernel completion event.
 
 Protocol v11 also observes paging writes on streams that were successfully opened inside the LAB root. The driver uses a pre-established nonpaged stream context and emits no-reply evidence only; it does not run a filesystem name query or synchronous preservation gate in the paging path. Treat these events as visibility, not as proof that memory-mapped writes are recoverable.
 
 ## Activation preflight
 
-A v0.7.17.0 LAB connection is not active immediately after `FilterConnectCommunicationPort`. GateClient first scans all existing non-reparse files under the disposable root. For every file, the kernel post-CREATE probe records final path/FILE_ID_INFO and tests `MmDoesFileHaveUserWritableReferences`.
+A v0.7.18.0 LAB connection is not active immediately after `FilterConnectCommunicationPort`. GateClient first scans all existing non-reparse files under the disposable root. For every file, the kernel post-CREATE probe records final path/FILE_ID_INFO and tests `MmDoesFileHaveUserWritableReferences`.
 
 If any file already has a user-writable mapped view, if a probe cannot be completed authoritatively, or if a pre-existing write/delete handle prevents the read-shared probe from opening the file, activation is refused. GateClient keeps every successful read-shared probe handle open until the explicit `ActivateGate` message succeeds, preventing a new write/delete handle from racing the rest of the scan.
 
@@ -83,6 +83,16 @@ Activation, paging, writable-section and completion evidence journals use the sa
 
 There is no `--disable-budget`, unlimited mode, or automatic free-space override.
 
+## Rollback retention maintenance
+
+0.7.18 adds LAB-only `RollbackMaintenance\RansomGuard.RollbackMaintenance.exe` plus `rollback_maintenance.cmd`.
+
+Retention is never automatic. Generate a plan first, review candidates/issues, then execute that exact plan. Default policy is 30 days, 32 GiB managed completed storage and a 24-hour minimum age for pressure cleanup.
+
+Only lifecycle-Completed, unheld sessions with no pending CREATE/RENAME intent can become new purge candidates. Active, Faulted, Held and legacy sessions remain protected.
+
+Cleanup is staged through `Retired\<session>` and the repository-level retention journal before deletion. See `docs/ROLLBACK_RETENTION.md`.
+
 ## Safety boundaries
 
 - Demand-start driver only.
@@ -108,7 +118,7 @@ Build the engineering package:
 .\build_lab.cmd
 ```
 
-Then, from the generated `RansomGuard-Lab-v0.7.17.0-*` directory, build/install the minifilter only in a
+Then, from the generated `RansomGuard-Lab-v0.7.18.0-*` directory, build/install the minifilter only in a
 Windows test VM using the existing lab scripts.
 
 ## Audit mode

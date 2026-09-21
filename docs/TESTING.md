@@ -49,6 +49,8 @@ Use an isolated test environment and snapshots for fault injection.
 
 The rollback policy tests exercise every supported Windows create disposition against existing and missing
 file states. Existing `SUPERSEDE`, `OVERWRITE` and `OVERWRITE_IF` must select a full pre-image.
+An existing file opened with `FILE_DELETE_ON_CLOSE` must also select a full pre-image, while an existing
+directory with delete-on-close is denied as unsupported topology mutation.
 Missing `SUPERSEDE`, `CREATE`, `OPEN_IF` and `OVERWRITE_IF` must select an originally-absent
 baseline. Invalid disposition values are rejected.
 

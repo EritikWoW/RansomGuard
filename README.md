@@ -25,14 +25,12 @@ undone by truncating the recovered copy to that length.
 Rename, delete-disposition and explicit truncate/allocation-length operations remain on the conservative
 **full-file pre-image** path for now.
 
-The engineering minifilter protocol is now v8 and reports CREATE, WRITE, RENAME, DELETE and TRUNCATE-class metadata operations. RENAME events also carry a normalized destination path.
+The engineering minifilter protocol is v9 and reports CREATE, WRITE, paging-WRITE evidence, RENAME, DELETE and TRUNCATE-class metadata operations. RENAME events also carry a normalized destination path.
 
 For CREATE, the gate distinguishes Windows create dispositions instead of treating every open as destructive:
 existing `FILE_SUPERSEDE`, `FILE_OVERWRITE` and `FILE_OVERWRITE_IF` require a durable full pre-image;
 `FILE_DELETE_ON_CLOSE` also requires a pre-image for an existing file even with an ordinary open;
-create-capable dispositions on a missing path durably record that the path was originally absent; ordinary
-non-destructive opens require no snapshot. Existing-directory delete-on-close is denied until directory-topology rollback exists. Paths marked originally absent do not later manufacture rollback
-pre-images from data created during the same incident.
+create-capable dispositions on a missing path durably record that the path was originally absent. Starting with 0.7.11, an existing file opened through FILE_OPEN/FILE_OPEN_IF with FILE_WRITE_DATA, GENERIC_WRITE, GENERIC_ALL, or MAXIMUM_ALLOWED also receives a conservative full pre-image before the handle is allowed. This deliberately trades storage amplification for a safe baseline before a handle can be used to create a writable file mapping. Read-only opens still require no CREATE-time snapshot. Existing-directory delete-on-close is denied until directory-topology rollback exists. Paths marked originally absent do not later manufacture rollback pre-images from data created during the same incident.
 
 Protocol v9 now also treats CREATE as a two-phase durable transaction. Before allow, the gate records a
 hash-chained CREATE intent linked to the preservation proof. After the filesystem completes the operation,
@@ -55,7 +53,9 @@ rejected. If reconciliation cannot be delivered, the intent remains pending inst
 
 On LAB gate restart, every older pending CREATE/RENAME intent under the same explicit root is now re-observed before a new session starts. RansomGuard records current path/file-identity evidence in a separate write-through SHA-256 hash-chained restart journal. Evidence can support completed, support not-completed, be indeterminate, or ambiguous. It never manufactures a filesystem completion record: authoritative completion still requires the original kernel post-operation result.
 
-Protocol v9 also removes the previous blind skip of paging-write callbacks. After a successful in-scope CREATE, the minifilter attaches a nonpaged stream context containing the bounded tracked path and kernel file identity when available. A later paging write retrieves only that stream context and queues a no-reply `PagingWrite` event; it does not query file names, call the blocking gate, or perform filesystem I/O in the paging path. GateClient persists these observations in a separate hash-chained `paging-write-journal.jsonl`. This is visibility/evidence, not preservation: memory-mapped modifications are still not claimed recoverable until a safe pre-preservation design is validated.
+Protocol v9 also removes the previous blind skip of paging-write callbacks. After a successful in-scope CREATE, the minifilter attaches a nonpaged stream context containing the bounded tracked path and kernel file identity when available. A later paging write retrieves only that stream context and queues a no-reply `PagingWrite` event; it does not query file names, call the blocking gate, or perform filesystem I/O in the paging path. GateClient persists these observations in a separate hash-chained `paging-write-journal.jsonl`.
+
+For handles opened after the LAB gate is active, 0.7.11 pre-preserves an existing file whenever CREATE requests write-capable access. Microsoft requires a file handle with write access for PAGE_READWRITE/PAGE_EXECUTE_READWRITE mappings, so those newly opened writable mappings now have a committed full-file baseline before section creation. Paging events remain evidence-only and are not themselves used as a blocking rollback path.
 
 ## Recovery safety
 
@@ -124,6 +124,7 @@ Bounded concurrent gate admission/workers are now implemented with a kernel cap 
 Restart evidence for pending/missing CREATE/RENAME completion events is durable and conservative; authoritative completion is never inferred from a restart probe. Paging writes on streams opened through the LAB gate are now visible as durable evidence without synchronously blocking the paging path.
 
 Remaining core work includes deeper crash recovery for in-flight kernel requests,
-safe pre-preservation for writable memory mappings/cache-manager paging writes,
+coverage for writable mappings created from handles that predate LAB-gate attachment plus live mmap fault-injection validation,
+storage-pressure-aware optimization of eager full pre-images,
 containment policy, process-state capture, adaptive crypto reconstruction, verified recovery orchestration,
 driver signing and Microsoft-assigned production altitude.

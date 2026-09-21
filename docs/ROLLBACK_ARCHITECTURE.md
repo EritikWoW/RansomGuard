@@ -341,7 +341,7 @@ The storage walk refuses reparse-point files/directories. The LAB client exposes
 
 Every new session gets a write-through SHA-256 hash-chained lifecycle journal. GateClient records Completed only after worker drain, repository verification, no worker failure and no pending CREATE/RENAME intent. Faulted, Active, Held, legacy-unmanaged and pending-transaction sessions are retention-protected.
 
-Retention planning is manual and read-only. It binds the current inventory into SHA-256 digests and a deterministic PlanId. Defaults are 30-day completed age, 32 GiB completed-storage cap and a 24-hour minimum age for pressure-driven purge. Protected completed bytes remain counted; if they prevent reaching the cap, UnresolvedExcessBytes remains nonzero rather than weakening protection.
+Retention planning is manual and read-only. It binds the current inventory into SHA-256 digests and a deterministic PlanId. Destructive execution and lifecycle Hold changes share one repository-wide cross-process maintenance lease, preventing a Hold from racing the final revalidation-to-purge window. Defaults are 30-day completed age, 32 GiB completed-storage cap and a 24-hour minimum age for pressure-driven purge. Protected completed bytes remain counted; if they prevent reaching the cap, UnresolvedExcessBytes remains nonzero rather than weakening protection.
 
 Purge is staged and crash-resumable: append PurgeStarted, atomically move Sessions/<id> to Retired/<id>, append Quarantined, delete only the quarantined tree through reparse-safe traversal, then append PurgeCompleted. Incomplete chains are recognized by the next plan and resumed conservatively.
 

@@ -1,8 +1,8 @@
-# RansomGuard 0.7.2.0 - range-aware pre-write COW milestone
+# RansomGuard 0.7.3.0 - CREATE-aware preservation milestone
 
 RansomGuard is moving from detection-only telemetry to `preserve -> contain -> recover`.
-0.7.2.0 keeps the deliberately constrained engineering minifilter gate and changes ordinary WRITE
-preservation from whole-file snapshots to incident-scoped range/block copy-on-write.
+0.7.3.0 retains the deliberately constrained engineering minifilter gate, range-aware WRITE COW,
+and adds explicit CREATE preservation semantics.
 
 ## WRITE ordering
 
@@ -29,12 +29,35 @@ Rename, delete-disposition, end-of-file, allocation-length and valid-data-length
 full-file pre-image store. These operations can destroy or relocate information in ways that are not yet modeled
 as block-only transactions.
 
-Protocol v3 therefore exposes four mutation classes:
+Protocol v4 exposes five mutation classes:
 
+- CREATE
 - WRITE
 - RENAME
 - DELETE
 - TRUNCATE
+
+## CREATE ordering
+
+For `IRP_MJ_CREATE`, protocol v4 carries the original Windows CreateDisposition/CreateOptions before
+the create completes.
+
+- If an existing file is opened with `FILE_SUPERSEDE`, `FILE_OVERWRITE` or `FILE_OVERWRITE_IF`,
+  the gate commits a conservative full-file pre-image before allowing the operation.
+- If the target is missing and the disposition can create it (`FILE_SUPERSEDE`, `FILE_CREATE`,
+  `FILE_OPEN_IF`, `FILE_OVERWRITE_IF`), `CreateRollbackStore` commits an append-only SHA-256
+  hash-chained `originally absent` baseline.
+- `FILE_DELETE_ON_CLOSE` on an existing file requires the same conservative full pre-image even with `FILE_OPEN`.
+- Existing-directory delete-on-close is denied because directory-topology rollback is not modeled yet.
+- `FILE_OPEN` / existing `FILE_OPEN_IF` without destructive create options need no preservation at CREATE time; later WRITE is still gated.
+- Once a path is marked originally absent, later WRITE/rename/delete/truncate events do not capture incident-created
+  bytes as if they were pre-incident data.
+
+The absence journal never deletes a created file automatically. It records recovery intent only; final recovery
+orchestration must decide how to quarantine/remove an incident-created path.
+
+The current existence probe is path-based. A race between that probe and the kernel create is still possible;
+production requires durable file identity plus post-create reconciliation.
 
 ## Range recovery
 
@@ -61,8 +84,10 @@ The prototype gates one explicit root negotiated at connection time. The gate cl
 The rollback store must live outside the gated root. The gate client's PID is excluded in kernel mode to avoid
 self-deadlock while it writes rollback data.
 
-Outside the exact root, or when the path cannot be resolved, the driver fails open. When no client is connected,
-it does not gate anything. The filter remains demand-start, automatic attachment is suppressed, and
+Outside the exact root, or when the name query fails before the root can be established, the driver fails open.
+If the bounded event path is truncated only after its prefix has already proven it is inside the gate root, user mode denies
+the operation rather than committing preservation state for an ambiguous path. When no client is connected, the driver
+does not gate anything. The filter remains demand-start, automatic attachment is suppressed, and
 `370099.4242` remains an unassigned LAB altitude.
 
 The normal product bundle does not install or enable this driver. Ordinary product operation remains AuditOnly.
@@ -76,14 +101,14 @@ Rollback startup validation now treats ambiguous durable state as a hard failure
 - unjournaled range `.block` objects are rejected;
 - leftover `.tmp` artifacts are rejected as incomplete capture evidence;
 - range block geometry must exactly match the recorded original file length and configured block size;
-- repository-wide verification also descends into each session's nested `write-cow` store;
+- repository-wide verification descends into each session's nested `write-cow` and `create-state` stores;
 - the LAB gate validates all existing sessions before opening a new one.
 
 These checks do not yet reconcile an interrupted in-flight kernel request. They prevent a restart from proceeding on top of rollback state whose commit boundary is ambiguous.
 
 ## Still required before production
 
-- explicit create/new-file transaction semantics;
+- post-create identity reconciliation and tunneled-name/file-ID confirmation;
 - rename destination capture and identity-safe rename rollback;
 - durable file identity (volume + file ID), not path identity alone;
 - bounded concurrent pending-I/O workers;

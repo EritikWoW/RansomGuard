@@ -1,10 +1,10 @@
-# RansomGuard minifilter engineering lab — v0.7.1.0
+# RansomGuard minifilter engineering lab — v0.7.3.0
 
 The minifilter has two mutually exclusive user-mode connection modes:
 
-- **Audit** — metadata-only, non-blocking WRITE / rename / delete-disposition observation.
+- **Audit** — metadata-only, non-blocking CREATE / WRITE / rename / delete-disposition / truncate observation.
 - **LAB Gate** — one explicit disposable directory is synchronously gated so a destructive mutation is
-  allowed only after the rollback client confirms a durable first pre-image commit.
+  allowed only after the rollback client returns an explicit preservation decision.
 
 The LAB Gate exists to validate preservation ordering. It is **not** a production driver configuration.
 Do not load it on a primary workstation and do not point it at real documents.
@@ -20,8 +20,9 @@ Do not load it on a primary workstation and do not point it at real documents.
 - Entire-drive, Windows, Program Files, ProgramData and reparse roots are refused by the gate client.
 - The gate client PID is excluded from kernel gating.
 - I/O outside the exact gate root remains fail-open.
-- Unresolved paths remain fail-open rather than risking OS-wide denial.
-- In-scope LAB I/O is denied if the user-mode pre-image commit fails or the reply times out.
+- Name-query failures remain fail-open rather than risking OS-wide denial.
+- A truncated name whose known prefix is already inside the gate root is sent to user mode and denied; no snapshot or absence baseline is committed against an ambiguous path.
+- In-scope LAB I/O is denied if required user-mode preservation fails or the reply times out.
 - The driver still contains no kernel file-writing, file-deletion, process-kill or process-suspend code.
 - Altitude `370099.4242` is an unassigned lab placeholder and must never ship.
 
@@ -33,7 +34,7 @@ Build the engineering package:
 .\build_lab.cmd
 ```
 
-Then, from the generated `RansomGuard-Lab-v0.7.1.0-*` directory, build/install the minifilter only in a
+Then, from the generated `RansomGuard-Lab-v0.7.3.0-*` directory, build/install the minifilter only in a
 Windows test VM using the existing lab scripts.
 
 ## Audit mode
@@ -59,9 +60,14 @@ Or choose another disposable non-system directory:
 ```
 
 The first run creates only the gate marker before connecting. Put **copies** of test files into that folder
-before starting the gate. Once connected, WRITE / rename / delete-disposition requests in that folder wait
-for rollback capture. New-file transaction semantics are not complete in this milestone, so do not use the
-lab gate as a general-purpose protected folder yet.
+before starting the gate. Once connected, CREATE / WRITE / rename / delete-disposition / truncate requests in that folder are gated.
+Protocol v4 distinguishes destructive replacement of an existing file from creation of an originally-absent path.
+It also treats `FILE_DELETE_ON_CLOSE` on an existing file as destructive and captures a full pre-image first;
+existing-directory delete-on-close is denied because directory-topology rollback is not modeled yet.
+An originally-absent path is committed as metadata-only recovery state; it does not cause the recovery library to delete files.
+
+CREATE classification is still path-based and native post-create/file-ID reconciliation is not complete, so do
+not use the lab gate as a general-purpose protected folder yet.
 
 Stop the client with Ctrl+C before unloading the filter.
 

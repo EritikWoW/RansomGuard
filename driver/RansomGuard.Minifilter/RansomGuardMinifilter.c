@@ -34,6 +34,7 @@ static LONG RgCurrentClientMode(VOID);
 static FLT_PREOP_CALLBACK_STATUS RgCompleteDenied(_Inout_ PFLT_CALLBACK_DATA Data);
 
 static const FLT_OPERATION_REGISTRATION gCallbacks[] = {
+    { IRP_MJ_CREATE, 0, RgPreCreate, NULL, NULL },
     { IRP_MJ_WRITE, FLTFL_OPERATION_REGISTRATION_SKIP_PAGING_IO, RgPreWrite, NULL, NULL },
     { IRP_MJ_SET_INFORMATION, 0, RgPreSetInformation, NULL, NULL },
     { IRP_MJ_OPERATION_END }
@@ -109,6 +110,42 @@ static FLT_PREOP_CALLBACK_STATUS RgCompleteDenied(PFLT_CALLBACK_DATA Data)
     Data->IoStatus.Status = STATUS_ACCESS_DENIED;
     Data->IoStatus.Information = 0;
     return FLT_PREOP_COMPLETE;
+}
+
+FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjects, PVOID *CompletionContext)
+{
+    RG_EVENT event;
+    NTSTATUS status;
+    LONG mode;
+    ULONG gateError = 0;
+
+    UNREFERENCED_PARAMETER(CompletionContext);
+    if (!RgShouldObserve(Data)) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    mode = RgCurrentClientMode();
+    if (mode == RgClientAudit) {
+        RgQueueEvent(Data, FltObjects, RgEventCreate, 0);
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    if (mode != RgClientLabGate) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    status = RgPopulateEvent(&event, Data, RgEventCreate, 0);
+    if (!NT_SUCCESS(status) || !RgEventIsInsideGateRoot(&event)) {
+        // LAB gate remains explicitly scoped. Unresolved/out-of-root CREATEs fail open.
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    if (!RgGateEvent(&event, &gateError)) {
+        UNREFERENCED_PARAMETER(gateError);
+        return RgCompleteDenied(Data);
+    }
+
+    return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
 
 FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjects, PVOID *CompletionContext)
@@ -211,6 +248,12 @@ static NTSTATUS RgPopulateEvent(PRG_EVENT Event, PFLT_CALLBACK_DATA Data,
     if (EventType == RgEventWrite) {
         Event->ByteOffset = Data->Iopb->Parameters.Write.ByteOffset.QuadPart;
         Event->Length = Data->Iopb->Parameters.Write.Length;
+    } else if (EventType == RgEventCreate) {
+        // Parameters.Create.Options carries CreateDisposition in the high byte and CreateOptions in the low 24 bits.
+        Event->Flags = Data->Iopb->Parameters.Create.Options;
+        if (Data->Iopb->Parameters.Create.SecurityContext != NULL) {
+            Event->Length = Data->Iopb->Parameters.Create.SecurityContext->DesiredAccess;
+        }
     }
 
     status = FltGetFileNameInformation(Data,
@@ -311,7 +354,9 @@ static BOOLEAN RgGateEvent(const RG_EVENT *Event, PULONG ErrorCode)
         return FALSE;
     }
 
-    allow = (reply.Decision == RgGateSnapshotCommitted);
+    allow = (reply.Decision == RgGateSnapshotCommitted ||
+             reply.Decision == RgGateBaselineCommitted ||
+             reply.Decision == RgGateNoPreservationRequired);
     return allow;
 }
 

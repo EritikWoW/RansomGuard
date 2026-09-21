@@ -1,13 +1,14 @@
-# RansomGuard 0.7.2.0
+# RansomGuard 0.7.3.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
 and recover data through rollback plus adaptive crypto analysis.
 
-## Core milestone in 0.7.2.0
+## Core preservation milestone
 
-0.7.2.0 keeps the engineering-only pre-write gate from 0.7.1.0 and replaces whole-file snapshots
-for ordinary WRITE operations with **range-aware copy-on-write**:
+0.7.3.0 retains the 0.7.2 range-aware COW gate and adds explicit CREATE preservation semantics.
+
+Ordinary WRITE operations still use **range-aware copy-on-write**:
 
     WRITE arrives
         -> minifilter holds it
@@ -24,7 +25,14 @@ undone by truncating the recovered copy to that length.
 Rename, delete-disposition and explicit truncate/allocation-length operations remain on the conservative
 **full-file pre-image** path for now.
 
-The minifilter protocol is v3 and reports WRITE, RENAME, DELETE and TRUNCATE-class metadata operations.
+The engineering minifilter protocol is now v4 and reports CREATE, WRITE, RENAME, DELETE and TRUNCATE-class metadata operations.
+
+For CREATE, the gate distinguishes Windows create dispositions instead of treating every open as destructive:
+existing `FILE_SUPERSEDE`, `FILE_OVERWRITE` and `FILE_OVERWRITE_IF` require a durable full pre-image;
+`FILE_DELETE_ON_CLOSE` also requires a pre-image for an existing file even with an ordinary open;
+create-capable dispositions on a missing path durably record that the path was originally absent; ordinary
+non-destructive opens require no snapshot. Existing-directory delete-on-close is denied until directory-topology rollback exists. Paths marked originally absent do not later manufacture rollback
+pre-images from data created during the same incident.
 
 ## Recovery safety
 
@@ -48,7 +56,8 @@ The blocking gate is still deliberately restricted:
 - requires `.ransomguard-gate-lab-root`;
 - refuses an entire drive, Windows, Program Files, ProgramData and reparse roots;
 - rollback storage must be outside the gated root;
-- unresolved/out-of-root I/O fails open;
+- out-of-root or name-query-failed I/O fails open;
+- a path truncated after an already verified in-root prefix is denied rather than preserved against an ambiguous name;
 - in-scope preservation failure or timeout fails closed;
 - negative/special write offsets are denied rather than guessed;
 - demand-start filter, automatic attachment suppressed;
@@ -71,7 +80,7 @@ Use only output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.7.2.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.7.3.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 LAB gate documentation:
 
@@ -83,7 +92,7 @@ LAB gate documentation:
 This milestone validates the preservation model and reduces write-path storage amplification.
 It is not yet production ransomware blocking.
 
-Remaining core work includes exact create semantics, rename-destination identity tracking,
-bounded concurrent gate workers, crash reconciliation, per-volume/file identity, memory-mapped write coverage,
+Remaining core work includes post-create identity reconciliation, rename-destination identity tracking,
+bounded concurrent gate workers, crash reconciliation, durable per-volume/file identity, memory-mapped write coverage,
 containment policy, process-state capture, adaptive crypto reconstruction, verified recovery orchestration,
 driver signing and Microsoft-assigned production altitude.

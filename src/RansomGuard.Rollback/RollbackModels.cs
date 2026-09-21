@@ -6,7 +6,8 @@ public enum RollbackMutationKind
 {
     Write = 1,
     Rename = 2,
-    Delete = 3
+    Delete = 3,
+    Create = 4
 }
 
 public sealed record RollbackCapture(

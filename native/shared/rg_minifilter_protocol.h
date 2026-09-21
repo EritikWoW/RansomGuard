@@ -1,19 +1,26 @@
 #pragma once
 
 // Wire protocol between the RansomGuard lab minifilter and user-mode clients.
-// v3 adds range-aware write COW plus explicit truncate gating. The production bundle still
-// does not install or enable the driver.
+// v4 adds explicit IRP_MJ_CREATE semantics: create disposition/options are carried in RG_EVENT.Flags,
+// and user mode can distinguish destructive replacement from an originally-absent new file.
+// The production bundle still does not install or enable the driver.
 
-#define RG_PROTOCOL_VERSION 3u
+#define RG_PROTOCOL_VERSION 4u
 #define RG_PATH_CHARS 512u
 #define RG_GATE_ROOT_CHARS 260u
 #define RG_PORT_NAME L"\\RansomGuardMinifilterPort"
+
+#define RG_CREATE_DISPOSITION_SHIFT 24u
+#define RG_CREATE_DISPOSITION_MASK 0xFF000000u
+#define RG_CREATE_OPTIONS_MASK 0x00FFFFFFu
 
 typedef enum _RG_EVENT_TYPE {
     RgEventInvalid = 0,
     RgEventWrite = 1,
     RgEventRename = 2,
-    RgEventDeleteDisposition = 3,\n    RgEventTruncate = 4
+    RgEventDeleteDisposition = 3,
+    RgEventTruncate = 4,
+    RgEventCreate = 5
 } RG_EVENT_TYPE;
 
 typedef enum _RG_PATH_STATUS {
@@ -31,7 +38,9 @@ typedef enum _RG_CLIENT_MODE {
 typedef enum _RG_GATE_DECISION {
     RgGateInvalid = 0,
     RgGateSnapshotCommitted = 1,
-    RgGateDeny = 2
+    RgGateDeny = 2,
+    RgGateBaselineCommitted = 3,
+    RgGateNoPreservationRequired = 4
 } RG_GATE_DECISION;
 
 #pragma pack(push, 1)

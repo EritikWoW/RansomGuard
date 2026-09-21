@@ -91,6 +91,10 @@ public sealed class RollbackRepository
             if (Directory.Exists(topologyRoot))
                 new ActivationTopologyStore(topologyRoot).VerifyAll();
         }
+
+        var retentionRoot = Path.Combine(_root, "retention-state");
+        if (Directory.Exists(retentionRoot))
+            new RollbackRetentionStore(_root, createIfMissing: false).VerifyAll();
     }
 
     private static void ValidateSessionId(string sessionId)

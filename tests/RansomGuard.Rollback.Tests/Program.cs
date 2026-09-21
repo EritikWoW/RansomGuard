@@ -1123,13 +1123,23 @@ try
     Directory.CreateDirectory(planSource);
 
     var fullPlanPath = Path.Combine(planSource, "full.bin");
-    await File.WriteAllBytesAsync(fullPlanPath, Enumerable.Range(0, 8192).Select(x => (byte)(x % 251)).ToArray());
+    var fullOriginalBytes = Enumerable.Range(0, 8192).Select(x => (byte)(x % 251)).ToArray();
+    await File.WriteAllBytesAsync(fullPlanPath, fullOriginalBytes);
     var fullCapture = await planSession.CapturePreimageAsync(fullPlanPath, RollbackMutationKind.Delete);
 
     var planRange = new RangeRollbackStore(Path.Combine(planSession.Root, "write-cow"));
     await planRange.CaptureWritePreimageAsync(fullPlanPath, 0, 64);
+    using (var mutateFull = new FileStream(fullPlanPath, FileMode.Open, FileAccess.Write, FileShare.Read))
+    {
+        mutateFull.Position = 128;
+        await mutateFull.WriteAsync(Enumerable.Repeat((byte)0xA5, 64).ToArray());
+        await mutateFull.FlushAsync();
+        mutateFull.Flush(true);
+    }
+
     var rangeOnlyPath = Path.Combine(planSource, "range-only.bin");
-    await File.WriteAllBytesAsync(rangeOnlyPath, Enumerable.Range(0, 128 * 1024).Select(x => (byte)((x * 7) % 251)).ToArray());
+    var rangeOriginalBytes = Enumerable.Range(0, 128 * 1024).Select(x => (byte)((x * 7) % 251)).ToArray();
+    await File.WriteAllBytesAsync(rangeOnlyPath, rangeOriginalBytes);
     await planRange.CaptureWritePreimageAsync(rangeOnlyPath, 4096, 128);
     using (var mutate = new FileStream(rangeOnlyPath, FileMode.Open, FileAccess.Write, FileShare.Read))
     {
@@ -1226,6 +1236,46 @@ try
     Check(repeatedRecoveryPlan.PlanId == recoveryPlan.PlanId &&
           repeatedRecoveryPlan.JournalEvidenceSha256 == recoveryPlan.JournalEvidenceSha256,
         "recovery plan identity is stable for unchanged validated evidence");
+
+    var recoveryOutput = Path.Combine(root, "verified-recovery-output");
+    var execution = await RollbackRecoveryExecutor.ExecuteReadyAsync(
+        planRepoRoot, recoveryPlan, recoveryOutput);
+    Check(execution.Succeeded &&
+          execution.RequestedReadyActions == 2 &&
+          execution.SucceededActions == 2 &&
+          execution.FailedActions == 0 &&
+          execution.ReviewActionsNotExecuted == 3 &&
+          execution.BlockedActionsNotExecuted == 2 &&
+          !execution.AutomaticTopologyMutationPerformed,
+        "recovery executor performs only ready copy-out actions");
+
+    var fullExecution = execution.Items.Single(x => x.Kind == RecoveryActionKind.RestoreFullPreimageCopy);
+    var rangeExecution = execution.Items.Single(x => x.Kind == RecoveryActionKind.RestoreRangeCowCopy);
+    Check(File.ReadAllBytes(fullExecution.RecoveredPath).SequenceEqual(fullOriginalBytes),
+        "full pre-image executor output equals original bytes");
+    Check(File.ReadAllBytes(rangeExecution.RecoveredPath).SequenceEqual(rangeOriginalBytes),
+        "range-COW executor output equals original bytes");
+    Check(!File.ReadAllBytes(fullPlanPath).SequenceEqual(fullOriginalBytes) &&
+          !File.ReadAllBytes(rangeOnlyPath).SequenceEqual(rangeOriginalBytes),
+        "copy-out executor leaves damaged live sources untouched");
+    Check(File.Exists(Path.Combine(recoveryOutput, "recovery-plan.json")) &&
+          File.Exists(Path.Combine(recoveryOutput, "recovery-execution.json")) &&
+          fullExecution.RecoveredSha256.Length == 64 &&
+          rangeExecution.RecoveredSha256.Length == 64,
+        "recovery executor persists plan/report and output SHA-256 evidence");
+
+    _ = await planCreateOps.RecordCompletionAsync(
+        9002, CreateCompletionState.Failed, 0xC0000001, 0, null, null);
+    var staleRejected = false;
+    var staleOutput = Path.Combine(root, "stale-recovery-output");
+    try
+    {
+        _ = await RollbackRecoveryExecutor.ExecuteReadyAsync(
+            planRepoRoot, recoveryPlan, staleOutput);
+    }
+    catch (InvalidDataException) { staleRejected = true; }
+    Check(staleRejected && !Directory.Exists(staleOutput),
+        "stale recovery plan is rejected before any output is created");
 
     Console.WriteLine($"All {passed} rollback tests passed. These are file-store tests, not minifilter integration tests.");
     return 0;

@@ -1143,6 +1143,7 @@ static BOOLEAN RgBindContainedRequestor(PFLT_CALLBACK_DATA Data,
     requestor = FltGetRequestorProcess(Data);
     if (requestor == NULL ||
         Event->ProcessId <= 4 ||
+        (ULONGLONG)(ULONG_PTR)PsGetProcessId(requestor) != Event->ProcessId ||
         Event->ProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId, 0, 0)) {
         if (ErrorCode != NULL) {
             *ErrorCode = (ULONG)STATUS_INVALID_PARAMETER;

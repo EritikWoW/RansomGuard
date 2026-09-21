@@ -237,7 +237,7 @@ try {
     foreach($bundle in @($release,$labRelease)){
         if([string]::IsNullOrWhiteSpace($bundle)){continue}
         $isLab=$bundle -eq $labRelease
-        $state=[ordered]@{schema=1;version=$productVersion;profile=$(if($isLab){'EngineeringLab'}else{'AuditConsole'});ordinaryApps='AuditOnly';uiTransport='PushFramedPipeV2';recovery='OfflineRGTEST03';rollback='VerifiedCrashReconciliationRecoveryRetentionAndStorageBudgetLab';scopedTrust='ExactHashContextAuditOnly';uiAdministration='SameExeUacOwnServiceAndReviewedRules';driverInstalledByBuild=$false;kernelWriteGateActive=$false;labKernelGateAvailable=$isLab;labKernelGate='ExplicitSingleRootRangeCowFullMetadataPreimageAndProcessObjectContainment';uiTestPassed=$true}
+        $state=[ordered]@{schema=1;version=$productVersion;profile=$(if($isLab){'EngineeringLab'}else{'AuditConsole'});ordinaryApps='AuditOnly';uiTransport='PushFramedPipeV2';recovery='OfflineRGTEST03';rollback='VerifiedCrashReconciliationRecoveryRetentionAndStorageBudgetLab';scopedTrust='ExactHashContextAuditOnly';uiAdministration='SameExeUacOwnServiceAndReviewedRules';driverInstalledByBuild=$false;kernelWriteGateActive=$false;labKernelGateAvailable=$isLab;labKernelGate='ExplicitSingleRootRangeCowFullMetadataPreimageAndEventBoundProcessObjectContainment';uiTestPassed=$true}
         $state | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $bundle 'BUILD_STATUS.json') -Encoding UTF8
         $hashes=Get-ChildItem -LiteralPath $bundle -File -Recurse | Sort-Object FullName | ForEach-Object {
             '{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash,$_.FullName.Substring($bundle.Length+1)

@@ -53,10 +53,12 @@ if(-not $kits){throw 'Windows Kits root not found. Install the WDK/SDK on the di
 $kits=$kits.TrimEnd('\')
 
 function Find-X64Tool([string]$Name){
-    $matches=Get-ChildItem -LiteralPath $kits -Filter $Name -File -Recurse -ErrorAction SilentlyContinue |
+    $match=Get-ChildItem -LiteralPath $kits -Filter $Name -File -Recurse -ErrorAction SilentlyContinue |
         Where-Object {$_.FullName -match '(?i)\\x64\\'} |
-        Sort-Object FullName -Descending
-    return ($matches | Select-Object -First 1).FullName
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+    if($match){return $match.FullName}
+    return $null
 }
 
 $signtool=Find-X64Tool 'signtool.exe'

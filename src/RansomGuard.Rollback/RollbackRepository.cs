@@ -66,6 +66,36 @@ public sealed class RollbackRepository
         }
     }
 
+    /// <summary>
+    /// Returns durable operation intents whose correlated post-operation completion was never committed.
+    /// Pending state is reported exactly as journaled; this method never infers success or failure from
+    /// the current filesystem state.
+    /// </summary>
+    public PendingRollbackSession[] PendingSessions()
+    {
+        var pending = new List<PendingRollbackSession>();
+        foreach (var id in SessionIds())
+        {
+            var sessionRoot = Path.Combine(_sessions, id);
+            var createRoot = Path.Combine(sessionRoot, "create-state");
+            var renameRoot = Path.Combine(sessionRoot, "rename-state");
+
+            var createRequests = Directory.Exists(createRoot)
+                ? new CreateOperationStore(createRoot).PendingIntents
+                    .Select(x => x.RequestSequence).Order().ToArray()
+                : Array.Empty<ulong>();
+            var renameRequests = Directory.Exists(renameRoot)
+                ? new RenameRollbackStore(renameRoot).PendingIntents
+                    .Select(x => x.RequestSequence).Order().ToArray()
+                : Array.Empty<ulong>();
+
+            if (createRequests.Length != 0 || renameRequests.Length != 0)
+                pending.Add(new PendingRollbackSession(id, createRequests, renameRequests));
+        }
+
+        return pending.OrderBy(x => x.SessionId, StringComparer.Ordinal).ToArray();
+    }
+
     private static void ValidateSessionId(string sessionId)
     {
         if (string.IsNullOrWhiteSpace(sessionId) || sessionId.Length > 80)
@@ -80,4 +110,12 @@ public sealed class RollbackRepository
         if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
             throw new IOException("Rollback repository must not be a reparse point: " + path);
     }
+}
+
+public sealed record PendingRollbackSession(
+    string SessionId,
+    ulong[] CreateRequestSequences,
+    ulong[] RenameRequestSequences)
+{
+    public int TotalPending => checked(CreateRequestSequences.Length + RenameRequestSequences.Length);
 }

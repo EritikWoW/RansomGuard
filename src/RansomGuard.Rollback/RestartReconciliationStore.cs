@@ -135,6 +135,49 @@ public sealed class RestartReconciliationStore
         }
     }
 
+    public RestartEvidenceAssessment Assess(
+        RestartOperationKind operationKind,
+        ulong requestSequence,
+        string intentRecordSha256)
+    {
+        if (!Enum.IsDefined(operationKind))
+            throw new InvalidDataException("Invalid restart reconciliation operation kind.");
+        if (requestSequence == 0)
+            throw new ArgumentOutOfRangeException(nameof(requestSequence));
+        if (!IsSha256(intentRecordSha256))
+            throw new InvalidDataException("Restart assessment requires a valid intent record hash.");
+
+        var matches = Observations
+            .Where(x =>
+                x.OperationKind == operationKind &&
+                x.RequestSequence == requestSequence &&
+                x.IntentRecordSha256.Equals(intentRecordSha256, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(x => x.Sequence)
+            .ToArray();
+
+        if (matches.Length == 0)
+            return new RestartEvidenceAssessment(
+                RestartEvidenceAssessmentState.NoEvidence,
+                0,
+                string.Empty);
+
+        var first = matches[0].Evidence;
+        var decisive =
+            first is RestartEvidenceState.SupportsCompleted or RestartEvidenceState.SupportsNotCompleted &&
+            matches.All(x => x.Evidence == first);
+
+        var state = decisive
+            ? first == RestartEvidenceState.SupportsCompleted
+                ? RestartEvidenceAssessmentState.ConsistentSupportsCompleted
+                : RestartEvidenceAssessmentState.ConsistentSupportsNotCompleted
+            : RestartEvidenceAssessmentState.Unresolved;
+
+        return new RestartEvidenceAssessment(
+            state,
+            matches.Length,
+            matches[^1].RecordSha256);
+    }
+
     public void VerifyAll() => LoadAndValidateJournal(rebuildState: false);
 
     private void LoadAndValidateJournal(bool rebuildState = true)
@@ -391,6 +434,19 @@ public enum RestartEvidenceState
     Indeterminate = 3,
     Ambiguous = 4
 }
+
+public enum RestartEvidenceAssessmentState
+{
+    NoEvidence = 0,
+    ConsistentSupportsCompleted = 1,
+    ConsistentSupportsNotCompleted = 2,
+    Unresolved = 3
+}
+
+public sealed record RestartEvidenceAssessment(
+    RestartEvidenceAssessmentState State,
+    int ObservationCount,
+    string LatestRecordSha256);
 
 public enum RestartPathState
 {

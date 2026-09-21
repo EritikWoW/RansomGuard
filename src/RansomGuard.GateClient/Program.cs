@@ -89,22 +89,31 @@ static class GateDecision
 {
     public static async Task<RgGateReply> EvaluateAsync(RgEvent ev, DevicePathResolver resolver, string root,
         RollbackStore store, RangeRollbackStore writeStore, CreateRollbackStore createStore,
+        CreateIdentityStore identityStore, CreateReconciliationTracker createTracker,
         CancellationToken cancellationToken)
     {
         try
         {
+            if (ev.ProtocolVersion != 5)
+                return Deny(ev.Sequence, 1);
+
+            var eventType = (RgEventType)ev.EventType;
+            if (eventType == RgEventType.CreateReconcile)
+                return await EvaluateCreateReconcileAsync(ev, resolver, root, identityStore, createTracker,
+                    cancellationToken).ConfigureAwait(false);
+
             // Never preserve or authorize against a truncated path. The kernel only sends a truncated
             // gate event when its known prefix is already inside the explicit LAB root, so deny it here.
-            if (ev.ProtocolVersion != 4 || ev.PathStatus != (uint)RgPathStatus.Resolved)
+            if (ev.PathStatus != (uint)RgPathStatus.Resolved)
                 return Deny(ev.Sequence, 1);
 
             var path = resolver.Resolve(ev.Path);
             if (string.IsNullOrWhiteSpace(path) || !PathPolicy.Under(path, root))
                 return Deny(ev.Sequence, 2);
 
-            var eventType = (RgEventType)ev.EventType;
             if (eventType == RgEventType.Create)
-                return await EvaluateCreateAsync(ev, path, store, createStore, cancellationToken).ConfigureAwait(false);
+                return await EvaluateCreateAsync(ev, path, store, createStore, createTracker, cancellationToken)
+                    .ConfigureAwait(false);
 
             var state = PathProbe.Get(path);
             if (state != CreateTargetState.File)
@@ -142,34 +151,53 @@ static class GateDecision
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"Gate capture failed: {ex.GetType().Name}: {ex.Message}");
+            Console.Error.WriteLine($"Gate capture/reconciliation failed: {ex.GetType().Name}: {ex.Message}");
             return Deny(ev.Sequence, 5);
         }
     }
 
-    private static async Task<RgGateReply> EvaluateCreateAsync(RgEvent ev, string path,
-        RollbackStore store, CreateRollbackStore createStore, CancellationToken cancellationToken)
+    private static async Task<RgGateReply> EvaluateCreateAsync(
+        RgEvent ev,
+        string path,
+        RollbackStore store,
+        CreateRollbackStore createStore,
+        CreateReconciliationTracker createTracker,
+        CancellationToken cancellationToken)
     {
         var rawDisposition = (ev.Flags >> 24) & 0xFF;
         if (!CreateGatePolicy.TryParseDisposition(rawDisposition, out var disposition))
             return Deny(ev.Sequence, 7);
 
         var createOptions = ev.Flags & 0x00FFFFFF;
+        var state = PathProbe.Get(path);
 
         if (createStore.WasOriginallyAbsent(path))
+        {
+            var preIdentity = state == CreateTargetState.Missing ? null : FileIdentityReader.Read(path);
+            createTracker.Register(new PendingCreate(ev.Sequence, path, disposition, state,
+                CreatePreservationAction.RecordOriginallyAbsent, preIdentity));
             return Allow(ev.Sequence, RgGateDecision.BaselineCommitted);
+        }
 
-        var state = PathProbe.Get(path);
         var action = CreateGatePolicy.Decide(disposition, state, createOptions);
         switch (action)
         {
             case CreatePreservationAction.CaptureExistingPreimage:
+            {
+                var before = FileIdentityReader.Read(path);
                 _ = await store.CapturePreimageAsync(path, RollbackMutationKind.Create, cancellationToken)
                     .ConfigureAwait(false);
+                var after = FileIdentityReader.Read(path);
+                if (!FileIdentityReader.Same(before, after))
+                    throw new InvalidDataException("Existing-file identity changed while its CREATE pre-image was captured.");
+
+                createTracker.Register(new PendingCreate(ev.Sequence, path, disposition, state, action, after));
                 return Allow(ev.Sequence, RgGateDecision.SnapshotCommitted);
+            }
 
             case CreatePreservationAction.RecordOriginallyAbsent:
                 _ = await createStore.CaptureAbsentAsync(path, cancellationToken).ConfigureAwait(false);
+                createTracker.Register(new PendingCreate(ev.Sequence, path, disposition, state, action, null));
                 return Allow(ev.Sequence, RgGateDecision.BaselineCommitted);
 
             case CreatePreservationAction.DenyUnsupported:
@@ -177,16 +205,68 @@ static class GateDecision
                 return Deny(ev.Sequence, 8);
 
             default:
-                // FILE_OPEN/OPEN_IF on an existing file are non-destructive at CREATE time unless
-                // FILE_DELETE_ON_CLOSE is present. FILE_CREATE on an existing file and
-                // FILE_OPEN/OVERWRITE on a missing file fail naturally.
+            {
+                var preIdentity = state == CreateTargetState.Missing ? null : FileIdentityReader.Read(path);
+                createTracker.Register(new PendingCreate(ev.Sequence, path, disposition, state, action, preIdentity));
                 return Allow(ev.Sequence, RgGateDecision.NoPreservationRequired);
+            }
         }
     }
 
+    private static async Task<RgGateReply> EvaluateCreateReconcileAsync(
+        RgEvent ev,
+        DevicePathResolver resolver,
+        string root,
+        CreateIdentityStore identityStore,
+        CreateReconciliationTracker createTracker,
+        CancellationToken cancellationToken)
+    {
+        if (ev.RelatedSequence == 0 || !createTracker.TryGet(ev.RelatedSequence, out var pending))
+            return Deny(ev.Sequence, 9);
+
+        // Failed CREATEs made no successful file-open transition. Clear the pending user-mode state
+        // and preserve the original NTSTATUS; no identity observation is committed.
+        if (!NtSuccess(ev.OperationStatus))
+        {
+            createTracker.Remove(ev.RelatedSequence);
+            return Allow(ev.Sequence, RgGateDecision.Reconciled);
+        }
+
+        if (ev.PathStatus != (uint)RgPathStatus.Resolved ||
+            ev.IdentityStatus != (uint)RgIdentityStatus.Resolved ||
+            ev.FileId128 is null || ev.FileId128.Length != 16 || ev.FileId128.All(b => b == 0))
+            return Deny(ev.Sequence, 10);
+
+        var finalPath = resolver.Resolve(ev.Path);
+        if (string.IsNullOrWhiteSpace(finalPath) || !PathPolicy.Under(finalPath, root))
+            return Deny(ev.Sequence, 11);
+
+        if (!Enum.IsDefined((CreateResult)ev.Flags))
+            return Deny(ev.Sequence, 12);
+
+        var finalId = Convert.ToHexString(ev.FileId128);
+        _ = await identityStore.RecordAsync(
+            ev.RelatedSequence,
+            pending.OriginalPath,
+            finalPath,
+            pending.Disposition,
+            pending.PreTargetState,
+            pending.PreservationAction,
+            (CreateResult)ev.Flags,
+            ev.VolumeSerialNumber,
+            finalId,
+            pending.PreIdentity,
+            cancellationToken).ConfigureAwait(false);
+
+        createTracker.Remove(ev.RelatedSequence);
+        return Allow(ev.Sequence, RgGateDecision.Reconciled);
+    }
+
+    private static bool NtSuccess(uint status) => unchecked((int)status) >= 0;
+
     private static RgGateReply Allow(ulong sequence, RgGateDecision decision) => new()
     {
-        ProtocolVersion = 4,
+        ProtocolVersion = 5,
         Decision = decision,
         RequestSequence = sequence,
         ErrorCode = 0
@@ -194,7 +274,7 @@ static class GateDecision
 
     private static RgGateReply Deny(ulong sequence, uint errorCode) => new()
     {
-        ProtocolVersion = 4,
+        ProtocolVersion = 5,
         Decision = RgGateDecision.Deny,
         RequestSequence = sequence,
         ErrorCode = errorCode

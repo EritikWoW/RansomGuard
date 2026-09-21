@@ -196,3 +196,12 @@ Only logs/journals and `runtime-result.json` are retained as workflow artifacts.
 
 A successful run proves the expected ordering on that VM image. It still does not prove reboot behavior, Driver Verifier stability, storage-pressure handling, all NTFS/ReFS edge cases, production signing, or Microsoft altitude suitability.
 
+
+
+## 0.7.20 kernel containment coverage
+
+Static minifilter gates require protocol v12, atomic activation-and-containment, `PsLookupProcessByProcessId`, a retained `PEPROCESS`, requestor comparison via `FltGetRequestorProcess`, system/self PID rejection, and explicit cleanup with `ObDereferenceObject` on disconnect/unload. They also require the contained process to be denied before `RgGateEvent` on mutating CREATE, non-paging WRITE and RENAME/DELETE/TRUNCATE paths.
+
+GateClient source checks require `--contain-pid` to be explicit, reject PID <= 4 and GateClient itself, forbid prepare-only use, send containment only as part of activation, and verify that the kernel reply reports the exact requested contained PID. No release/clear containment verb is permitted.
+
+The disposable-VM runtime harness adds a fourth scenario: a helper process exists before activation but holds no protected-root handle. GateClient activates with that helper's PID; after the kernel reports containment active, the helper attempts an append and must receive access denial while the target SHA-256 stays unchanged. A separate ordinary helper must still be able to mutate another file through the normal preservation gate, proving containment is single-process scoped rather than root-wide shutdown.

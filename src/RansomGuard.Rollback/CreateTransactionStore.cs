@@ -115,6 +115,15 @@ public sealed class CreateTransactionStore
         }
     }
 
+    public bool TryGetIntent(ulong requestSequence, out CreateOperationIntent? intent)
+    {
+        lock (_intents)
+        {
+            intent = _intents.SingleOrDefault(x => x.RequestSequence == requestSequence);
+            return intent is not null;
+        }
+    }
+
     public async Task<CreateOperationCompletion> RecordCompletionAsync(
         ulong requestSequence,
         CreateCompletionState state,

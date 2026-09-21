@@ -138,6 +138,11 @@ if($gateBlock -notmatch [regex]::Escape('if (!allow && reply.Flags != 0)')){
     throw 'Containment reply flags must never be accepted on a denied/unpreserved operation.'
 }
 
+if($gateBlock -notmatch [regex]::Escape('else if (allow && RgIsContainedRequestor(Data))') -or
+   $gateBlock -notmatch [regex]::Escape('*ErrorCode = (ULONG)STATUS_ACCESS_DENIED')){
+    throw 'Sibling in-flight mutations must be denied if containment becomes active while they wait for user mode.'
+}
+
 
 if($src -match 'IRP_MJ_WRITE\s*,\s*FLTFL_OPERATION_REGISTRATION_SKIP_PAGING_IO'){
     throw 'Paging-write visibility requires IRP_MJ_WRITE callbacks to receive paging I/O.'

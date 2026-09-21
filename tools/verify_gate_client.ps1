@@ -38,7 +38,7 @@ foreach($required in @(
   'CreateGatePolicy.TryParseDisposition',
   '(ev.Flags >> 24) & 0xFF',
   'ev.Flags & 0x00FFFFFF',
-  'ProtocolVersion = 9',
+  'ProtocolVersion = 10',
   'CreatePreservationAction.CaptureExistingPreimage',
   'CreatePreservationAction.RecordOriginallyAbsent',
   'CreatePreservationAction.DenyUnsupported',
@@ -75,7 +75,12 @@ foreach($required in @(
   'PagingWriteEvidenceStore',
   'RgEventType.PagingWrite',
   'pagingStore.RecordAsync',
-  'evidence-only'
+  'evidence-only',
+  'WritableSectionEvidenceStore',
+  'RgEventType.WritableSection',
+  'WritableSectionAttestation.Evaluate',
+  'sectionStore.RecordAsync',
+  'BaselineVerified'
 )){
   if($text -notmatch [regex]::Escape($required)){throw "Gate client invariant missing: $required"}
 }
@@ -138,6 +143,20 @@ if($pagingBranch -lt 0 -or $pagingPersist -lt 0 -or $pagingReturn -lt 0 -or
   throw 'PagingWrite must be persisted as evidence only and must not receive FilterReplyMessage.'
 }
 
+$sectionBranch=$text.IndexOf('if ((RgEventType)ev.EventType == RgEventType.WritableSection)')
+$sectionPersist=$text.IndexOf('sectionStore.RecordAsync(',$sectionBranch)
+$sectionReturn=$text.IndexOf('return;',$sectionPersist)
+$sectionReply=$text.IndexOf('Native.Reply(',$sectionBranch)
+if($sectionBranch -lt 0 -or $sectionPersist -lt 0 -or $sectionReturn -lt 0 -or
+   ($sectionReply -ge 0 -and $sectionReply -lt $sectionReturn)){
+  throw 'WritableSection must be persisted as no-reply attestation evidence.'
+}
+$sectionEvaluate=$text.IndexOf('WritableSectionAttestation.Evaluate(',$sectionBranch)
+$sectionIntent=$text.IndexOf('createOperationStore.Intents.SingleOrDefault',$sectionBranch)
+if($sectionIntent -lt 0 -or $sectionEvaluate -lt 0 -or $sectionIntent -gt $sectionEvaluate){
+  throw 'WritableSection must resolve the correlated CREATE intent before attestation.'
+}
+
 $createResultBranch=$text.IndexOf('if ((RgEventType)ev.EventType == RgEventType.CreateResult)')
 $createResultPersist=$text.IndexOf('CreateReconciliation.HandleAsync(',$createResultBranch)
 $createResultReturn=$text.IndexOf('return;',$createResultPersist)
@@ -190,4 +209,4 @@ if($restartBlock -notmatch [regex]::Escape('PathPolicy.Under(intent.OriginalPath
   throw 'Restart reconciliation must remain scoped to the explicitly selected LAB root.'
 }
 
-Write-Host 'LAB gate client source check PASSED: protocol-v9 CREATE/RENAME semantics, eager pre-image for content-write capable opens, bounded workers, durable FILE_ID_INFO binding, restart/paging evidence, range COW, durable intents/completions, no destructive/process-control APIs.'
+Write-Host 'LAB gate client source check PASSED: protocol-v10 CREATE/RENAME semantics, eager writable-open pre-image, no-reply section attestation, bounded workers, durable identity/restart/paging evidence, no destructive/process-control APIs.'

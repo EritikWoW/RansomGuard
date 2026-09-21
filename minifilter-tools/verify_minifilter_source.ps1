@@ -81,7 +81,9 @@ foreach($required in @(
     'PAGE_EXECUTE_READWRITE',
     'RgObserveWritableSection',
     'PreservationDecision',
-    'CreateRequestSequence'
+    'CreateRequestSequence',
+    'FLT_SET_CONTEXT_REPLACE_IF_EXISTS',
+    'FLT_SET_CONTEXT_KEEP_IF_EXISTS'
 )){
     if($src -notmatch [regex]::Escape($required)){throw "LAB write-gate invariant missing: $required"}
 }
@@ -134,6 +136,17 @@ $sectionObserve=$src.Substring($sectionObserveStart,$sectionObserveEnd-$sectionO
 foreach($forbidden in @('RgGateEvent(','FltGetFileNameInformation(','FltQueryInformationFile(')){
     if($sectionObserve.Contains($forbidden)){throw "Writable-section observation must use only established stream context: $forbidden"}
 }
+$attachStart=$src.IndexOf('static VOID RgAttachPagingStreamContext(PCFLT_RELATED_OBJECTS FltObjects')
+$attachEnd=$src.IndexOf('static VOID RgObservePagingWrite',$attachStart)
+if($attachStart -lt 0 -or $attachEnd -lt 0){throw 'Stream-context attachment helper missing.'}
+$attachBlock=$src.Substring($attachStart,$attachEnd-$attachStart)
+if($attachBlock -notmatch [regex]::Escape('FLT_SET_CONTEXT_REPLACE_IF_EXISTS') -or
+   $attachBlock -notmatch [regex]::Escape('FLT_SET_CONTEXT_KEEP_IF_EXISTS') -or
+   $attachBlock -notmatch [regex]::Escape('PreservationDecision == RgGateSnapshotCommitted') -or
+   $attachBlock -notmatch [regex]::Escape('PreservationDecision == RgGateBaselineCommitted')){
+    throw 'Protected CREATE must upgrade a prior read-only stream context while read-only CREATE must not downgrade it.'
+}
+
 if($sectionObserve -notmatch [regex]::Escape('FltGetStreamContext') -or
    $sectionObserve -notmatch [regex]::Escape('event.RelatedSequence = context->CreateRequestSequence') -or
    $sectionObserve -notmatch [regex]::Escape('event.CompletionInformation = context->PreservationDecision') -or

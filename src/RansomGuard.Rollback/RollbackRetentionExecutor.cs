@@ -11,6 +11,7 @@ public static class RollbackRetentionExecutor
     {
         ArgumentNullException.ThrowIfNull(requestedPlan);
         var repositoryFull = Path.GetFullPath(repositoryRoot);
+        using var maintenanceLease = RollbackMaintenanceLease.Acquire(repositoryFull);
 
         var current = RollbackRetentionPlanner.Build(
             repositoryFull,

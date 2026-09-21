@@ -192,18 +192,22 @@ if($renameBranch -lt 0 -or $renameSourceCapture -lt 0 -or $renameIntent -lt 0 -o
 
 $connect=$text.IndexOf('using var port = Native.Connect(')
 $preflight=$text.IndexOf('ActivationPreflight.RunAsync(',$connect)
-$activate=$text.IndexOf('RgControlCommand.ActivateGate',$preflight)
-$workerLoop=$text.IndexOf('while (!cts.IsCancellationRequested)',$activate)
-if($connect -lt 0 -or $preflight -lt 0 -or $activate -lt 0 -or $workerLoop -lt 0 -or
-   $connect -gt $preflight -or $preflight -gt $activate -or $activate -gt $workerLoop){
-  throw 'LAB gate must connect, complete activation preflight, activate kernel gate, then enter normal receive loop.'
+$workerLoop=$text.IndexOf('while (!cts.IsCancellationRequested)',$preflight)
+if($connect -lt 0 -or $preflight -lt 0 -or $workerLoop -lt 0 -or
+   $connect -gt $preflight -or $preflight -gt $workerLoop){
+  throw 'LAB gate must connect and complete activation preflight before the normal receive loop.'
 }
 $preflightStart=$text.IndexOf('static class ActivationPreflight')
 $preflightEnd=$text.IndexOf('readonly record struct ActivationPreflightSummary',$preflightStart)
 if($preflightStart -lt 0 -or $preflightEnd -lt 0){throw 'ActivationPreflight implementation missing.'}
 $preflightBlock=$text.Substring($preflightStart,$preflightEnd-$preflightStart)
-foreach($required in @('Directory.EnumerateFiles','FileAttributes.ReparsePoint','Native.OpenPreflight','ActivationPreflightStore','RgEventType.ActivationPreflight','RgEventType.PagingWrite','RgEventType.WritableSection')){
+foreach($required in @('Directory.EnumerateFiles','FileAttributes.ReparsePoint','Native.OpenPreflight','ActivationPreflightStore','RgEventType.ActivationPreflight','RgEventType.PagingWrite','RgEventType.WritableSection','heldHandles','RgControlCommand.ActivateGate','Native.Control')){
   if($preflightBlock -notmatch [regex]::Escape($required)){throw "Activation preflight missing invariant: $required"}
+}
+$activateInPreflight=$preflightBlock.IndexOf('RgControlCommand.ActivateGate')
+$disposeInPreflight=$preflightBlock.IndexOf('foreach (var handle in heldHandles) handle.Dispose()')
+if($activateInPreflight -lt 0 -or $disposeInPreflight -lt 0 -or $activateInPreflight -gt $disposeInPreflight){
+  throw 'Activation must occur while share-read preflight handles are still held.'
 }
 if($preflightBlock -match 'Native\.Reply\('){throw 'Activation preflight events must remain no-reply evidence.'}
 

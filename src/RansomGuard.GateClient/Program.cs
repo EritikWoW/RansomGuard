@@ -113,13 +113,15 @@ static class GateDecision
             if (createStore.WasOriginallyAbsent(path))
                 return Allow(ev.Sequence, RgGateDecision.BaselineCommitted);
 
-            _ = await identityStore.CaptureOrVerifyAsync(path, cancellationToken).ConfigureAwait(false);
+            var identityBaseline = await identityStore.CaptureOrVerifyAsync(path, cancellationToken)
+                .ConfigureAwait(false);
 
             if (eventType == RgEventType.Write)
             {
                 if (ev.ByteOffset < 0)
                     return Deny(ev.Sequence, 6);
-                await writeStore.CaptureWritePreimageAsync(path, ev.ByteOffset, ev.Length, cancellationToken)
+                await writeStore.CaptureWritePreimageAsync(path, ev.ByteOffset, ev.Length,
+                        identityBaseline.Identity, cancellationToken)
                     .ConfigureAwait(false);
             }
             else
@@ -131,7 +133,8 @@ static class GateDecision
                     RgEventType.Truncate => RollbackMutationKind.Write,
                     _ => throw new InvalidOperationException("Unsupported gate event type.")
                 };
-                _ = await store.CapturePreimageAsync(path, mutation, cancellationToken).ConfigureAwait(false);
+                _ = await store.CapturePreimageAsync(path, mutation, identityBaseline.Identity, cancellationToken)
+                    .ConfigureAwait(false);
             }
 
             return Allow(ev.Sequence, RgGateDecision.SnapshotCommitted);
@@ -165,8 +168,10 @@ static class GateDecision
         switch (action)
         {
             case CreatePreservationAction.CaptureExistingPreimage:
-                _ = await identityStore.CaptureOrVerifyAsync(path, cancellationToken).ConfigureAwait(false);
-                _ = await store.CapturePreimageAsync(path, RollbackMutationKind.Create, cancellationToken)
+                var identityBaseline = await identityStore.CaptureOrVerifyAsync(path, cancellationToken)
+                    .ConfigureAwait(false);
+                _ = await store.CapturePreimageAsync(path, RollbackMutationKind.Create,
+                        identityBaseline.Identity, cancellationToken)
                     .ConfigureAwait(false);
                 return Allow(ev.Sequence, RgGateDecision.SnapshotCommitted);
 

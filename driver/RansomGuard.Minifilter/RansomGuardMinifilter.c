@@ -306,6 +306,162 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
 
+static VOID RgMarkGateAmbiguous(VOID)
+{
+    InterlockedExchange(&gGateAmbiguous, 1);
+}
+
+static NTSTATUS RgAllocateCreateContext(PFLT_CALLBACK_DATA Data, ULONGLONG RequestSequence,
+                                        PRG_CREATE_CONTEXT *CreateContext)
+{
+    PRG_CREATE_CONTEXT context;
+    NTSTATUS status;
+
+    *CreateContext = NULL;
+    context = (PRG_CREATE_CONTEXT)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(RG_CREATE_CONTEXT), RG_POOL_TAG);
+    if (context == NULL) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    RtlZeroMemory(context, sizeof(*context));
+
+    status = FltGetFileNameInformation(Data,
+        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
+        &context->PreCreateNameInfo);
+    if (!NT_SUCCESS(status) || context->PreCreateNameInfo == NULL) {
+        ExFreePoolWithTag(context, RG_POOL_TAG);
+        return NT_SUCCESS(status) ? STATUS_UNSUCCESSFUL : status;
+    }
+
+    status = FltParseFileNameInformation(context->PreCreateNameInfo);
+    if (!NT_SUCCESS(status)) {
+        FltReleaseFileNameInformation(context->PreCreateNameInfo);
+        ExFreePoolWithTag(context, RG_POOL_TAG);
+        return status;
+    }
+
+    context->RequestSequence = RequestSequence;
+    *CreateContext = context;
+    return STATUS_SUCCESS;
+}
+
+static VOID RgReleaseCreateContext(PRG_CREATE_CONTEXT CreateContext)
+{
+    if (CreateContext == NULL) {
+        return;
+    }
+
+    if (CreateContext->PreCreateNameInfo != NULL) {
+        FltReleaseFileNameInformation(CreateContext->PreCreateNameInfo);
+        CreateContext->PreCreateNameInfo = NULL;
+    }
+    RtlSecureZeroMemory(CreateContext, sizeof(*CreateContext));
+    ExFreePoolWithTag(CreateContext, RG_POOL_TAG);
+}
+
+static BOOLEAN RgFileIdIsZero(_In_reads_(16) const UCHAR *Identifier)
+{
+    ULONG i;
+    for (i = 0; i < 16; i++) {
+        if (Identifier[i] != 0) {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+static VOID RgCopyNameToEvent(_Inout_ PRG_EVENT Event, _In_ PFLT_FILE_NAME_INFORMATION NameInfo)
+{
+    ULONG chars;
+
+    chars = NameInfo->Name.Length / sizeof(WCHAR);
+    if (chars >= RG_PATH_CHARS) {
+        chars = RG_PATH_CHARS - 1;
+        Event->PathStatus = RgPathTruncated;
+    } else {
+        Event->PathStatus = RgPathResolved;
+    }
+
+    if (chars != 0) {
+        RtlCopyMemory(Event->Path, NameInfo->Name.Buffer, chars * sizeof(WCHAR));
+    }
+    Event->Path[chars] = L'\0';
+}
+
+static NTSTATUS RgBuildCreateReconcileEvent(PRG_EVENT Event, PFLT_CALLBACK_DATA Data,
+                                             PCFLT_RELATED_OBJECTS FltObjects,
+                                             PRG_CREATE_CONTEXT CreateContext)
+{
+    PFLT_FILE_NAME_INFORMATION tunneledName = NULL;
+    PFLT_FILE_NAME_INFORMATION finalName;
+    FILE_ID_INFORMATION fileId;
+    LARGE_INTEGER systemTime;
+    NTSTATUS status;
+    BOOLEAN opened;
+
+    RtlZeroMemory(Event, sizeof(*Event));
+    Event->ProtocolVersion = RG_PROTOCOL_VERSION;
+    Event->EventType = RgEventCreateReconcile;
+    Event->Sequence = (ULONGLONG)InterlockedIncrement64(&gSequence);
+    Event->RelatedSequence = CreateContext->RequestSequence;
+    Event->OperationStatus = (ULONG)Data->IoStatus.Status;
+    Event->Flags = (ULONG)Data->IoStatus.Information;
+    KeQuerySystemTimePrecise(&systemTime);
+    Event->SystemTime100ns = systemTime.QuadPart;
+    Event->ProcessId = (ULONGLONG)(ULONG_PTR)FltGetRequestorProcessId(Data);
+    Event->ThreadId = (ULONGLONG)(ULONG_PTR)PsGetCurrentThreadId();
+
+    opened = NT_SUCCESS(Data->IoStatus.Status) && Data->IoStatus.Status != STATUS_REPARSE;
+    if (!opened) {
+        Event->IdentityStatus = RgIdentityNotApplicable;
+        RgCopyNameToEvent(Event, CreateContext->PreCreateNameInfo);
+        return STATUS_SUCCESS;
+    }
+
+    status = FltGetTunneledName(Data, CreateContext->PreCreateNameInfo, &tunneledName);
+    if (!NT_SUCCESS(status)) {
+        Event->PathStatus = RgPathQueryFailed;
+        Event->IdentityStatus = RgIdentityQueryFailed;
+        return status;
+    }
+
+    finalName = tunneledName != NULL ? tunneledName : CreateContext->PreCreateNameInfo;
+    status = FltParseFileNameInformation(finalName);
+    if (!NT_SUCCESS(status)) {
+        if (tunneledName != NULL) {
+            FltReleaseFileNameInformation(tunneledName);
+        }
+        Event->PathStatus = RgPathQueryFailed;
+        Event->IdentityStatus = RgIdentityQueryFailed;
+        return status;
+    }
+    RgCopyNameToEvent(Event, finalName);
+
+    RtlZeroMemory(&fileId, sizeof(fileId));
+    status = FltQueryInformationFile(
+        FltObjects->Instance,
+        FltObjects->FileObject,
+        &fileId,
+        sizeof(fileId),
+        FileIdInformation,
+        NULL);
+
+    if (NT_SUCCESS(status) && !RgFileIdIsZero(fileId.FileId.Identifier)) {
+        Event->IdentityStatus = RgIdentityResolved;
+        Event->VolumeSerialNumber = fileId.VolumeSerialNumber;
+        RtlCopyMemory(Event->FileId128, fileId.FileId.Identifier, sizeof(Event->FileId128));
+    } else {
+        Event->IdentityStatus = RgIdentityQueryFailed;
+        if (NT_SUCCESS(status)) {
+            status = STATUS_NOT_SUPPORTED;
+        }
+    }
+
+    if (tunneledName != NULL) {
+        FltReleaseFileNameInformation(tunneledName);
+    }
+    return status;
+}
+
 static NTSTATUS RgPopulateEvent(PRG_EVENT Event, PFLT_CALLBACK_DATA Data,
                                 RG_EVENT_TYPE EventType, ULONG FileInformationClass)
 {

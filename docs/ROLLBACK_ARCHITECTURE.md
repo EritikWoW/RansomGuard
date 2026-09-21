@@ -82,8 +82,10 @@ The prototype gates one explicit root negotiated at connection time. The gate cl
 The rollback store must live outside the gated root. The gate client's PID is excluded in kernel mode to avoid
 self-deadlock while it writes rollback data.
 
-Outside the exact root, or when the path cannot be resolved, the driver fails open. When no client is connected,
-it does not gate anything. The filter remains demand-start, automatic attachment is suppressed, and
+Outside the exact root, or when the name query fails before the root can be established, the driver fails open.
+If the bounded event path is truncated only after its prefix has already proven it is inside the gate root, user mode denies
+the operation rather than committing preservation state for an ambiguous path. When no client is connected, the driver
+does not gate anything. The filter remains demand-start, automatic attachment is suppressed, and
 `370099.4242` remains an unassigned LAB altitude.
 
 The normal product bundle does not install or enable this driver. Ordinary product operation remains AuditOnly.

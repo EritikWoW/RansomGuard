@@ -176,6 +176,8 @@ public sealed class CreateIdentityStore
             if (!calculated.Equals(line.RecordSha256, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Create identity journal record hash mismatch.");
 
+            if (!string.IsNullOrEmpty(line.PreFileId128Hex))
+                ValidateFileId(line.PreFileId128Hex);
             var preIdentity = string.IsNullOrEmpty(line.PreFileId128Hex)
                 ? null
                 : new RollbackFileIdentity(line.PreVolumeSerialNumber, NormalizeFileId(line.PreFileId128Hex));

@@ -1,0 +1,107 @@
+name: Minifilter runtime VM
+
+on:
+  workflow_dispatch:
+    inputs:
+      volume:
+        description: Disposable VM volume to attach
+        required: true
+        default: C:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ransomguard-runtime-vm
+  cancel-in-progress: false
+
+jobs:
+  runtime:
+    environment: ransomguard-runtime-lab
+    runs-on: [self-hosted, Windows, X64, ransomguard-lab-vm]
+    timeout-minutes: 45
+    env:
+      RANSOMGUARD_RUNTIME_VM: YES-I-AM-DISPOSABLE
+      RG_VOLUME: ${{ inputs.volume }}
+      RG_TEST_CERT_THUMBPRINT: ${{ secrets.RANSOMGUARD_TEST_CERT_THUMBPRINT }}
+
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@v4
+        with:
+          clean: true
+
+      - name: Guard disposable VM runner
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          if (-not $env:RG_TEST_CERT_THUMBPRINT) { throw 'RANSOMGUARD_TEST_CERT_THUMBPRINT secret is not configured.' }
+          $id=[Security.Principal.WindowsIdentity]::GetCurrent()
+          $p=New-Object Security.Principal.WindowsPrincipal($id)
+          if(-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){throw 'Self-hosted runtime runner must be elevated.'}
+          $cs=Get-CimInstance Win32_ComputerSystem
+          $vmText=("$($cs.Manufacturer) $($cs.Model)")
+          if($vmText -notmatch '(?i)virtual|vmware|virtualbox|kvm|qemu|hyper-v|parallels|xen'){throw "REFUSED non-VM runner: $vmText"}
+          Write-Host "Runtime VM: $vmText"
+          Write-Host "Testing commit: $env:GITHUB_SHA"
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Validate runtime-lab source boundaries
+        shell: pwsh
+        run: |
+          Set-ExecutionPolicy -Scope Process Bypass -Force
+          .\tools\verify_runtime_vm_workflow.ps1
+
+      - name: Publish GateClient from exact commit
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $out=Join-Path $env:GITHUB_WORKSPACE 'runtime-vm\GateClient'
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+          dotnet publish .\src\RansomGuard.GateClient\RansomGuard.GateClient.csproj -c Release -r win-x64 --self-contained true -o $out
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          if(-not(Test-Path (Join-Path $out 'RansomGuard.GateClient.exe'))){throw 'GateClient publish output missing.'}
+
+      - name: Build unsigned driver from exact commit
+        shell: pwsh
+        run: |
+          Set-ExecutionPolicy -Scope Process Bypass -Force
+          .\minifilter-tools\build_minifilter.ps1 -Configuration Release
+
+      - name: Test-sign, install, load and attach current driver
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $package=Get-ChildItem .\minifilter-build -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          if(-not $package){throw 'Current driver package was not produced.'}
+          .\minifilter-tools\install_runtime_vm_driver.ps1 -PackageDirectory $package.FullName -CertificateThumbprint $env:RG_TEST_CERT_THUMBPRINT -Volume $env:RG_VOLUME
+
+      - name: Run activation and mapped-write runtime integration
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $gate=Join-Path $env:GITHUB_WORKSPACE 'runtime-vm\GateClient\RansomGuard.GateClient.exe'
+          .\minifilter-tools\run_runtime_vm_integration.ps1 -GateClientPath $gate -Root 'C:\RansomGuard-Runtime-Lab' -StoreRoot 'C:\RansomGuard-Runtime-Store'
+          New-Item -ItemType Directory -Path .\runtime-vm-results -Force | Out-Null
+          if(Test-Path 'C:\RansomGuard-Runtime-Store'){Copy-Item 'C:\RansomGuard-Runtime-Store' '.\runtime-vm-results\Store' -Recurse -Force}
+          fltmc instances RansomGuardMinifilter | Out-File .\runtime-vm-results\fltmc-instances.txt -Encoding utf8
+          Write-Host 'RUNTIME VM INTEGRATION PASSED.' -ForegroundColor Green
+
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ransomguard-runtime-vm-evidence-${{ github.sha }}
+          path: runtime-vm-results/**
+          if-no-files-found: warn
+
+      - name: Detach and unload driver
+        if: always()
+        shell: pwsh
+        run: |
+          Set-ExecutionPolicy -Scope Process Bypass -Force
+          .\minifilter-tools\unload_minifilter_lab.ps1 -Volume $env:RG_VOLUME

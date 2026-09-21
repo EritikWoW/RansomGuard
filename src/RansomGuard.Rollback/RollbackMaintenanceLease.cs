@@ -21,6 +21,10 @@ public sealed class RollbackMaintenanceLease : IDisposable
             throw new ArgumentException("Rollback repository root is required.", nameof(repositoryRoot));
 
         var root = Path.GetFullPath(repositoryRoot);
+        if (!Directory.Exists(root))
+            throw new DirectoryNotFoundException("Rollback repository root does not exist: " + root);
+        RejectReparse(root);
+
         var stateRoot = Path.Combine(root, "retention-state");
         Directory.CreateDirectory(stateRoot);
         RejectReparse(stateRoot);

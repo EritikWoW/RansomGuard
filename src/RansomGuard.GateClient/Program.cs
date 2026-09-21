@@ -23,6 +23,7 @@ repository.VerifyAll(); // Refuse to start a new gate session on top of ambiguou
 var sessionId = options.SessionId ?? $"gate-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}";
 var store = repository.CreateSession(sessionId);
 var writeStore = new RangeRollbackStore(Path.Combine(store.Root, "write-cow"));
+var createStore = new CreateRollbackStore(Path.Combine(store.Root, "create-state"));
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
 Console.WriteLine("RansomGuard LAB pre-write gate v0.7.2.0");
@@ -31,12 +32,12 @@ Console.WriteLine($"Protected LAB root : {options.Root}");
 Console.WriteLine($"Kernel NT root     : {ntRoot}");
 Console.WriteLine($"Rollback session   : {sessionId}");
 Console.WriteLine($"Rollback store     : {store.Root}");
-Console.WriteLine("Writes/rename/delete/truncate in this root are denied unless a durable pre-image commit succeeds.");
+Console.WriteLine("CREATE/write/rename/delete/truncate in this root are gated by durable preservation semantics.");
 Console.WriteLine("Press Ctrl+C to disconnect. The driver then stops gating because no client is connected.");
 
 var context = new RgConnectContext
 {
-    ProtocolVersion = 3,
+    ProtocolVersion = 4,
     ClientMode = (uint)RgClientMode.LabGate,
     ClientProcessId = (ulong)Environment.ProcessId,
     GateRootLengthBytes = checked((uint)(ntRoot.Length * 2)),
@@ -69,7 +70,7 @@ try
 
         var header = Marshal.PtrToStructure<FilterMessageHeader>(buffer);
         var ev = Marshal.PtrToStructure<RgEvent>(IntPtr.Add(buffer, headerSize));
-        var reply = await GateDecision.EvaluateAsync(ev, resolver, options.Root, store, writeStore, cts.Token);
+        var reply = await GateDecision.EvaluateAsync(ev, resolver, options.Root, store, writeStore, createStore, cts.Token);
         Native.Reply(port, header.MessageId, reply);
 
         var path = resolver.Resolve(ev.Path) ?? ev.Path ?? "<unresolved>";
@@ -83,25 +84,35 @@ finally
 
 static class GateDecision
 {
+    private const uint FileDirectoryFile = 0x00000001;
+
     public static async Task<RgGateReply> EvaluateAsync(RgEvent ev, DevicePathResolver resolver, string root,
-        RollbackStore store, RangeRollbackStore writeStore, CancellationToken cancellationToken)
+        RollbackStore store, RangeRollbackStore writeStore, CreateRollbackStore createStore,
+        CancellationToken cancellationToken)
     {
         try
         {
-            if (ev.ProtocolVersion != 3 || (ev.PathStatus != (uint)RgPathStatus.Resolved && ev.PathStatus != (uint)RgPathStatus.Truncated))
+            if (ev.ProtocolVersion != 4 ||
+                (ev.PathStatus != (uint)RgPathStatus.Resolved && ev.PathStatus != (uint)RgPathStatus.Truncated))
                 return Deny(ev.Sequence, 1);
 
             var path = resolver.Resolve(ev.Path);
             if (string.IsNullOrWhiteSpace(path) || !PathPolicy.Under(path, root))
                 return Deny(ev.Sequence, 2);
 
-            if (!File.Exists(path))
-            {
-                // v0.7.2 does not yet model file creation. Fail closed inside the explicit LAB root.
-                return Deny(ev.Sequence, 3);
-            }
-
             var eventType = (RgEventType)ev.EventType;
+            if (eventType == RgEventType.Create)
+                return await EvaluateCreateAsync(ev, path, store, createStore, cancellationToken).ConfigureAwait(false);
+
+            var state = PathProbe.Get(path);
+            if (state != PathState.File)
+                return Deny(ev.Sequence, 3);
+
+            // Once a path is known to have been absent at incident start, later mutations must not
+            // manufacture a pre-image from data that was created during the incident.
+            if (createStore.WasOriginallyAbsent(path))
+                return Allow(ev.Sequence, RgGateDecision.BaselineCommitted);
+
             if (eventType == RgEventType.Write)
             {
                 if (ev.ByteOffset < 0)
@@ -121,13 +132,7 @@ static class GateDecision
                 _ = await store.CapturePreimageAsync(path, mutation, cancellationToken).ConfigureAwait(false);
             }
 
-            return new RgGateReply
-            {
-                ProtocolVersion = 3,
-                Decision = RgGateDecision.SnapshotCommitted,
-                RequestSequence = ev.Sequence,
-                ErrorCode = 0
-            };
+            return Allow(ev.Sequence, RgGateDecision.SnapshotCommitted);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -140,13 +145,91 @@ static class GateDecision
         }
     }
 
+    private static async Task<RgGateReply> EvaluateCreateAsync(RgEvent ev, string path,
+        RollbackStore store, CreateRollbackStore createStore, CancellationToken cancellationToken)
+    {
+        var rawDisposition = (ev.Flags >> 24) & 0xFF;
+        if (rawDisposition > (uint)RgCreateDisposition.OverwriteIf)
+            return Deny(ev.Sequence, 7);
+
+        var disposition = (RgCreateDisposition)rawDisposition;
+        var createOptions = ev.Flags & 0x00FFFFFF;
+
+        // Directory creates/opens do not destroy file contents. Directory topology recovery is not
+        // part of this milestone; file mutations beneath the directory remain gated independently.
+        if ((createOptions & FileDirectoryFile) != 0)
+            return Allow(ev.Sequence, RgGateDecision.NoPreservationRequired);
+
+        if (createStore.WasOriginallyAbsent(path))
+            return Allow(ev.Sequence, RgGateDecision.BaselineCommitted);
+
+        var state = PathProbe.Get(path);
+        if (state == PathState.Directory)
+            return Allow(ev.Sequence, RgGateDecision.NoPreservationRequired);
+
+        if (state == PathState.File)
+        {
+            if (IsDestructiveWhenExisting(disposition))
+            {
+                _ = await store.CapturePreimageAsync(path, RollbackMutationKind.Create, cancellationToken)
+                    .ConfigureAwait(false);
+                return Allow(ev.Sequence, RgGateDecision.SnapshotCommitted);
+            }
+
+            // FILE_OPEN / FILE_OPEN_IF only open an existing file, while FILE_CREATE fails if it exists.
+            // A later destructive WRITE is still protected by range COW.
+            return Allow(ev.Sequence, RgGateDecision.NoPreservationRequired);
+        }
+
+        if (MayCreateWhenMissing(disposition))
+        {
+            _ = await createStore.CaptureAbsentAsync(path, cancellationToken).ConfigureAwait(false);
+            return Allow(ev.Sequence, RgGateDecision.BaselineCommitted);
+        }
+
+        // FILE_OPEN and FILE_OVERWRITE fail naturally when the target is absent.
+        return Allow(ev.Sequence, RgGateDecision.NoPreservationRequired);
+    }
+
+    private static bool IsDestructiveWhenExisting(RgCreateDisposition disposition) =>
+        disposition is RgCreateDisposition.Supersede or
+            RgCreateDisposition.Overwrite or RgCreateDisposition.OverwriteIf;
+
+    private static bool MayCreateWhenMissing(RgCreateDisposition disposition) =>
+        disposition is RgCreateDisposition.Supersede or RgCreateDisposition.Create or
+            RgCreateDisposition.OpenIf or RgCreateDisposition.OverwriteIf;
+
+    private static RgGateReply Allow(ulong sequence, RgGateDecision decision) => new()
+    {
+        ProtocolVersion = 4,
+        Decision = decision,
+        RequestSequence = sequence,
+        ErrorCode = 0
+    };
+
     private static RgGateReply Deny(ulong sequence, uint errorCode) => new()
     {
-        ProtocolVersion = 3,
+        ProtocolVersion = 4,
         Decision = RgGateDecision.Deny,
         RequestSequence = sequence,
         ErrorCode = errorCode
     };
+}
+
+enum PathState { Missing, File, Directory }
+
+static class PathProbe
+{
+    public static PathState Get(string path)
+    {
+        try
+        {
+            var attributes = File.GetAttributes(path);
+            return (attributes & FileAttributes.Directory) != 0 ? PathState.Directory : PathState.File;
+        }
+        catch (FileNotFoundException) { return PathState.Missing; }
+        catch (DirectoryNotFoundException) { return PathState.Missing; }
+    }
 }
 
 sealed record Options(string Root, string StoreRoot, string? SessionId, bool PrepareOnly)
@@ -273,9 +356,10 @@ sealed class DevicePathResolver
 }
 
 enum RgClientMode : uint { Audit = 1, LabGate = 2 }
-enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4 }
+enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5 }
+enum RgCreateDisposition : uint { Supersede = 0, Open = 1, Create = 2, OpenIf = 3, Overwrite = 4, OverwriteIf = 5 }
 enum RgPathStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2, Truncated = 3 }
-enum RgGateDecision : uint { Invalid = 0, SnapshotCommitted = 1, Deny = 2 }
+enum RgGateDecision : uint { Invalid = 0, SnapshotCommitted = 1, Deny = 2, BaselineCommitted = 3, NoPreservationRequired = 4 }
 
 [StructLayout(LayoutKind.Sequential)]
 struct FilterMessageHeader { public uint ReplyLength; public ulong MessageId; }

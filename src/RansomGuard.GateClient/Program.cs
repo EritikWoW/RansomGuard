@@ -32,7 +32,7 @@ var renameStore = new RenameRollbackStore(Path.Combine(store.Root, "rename-state
 var pagingStore = new PagingWriteEvidenceStore(Path.Combine(store.Root, "paging-state"));
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
-Console.WriteLine("RansomGuard LAB pre-write gate v0.7.10.0");
+Console.WriteLine("RansomGuard LAB pre-write gate v0.7.11.0");
 Console.WriteLine("LAB ONLY: use only inside a disposable test directory on a test machine/VM.");
 Console.WriteLine($"Protected LAB root : {options.Root}");
 Console.WriteLine($"Kernel NT root     : {ntRoot}");

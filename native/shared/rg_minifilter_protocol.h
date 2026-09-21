@@ -1,11 +1,10 @@
 #pragma once
 
 // Wire protocol between the RansomGuard lab minifilter and user-mode clients.
-// v4 adds explicit IRP_MJ_CREATE semantics: create disposition/options are carried in RG_EVENT.Flags,
-// and user mode can distinguish destructive replacement from an originally-absent new file.
+// v5 retains CREATE semantics and adds an explicit normalized destination path for rename events.
 // The production bundle still does not install or enable the driver.
 
-#define RG_PROTOCOL_VERSION 4u
+#define RG_PROTOCOL_VERSION 5u
 #define RG_PATH_CHARS 512u
 #define RG_GATE_ROOT_CHARS 260u
 #define RG_PORT_NAME L"\\RansomGuardMinifilterPort"
@@ -66,8 +65,9 @@ typedef struct _RG_EVENT {
     unsigned long Length;
     unsigned long FileInformationClass;
     unsigned long DroppedBeforeThis;
-    unsigned long Reserved;
+    unsigned long DestinationPathStatus;
     wchar_t Path[RG_PATH_CHARS];
+    wchar_t DestinationPath[RG_PATH_CHARS];
 } RG_EVENT, *PRG_EVENT;
 
 typedef struct _RG_GATE_REPLY {

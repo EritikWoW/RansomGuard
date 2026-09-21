@@ -6,10 +6,12 @@ $rangeStore=Join-Path $root 'src\RansomGuard.Rollback\RangeRollbackStore.cs'
 $createStore=Join-Path $root 'src\RansomGuard.Rollback\CreateRollbackStore.cs'
 $createPolicy=Join-Path $root 'src\RansomGuard.Rollback\CreateGatePolicy.cs'
 $identityStore=Join-Path $root 'src\RansomGuard.Rollback\FileIdentityStore.cs'
+$renameStore=Join-Path $root 'src\RansomGuard.Rollback\RenameRollbackStore.cs'
 if(-not(Test-Path -LiteralPath $rangeStore)){throw 'RangeRollbackStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $createStore)){throw 'CreateRollbackStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $createPolicy)){throw 'CreateGatePolicy.cs missing.'}
 if(-not(Test-Path -LiteralPath $identityStore)){throw 'FileIdentityStore.cs missing.'}
+if(-not(Test-Path -LiteralPath $renameStore)){throw 'RenameRollbackStore.cs missing.'}
 $rangeText=Get-Content -LiteralPath $rangeStore -Raw
 foreach($required in @(
     'CaptureWritePreimageAsync',
@@ -76,6 +78,24 @@ foreach($required in @(
     if($identityText -notmatch [regex]::Escape($required)){throw "File identity source gate missing invariant: $required"}
 }
 
+$renameText=Get-Content -LiteralPath $renameStore -Raw
+foreach($required in @(
+    'rename-journal.jsonl',
+    'CaptureIntentAsync',
+    'RenameDestinationState.OriginallyAbsent',
+    'RenameDestinationState.ExistingFile',
+    'RenameDestinationState.SameAsSource',
+    'RequestSequence',
+    'SourceVolumeSerialHex',
+    'DestinationVolumeSerialHex',
+    'FileOptions.WriteThrough',
+    'Flush(true)',
+    'Rename rollback journal hash chain mismatch',
+    'post-operation reconciliation'
+)){
+    if($renameText -notmatch [regex]::Escape($required)){throw "Rename rollback source gate missing invariant: $required"}
+}
+
 if(-not(Test-Path -LiteralPath $store)){throw 'RollbackStore.cs missing.'}
 $text=Get-Content -LiteralPath $store -Raw
 foreach($required in @(
@@ -108,5 +128,6 @@ $repository=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Rollback\
 if($repository -notmatch 'new RangeRollbackStore\(rangeRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested write-cow stores.'}
 if($repository -notmatch 'new CreateRollbackStore\(createRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested create-state stores.'}
 if($repository -notmatch 'new FileIdentityStore\(identityRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested identity-state stores.'}
-Write-Host 'Rollback source gate PASSED: full-file, range-COW, create-baseline and durable file-identity journals, hashes, crash-artifact rejection, write-through commits, first-state semantics, copy-only restore.'
-Write-Host 'Normal service capture remains disabled; v0.7.3 keeps blocking preservation inside the explicit LAB gate only.'
+if($repository -notmatch 'new RenameRollbackStore\(renameRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested rename-state stores.'}
+Write-Host 'Rollback source gate PASSED: full-file, range-COW, create-baseline, durable file-identity and rename-intent journals, hashes, crash-artifact rejection, write-through commits, first-state semantics, copy-only restore.'
+Write-Host 'Normal service capture remains disabled; v0.7.4 keeps blocking preservation inside the explicit LAB gate only.'

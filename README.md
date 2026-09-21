@@ -1,4 +1,4 @@
-# RansomGuard 0.7.3.0
+# RansomGuard 0.7.4.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
@@ -6,7 +6,7 @@ and recover data through rollback plus adaptive crypto analysis.
 
 ## Core preservation milestone
 
-0.7.3.0 retains the 0.7.2 range-aware COW gate and adds explicit CREATE preservation semantics.
+0.7.4.0 retains the 0.7.2 range-aware COW gate and adds explicit CREATE preservation semantics.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 
@@ -25,7 +25,7 @@ undone by truncating the recovered copy to that length.
 Rename, delete-disposition and explicit truncate/allocation-length operations remain on the conservative
 **full-file pre-image** path for now.
 
-The engineering minifilter protocol is now v4 and reports CREATE, WRITE, RENAME, DELETE and TRUNCATE-class metadata operations.
+The engineering minifilter protocol is now v5 and reports CREATE, WRITE, RENAME, DELETE and TRUNCATE-class metadata operations. RENAME events also carry a normalized destination path.
 
 For CREATE, the gate distinguishes Windows create dispositions instead of treating every open as destructive:
 existing `FILE_SUPERSEDE`, `FILE_OVERWRITE` and `FILE_OVERWRITE_IF` require a durable full pre-image;
@@ -33,6 +33,12 @@ existing `FILE_SUPERSEDE`, `FILE_OVERWRITE` and `FILE_OVERWRITE_IF` require a du
 create-capable dispositions on a missing path durably record that the path was originally absent; ordinary
 non-destructive opens require no snapshot. Existing-directory delete-on-close is denied until directory-topology rollback exists. Paths marked originally absent do not later manufacture rollback
 pre-images from data created during the same incident.
+
+For RENAME, the gate now preserves the source and classifies the normalized destination before allow. An existing
+destination gets its own identity-bound full pre-image; a missing destination gets a durable absence baseline; then
+a hash-chained rename intent records source identity, destination state, flags and exact pre-operation names. Cross-root,
+ambiguous, directory-topology and same-file-alias cases fail closed. This is pre-operation preservation only: post-rename
+tunneled-name/file-ID reconciliation is still required before recovery may treat an intent as a completed rename.
 
 ## Recovery safety
 
@@ -84,7 +90,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.7.3.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.7.4.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 LAB gate documentation:
 
@@ -96,7 +102,7 @@ LAB gate documentation:
 This milestone validates the preservation model and reduces write-path storage amplification.
 It is not yet production ransomware blocking.
 
-Remaining core work includes post-create identity reconciliation, rename-destination identity tracking,
-bounded concurrent gate workers, crash reconciliation, durable per-volume/file identity, memory-mapped write coverage,
+Remaining core work includes post-create/post-rename tunneled-name identity reconciliation,
+bounded concurrent gate workers, crash reconciliation, memory-mapped write coverage,
 containment policy, process-state capture, adaptive crypto reconstruction, verified recovery orchestration,
 driver signing and Microsoft-assigned production altitude.

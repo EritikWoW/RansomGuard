@@ -56,6 +56,10 @@ public sealed class RollbackRepository
             var identityRoot = Path.Combine(store.Root, "identity-state");
             if (Directory.Exists(identityRoot))
                 new FileIdentityStore(identityRoot).VerifyAll();
+
+            var renameRoot = Path.Combine(store.Root, "rename-state");
+            if (Directory.Exists(renameRoot))
+                new RenameRollbackStore(renameRoot).VerifyAll();
         }
     }
 

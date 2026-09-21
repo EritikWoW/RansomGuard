@@ -38,15 +38,19 @@ foreach($required in @(
     'RgEventCreate',
     'Parameters.Create.Options',
     'RgGateBaselineCommitted',
-    'RgGateNoPreservationRequired'
+    'RgGateNoPreservationRequired',
+    'FltGetDestinationFileNameInformation',
+    'DestinationPathStatus',
+    'DestinationPath'
 )){
     if($src -notmatch [regex]::Escape($required)){throw "LAB write-gate invariant missing: $required"}
 }
-if($proto -notmatch '#define\s+RG_PROTOCOL_VERSION\s+4u'){throw 'Minifilter protocol must be v4 for explicit create semantics.'}
+if($proto -notmatch '#define\s+RG_PROTOCOL_VERSION\s+5u'){throw 'Minifilter protocol must be v5 for explicit create and rename-destination semantics.'}
 if($proto -notmatch 'RG_GATE_ROOT_CHARS'){throw 'Protocol must carry an explicit bounded gate root.'}
 if($src -notmatch 'Unresolved/out-of-root paths fail open'){throw 'LAB gate must document fail-open behavior outside the explicitly resolved gate root.'}
 if($src -notmatch 'requestorPid\s*==\s*\(ULONGLONG\)InterlockedCompareExchange64\(&gClientProcessId'){throw 'Gate client PID must be excluded to prevent rollback-store self-deadlock.'}
 if($proto -notmatch 'RG_CREATE_DISPOSITION_SHIFT'){throw 'Protocol must carry CREATE disposition/options semantics.'}
+if($proto -notmatch 'DestinationPathStatus' -or $proto -notmatch 'DestinationPath\[RG_PATH_CHARS\]'){throw 'Protocol v5 must carry bounded rename destination path metadata.'}
 if($proto -notmatch 'RgGateBaselineCommitted' -or $proto -notmatch 'RgGateNoPreservationRequired'){throw 'Protocol must distinguish committed absence baselines from no-op create opens.'}
 if($infText -notmatch 'StartType\s*=\s*3'){throw 'Driver must remain demand-start in the lab prototype.'}
 if($infText -notmatch 'Instance1\.Flags\s*=\s*0x1'){throw 'Automatic volume attachment must remain suppressed.'}

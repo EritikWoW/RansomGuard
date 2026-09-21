@@ -1,6 +1,6 @@
 #include "RansomGuardMinifilter.h"
 
-C_ASSERT(sizeof(RG_EVENT) == 1096);
+C_ASSERT(sizeof(RG_EVENT) == 2120);
 C_ASSERT(sizeof(RG_CONNECT_CONTEXT) == 544);
 C_ASSERT(sizeof(RG_GATE_REPLY) == 24);
 
@@ -27,7 +27,10 @@ static NTSTATUS RgConnect(_In_ PFLT_PORT ClientPort, _In_opt_ PVOID ServerPortCo
                           _In_ ULONG SizeOfContext, _Outptr_result_maybenull_ PVOID *ConnectionPortCookie);
 static VOID RgDisconnect(_In_opt_ PVOID ConnectionCookie);
 static NTSTATUS RgPopulateEvent(_Out_ PRG_EVENT Event, _Inout_ PFLT_CALLBACK_DATA Data,
+                                _In_ PCFLT_RELATED_OBJECTS FltObjects,
                                 _In_ RG_EVENT_TYPE EventType, _In_ ULONG FileInformationClass);
+static VOID RgPopulateRenameDestination(_Inout_ PRG_EVENT Event, _Inout_ PFLT_CALLBACK_DATA Data,
+                                        _In_ PCFLT_RELATED_OBJECTS FltObjects);
 static BOOLEAN RgEventIsInsideGateRoot(_In_ const RG_EVENT *Event);
 static BOOLEAN RgGateEvent(_In_ const RG_EVENT *Event, _Out_opt_ PULONG ErrorCode);
 static LONG RgCurrentClientMode(VOID);
@@ -134,7 +137,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    status = RgPopulateEvent(&event, Data, RgEventCreate, 0);
+    status = RgPopulateEvent(&event, Data, FltObjects, RgEventCreate, 0);
     if (!NT_SUCCESS(status) || !RgEventIsInsideGateRoot(&event)) {
         // LAB gate remains explicitly scoped. Unresolved/out-of-root CREATEs fail open.
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
@@ -170,7 +173,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJE
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    status = RgPopulateEvent(&event, Data, RgEventWrite, 0);
+    status = RgPopulateEvent(&event, Data, FltObjects, RgEventWrite, 0);
     if (!NT_SUCCESS(status) || !RgEventIsInsideGateRoot(&event)) {
         // LAB gate is intentionally scoped. Unresolved/out-of-root paths fail open rather than risking OS-wide I/O loss.
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
@@ -213,7 +216,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    status = RgPopulateEvent(&event, Data, eventType, infoClass);
+    status = RgPopulateEvent(&event, Data, FltObjects, eventType, infoClass);
     if (!NT_SUCCESS(status) || !RgEventIsInsideGateRoot(&event)) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
@@ -227,6 +230,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
 }
 
 static NTSTATUS RgPopulateEvent(PRG_EVENT Event, PFLT_CALLBACK_DATA Data,
+                                PCFLT_RELATED_OBJECTS FltObjects,
                                 RG_EVENT_TYPE EventType, ULONG FileInformationClass)
 {
     PFLT_FILE_NAME_INFORMATION nameInfo = NULL;
@@ -283,7 +287,71 @@ static NTSTATUS RgPopulateEvent(PRG_EVENT Event, PFLT_CALLBACK_DATA Data,
     }
 
     FltReleaseFileNameInformation(nameInfo);
+
+    if (EventType == RgEventRename) {
+        RgPopulateRenameDestination(Event, Data, FltObjects);
+    }
+
     return status;
+}
+
+static VOID RgPopulateRenameDestination(PRG_EVENT Event, PFLT_CALLBACK_DATA Data,
+                                        PCFLT_RELATED_OBJECTS FltObjects)
+{
+    PFILE_RENAME_INFORMATION renameInfo;
+    PFLT_FILE_NAME_INFORMATION destinationInfo = NULL;
+    ULONG bufferLength;
+    ULONG minimumLength = FIELD_OFFSET(FILE_RENAME_INFORMATION, FileName);
+    ULONG chars;
+    NTSTATUS status;
+    FILE_INFORMATION_CLASS infoClass;
+
+    Event->DestinationPathStatus = RgPathUnknown;
+    infoClass = Data->Iopb->Parameters.SetFileInformation.FileInformationClass;
+    bufferLength = Data->Iopb->Parameters.SetFileInformation.Length;
+    renameInfo = (PFILE_RENAME_INFORMATION)Data->Iopb->Parameters.SetFileInformation.InfoBuffer;
+
+    if (renameInfo == NULL || bufferLength < minimumLength ||
+        renameInfo->FileNameLength == 0 ||
+        renameInfo->FileNameLength > (bufferLength - minimumLength) ||
+        (renameInfo->FileNameLength % sizeof(WCHAR)) != 0) {
+        Event->DestinationPathStatus = RgPathQueryFailed;
+        return;
+    }
+
+    if (infoClass == FileRenameInformationEx) {
+        Event->Flags = *(PULONG)renameInfo;
+    } else {
+        Event->Flags = renameInfo->ReplaceIfExists ? 1u : 0u;
+    }
+
+    status = FltGetDestinationFileNameInformation(
+        FltObjects->Instance,
+        FltObjects->FileObject,
+        renameInfo->RootDirectory,
+        renameInfo->FileName,
+        renameInfo->FileNameLength,
+        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
+        &destinationInfo);
+
+    if (!NT_SUCCESS(status) || destinationInfo == NULL) {
+        Event->DestinationPathStatus = RgPathQueryFailed;
+        return;
+    }
+
+    chars = destinationInfo->Name.Length / sizeof(WCHAR);
+    if (chars >= RG_PATH_CHARS) {
+        chars = RG_PATH_CHARS - 1;
+        Event->DestinationPathStatus = RgPathTruncated;
+    } else {
+        Event->DestinationPathStatus = RgPathResolved;
+    }
+
+    if (chars != 0) {
+        RtlCopyMemory(Event->DestinationPath, destinationInfo->Name.Buffer, chars * sizeof(WCHAR));
+    }
+    Event->DestinationPath[chars] = L'\0';
+    FltReleaseFileNameInformation(destinationInfo);
 }
 
 static BOOLEAN RgEventIsInsideGateRoot(const RG_EVENT *Event)
@@ -389,7 +457,7 @@ static VOID RgQueueEvent(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjec
     }
 
     RtlZeroMemory(work, sizeof(*work));
-    status = RgPopulateEvent(&work->Event, Data, EventType, FileInformationClass);
+    status = RgPopulateEvent(&work->Event, Data, FltObjects, EventType, FileInformationClass);
     if (!NT_SUCCESS(status) && work->Event.PathStatus != RgPathQueryFailed) {
         RtlSecureZeroMemory(&work->Event, sizeof(work->Event));
         ExFreePoolWithTag(work, RG_POOL_TAG);

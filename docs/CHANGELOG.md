@@ -1,3 +1,13 @@
+# RansomGuard 0.7.4.0
+- Protocol v5 adds a normalized destination path and destination path status for RENAME events.
+- The minifilter obtains rename destinations with `FltGetDestinationFileNameInformation` instead of reconstructing relative names in user mode.
+- LAB rename gating now preserves the source and, when present, the destination file before allow; missing destinations receive a durable absence baseline.
+- Added a write-through SHA-256 hash-chained `rename-state` intent journal with source/destination identities, destination state, rename flags, information class and kernel request sequence.
+- Cross-root, unresolved/truncated destination, directory-topology and same-file-alias rename cases fail closed in LAB mode.
+- Repository startup validation now includes nested `rename-state` journals.
+- Audit client decodes and records protocol-v5 rename destination metadata.
+- This milestone records pre-operation rename intent only; post-operation tunneled-name/file-ID reconciliation is still required before automatic topology recovery.
+
 # RansomGuard 0.7.3.0
 - Added incident-scoped durable existing-file identity tracking using Windows `FILE_ID_INFO` (volume serial + 128-bit file ID).
 - The LAB gate captures/verifies identity before destructive existing-file preservation and rejects a path that changes to a different file identity during the same incident.

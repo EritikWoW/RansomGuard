@@ -173,6 +173,7 @@ public sealed class RollbackStore
     public void VerifyAll()
     {
         LoadAndValidateJournal(rebuildState: false);
+        var referenced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var capture in _firstCapture.Values)
         {
             var snapshot = SafeSnapshotPath(capture.SnapshotRelativePath);
@@ -180,7 +181,18 @@ public sealed class RollbackStore
             var info = new FileInfo(snapshot);
             if (info.Length != capture.OriginalLength)
                 throw new InvalidDataException("Rollback object length mismatch: " + snapshot);
+            var actualSha = HashFile(snapshot);
+            if (!actualSha.Equals(capture.OriginalSha256, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Committed rollback object SHA-256 mismatch: " + snapshot);
+            referenced.Add(Path.GetFullPath(snapshot));
         }
+
+        foreach (var file in Directory.EnumerateFiles(_objects, "*.preimage", SearchOption.TopDirectoryOnly))
+            if (!referenced.Contains(Path.GetFullPath(file)))
+                throw new InvalidDataException("Unjournaled rollback object found: " + file);
+
+        foreach (var file in Directory.EnumerateFiles(_objects, "*.tmp", SearchOption.TopDirectoryOnly))
+            throw new InvalidDataException("Incomplete rollback temp artifact found: " + file);
     }
 
     private void LoadAndValidateJournal(bool rebuildState = true)
@@ -209,11 +221,15 @@ public sealed class RollbackStore
             var calculated = HashPayload(line.Payload);
             if (!calculated.Equals(line.RecordSha256, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Rollback journal record hash mismatch.");
+            if (!Enum.IsDefined(line.Mutation) || line.OriginalLength < 0 ||
+                string.IsNullOrWhiteSpace(line.SnapshotRelativePath) || !IsSha256(line.OriginalSha256))
+                throw new InvalidDataException("Invalid rollback journal record fields.");
             var snapshot = SafeSnapshotPath(line.SnapshotRelativePath);
             if (!File.Exists(snapshot)) throw new InvalidDataException("Rollback journal references a missing object.");
             if (new FileInfo(snapshot).Length != line.OriginalLength)
                 throw new InvalidDataException("Rollback journal object length mismatch.");
-            rebuilt.TryAdd(Path.GetFullPath(line.OriginalPath), line.ToCapture());
+            if (!rebuilt.TryAdd(Path.GetFullPath(line.OriginalPath), line.ToCapture()))
+                throw new InvalidDataException("Duplicate rollback capture for original path.");
             expectedPrevious = line.RecordSha256;
             expectedSequence++;
         }
@@ -265,6 +281,17 @@ public sealed class RollbackStore
         var hash = await sha.ComputeHashAsync(fs, cancellationToken).ConfigureAwait(false);
         return Hex(hash);
     }
+
+    private static string HashFile(string path)
+    {
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024,
+            FileOptions.SequentialScan);
+        using var sha = SHA256.Create();
+        return Hex(sha.ComputeHash(fs));
+    }
+
+    private static bool IsSha256(string value) =>
+        value.Length == 64 && value.All(char.IsAsciiHexDigit);
 
     private static string Hex(byte[] data) => Convert.ToHexString(data);
 

@@ -148,6 +148,18 @@ The gate also rejects source changes that introduce an unlimited/disable/bypass 
 
 These tests validate userspace accounting/policy. Native low-disk behavior under real Filter Manager load still requires the disposable-VM/fault-injection campaign.
 
+## 0.7.18 rollback lifecycle and retention coverage
+
+Rollback tests validate that new sessions start Active, old clean Completed sessions become eligible, and Held, Active, Faulted and pending-transaction sessions are excluded.
+
+A stale plan is created, then the candidate session is put on Hold; execution must reject the old plan and leave the session in Sessions. After releasing Hold, execution must produce the exact Started/Quarantined/Completed audit chain, remove the candidate from Sessions, remove the transient Retired tree and leave protected sessions untouched.
+
+A separate capacity-pressure test uses a tiny completed-byte cap and verifies selection of the oldest eligible session while respecting the minimum pressure age.
+
+Crash-resume coverage writes PurgeStarted, moves the session into Retired and simulates process loss before Quarantined. The next plan must emit ResumePurgeFromRetired, complete the audit chain and remove the quarantined tree.
+
+The source gate additionally requires manual-only maintenance CLI packaging, lifecycle hash chains, no automatic retention invocation in GateClient, no direct Sessions deletion, no force/ignore-hold commands and reparse-safe quarantine cleanup.
+
 ## Manual disposable-VM minifilter runtime gate
 
 0.7.15 uses `.github/workflows/minifilter-runtime-vm.yml`, a manual workflow that is intentionally excluded from push/pull-request CI. It requires a self-hosted Windows VM runner labeled `ransomguard-lab-vm`, Administrator execution, installed WDK/VS tooling, preconfigured lab signing, and an already trusted certificate/private key referenced by the environment secret `RANSOMGUARD_LAB_CERT_THUMBPRINT`.

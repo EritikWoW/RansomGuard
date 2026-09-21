@@ -22,7 +22,11 @@ Directory.CreateDirectory(options.StoreRoot);
 var repository = new RollbackRepository(options.StoreRoot);
 repository.VerifyAll(); // Refuse to start a new gate session on top of ambiguous/crash-damaged rollback state.
 var restartSummary = await RestartReconciliation.ObservePendingAsync(
-    repository, options.Root, CancellationToken.None).ConfigureAwait(false);
+    repository,
+    options.Root,
+    checked(options.MaxStoreMiB * RollbackStorageBudget.MiB),
+    checked(options.MinFreeMiB * RollbackStorageBudget.MiB),
+    CancellationToken.None).ConfigureAwait(false);
 var sessionId = options.SessionId ?? $"gate-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}";
 var store = repository.CreateSession(sessionId);
 var writeStore = new RangeRollbackStore(Path.Combine(store.Root, "write-cow"));
@@ -888,6 +892,8 @@ static class RestartReconciliation
     public static async Task<RestartReconciliationSummary> ObservePendingAsync(
         RollbackRepository repository,
         string currentRoot,
+        long maxSessionBytes,
+        long minFreeBytes,
         CancellationToken cancellationToken)
     {
         var observed = 0;
@@ -899,6 +905,8 @@ static class RestartReconciliation
         {
             cancellationToken.ThrowIfCancellationRequested();
             var session = repository.OpenSession(sessionId);
+            var storageBudget = new RollbackStorageBudget(
+                session.Root, maxSessionBytes, minFreeBytes);
             var restartStore = new RestartReconciliationStore(Path.Combine(session.Root, "restart-state"));
 
             var createRoot = Path.Combine(session.Root, "create-state");
@@ -913,6 +921,10 @@ static class RestartReconciliation
 
                     var current = PathProbe.ObserveForRestart(intent.OriginalPath);
                     var evidence = RestartReconciliationClassifier.ClassifyCreate(intent, current);
+                    await using var restartCreateReservation = await storageBudget.ReserveAsync(
+                        RollbackStorageBudget.MetadataReservationBytes,
+                        "restart-create-evidence",
+                        cancellationToken).ConfigureAwait(false);
                     _ = await restartStore.RecordObservationAsync(
                             RestartOperationKind.Create,
                             intent.RequestSequence,
@@ -940,6 +952,10 @@ static class RestartReconciliation
                     var source = PathProbe.ObserveForRestart(intent.SourcePath);
                     var destination = PathProbe.ObserveForRestart(intent.DestinationPath);
                     var evidence = RestartReconciliationClassifier.ClassifyRename(intent, source, destination);
+                    await using var restartRenameReservation = await storageBudget.ReserveAsync(
+                        RollbackStorageBudget.MetadataReservationBytes,
+                        "restart-rename-evidence",
+                        cancellationToken).ConfigureAwait(false);
                     _ = await restartStore.RecordObservationAsync(
                             RestartOperationKind.Rename,
                             intent.RequestSequence,

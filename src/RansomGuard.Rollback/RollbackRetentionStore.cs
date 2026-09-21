@@ -22,7 +22,7 @@ public sealed class RollbackRetentionStore
         get { lock (_records) return _records.OrderBy(x => x.Sequence).ToArray(); }
     }
 
-    public RollbackRetentionStore(string repositoryRoot)
+    public RollbackRetentionStore(string repositoryRoot, bool createIfMissing = true)
     {
         if (string.IsNullOrWhiteSpace(repositoryRoot))
             throw new ArgumentException("Rollback repository root is required.", nameof(repositoryRoot));
@@ -30,8 +30,17 @@ public sealed class RollbackRetentionStore
         var repositoryFull = Path.GetFullPath(repositoryRoot);
         _root = Path.Combine(repositoryFull, "retention-state");
         _journal = Path.Combine(_root, "retention-journal.jsonl");
-        Directory.CreateDirectory(_root);
-        RejectReparse(_root);
+
+        if (createIfMissing)
+        {
+            Directory.CreateDirectory(_root);
+            RejectReparse(_root);
+        }
+        else if (Directory.Exists(_root))
+        {
+            RejectReparse(_root);
+        }
+
         LoadAndValidateJournal();
     }
 

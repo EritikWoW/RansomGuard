@@ -17,6 +17,7 @@ typedef struct _RG_WORK_ITEM {
 typedef struct _RG_POST_CONTEXT {
     ULONGLONG RequestSequence;
     PFLT_FILE_NAME_INFORMATION PreDestinationNameInfo;
+    PFLT_FILE_NAME_INFORMATION PreCreateNameInfo;
 } RG_POST_CONTEXT, *PRG_POST_CONTEXT;
 
 DRIVER_INITIALIZE DriverEntry;
@@ -25,6 +26,9 @@ NTSTATUS RgInstanceSetup(_In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ FLT_INSTANC
                          _In_ DEVICE_TYPE VolumeDeviceType, _In_ FLT_FILESYSTEM_TYPE VolumeFilesystemType);
 FLT_PREOP_CALLBACK_STATUS RgPreCreate(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects,
                                       _Flt_CompletionContext_Outptr_ PVOID *CompletionContext);
+FLT_POSTOP_CALLBACK_STATUS RgPostCreate(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects,
+                                        _In_opt_ PVOID CompletionContext,
+                                        _In_ FLT_POST_OPERATION_FLAGS Flags);
 FLT_PREOP_CALLBACK_STATUS RgPreWrite(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects,
                                      _Flt_CompletionContext_Outptr_ PVOID *CompletionContext);
 FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects,

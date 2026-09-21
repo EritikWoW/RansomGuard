@@ -681,12 +681,22 @@ static VOID RgAttachPagingStreamContext(PCFLT_RELATED_OBJECTS FltObjects,
                                         ULONGLONG CreateRequestSequence)
 {
     PRG_STREAM_CONTEXT context = NULL;
+    PRG_STREAM_CONTEXT oldContext = NULL;
     NTSTATUS status;
+    FLT_SET_CONTEXT_OPERATION operation;
 
     if (FltObjects == NULL || FltObjects->FileObject == NULL || CreateResult == NULL ||
         CreateResult->PathStatus != RgPathResolved) {
         return;
     }
+
+    // Stream contexts are shared across handles. A later preservation-sensitive CREATE must
+    // upgrade a context that may have been seeded by an earlier read-only open. Conversely,
+    // a read-only open must never downgrade an already protected stream.
+    operation = (PreservationDecision == RgGateSnapshotCommitted ||
+                 PreservationDecision == RgGateBaselineCommitted)
+        ? FLT_SET_CONTEXT_REPLACE_IF_EXISTS
+        : FLT_SET_CONTEXT_KEEP_IF_EXISTS;
 
     status = FltAllocateContext(
         gFilter,
@@ -712,15 +722,18 @@ static VOID RgAttachPagingStreamContext(PCFLT_RELATED_OBJECTS FltObjects,
     status = FltSetStreamContext(
         FltObjects->Instance,
         FltObjects->FileObject,
-        FLT_SET_CONTEXT_KEEP_IF_EXISTS,
+        operation,
         context,
-        NULL);
+        (PFLT_CONTEXT *)&oldContext);
 
     if (!NT_SUCCESS(status) && status != STATUS_FLT_CONTEXT_ALREADY_DEFINED &&
         status != STATUS_NOT_SUPPORTED) {
         InterlockedIncrement(&gDropped);
     }
 
+    if (oldContext != NULL) {
+        FltReleaseContext(oldContext);
+    }
     FltReleaseContext(context);
 }
 

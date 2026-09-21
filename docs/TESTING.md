@@ -150,7 +150,7 @@ These tests validate userspace accounting/policy. Native low-disk behavior under
 
 ## 0.7.18 rollback lifecycle and retention coverage
 
-Rollback tests validate that new sessions start Active, old clean Completed sessions become eligible, and Held, Active, Faulted and pending-transaction sessions are excluded.
+Rollback tests validate that new sessions start Active, old clean Completed sessions become eligible, and Held, Active, Faulted and pending-transaction sessions are excluded. They also require a second concurrent maintenance lease to fail and verify that the lease can be reacquired after release.
 
 A stale plan is created, then the candidate session is put on Hold; execution must reject the old plan and leave the session in Sessions. After releasing Hold, execution must produce the exact Started/Quarantined/Completed audit chain, remove the candidate from Sessions, remove the transient Retired tree and leave protected sessions untouched.
 

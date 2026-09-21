@@ -34,9 +34,9 @@ public sealed class RollbackRetentionReleaseStore
         _root = Path.Combine(repositoryFull, "Retention");
         _journal = Path.Combine(_root, "retention-release-journal.jsonl");
 
-        Directory.CreateDirectory(_root);
         RejectReparse(repositoryFull);
-        RejectReparse(_root);
+        if (Directory.Exists(_root))
+            RejectReparse(_root);
         LoadAndValidateJournal();
     }
 
@@ -174,6 +174,8 @@ public sealed class RollbackRetentionReleaseStore
 
     private void AppendLine(RollbackRetentionReleaseLine line)
     {
+        Directory.CreateDirectory(_root);
+        RejectReparse(_root);
         var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(line, _json) + "\n");
         using var fs = new FileStream(
             _journal,

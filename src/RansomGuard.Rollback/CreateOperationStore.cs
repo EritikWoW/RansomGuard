@@ -87,8 +87,8 @@ public sealed class CreateOperationStore
             throw new InvalidDataException("Denied CREATE operations must not be recorded as allowed intents.");
 
         var full = NormalizePath(originalPath);
-        ValidateIntentFields(disposition, createOptions, observedTargetState, preservationAction,
-            preservationRecordSha256, originalIdentity);
+        ValidateIntentFields(disposition, createOptions, desiredAccess, observedTargetState, preservationAction,
+            preservationRecordSha256, originalIdentity, allowLegacyWriteCapableNoPreservation: false);
 
         await _appendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -286,10 +286,12 @@ public sealed class CreateOperationStore
             ValidateIntentFields(
                 line.Disposition,
                 line.CreateOptions,
+                line.DesiredAccess,
                 line.ObservedTargetState,
                 line.PreservationAction,
                 line.PreservationRecordSha256,
-                originalIdentity);
+                originalIdentity,
+                allowLegacyWriteCapableNoPreservation: true);
 
             rebuilt.Add(line.ToIntent() with { OriginalPath = full });
             expectedPrevious = line.RecordSha256;
@@ -392,19 +394,29 @@ public sealed class CreateOperationStore
     private static void ValidateIntentFields(
         CreateDisposition disposition,
         uint createOptions,
+        uint desiredAccess,
         CreateTargetState targetState,
         CreatePreservationAction preservationAction,
         string preservationRecordSha256,
-        DurableFileIdentity? originalIdentity)
+        DurableFileIdentity? originalIdentity,
+        bool allowLegacyWriteCapableNoPreservation)
     {
         if (!Enum.IsDefined(disposition) || !Enum.IsDefined(targetState) || !Enum.IsDefined(preservationAction))
             throw new InvalidDataException("Invalid CREATE intent state.");
 
-        var expectedAction = CreateGatePolicy.Decide(disposition, targetState, createOptions);
+        var expectedAction = CreateGatePolicy.Decide(disposition, targetState, createOptions, desiredAccess);
         if (expectedAction == CreatePreservationAction.DenyUnsupported)
             throw new InvalidDataException("Unsupported CREATE policy outcome must not be committed as an allowed intent.");
-        if (preservationAction != expectedAction)
-            throw new InvalidDataException("CREATE intent preservation action does not match the disposition/target policy.");
+
+        var legacyWriteCapableNoPreservation =
+            allowLegacyWriteCapableNoPreservation &&
+            preservationAction == CreatePreservationAction.NoPreservationRequired &&
+            expectedAction == CreatePreservationAction.CaptureExistingPreimage &&
+            CreateGatePolicy.Decide(disposition, targetState, createOptions, desiredAccess: 0) ==
+                CreatePreservationAction.NoPreservationRequired;
+
+        if (preservationAction != expectedAction && !legacyWriteCapableNoPreservation)
+            throw new InvalidDataException("CREATE intent preservation action does not match the disposition/target/access policy.");
 
         switch (preservationAction)
         {

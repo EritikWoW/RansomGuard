@@ -26,6 +26,11 @@ foreach($required in @(
     'RgEventIsInsideGateRoot',
     'gClientProcessId',
     'RG_GATE_TIMEOUT_MS',
+    'RG_MAX_GATE_INFLIGHT',
+    'gGateInFlight',
+    'RgAcquireClientPort',
+    'RgReleaseClientPort',
+    'RgWaitForPortUsers',
     'FltSendMessage',
     'RgGateSnapshotCommitted',
     'FLT_PREOP_COMPLETE',
@@ -60,6 +65,22 @@ foreach($required in @(
 )){
     if($src -notmatch [regex]::Escape($required)){throw "LAB write-gate invariant missing: $required"}
 }
+if($src -notmatch 'InterlockedIncrement\(&gGateInFlight\)' -or
+   $src -notmatch 'inFlight\s*>\s*RG_MAX_GATE_INFLIGHT' -or
+   $src -notmatch 'STATUS_DEVICE_BUSY'){
+    throw 'Kernel gate must fail closed when the bounded in-flight admission limit is exceeded.'
+}
+$gateStart=$src.IndexOf('static BOOLEAN RgGateEvent(')
+$gateEnd=$src.IndexOf('static VOID RgQueueEvent',$gateStart)
+if($gateStart -lt 0 -or $gateEnd -lt 0){throw 'RgGateEvent source block missing.'}
+$gateBlock=$src.Substring($gateStart,$gateEnd-$gateStart)
+if($gateBlock -match 'ExAcquireFastMutex\(&gPortMutex\)'){
+    throw 'RgGateEvent must not hold gPortMutex while waiting for user-mode preservation.'
+}
+if($gateBlock -notmatch 'RgAcquireClientPort\(RgClientLabGate' -or
+   $gateBlock -notmatch 'RgReleaseClientPort\(\)'){
+    throw 'RgGateEvent must use the short-lived client-port lease around FltSendMessage.'
+}
 if($proto -notmatch '#define\s+RG_PROTOCOL_VERSION\s+8u'){throw 'Minifilter protocol must be v8 for CREATE/RENAME completion identity reconciliation.'}
 if($proto -notmatch 'RG_GATE_ROOT_CHARS'){throw 'Protocol must carry an explicit bounded gate root.'}
 if($src -notmatch 'Unresolved/out-of-root paths fail open'){throw 'LAB gate must document fail-open behavior outside the explicitly resolved gate root.'}
@@ -81,7 +102,7 @@ if($proto -notmatch 'RgGateBaselineCommitted' -or $proto -notmatch 'RgGateNoPres
 if($infText -notmatch 'StartType\s*=\s*3'){throw 'Driver must remain demand-start in the lab prototype.'}
 if($infText -notmatch 'Instance1\.Flags\s*=\s*0x1'){throw 'Automatic volume attachment must remain suppressed.'}
 if($infText -notmatch 'Instance1\.Altitude\s*=\s*"370099\.4242"'){throw 'Unexpected LAB altitude. Review altitude policy manually.'}
-Write-Host 'LAB pre-write gate source check PASSED.' -ForegroundColor Green
+Write-Host 'LAB pre-write gate source check PASSED, including bounded concurrent gate admission.' -ForegroundColor Green
 Write-Host 'Gate scope: one explicit NT root negotiated by the single connected client.'
 Write-Host 'In-scope CREATE/WRITE/RENAME/DELETE/TRUNCATE require an explicit user-mode preservation decision; allowed CREATE/RENAME operations emit correlated post-operation reconciliation.'
 Write-Host 'Out-of-scope/unresolved I/O remains fail-open; no process-control or kernel file-writing APIs are present.'

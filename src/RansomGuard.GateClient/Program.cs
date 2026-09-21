@@ -266,11 +266,14 @@ finally
     if (activeWorkers.Count != 0)
         await Task.WhenAll(activeWorkers).ConfigureAwait(false);
 
-    await using var lifecycleCloseReservation = await storageBudget.ReserveAsync(
-        RollbackStorageBudget.MetadataReservationBytes,
-        "session-lifecycle-close",
-        CancellationToken.None).ConfigureAwait(false);
-    _ = await lifecycleStore.RecordClosedCleanlyAsync(CancellationToken.None).ConfigureAwait(false);
+    if (cts.IsCancellationRequested)
+    {
+        await using var lifecycleCloseReservation = await storageBudget.ReserveAsync(
+            RollbackStorageBudget.MetadataReservationBytes,
+            "session-lifecycle-close",
+            CancellationToken.None).ConfigureAwait(false);
+        _ = await lifecycleStore.RecordClosedCleanlyAsync(CancellationToken.None).ConfigureAwait(false);
+    }
 }
 
 static class ActivationPreflight

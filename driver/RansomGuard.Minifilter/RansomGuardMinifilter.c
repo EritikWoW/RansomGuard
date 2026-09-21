@@ -119,11 +119,14 @@ static FLT_PREOP_CALLBACK_STATUS RgCompleteDenied(PFLT_CALLBACK_DATA Data)
 FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjects, PVOID *CompletionContext)
 {
     RG_EVENT event;
+    PRG_CREATE_CONTEXT createContext = NULL;
     NTSTATUS status;
     LONG mode;
+    LONG createPending;
     ULONG gateError = 0;
+    RG_GATE_DECISION decision = RgGateInvalid;
 
-    UNREFERENCED_PARAMETER(CompletionContext);
+    *CompletionContext = NULL;
     if (!RgShouldObserve(Data)) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
@@ -144,12 +147,106 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    if (!RgGateEvent(&event, &gateError)) {
-        UNREFERENCED_PARAMETER(gateError);
+    if (InterlockedCompareExchange(&gReconciliationFaulted, 0, 0) != 0) {
         return RgCompleteDenied(Data);
     }
 
+    createPending = InterlockedIncrement(&gCreatePending);
+    if (createPending > RG_MAX_PENDING) {
+        InterlockedDecrement(&gCreatePending);
+        return RgCompleteDenied(Data);
+    }
+
+    createContext = (PRG_CREATE_CONTEXT)ExAllocatePool2(
+        POOL_FLAG_NON_PAGED, sizeof(RG_CREATE_CONTEXT), RG_POOL_TAG);
+    if (createContext == NULL) {
+        InterlockedDecrement(&gCreatePending);
+        return RgCompleteDenied(Data);
+    }
+
+    RtlZeroMemory(createContext, sizeof(*createContext));
+    createContext->PreEvent = event;
+
+    if (!RgGateEvent(&event, &gateError, &decision)) {
+        UNREFERENCED_PARAMETER(gateError);
+        RtlSecureZeroMemory(createContext, sizeof(*createContext));
+        ExFreePoolWithTag(createContext, RG_POOL_TAG);
+        InterlockedDecrement(&gCreatePending);
+        return RgCompleteDenied(Data);
+    }
+
+    if (decision == RgGateSnapshotCommitted || decision == RgGateBaselineCommitted) {
+        *CompletionContext = createContext;
+        return FLT_PREOP_SUCCESS_WITH_CALLBACK;
+    }
+
+    RtlSecureZeroMemory(createContext, sizeof(*createContext));
+    ExFreePoolWithTag(createContext, RG_POOL_TAG);
+    InterlockedDecrement(&gCreatePending);
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
+}
+
+FLT_POSTOP_CALLBACK_STATUS RgPostCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjects,
+                                         PVOID CompletionContext, FLT_POST_OPERATION_FLAGS Flags)
+{
+    PRG_CREATE_CONTEXT createContext = (PRG_CREATE_CONTEXT)CompletionContext;
+    RG_EVENT result;
+    FILE_ID_INFORMATION fileIdInfo;
+    NTSTATUS identityStatus = STATUS_UNSUCCESSFUL;
+    ULONG returned = 0;
+    ULONG gateError = 0;
+
+    if (createContext == NULL) {
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    }
+
+    if (FlagOn(Flags, FLTFL_POST_OPERATION_DRAINING)) {
+        RtlSecureZeroMemory(createContext, sizeof(*createContext));
+        ExFreePoolWithTag(createContext, RG_POOL_TAG);
+        InterlockedDecrement(&gCreatePending);
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    }
+
+    result = createContext->PreEvent;
+    result.EventType = (ULONG)RgEventCreateResult;
+    result.RelatedSequence = createContext->PreEvent.Sequence;
+    result.Sequence = (ULONGLONG)InterlockedIncrement64(&gSequence);
+    result.CompletionStatus = (ULONG)Data->IoStatus.Status;
+    result.CreateAction = (ULONG)Data->IoStatus.Information;
+    result.IdentityStatus = (ULONG)STATUS_UNSUCCESSFUL;
+    result.VolumeSerialNumber = 0;
+    result.FileIdPart0 = 0;
+    result.FileIdPart1 = 0;
+    result.Reserved2 = 0;
+    KeQuerySystemTimePrecise((PLARGE_INTEGER)&result.SystemTime100ns);
+
+    if (NT_SUCCESS(Data->IoStatus.Status) && FltObjects->FileObject != NULL &&
+        KeGetCurrentIrql() == PASSIVE_LEVEL) {
+        RtlZeroMemory(&fileIdInfo, sizeof(fileIdInfo));
+        identityStatus = FltQueryInformationFile(
+            FltObjects->Instance,
+            FltObjects->FileObject,
+            &fileIdInfo,
+            sizeof(fileIdInfo),
+            FileIdInformation,
+            &returned);
+        result.IdentityStatus = (ULONG)identityStatus;
+        if (NT_SUCCESS(identityStatus) && returned >= sizeof(fileIdInfo)) {
+            result.VolumeSerialNumber = fileIdInfo.VolumeSerialNumber;
+            RtlCopyMemory(&result.FileIdPart0, &fileIdInfo.FileId.Identifier[0], sizeof(result.FileIdPart0));
+            RtlCopyMemory(&result.FileIdPart1, &fileIdInfo.FileId.Identifier[8], sizeof(result.FileIdPart1));
+        }
+    }
+
+    if (!RgCommitCreateResult(&result, &gateError)) {
+        UNREFERENCED_PARAMETER(gateError);
+        InterlockedExchange(&gReconciliationFaulted, 1);
+    }
+
+    RtlSecureZeroMemory(createContext, sizeof(*createContext));
+    ExFreePoolWithTag(createContext, RG_POOL_TAG);
+    InterlockedDecrement(&gCreatePending);
+    return FLT_POSTOP_FINISHED_PROCESSING;
 }
 
 FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjects, PVOID *CompletionContext)

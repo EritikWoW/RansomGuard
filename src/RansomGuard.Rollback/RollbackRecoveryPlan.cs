@@ -113,7 +113,7 @@ public static class RollbackRecoveryPlanner
                     var reviewable = assessment.State is
                         RestartEvidenceAssessmentState.ConsistentSupportsCompleted or
                         RestartEvidenceAssessmentState.ConsistentSupportsNotCompleted;
-                    var reason = assessment.State switch
+                    var crashReason = assessment.State switch
                     {
                         RestartEvidenceAssessmentState.ConsistentSupportsCompleted =>
                             "CREATE intent has no authoritative kernel completion, but all durable restart observations consistently support completion. Manual review is allowed; restart evidence never becomes a kernel completion.",
@@ -133,7 +133,7 @@ public static class RollbackRecoveryPlanner
                         reviewable ? assessment.LatestRecordSha256 : intent.RecordSha256,
                         intent.RequestSequence,
                         false,
-                        reason));
+                        crashReason));
                     continue;
                 }
 
@@ -190,7 +190,7 @@ public static class RollbackRecoveryPlanner
                     var reviewable = assessment.State is
                         RestartEvidenceAssessmentState.ConsistentSupportsCompleted or
                         RestartEvidenceAssessmentState.ConsistentSupportsNotCompleted;
-                    var reason = assessment.State switch
+                    var crashReason = assessment.State switch
                     {
                         RestartEvidenceAssessmentState.ConsistentSupportsCompleted =>
                             "RENAME intent has no authoritative kernel completion, but all durable restart observations consistently support completion. Manual topology review is allowed; restart evidence never becomes a kernel completion.",
@@ -210,7 +210,7 @@ public static class RollbackRecoveryPlanner
                         reviewable ? assessment.LatestRecordSha256 : intent.RecordSha256,
                         intent.RequestSequence,
                         false,
-                        reason));
+                        crashReason));
                     continue;
                 }
 

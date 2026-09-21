@@ -50,7 +50,7 @@ public sealed class FileIdentityStore
 
         using var input = new FileStream(full, FileMode.Open, FileAccess.Read,
             FileShare.Read | FileShare.Write | FileShare.Delete, 4096, FileOptions.None);
-        var identity = QueryIdentity(input.SafeFileHandle);
+        var identity = QueryHandleIdentity(input.SafeFileHandle);
 
         await _appendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -170,7 +170,7 @@ public sealed class FileIdentityStore
     private string HashPayload(FileIdentityJournalPayload payload) =>
         Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(payload, _json)));
 
-    private static DurableFileIdentity QueryIdentity(SafeFileHandle handle)
+    public static DurableFileIdentity QueryHandleIdentity(SafeFileHandle handle)
     {
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("Durable file identity requires Windows FILE_ID_INFO.");

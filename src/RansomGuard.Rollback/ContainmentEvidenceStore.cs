@@ -254,7 +254,7 @@ public sealed class ContainmentEvidenceStore
         RejectReparse(_journal);
         var rebuilt = new List<ContainmentEvidence>();
         var keys = new HashSet<string>(StringComparer.Ordinal);
-        var requested = new HashSet<ulong>();
+        var requested = new Dictionary<ulong, ContainmentEvidence>();
         var expectedPrevious = new string('0', 64);
         long expectedSequence = 1;
 
@@ -296,21 +296,29 @@ public sealed class ContainmentEvidenceStore
                 throw new InvalidDataException("Containment evidence journal record hash mismatch.");
 
             var full = NormalizePath(line.Path);
+            var evidence = line.ToEvidence() with { Path = full };
             if (line.Phase == ContainmentEvidencePhase.Requested)
             {
                 if (line.KernelStatus != 0 || line.ContainmentActive || line.ContainedProcessId != 0)
                     throw new InvalidDataException("Containment request record claims kernel activation.");
-                requested.Add(line.KernelSequence);
+                requested.Add(line.KernelSequence, evidence);
             }
             else
             {
-                if (!requested.Contains(line.KernelSequence) ||
+                if (!requested.TryGetValue(line.KernelSequence, out var request) ||
                     !line.ContainmentActive ||
-                    line.ContainedProcessId != line.ProcessId)
-                    throw new InvalidDataException("Containment kernel-active record is not linked to a valid request.");
+                    line.ContainedProcessId != line.ProcessId ||
+                    request.ProcessId != line.ProcessId ||
+                    request.ProcessCreationFileTimeUtc != line.ProcessCreationFileTimeUtc ||
+                    request.EventType != line.EventType ||
+                    !request.Path.Equals(full, StringComparison.OrdinalIgnoreCase) ||
+                    request.PreservationDecision != line.PreservationDecision ||
+                    request.EvidenceCount != line.EvidenceCount ||
+                    request.DistinctPathCount != line.DistinctPathCount)
+                    throw new InvalidDataException("Containment kernel-active record is not linked to the exact durable request.");
             }
 
-            rebuilt.Add(line.ToEvidence() with { Path = full });
+            rebuilt.Add(evidence);
             expectedPrevious = line.RecordSha256;
             expectedSequence++;
         }

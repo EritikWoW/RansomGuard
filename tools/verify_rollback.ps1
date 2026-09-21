@@ -168,5 +168,16 @@ if($repository -notmatch 'new CreateRollbackStore\(createRoot\)\.VerifyAll\(\)')
 if($repository -notmatch 'new CreateOperationStore\(createRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include CREATE intent/completion journals.'}
 if($repository -notmatch 'new FileIdentityStore\(identityRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested identity-state stores.'}
 if($repository -notmatch 'new RenameRollbackStore\(renameRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested rename-state stores.'}
-Write-Host 'Rollback source gate PASSED: full-file, range-COW, create-baseline, CREATE intent/completion, durable file-identity, rename-intent/completion journals, hashes, crash-artifact rejection, write-through commits, first-state semantics, copy-only restore.'
-Write-Host 'Normal service capture remains disabled; v0.7.8 keeps blocking preservation inside the explicit LAB gate only.'
+foreach($required in @(
+    'PendingRollbackSession',
+    'PendingSessions()',
+    'new CreateOperationStore(createRoot).PendingIntents',
+    'new RenameRollbackStore(renameRoot).PendingIntents',
+    'CreateRequestSequences',
+    'RenameRequestSequences',
+    'TotalPending'
+)){
+    if($repository -notmatch [regex]::Escape($required)){throw "Pending-operation quarantine invariant missing: $required"}
+}
+Write-Host 'Rollback source gate PASSED: full-file, range-COW, create-baseline, CREATE intent/completion, durable file-identity, rename-intent/completion journals, pending-operation quarantine reporting, hashes, crash-artifact rejection, write-through commits, first-state semantics, copy-only restore.'
+Write-Host 'Normal service capture remains disabled; v0.7.9 keeps blocking preservation inside the explicit LAB gate only.'

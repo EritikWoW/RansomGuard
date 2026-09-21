@@ -542,14 +542,18 @@ static class PathProbe
     }
 }
 
-sealed record Options(string Root, string StoreRoot, string? SessionId, bool PrepareOnly)
+sealed record Options(string Root, string StoreRoot, string? SessionId, bool PrepareOnly, int GateWorkers)
 {
+    public const int DefaultGateWorkers = 4;
+    public const int MaxGateWorkers = 8;
+
     public static Options Parse(string[] args)
     {
         string? root = null;
         string? store = null;
         string? session = null;
         var prepare = false;
+        var gateWorkers = DefaultGateWorkers;
         for (var i = 0; i < args.Length; i++)
         {
             switch (args[i].ToLowerInvariant())
@@ -557,13 +561,18 @@ sealed record Options(string Root, string StoreRoot, string? SessionId, bool Pre
                 case "--root" when i + 1 < args.Length: root = Path.GetFullPath(args[++i]).TrimEnd('\\'); break;
                 case "--store" when i + 1 < args.Length: store = Path.GetFullPath(args[++i]); break;
                 case "--session" when i + 1 < args.Length: session = args[++i]; break;
+                case "--gate-workers" when i + 1 < args.Length:
+                    if (!int.TryParse(args[++i], out gateWorkers) || gateWorkers < 1 || gateWorkers > MaxGateWorkers)
+                        throw new ArgumentOutOfRangeException(nameof(args),
+                            $"--gate-workers must be between 1 and {MaxGateWorkers}.");
+                    break;
                 case "--prepare-root": prepare = true; break;
                 default: throw new ArgumentException($"Unknown/incomplete argument: {args[i]}");
             }
         }
         if (string.IsNullOrWhiteSpace(root)) throw new ArgumentException("Pass --root <disposable-test-directory>.");
         store ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RansomGuardV072", "GateRollback");
-        return new Options(root, store, session, prepare);
+        return new Options(root, store, session, prepare, gateWorkers);
     }
 }
 

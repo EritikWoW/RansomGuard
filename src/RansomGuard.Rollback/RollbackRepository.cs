@@ -24,7 +24,9 @@ public sealed class RollbackRepository
         var path = Path.Combine(_sessions, sessionId);
         if (Directory.Exists(path) || File.Exists(path)) throw new IOException("Rollback session already exists: " + sessionId);
         Directory.CreateDirectory(path);
-        return new RollbackStore(path);
+        var store = new RollbackStore(path);
+        new RollbackSessionLifecycleStore(path).InitializeCreated();
+        return store;
     }
 
     public RollbackStore OpenSession(string sessionId)
@@ -45,6 +47,11 @@ public sealed class RollbackRepository
         {
             var store = OpenSession(id);
             store.VerifyAll();
+
+            var lifecycleRoot = Path.Combine(store.Root, "lifecycle-state");
+            if (Directory.Exists(lifecycleRoot))
+                new RollbackSessionLifecycleStore(store.Root).VerifyAll();
+
             var rangeRoot = Path.Combine(store.Root, "write-cow");
             if (Directory.Exists(rangeRoot))
                 new RangeRollbackStore(rangeRoot).VerifyAll();

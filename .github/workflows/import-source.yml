@@ -1,0 +1,50 @@
+name: Import RansomGuard source
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'ransomguard_v0_7_1_0_source.zip'
+      - '.github/workflows/import-source.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f ransomguard_v0_7_1_0_source.zip
+          echo "abc203f00894162e01ed99cc34c434172869b900004b3fb100249dc54bd9957d  ransomguard_v0_7_1_0_source.zip" | sha256sum -c -
+
+      - name: Expand source into repository root
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .import-rg
+          mkdir .import-rg
+          unzip -q ransomguard_v0_7_1_0_source.zip -d .import-rg
+          test -d .import-rg/ransomguard_v0_7_1_0
+          cp -a .import-rg/ransomguard_v0_7_1_0/. .
+          rm -rf .import-rg
+          rm -f ransomguard_v0_7_1_0_source.zip
+
+      - name: Commit imported source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+            exit 0
+          fi
+          git commit -m "Import full RansomGuard 0.7.1.0 source"
+          git push

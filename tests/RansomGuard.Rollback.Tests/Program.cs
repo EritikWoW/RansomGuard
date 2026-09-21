@@ -721,6 +721,99 @@ try
     catch (InvalidDataException) { nestedRenameRejected = true; }
     Check(nestedRenameRejected, "repository verification includes nested rename-state journal");
 
+    // Crash/restart quarantine reports unresolved operation intents exactly as journaled.
+    var pendingRepo = new RollbackRepository(Path.Combine(root, "pending-operation-repo"));
+    var pendingSession = pendingRepo.CreateSession("pending_ops");
+    var pendingCreateStore = new CreateOperationStore(Path.Combine(pendingSession.Root, "create-state"));
+    var pendingRenameStore = new RenameRollbackStore(Path.Combine(pendingSession.Root, "rename-state"));
+    var pendingCreatePath = Path.Combine(sourceDir, "pending-quarantine-create.bin");
+    var pendingRenameSource = Path.Combine(sourceDir, "pending-quarantine-source.bin");
+    var pendingRenameDestination = Path.Combine(sourceDir, "pending-quarantine-destination.bin");
+    var pendingIdentity = new DurableFileIdentity(
+        "AABBCCDDEEFF0011", "11223344556677889900AABBCCDDEEFF");
+
+    _ = await pendingCreateStore.RecordIntentAsync(
+        9001,
+        pendingCreatePath,
+        CreateDisposition.Create,
+        0,
+        0x40000000,
+        CreateTargetState.Missing,
+        CreatePreservationAction.RecordOriginallyAbsent,
+        new string('F', 64),
+        null);
+    _ = await pendingRenameStore.CaptureIntentAsync(
+        9002,
+        pendingRenameSource,
+        pendingRenameDestination,
+        pendingIdentity,
+        true,
+        RenameDestinationState.OriginallyAbsent,
+        null,
+        0,
+        10);
+
+    var completedSession = pendingRepo.CreateSession("completed_ops");
+    var completedCreateStore = new CreateOperationStore(Path.Combine(completedSession.Root, "create-state"));
+    var completedRenameStore = new RenameRollbackStore(Path.Combine(completedSession.Root, "rename-state"));
+    _ = await completedCreateStore.RecordIntentAsync(
+        9101,
+        pendingCreatePath,
+        CreateDisposition.Create,
+        0,
+        0x40000000,
+        CreateTargetState.Missing,
+        CreatePreservationAction.RecordOriginallyAbsent,
+        new string('E', 64),
+        null);
+    _ = await completedCreateStore.RecordCompletionAsync(
+        9101,
+        CreateCompletionState.Failed,
+        0xC0000001u,
+        0,
+        null,
+        null);
+    _ = await completedRenameStore.CaptureIntentAsync(
+        9102,
+        pendingRenameSource,
+        pendingRenameDestination,
+        pendingIdentity,
+        true,
+        RenameDestinationState.OriginallyAbsent,
+        null,
+        0,
+        10);
+    _ = await completedRenameStore.RecordCompletionAsync(
+        9102,
+        RenameCompletionState.Failed,
+        0xC0000001u,
+        0,
+        null,
+        null);
+
+    pendingRepo.VerifyAll();
+    var pendingSessions = pendingRepo.PendingSessions();
+    Check(pendingSessions.Length == 1 && pendingSessions[0].SessionId == "pending_ops",
+        "repository quarantine reports only sessions with unresolved operation intents");
+    Check(pendingSessions[0].CreateRequestSequences.SequenceEqual(new ulong[] { 9001 }),
+        "repository quarantine preserves exact pending CREATE request sequence");
+    Check(pendingSessions[0].RenameRequestSequences.SequenceEqual(new ulong[] { 9002 }),
+        "repository quarantine preserves exact pending RENAME request sequence");
+    Check(pendingSessions[0].TotalPending == 2,
+        "repository quarantine reports deterministic total pending count");
+
+    var reopenedPendingRepo = new RollbackRepository(Path.Combine(root, "pending-operation-repo"));
+    var reopenedPending = reopenedPendingRepo.PendingSessions();
+    Check(reopenedPending.Length == 1 &&
+          reopenedPending[0].CreateRequestSequences.Single() == 9001 &&
+          reopenedPending[0].RenameRequestSequences.Single() == 9002,
+        "pending-operation quarantine rebuilds identically after repository reopen");
+    Check(new CreateOperationStore(Path.Combine(pendingSession.Root, "create-state"))
+              .PendingIntents.Single().RequestSequence == 9001 &&
+          new RenameRollbackStore(Path.Combine(pendingSession.Root, "rename-state"))
+              .PendingIntents.Single().RequestSequence == 9002,
+        "pending inspection never infers or writes a completion");
+
     Console.WriteLine($"All {passed} rollback tests passed. These are file-store tests, not minifilter integration tests.");
     return 0;
 }

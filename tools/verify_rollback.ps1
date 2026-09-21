@@ -23,7 +23,9 @@ foreach($required in @(
     'Range rollback block SHA-256 mismatch',
     'Unjournaled range rollback object found',
     'Incomplete range rollback temp artifact found',
-    'Range rollback block does not match the original file geometry'
+    'Range rollback block does not match the original file geometry',
+    'Range pre-image source handle identity does not match the expected incident identity',
+    'FileIdentityStore.QueryHandleIdentity(input.SafeFileHandle)'
 )){
     if($rangeText -notmatch [regex]::Escape($required)){throw "Range rollback source gate missing invariant: $required"}
 }
@@ -88,7 +90,9 @@ foreach($required in @(
     'Recovery output already exists',
     'Committed rollback object SHA-256 mismatch',
     'Unjournaled rollback object found',
-    'Incomplete rollback temp artifact found'
+    'Incomplete rollback temp artifact found',
+    'Full pre-image source handle identity does not match the expected incident identity',
+    'FileIdentityStore.QueryHandleIdentity(input.SafeFileHandle)'
 )){
     if($text -notmatch [regex]::Escape($required)){throw "Rollback source gate missing invariant: $required"}
 }

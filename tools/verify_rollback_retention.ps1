@@ -28,6 +28,8 @@ foreach($required in @(
     'FileOptions.WriteThrough',
     'Flush(true)',
     'Rollback session lifecycle hash chain mismatch',
+    'Rollback session lifecycle timestamps must be monotonic',
+    'Rollback session lifecycle timestamps are not monotonic',
     'IsRetentionEligible'
 )){
     if($lifecycleText -notmatch [regex]::Escape($required)){throw "Lifecycle invariant missing: $required"}
@@ -135,6 +137,7 @@ foreach($required in @(
     'case "release-hold":',
     'RollbackRetentionPlanner.Build',
     'RollbackRetentionExecutor.ExecuteAsync',
+    'using var reportStream = OpenNewOutput(reportPath);',
     'FileMode.CreateNew',
     'Active, Faulted, Held, legacy and pending-transaction sessions are never selected'
 )){
@@ -142,6 +145,12 @@ foreach($required in @(
 }
 if($cliText -match '(?i)case\s+"(delete|purge-now|force-delete|ignore-hold|ignore-pending)"'){
     throw 'Rollback maintenance CLI must not expose force/destructive bypass verbs.'
+}
+
+$reportReserve=$cliText.IndexOf('using var reportStream = OpenNewOutput(reportPath);')
+$retentionExecute=$cliText.IndexOf('RollbackRetentionExecutor.ExecuteAsync(')
+if($reportReserve -lt 0 -or $retentionExecute -lt 0 -or $reportReserve -gt $retentionExecute){
+    throw 'Retention report output must be reserved before destructive execution begins.'
 }
 
 $buildText=Get-Content -LiteralPath $build -Raw

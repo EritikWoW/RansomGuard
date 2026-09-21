@@ -91,3 +91,20 @@ source gate additionally requires result persistence without `FilterReplyMessage
 These tests and compile gates do not prove real filesystem tunneling behavior, completion-message delivery under
 fault injection, or post-operation file-ID identity. Those require an isolated Windows VM and remain separate
 from the normal product bundle.
+
+
+## Protocol v7 CREATE completion reconciliation coverage
+
+CREATE rollback tests now model the operation as a durable pre-operation intent plus a correlated completion.
+Coverage includes authoritative success with final path and kernel identity, name-only and identity-only partial
+reconciliation, fully unresolved successful completion, failed filesystem completion, pending intent after missing
+result delivery, reopen/rebuild correlation, exact duplicate idempotence, conflicting duplicate rejection, missing-intent
+rejection, and completion-journal corruption detection.
+
+The minifilter source gate requires the post-CREATE callback, `FltGetTunneledName`,
+`FltQueryInformationFile(..., FileIdInformation, ...)`, the correlated `CreateResult` event and protocol-v7
+identity fields. The GateClient source gate requires CREATE intent persistence before allow and result persistence
+without `FilterReplyMessage`.
+
+These tests and compile gates do not prove real filesystem tunneling behavior, completion-message delivery under
+fault injection, or all NTFS/ReFS create edge cases. Those remain isolated Windows-VM validation work.

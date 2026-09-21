@@ -51,7 +51,10 @@ public sealed class RollbackRepository
 
             var createRoot = Path.Combine(store.Root, "create-state");
             if (Directory.Exists(createRoot))
+            {
                 new CreateRollbackStore(createRoot).VerifyAll();
+                new CreateOperationStore(createRoot).VerifyAll();
+            }
 
             var identityRoot = Path.Combine(store.Root, "identity-state");
             if (Directory.Exists(identityRoot))

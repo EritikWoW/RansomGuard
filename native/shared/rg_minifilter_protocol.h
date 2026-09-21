@@ -1,10 +1,11 @@
 #pragma once
 
 // Wire protocol between the RansomGuard lab minifilter and user-mode clients.
-// v6 retains CREATE/RENAME preservation semantics and adds post-rename completion reconciliation.
+// v7 retains CREATE/RENAME preservation semantics, adds post-rename completion reconciliation,
+// and adds correlated post-CREATE final-name plus kernel FILE_ID_INFORMATION reconciliation.
 // The production bundle still does not install or enable the driver.
 
-#define RG_PROTOCOL_VERSION 6u
+#define RG_PROTOCOL_VERSION 7u
 #define RG_PATH_CHARS 512u
 #define RG_GATE_ROOT_CHARS 260u
 #define RG_PORT_NAME L"\\RansomGuardMinifilterPort"
@@ -20,7 +21,8 @@ typedef enum _RG_EVENT_TYPE {
     RgEventDeleteDisposition = 3,
     RgEventTruncate = 4,
     RgEventCreate = 5,
-    RgEventRenameResult = 6
+    RgEventRenameResult = 6,
+    RgEventCreateResult = 7
 } RG_EVENT_TYPE;
 
 typedef enum _RG_PATH_STATUS {
@@ -29,6 +31,12 @@ typedef enum _RG_PATH_STATUS {
     RgPathQueryFailed = 2,
     RgPathTruncated = 3
 } RG_PATH_STATUS;
+
+typedef enum _RG_IDENTITY_STATUS {
+    RgIdentityUnknown = 0,
+    RgIdentityResolved = 1,
+    RgIdentityQueryFailed = 2
+} RG_IDENTITY_STATUS;
 
 typedef enum _RG_CLIENT_MODE {
     RgClientAudit = 1,
@@ -70,6 +78,10 @@ typedef struct _RG_EVENT {
     unsigned long long RelatedSequence;
     unsigned long CompletionStatus;
     unsigned long long CompletionInformation;
+    unsigned long IdentityStatus;
+    unsigned long long VolumeSerialNumber;
+    unsigned long long FileIdLow;
+    unsigned long long FileIdHigh;
     wchar_t Path[RG_PATH_CHARS];
     wchar_t DestinationPath[RG_PATH_CHARS];
 } RG_EVENT, *PRG_EVENT;

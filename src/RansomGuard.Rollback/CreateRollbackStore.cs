@@ -41,6 +41,9 @@ public sealed class CreateRollbackStore
 
     public bool WasOriginallyAbsent(string path) => _baselines.ContainsKey(NormalizeSource(path));
 
+    public bool TryGetBaseline(string path, out CreateRollbackBaseline? baseline) =>
+        _baselines.TryGetValue(NormalizeSource(path), out baseline);
+
     public async Task<CreateRollbackBaseline> CaptureAbsentAsync(string path,
         CancellationToken cancellationToken = default)
     {

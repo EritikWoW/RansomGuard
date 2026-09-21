@@ -11,6 +11,15 @@ foreach($required in @(
   'CapturePreimageAsync',
   'CaptureWritePreimageAsync',
   'CreateRollbackStore',
+  'CreateOperationStore',
+  'CreateReconciliation.HandleAsync',
+  'CreateCompletionState.Succeeded',
+  'CreateCompletionState.SucceededNameUnresolved',
+  'CreateCompletionState.SucceededIdentityUnresolved',
+  'CreateCompletionState.SucceededNameAndIdentityUnresolved',
+  'CreateCompletionState.Failed',
+  'RgEventType.CreateResult',
+  'RgIdentityStatus.Resolved',
   'FileIdentityStore',
   'RenameRollbackStore',
   'CaptureOrVerifyAsync',
@@ -26,11 +35,11 @@ foreach($required in @(
   'CreateGatePolicy.TryParseDisposition',
   '(ev.Flags >> 24) & 0xFF',
   'ev.Flags & 0x00FFFFFF',
-  'ProtocolVersion = 6',
+  'ProtocolVersion = 7',
   'CreatePreservationAction.CaptureExistingPreimage',
   'CreatePreservationAction.RecordOriginallyAbsent',
   'CreatePreservationAction.DenyUnsupported',
-  'CreateGatePolicy.Decide(disposition, state, createOptions)',
+  'CreateGatePolicy.Decide(disposition, observedState, createOptions)',
   'RgGateDecision.SnapshotCommitted',
   'RgGateDecision.BaselineCommitted',
   'RgGateDecision.NoPreservationRequired',
@@ -39,7 +48,7 @@ foreach($required in @(
   'LAB gate root must not be inside Windows, Program Files, or ProgramData',
   'PathProbe.Get(path)',
   'ev.PathStatus != (uint)RgPathStatus.Resolved',
-  'createStore.WasOriginallyAbsent(path)',
+  'createStore.TryGetBaseline(path',
   'RgEventType.Truncate',
   'RgEventType.Create',
   'ev.DestinationPathStatus != (uint)RgPathStatus.Resolved',
@@ -61,18 +70,22 @@ if($text -match '\b(File\.Delete|Directory\.Delete|RestoreToNewCopyAsync|Process
 
 $existingCase=$text.IndexOf('case CreatePreservationAction.CaptureExistingPreimage:')
 if($existingCase -lt 0){throw 'Existing-file CREATE preservation case missing.'}
-$existingCapture=$text.IndexOf('CapturePreimageAsync(path, RollbackMutationKind.Create',$existingCase)
-$existingAllow=$text.IndexOf('RgGateDecision.SnapshotCommitted',$existingCapture)
-if($existingCapture -lt 0 -or $existingAllow -lt 0 -or $existingAllow -lt $existingCapture){
-  throw 'CREATE SnapshotCommitted must be returned only after durable existing-file pre-image capture.'
+$existingCapture=$text.IndexOf('RollbackMutationKind.Create',$existingCase)
+$createIntentAfterExisting=$text.IndexOf('createOperationStore.RecordIntentAsync(',$existingCapture)
+$existingAllow=$text.IndexOf('CreatePreservationAction.CaptureExistingPreimage => Allow',$createIntentAfterExisting)
+if($existingCapture -lt 0 -or $createIntentAfterExisting -lt 0 -or $existingAllow -lt 0 -or
+   $existingCapture -gt $createIntentAfterExisting -or $createIntentAfterExisting -gt $existingAllow){
+  throw 'CREATE SnapshotCommitted must follow durable pre-image capture and durable CREATE intent commit.'
 }
 
 $absentCase=$text.IndexOf('case CreatePreservationAction.RecordOriginallyAbsent:')
 if($absentCase -lt 0){throw 'Originally-absent CREATE preservation case missing.'}
 $absentCapture=$text.IndexOf('CaptureAbsentAsync(path',$absentCase)
-$absentAllow=$text.IndexOf('RgGateDecision.BaselineCommitted',$absentCapture)
-if($absentCapture -lt 0 -or $absentAllow -lt 0 -or $absentAllow -lt $absentCapture){
-  throw 'CREATE BaselineCommitted must be returned only after durable absence-baseline capture.'
+$createIntentAfterAbsent=$text.IndexOf('createOperationStore.RecordIntentAsync(',$absentCapture)
+$absentAllow=$text.IndexOf('CreatePreservationAction.RecordOriginallyAbsent => Allow',$createIntentAfterAbsent)
+if($absentCapture -lt 0 -or $createIntentAfterAbsent -lt 0 -or $absentAllow -lt 0 -or
+   $absentCapture -gt $createIntentAfterAbsent -or $createIntentAfterAbsent -gt $absentAllow){
+  throw 'CREATE BaselineCommitted must follow durable absence-baseline capture and durable CREATE intent commit.'
 }
 
 $identityCapture=$text.IndexOf('identityStore.CaptureOrVerifyAsync(path')
@@ -95,6 +108,22 @@ if($resultBranch -lt 0 -or $resultPersist -lt 0 -or $resultContinue -lt 0 -or
   throw 'RenameResult must be persisted as completion metadata and must not receive FilterReplyMessage.'
 }
 
+$createResultBranch=$text.IndexOf('if ((RgEventType)ev.EventType == RgEventType.CreateResult)')
+$createResultPersist=$text.IndexOf('CreateReconciliation.HandleAsync(',$createResultBranch)
+$createResultContinue=$text.IndexOf('continue;',$createResultPersist)
+$createResultReply=$text.IndexOf('Native.Reply(',$createResultBranch)
+if($createResultBranch -lt 0 -or $createResultPersist -lt 0 -or $createResultContinue -lt 0 -or
+   ($createResultReply -ge 0 -and $createResultReply -lt $createResultContinue)){
+  throw 'CreateResult must be persisted as completion metadata and must not receive FilterReplyMessage.'
+}
+
+$createEvaluate=$text.IndexOf('private static async Task<RgGateReply> EvaluateCreateAsync')
+$createIntent=$text.IndexOf('createOperationStore.RecordIntentAsync(',$createEvaluate)
+$createReturn=$text.IndexOf('return action switch',$createIntent)
+if($createEvaluate -lt 0 -or $createIntent -lt 0 -or $createReturn -lt 0 -or $createIntent -gt $createReturn){
+  throw 'CREATE intent must be durably committed before any allow decision is returned.'
+}
+
 $renameBranch=$text.IndexOf('if (eventType == RgEventType.Rename)')
 $renameSourceCapture=$text.IndexOf('CapturePreimageAsync(sourcePath, RollbackMutationKind.Rename',$renameBranch)
 $renameIntent=$text.IndexOf('renameStore.CaptureIntentAsync(',$renameSourceCapture)
@@ -104,4 +133,4 @@ if($renameBranch -lt 0 -or $renameSourceCapture -lt 0 -or $renameIntent -lt 0 -o
   throw 'RENAME must preserve source/destination state and durably commit rename intent before allow.'
 }
 
-Write-Host 'LAB gate client source check PASSED: explicit disposable root, protocol-v6 CREATE/RENAME semantics, durable FILE_ID_INFO identity binding, range COW for writes, source/destination pre-image preservation, durable rename intents/completions and originally-absent baselines, no destructive/process-control APIs.'
+Write-Host 'LAB gate client source check PASSED: explicit disposable root, protocol-v7 CREATE/RENAME semantics, durable FILE_ID_INFO identity binding, range COW for writes, durable CREATE/RENAME intents and completions, originally-absent baselines, no destructive/process-control APIs.'

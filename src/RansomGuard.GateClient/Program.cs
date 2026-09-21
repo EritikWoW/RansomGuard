@@ -24,11 +24,12 @@ var sessionId = options.SessionId ?? $"gate-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{G
 var store = repository.CreateSession(sessionId);
 var writeStore = new RangeRollbackStore(Path.Combine(store.Root, "write-cow"));
 var createStore = new CreateRollbackStore(Path.Combine(store.Root, "create-state"));
+var createOperationStore = new CreateOperationStore(Path.Combine(store.Root, "create-state"));
 var identityStore = new FileIdentityStore(Path.Combine(store.Root, "identity-state"));
 var renameStore = new RenameRollbackStore(Path.Combine(store.Root, "rename-state"));
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
-Console.WriteLine("RansomGuard LAB pre-write gate v0.7.5.0");
+Console.WriteLine("RansomGuard LAB pre-write gate v0.7.6.0");
 Console.WriteLine("LAB ONLY: use only inside a disposable test directory on a test machine/VM.");
 Console.WriteLine($"Protected LAB root : {options.Root}");
 Console.WriteLine($"Kernel NT root     : {ntRoot}");
@@ -39,7 +40,7 @@ Console.WriteLine("Press Ctrl+C to disconnect. The driver then stops gating beca
 
 var context = new RgConnectContext
 {
-    ProtocolVersion = 6,
+    ProtocolVersion = 7,
     ClientMode = (uint)RgClientMode.LabGate,
     ClientProcessId = (ulong)Environment.ProcessId,
     GateRootLengthBytes = checked((uint)(ntRoot.Length * 2)),
@@ -54,7 +55,7 @@ var headerSize = Marshal.SizeOf<FilterMessageHeader>();
 var eventSize = Marshal.SizeOf<RgEvent>();
 var replyHeaderSize = Marshal.SizeOf<FilterReplyHeader>();
 var gateReplySize = Marshal.SizeOf<RgGateReply>();
-if (headerSize != 16 || eventSize != 2140 || replyHeaderSize != 16 || gateReplySize != 24)
+if (headerSize != 16 || eventSize != 2168 || replyHeaderSize != 16 || gateReplySize != 24)
     throw new InvalidOperationException($"Unexpected protocol sizes: message={headerSize}, event={eventSize}, replyHeader={replyHeaderSize}, gateReply={gateReplySize}");
 
 var resolver = new DevicePathResolver();
@@ -73,6 +74,15 @@ try
         var header = Marshal.PtrToStructure<FilterMessageHeader>(buffer);
         var ev = Marshal.PtrToStructure<RgEvent>(IntPtr.Add(buffer, headerSize));
 
+        if ((RgEventType)ev.EventType == RgEventType.CreateResult)
+        {
+            var completion = await CreateReconciliation.HandleAsync(
+                ev, resolver, options.Root, createOperationStore, cts.Token).ConfigureAwait(false);
+            Console.WriteLine(
+                $"{DateTime.Now:HH:mm:ss.fff} {RgEventType.CreateResult,-20} request={ev.RelatedSequence,-7} {completion.State,-34} status=0x{completion.CompletionStatus:X8} {completion.FinalPath}");
+            continue;
+        }
+
         if ((RgEventType)ev.EventType == RgEventType.RenameResult)
         {
             var completion = await RenameReconciliation.HandleAsync(
@@ -82,7 +92,7 @@ try
             continue;
         }
 
-        var reply = await GateDecision.EvaluateAsync(ev, resolver, options.Root, store, writeStore, createStore, identityStore, renameStore, cts.Token);
+        var reply = await GateDecision.EvaluateAsync(ev, resolver, options.Root, store, writeStore, createStore, createOperationStore, identityStore, renameStore, cts.Token);
         Native.Reply(port, header.MessageId, reply);
 
         var path = resolver.Resolve(ev.Path) ?? ev.Path ?? "<unresolved>";
@@ -94,6 +104,70 @@ finally
     Marshal.FreeHGlobal(buffer);
 }
 
+static class CreateReconciliation
+{
+    public static async Task<CreateOperationCompletion> HandleAsync(
+        RgEvent ev,
+        DevicePathResolver resolver,
+        string root,
+        CreateOperationStore operationStore,
+        CancellationToken cancellationToken)
+    {
+        if (ev.ProtocolVersion != 7 || ev.RelatedSequence == 0)
+            throw new InvalidDataException("Invalid CREATE completion correlation.");
+
+        if (!NtSuccess(ev.CompletionStatus))
+        {
+            return await operationStore.RecordCompletionAsync(
+                    ev.RelatedSequence,
+                    CreateCompletionState.Failed,
+                    ev.CompletionStatus,
+                    ev.CompletionInformation,
+                    null,
+                    null,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        string? finalPath = null;
+        if (ev.PathStatus == (uint)RgPathStatus.Resolved)
+        {
+            var resolved = resolver.Resolve(ev.Path);
+            if (!string.IsNullOrWhiteSpace(resolved) && PathPolicy.Under(resolved, root))
+                finalPath = resolved;
+        }
+
+        DurableFileIdentity? finalIdentity = null;
+        if (ev.IdentityStatus == (uint)RgIdentityStatus.Resolved &&
+            (ev.VolumeSerialNumber != 0 || ev.FileIdLow != 0 || ev.FileIdHigh != 0))
+        {
+            finalIdentity = new DurableFileIdentity(
+                ev.VolumeSerialNumber.ToString("X16"),
+                ev.FileIdLow.ToString("X16") + ev.FileIdHigh.ToString("X16"));
+        }
+
+        var state = (finalPath is not null, finalIdentity is not null) switch
+        {
+            (true, true) => CreateCompletionState.Succeeded,
+            (false, true) => CreateCompletionState.SucceededNameUnresolved,
+            (true, false) => CreateCompletionState.SucceededIdentityUnresolved,
+            _ => CreateCompletionState.SucceededNameAndIdentityUnresolved
+        };
+
+        return await operationStore.RecordCompletionAsync(
+                ev.RelatedSequence,
+                state,
+                ev.CompletionStatus,
+                ev.CompletionInformation,
+                finalPath,
+                finalIdentity,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static bool NtSuccess(uint status) => (status & 0x80000000u) == 0;
+}
+
 static class RenameReconciliation
 {
     public static async Task<RenameRollbackCompletion> HandleAsync(
@@ -103,7 +177,7 @@ static class RenameReconciliation
         RenameRollbackStore renameStore,
         CancellationToken cancellationToken)
     {
-        if (ev.ProtocolVersion != 6 || ev.RelatedSequence == 0)
+        if (ev.ProtocolVersion != 7 || ev.RelatedSequence == 0)
             throw new InvalidDataException("Invalid rename completion correlation.");
 
         if (!NtSuccess(ev.CompletionStatus))
@@ -151,13 +225,14 @@ static class GateDecision
 {
     public static async Task<RgGateReply> EvaluateAsync(RgEvent ev, DevicePathResolver resolver, string root,
         RollbackStore store, RangeRollbackStore writeStore, CreateRollbackStore createStore,
-        FileIdentityStore identityStore, RenameRollbackStore renameStore, CancellationToken cancellationToken)
+        CreateOperationStore createOperationStore, FileIdentityStore identityStore,
+        RenameRollbackStore renameStore, CancellationToken cancellationToken)
     {
         try
         {
             // Never preserve or authorize against a truncated path. The kernel only sends a truncated
             // gate event when its known prefix is already inside the explicit LAB root, so deny it here.
-            if (ev.ProtocolVersion != 6 || ev.PathStatus != (uint)RgPathStatus.Resolved)
+            if (ev.ProtocolVersion != 7 || ev.PathStatus != (uint)RgPathStatus.Resolved)
                 return Deny(ev.Sequence, 1);
 
             var path = resolver.Resolve(ev.Path);
@@ -166,7 +241,7 @@ static class GateDecision
 
             var eventType = (RgEventType)ev.EventType;
             if (eventType == RgEventType.Create)
-                return await EvaluateCreateAsync(ev, path, store, createStore, identityStore, cancellationToken).ConfigureAwait(false);
+                return await EvaluateCreateAsync(ev, path, store, createStore, createOperationStore, identityStore, cancellationToken).ConfigureAwait(false);
 
             var state = PathProbe.Get(path);
             if (state != CreateTargetState.File)
@@ -308,49 +383,86 @@ static class GateDecision
     }
 
     private static async Task<RgGateReply> EvaluateCreateAsync(RgEvent ev, string path,
-        RollbackStore store, CreateRollbackStore createStore, FileIdentityStore identityStore,
-        CancellationToken cancellationToken)
+        RollbackStore store, CreateRollbackStore createStore, CreateOperationStore createOperationStore,
+        FileIdentityStore identityStore, CancellationToken cancellationToken)
     {
         var rawDisposition = (ev.Flags >> 24) & 0xFF;
         if (!CreateGatePolicy.TryParseDisposition(rawDisposition, out var disposition))
             return Deny(ev.Sequence, 7);
 
         var createOptions = ev.Flags & 0x00FFFFFF;
+        var observedState = PathProbe.Get(path);
+        CreatePreservationAction action;
+        string preservationRecordSha256 = string.Empty;
+        DurableFileIdentity? originalIdentity = null;
 
-        if (createStore.WasOriginallyAbsent(path))
-            return Allow(ev.Sequence, RgGateDecision.BaselineCommitted);
-
-        var state = PathProbe.Get(path);
-        var action = CreateGatePolicy.Decide(disposition, state, createOptions);
-        switch (action)
+        if (createStore.TryGetBaseline(path, out var committedAbsent) && committedAbsent is not null)
         {
-            case CreatePreservationAction.CaptureExistingPreimage:
-                var identityBaseline = await identityStore.CaptureOrVerifyAsync(path, cancellationToken)
-                    .ConfigureAwait(false);
-                _ = await store.CapturePreimageAsync(path, RollbackMutationKind.Create,
-                        identityBaseline.Identity, cancellationToken)
-                    .ConfigureAwait(false);
-                return Allow(ev.Sequence, RgGateDecision.SnapshotCommitted);
-
-            case CreatePreservationAction.RecordOriginallyAbsent:
-                _ = await createStore.CaptureAbsentAsync(path, cancellationToken).ConfigureAwait(false);
-                return Allow(ev.Sequence, RgGateDecision.BaselineCommitted);
-
-            case CreatePreservationAction.DenyUnsupported:
-                // Directory delete-on-close/topology rollback is not modeled yet.
-                return Deny(ev.Sequence, 8);
-
-            default:
-                // FILE_OPEN/OPEN_IF on an existing file are non-destructive at CREATE time unless
-                // FILE_DELETE_ON_CLOSE is present. FILE_CREATE on an existing file and
-                // FILE_OPEN/OVERWRITE on a missing file fail naturally.
-                return Allow(ev.Sequence, RgGateDecision.NoPreservationRequired);
+            // The path was absent before this incident. Even if it exists now, never manufacture a
+            // pre-incident pre-image from bytes created during the incident.
+            action = CreatePreservationAction.RecordOriginallyAbsent;
+            preservationRecordSha256 = committedAbsent.RecordSha256;
         }
+        else
+        {
+            action = CreateGatePolicy.Decide(disposition, observedState, createOptions);
+            switch (action)
+            {
+                case CreatePreservationAction.CaptureExistingPreimage:
+                    var identityBaseline = await identityStore.CaptureOrVerifyAsync(path, cancellationToken)
+                        .ConfigureAwait(false);
+                    originalIdentity = identityBaseline.Identity;
+                    var capture = await store.CapturePreimageAsync(
+                            path,
+                            RollbackMutationKind.Create,
+                            identityBaseline.Identity,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    preservationRecordSha256 = capture.RecordSha256;
+                    break;
+
+                case CreatePreservationAction.RecordOriginallyAbsent:
+                    var absent = await createStore.CaptureAbsentAsync(path, cancellationToken)
+                        .ConfigureAwait(false);
+                    preservationRecordSha256 = absent.RecordSha256;
+                    break;
+
+                case CreatePreservationAction.DenyUnsupported:
+                    // Directory delete-on-close/topology rollback is not modeled yet.
+                    return Deny(ev.Sequence, 8);
+
+                case CreatePreservationAction.NoPreservationRequired:
+                    break;
+
+                default:
+                    throw new InvalidOperationException("Unknown CREATE preservation action.");
+            }
+        }
+
+        _ = await createOperationStore.RecordIntentAsync(
+                ev.Sequence,
+                path,
+                disposition,
+                createOptions,
+                ev.Length,
+                observedState,
+                action,
+                preservationRecordSha256,
+                originalIdentity,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return action switch
+        {
+            CreatePreservationAction.CaptureExistingPreimage => Allow(ev.Sequence, RgGateDecision.SnapshotCommitted),
+            CreatePreservationAction.RecordOriginallyAbsent => Allow(ev.Sequence, RgGateDecision.BaselineCommitted),
+            _ => Allow(ev.Sequence, RgGateDecision.NoPreservationRequired)
+        };
     }
 
     private static RgGateReply Allow(ulong sequence, RgGateDecision decision) => new()
     {
-        ProtocolVersion = 6,
+        ProtocolVersion = 7,
         Decision = decision,
         RequestSequence = sequence,
         ErrorCode = 0
@@ -358,7 +470,7 @@ static class GateDecision
 
     private static RgGateReply Deny(ulong sequence, uint errorCode) => new()
     {
-        ProtocolVersion = 6,
+        ProtocolVersion = 7,
         Decision = RgGateDecision.Deny,
         RequestSequence = sequence,
         ErrorCode = errorCode
@@ -503,8 +615,9 @@ sealed class DevicePathResolver
 }
 
 enum RgClientMode : uint { Audit = 1, LabGate = 2 }
-enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, RenameResult = 6 }
+enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, RenameResult = 6, CreateResult = 7 }
 enum RgPathStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2, Truncated = 3 }
+enum RgIdentityStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2 }
 enum RgGateDecision : uint { Invalid = 0, SnapshotCommitted = 1, Deny = 2, BaselineCommitted = 3, NoPreservationRequired = 4 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -534,6 +647,8 @@ struct RgEvent
     public ulong RelatedSequence;
     public uint CompletionStatus;
     public ulong CompletionInformation;
+    public uint IdentityStatus;
+    public ulong VolumeSerialNumber, FileIdLow, FileIdHigh;
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 512)] public string? Path;
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 512)] public string? DestinationPath;
 }

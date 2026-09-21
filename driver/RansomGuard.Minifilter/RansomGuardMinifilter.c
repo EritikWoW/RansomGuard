@@ -1,6 +1,6 @@
 #include "RansomGuardMinifilter.h"
 
-C_ASSERT(sizeof(RG_EVENT) == 2140);
+C_ASSERT(sizeof(RG_EVENT) == 2168);
 C_ASSERT(sizeof(RG_CONNECT_CONTEXT) == 544);
 C_ASSERT(sizeof(RG_GATE_REPLY) == 24);
 
@@ -27,7 +27,12 @@ static NTSTATUS RgCreateRenamePostContext(_Inout_ PFLT_CALLBACK_DATA Data,
                                           _In_ PCFLT_RELATED_OBJECTS FltObjects,
                                           _In_ ULONGLONG RequestSequence,
                                           _Outptr_ PRG_POST_CONTEXT *PostContext);
+static NTSTATUS RgCreateCreatePostContext(_Inout_ PFLT_CALLBACK_DATA Data,
+                                          _In_ ULONGLONG RequestSequence,
+                                          _Outptr_ PRG_POST_CONTEXT *PostContext);
 static VOID RgFreePostContext(_In_opt_ PRG_POST_CONTEXT PostContext);
+static VOID RgPopulatePostCreateIdentity(_Inout_ PRG_EVENT Event,
+                                         _In_ PCFLT_RELATED_OBJECTS FltObjects);
 static FLT_POSTOP_CALLBACK_STATUS RgPostSetInformationSafe(_Inout_ PFLT_CALLBACK_DATA Data,
                                                            _In_ PCFLT_RELATED_OBJECTS FltObjects,
                                                            _In_opt_ PVOID CompletionContext,
@@ -47,7 +52,7 @@ static LONG RgCurrentClientMode(VOID);
 static FLT_PREOP_CALLBACK_STATUS RgCompleteDenied(_Inout_ PFLT_CALLBACK_DATA Data);
 
 static const FLT_OPERATION_REGISTRATION gCallbacks[] = {
-    { IRP_MJ_CREATE, 0, RgPreCreate, NULL, NULL },
+    { IRP_MJ_CREATE, 0, RgPreCreate, RgPostCreate, NULL },
     { IRP_MJ_WRITE, FLTFL_OPERATION_REGISTRATION_SKIP_PAGING_IO, RgPreWrite, NULL, NULL },
     { IRP_MJ_SET_INFORMATION, 0, RgPreSetInformation, RgPostSetInformation, NULL },
     { IRP_MJ_OPERATION_END }
@@ -128,11 +133,12 @@ static FLT_PREOP_CALLBACK_STATUS RgCompleteDenied(PFLT_CALLBACK_DATA Data)
 FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjects, PVOID *CompletionContext)
 {
     RG_EVENT event;
+    PRG_POST_CONTEXT postContext = NULL;
     NTSTATUS status;
     LONG mode;
     ULONG gateError = 0;
 
-    UNREFERENCED_PARAMETER(CompletionContext);
+    *CompletionContext = NULL;
     if (!RgShouldObserve(Data)) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
@@ -153,12 +159,19 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    if (!RgGateEvent(&event, &gateError)) {
-        UNREFERENCED_PARAMETER(gateError);
+    status = RgCreateCreatePostContext(Data, event.Sequence, &postContext);
+    if (!NT_SUCCESS(status)) {
         return RgCompleteDenied(Data);
     }
 
-    return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    if (!RgGateEvent(&event, &gateError)) {
+        UNREFERENCED_PARAMETER(gateError);
+        RgFreePostContext(postContext);
+        return RgCompleteDenied(Data);
+    }
+
+    *CompletionContext = postContext;
+    return FLT_PREOP_SUCCESS_WITH_CALLBACK;
 }
 
 FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjects, PVOID *CompletionContext)
@@ -427,6 +440,74 @@ static NTSTATUS RgCreateRenamePostContext(PFLT_CALLBACK_DATA Data,
     return STATUS_SUCCESS;
 }
 
+static NTSTATUS RgCreateCreatePostContext(PFLT_CALLBACK_DATA Data,
+                                          ULONGLONG RequestSequence,
+                                          PRG_POST_CONTEXT *PostContext)
+{
+    PFLT_FILE_NAME_INFORMATION nameInfo = NULL;
+    PRG_POST_CONTEXT context = NULL;
+    NTSTATUS status;
+
+    *PostContext = NULL;
+    status = FltGetFileNameInformation(
+        Data,
+        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
+        &nameInfo);
+    if (!NT_SUCCESS(status) || nameInfo == NULL) {
+        return NT_SUCCESS(status) ? STATUS_UNSUCCESSFUL : status;
+    }
+
+    context = (PRG_POST_CONTEXT)ExAllocatePool2(
+        POOL_FLAG_NON_PAGED,
+        sizeof(RG_POST_CONTEXT),
+        RG_POOL_TAG);
+    if (context == NULL) {
+        FltReleaseFileNameInformation(nameInfo);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    RtlZeroMemory(context, sizeof(*context));
+    context->RequestSequence = RequestSequence;
+    context->PreCreateNameInfo = nameInfo;
+    *PostContext = context;
+    return STATUS_SUCCESS;
+}
+
+static VOID RgPopulatePostCreateIdentity(PRG_EVENT Event,
+                                         PCFLT_RELATED_OBJECTS FltObjects)
+{
+    FILE_ID_INFORMATION identity;
+    ULONG returned = 0;
+    NTSTATUS status;
+
+    Event->IdentityStatus = RgIdentityUnknown;
+    if (FltObjects == NULL || FltObjects->Instance == NULL || FltObjects->FileObject == NULL) {
+        Event->IdentityStatus = RgIdentityQueryFailed;
+        return;
+    }
+
+    RtlZeroMemory(&identity, sizeof(identity));
+    status = FltQueryInformationFile(
+        FltObjects->Instance,
+        FltObjects->FileObject,
+        &identity,
+        sizeof(identity),
+        FileIdInformation,
+        &returned);
+
+    if (!NT_SUCCESS(status) || returned < (ULONG)sizeof(identity)) {
+        Event->IdentityStatus = RgIdentityQueryFailed;
+        return;
+    }
+
+    Event->VolumeSerialNumber = identity.VolumeSerialNumber;
+    RtlCopyMemory(&Event->FileIdLow, identity.FileId.Identifier, sizeof(Event->FileIdLow));
+    RtlCopyMemory(&Event->FileIdHigh,
+        identity.FileId.Identifier + sizeof(Event->FileIdLow),
+        sizeof(Event->FileIdHigh));
+    Event->IdentityStatus = RgIdentityResolved;
+}
+
 static VOID RgFreePostContext(PRG_POST_CONTEXT PostContext)
 {
     if (PostContext == NULL) {
@@ -438,8 +519,79 @@ static VOID RgFreePostContext(PRG_POST_CONTEXT PostContext)
         PostContext->PreDestinationNameInfo = NULL;
     }
 
+    if (PostContext->PreCreateNameInfo != NULL) {
+        FltReleaseFileNameInformation(PostContext->PreCreateNameInfo);
+        PostContext->PreCreateNameInfo = NULL;
+    }
+
     RtlSecureZeroMemory(PostContext, sizeof(*PostContext));
     ExFreePoolWithTag(PostContext, RG_POOL_TAG);
+}
+
+FLT_POSTOP_CALLBACK_STATUS RgPostCreate(PFLT_CALLBACK_DATA Data,
+                                        PCFLT_RELATED_OBJECTS FltObjects,
+                                        PVOID CompletionContext,
+                                        FLT_POST_OPERATION_FLAGS Flags)
+{
+    PRG_POST_CONTEXT context = (PRG_POST_CONTEXT)CompletionContext;
+    PFLT_FILE_NAME_INFORMATION tunneledInfo = NULL;
+    PFLT_FILE_NAME_INFORMATION finalInfo = NULL;
+    RG_EVENT event;
+    NTSTATUS status = STATUS_SUCCESS;
+    ULONG chars = 0;
+    LARGE_INTEGER systemTime;
+
+    if (context == NULL) {
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    }
+
+    if (FlagOn(Flags, FLTFL_POST_OPERATION_DRAINING)) {
+        RgFreePostContext(context);
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    }
+
+    RtlZeroMemory(&event, sizeof(event));
+    event.ProtocolVersion = RG_PROTOCOL_VERSION;
+    event.EventType = RgEventCreateResult;
+    event.Sequence = (ULONGLONG)InterlockedIncrement64(&gSequence);
+    event.RelatedSequence = context->RequestSequence;
+    event.CompletionStatus = (ULONG)Data->IoStatus.Status;
+    event.CompletionInformation = (ULONGLONG)Data->IoStatus.Information;
+    event.PathStatus = RgPathUnknown;
+    event.IdentityStatus = RgIdentityUnknown;
+    KeQuerySystemTimePrecise(&systemTime);
+    event.SystemTime100ns = systemTime.QuadPart;
+
+    if (NT_SUCCESS(Data->IoStatus.Status)) {
+        status = FltGetTunneledName(Data, context->PreCreateNameInfo, &tunneledInfo);
+        if (NT_SUCCESS(status)) {
+            finalInfo = (tunneledInfo != NULL) ? tunneledInfo : context->PreCreateNameInfo;
+            chars = finalInfo->Name.Length / sizeof(WCHAR);
+            if (chars >= RG_PATH_CHARS) {
+                chars = RG_PATH_CHARS - 1;
+                event.PathStatus = RgPathTruncated;
+            } else {
+                event.PathStatus = RgPathResolved;
+            }
+
+            if (chars != 0) {
+                RtlCopyMemory(event.Path, finalInfo->Name.Buffer, chars * sizeof(WCHAR));
+            }
+            event.Path[chars] = L'\0';
+        } else {
+            event.PathStatus = RgPathQueryFailed;
+        }
+
+        RgPopulatePostCreateIdentity(&event, FltObjects);
+    }
+
+    RgQueueRawEvent(&event, RgClientLabGate);
+
+    if (tunneledInfo != NULL) {
+        FltReleaseFileNameInformation(tunneledInfo);
+    }
+    RgFreePostContext(context);
+    return FLT_POSTOP_FINISHED_PROCESSING;
 }
 
 FLT_POSTOP_CALLBACK_STATUS RgPostSetInformation(PFLT_CALLBACK_DATA Data,

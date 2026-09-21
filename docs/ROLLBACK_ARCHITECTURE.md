@@ -1,8 +1,9 @@
-# RansomGuard 0.7.5.0 - rename completion reconciliation milestone
+# RansomGuard 0.7.6.0 - CREATE completion and identity reconciliation milestone
 
 RansomGuard is moving from detection-only telemetry to `preserve -> contain -> recover`.
-0.7.5.0 retains the deliberately constrained engineering minifilter gate, range-aware WRITE COW,
-CREATE preservation and rename-destination preservation, and adds durable post-rename outcome reconciliation.
+0.7.6.0 retains the deliberately constrained engineering minifilter gate, range-aware WRITE COW,
+CREATE/RENAME preservation and rename outcome reconciliation, and adds durable post-CREATE outcome,
+tunneled-name and kernel file-identity reconciliation.
 
 ## WRITE ordering
 
@@ -29,7 +30,7 @@ Rename, delete-disposition, end-of-file, allocation-length and valid-data-length
 full-file pre-image store. These operations can destroy or relocate information in ways that are not yet modeled
 as block-only transactions.
 
-Protocol v6 exposes five mutation classes and adds a normalized destination path/status to RENAME events:
+Protocol v7 exposes five mutation classes and adds a normalized destination path/status to RENAME events:
 
 - CREATE
 - WRITE
@@ -56,8 +57,26 @@ the create completes.
 The absence journal never deletes a created file automatically. It records recovery intent only; final recovery
 orchestration must decide how to quarantine/remove an incident-created path.
 
-The current existence probe is path-based. A race between that probe and the kernel create is still possible;
-production requires post-create reconciliation.
+## CREATE completion reconciliation
+
+Every gated CREATE that is allowed now has a second durable transaction layer:
+
+1. before the gate reply, `CreateOperationStore` appends a write-through SHA-256 hash-chained intent containing
+   the kernel request sequence, disposition/options, desired access, pre-operation target state and exact preservation proof;
+2. the minifilter retains the pre-CREATE normalized name and returns `FLT_PREOP_SUCCESS_WITH_CALLBACK`;
+3. after completion, a failed CREATE emits the final NTSTATUS without claiming a name or identity;
+4. after successful CREATE, `FltGetTunneledName` reconciles Windows name tunneling;
+5. on the actual completed `FileObject`, `FltQueryInformationFile(..., FileIdInformation, ...)` captures
+   the volume serial plus 128-bit file ID;
+6. protocol v7 emits a no-reply `CreateResult` correlated to the original request sequence;
+7. user mode appends a separate write-through hash-chained completion record linked to the exact intent hash.
+
+Successful completion can be authoritative or explicitly name-unresolved, identity-unresolved, or fully unresolved.
+If the result cannot be delivered or persisted, the CREATE intent remains pending. Recovery must never infer
+completion from the pre-operation intent alone.
+
+The initial CREATE classification still uses a path-based pre-operation probe, but the completed operation is now
+bound to the final tunneled name and kernel file identity when those are available.
 
 ## Durable existing-file identity
 
@@ -80,9 +99,9 @@ This is groundwork for identity-safe rename recovery, not the completed rename t
 paths remain governed by the create baseline because replacing one incident-created file with another does not change
 the pre-incident requirement that the path was absent.
 
-The remaining identity gap is kernel/post-create reconciliation: even though the snapshot handle is identity-checked,
-user mode still opens that handle by path. Production handling must bind the completed CREATE/rename operation to the
-exact kernel file object and destination identity.
+Existing-file snapshot reads remain userspace path opens protected by exact-handle identity verification. Completed
+CREATE operations now additionally report identity from the kernel file object itself. Completed RENAME operations
+still require the same post-operation kernel file-ID binding before automatic topology recovery can be production-safe.
 
 ## RENAME destination ordering
 
@@ -109,7 +128,7 @@ After an allowed rename returns from the filesystem, the minifilter executes a p
 2. `FltDoCompletionProcessingWhenSafe` moves reconciliation to a safe post-operation context when required;
 3. a failed rename emits a correlated result carrying the final NTSTATUS and no successful topology claim;
 4. on success, `FltGetTunneledName` reconciles the retained pre-operation destination against Windows file-name tunneling;
-5. the driver emits a no-reply protocol-v6 `RenameResult` correlated by the original kernel request sequence;
+5. the driver emits a no-reply protocol-v7 `RenameResult` correlated by the original kernel request sequence;
 6. `RenameRollbackStore` appends a separate write-through SHA-256 hash-chained completion record linked to the exact intent hash.
 
 A completion may be `Succeeded`, `SucceededNameUnresolved`, or `Failed`. If the safe post path cannot run,
@@ -163,17 +182,16 @@ Rollback startup validation now treats ambiguous durable state as a hard failure
 - leftover `.tmp` artifacts are rejected as incomplete capture evidence;
 - range block geometry must exactly match the recorded original file length and configured block size;
 - repository-wide verification descends into each session's nested `write-cow`, `create-state`, `identity-state` and `rename-state` stores;
-- rename completion records are hash-chained separately and cryptographically linked to their exact pre-operation intent;
+- CREATE and RENAME completion records are hash-chained separately and cryptographically linked to their exact pre-operation intents;
 - the LAB gate validates all existing sessions before opening a new one.
 
 These checks do not yet reconcile an interrupted in-flight kernel request. They prevent a restart from proceeding on top of rollback state whose commit boundary is ambiguous.
 
 ## Still required before production
 
-- post-create completion reconciliation;
-- post-operation kernel file-ID confirmation for completed create/rename operations;
+- post-operation kernel file-ID confirmation for completed rename operations;
 - bounded concurrent pending-I/O workers;
-- crash/restart reconciliation for requests pending during user-mode failure or missing rename-result delivery;
+- crash/restart reconciliation for requests pending during user-mode failure or missing CREATE/RENAME result delivery;
 - memory-mapped/cache-manager write coverage;
 - storage quotas, retention and pressure policy;
 - transition from protected-root health to containment/block policy;

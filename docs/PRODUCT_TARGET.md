@@ -14,7 +14,7 @@ pre-mutation preservation path.
 
 ## Current milestone
 
-The current engineering branch extends the range-aware write COW gate with protocol v6 CREATE, RENAME destination and rename-completion semantics:
+The current engineering branch extends the range-aware write COW gate with protocol v7 CREATE completion, RENAME destination and rename-completion semantics:
 
 `CREATE -> classify disposition -> durable existing-file pre-image OR originally-absent baseline -> allow`
 
@@ -27,14 +27,14 @@ from data that did not exist before the incident.
 The gate is intentionally not enabled in the normal bundle and is not production-safe yet. Existing-file
 preservation is now additionally bound to a durable Windows `FILE_ID_INFO` identity journal
 (volume serial + 128-bit file ID), so a path that changes to a different file during one incident is rejected.
-CREATE existence classification itself is still path-based; post-create/kernel identity reconciliation remains required.
+CREATE classification still begins with a path-based pre-operation probe, but protocol v7 now records a durable CREATE intent before allow and correlates it with a post-operation result containing the tunneled final name and kernel `FileIdInformation` identity when available. Missing or partial reconciliation stays explicit and pending/unknown rather than being inferred.
 
-Protocol v6 carries the normalized pre-operation rename destination and a correlated post-operation `RenameResult`.
+Protocol v7 retains the normalized pre-operation rename destination and correlated post-operation `RenameResult`.
 Before allowing a rename, the LAB gate preserves the source, preserves an existing destination or commits its absence,
 and durably records a rename intent. After completion, the minifilter resolves the tunneled final name on a safe post-op
 path and user mode appends a second hash-chained record for success, failure, or unresolved successful completion.
 A missing result leaves the intent pending; pre-operation intent is never promoted to success by inference.
 
-The next core milestones are post-create reconciliation, kernel file-ID binding of completed create/rename operations,
-bounded concurrent and crash-reconciled gating, containment, process-state capture,
+The next core milestones are post-operation kernel file-ID binding for completed renames,
+bounded concurrent and crash-reconciled gating, memory-mapped write coverage, containment, process-state capture,
 adaptive crypto analysis, and verified recovery orchestration.

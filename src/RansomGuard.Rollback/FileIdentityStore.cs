@@ -18,15 +18,21 @@ public sealed class FileIdentityStore
 {
     private readonly string _root;
     private readonly string _journal;
+    private readonly string _transitionJournal;
     private readonly SemaphoreSlim _appendGate = new(1, 1);
     private readonly ConcurrentDictionary<string, FileIdentityBaseline> _byPath =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, DurableFileIdentity> _currentByPath =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly JsonSerializerOptions _json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     private long _nextSequence;
     private string _lastRecordHash = new('0', 64);
+    private long _nextTransitionSequence;
+    private string _lastTransitionHash = new('0', 64);
 
     public string Root => _root;
     public string JournalPath => _journal;
+    public string TransitionJournalPath => _transitionJournal;
     public IReadOnlyCollection<FileIdentityBaseline> Baselines =>
         _byPath.Values.OrderBy(x => x.Sequence).ToArray();
 
@@ -37,9 +43,11 @@ public sealed class FileIdentityStore
 
         _root = Path.GetFullPath(root);
         _journal = Path.Combine(_root, "identity-journal.jsonl");
+        _transitionJournal = Path.Combine(_root, "identity-transition-journal.jsonl");
         Directory.CreateDirectory(_root);
         RejectReparse(_root);
         LoadAndValidateJournal();
+        LoadAndValidateTransitions();
     }
 
     public async Task<FileIdentityBaseline> CaptureOrVerifyAsync(string path,
@@ -57,7 +65,7 @@ public sealed class FileIdentityStore
         {
             if (_byPath.TryGetValue(full, out var existing))
             {
-                if (!existing.Identity.Equals(identity))
+                if (!_currentByPath.TryGetValue(full, out var current) || !current.Equals(identity))
                     throw new InvalidDataException(
                         "File identity changed for a path already observed in this incident: " + full);
                 return existing;
@@ -73,7 +81,7 @@ public sealed class FileIdentityStore
             _lastRecordHash = recordHash;
 
             var baseline = line.ToBaseline();
-            if (!_byPath.TryAdd(full, baseline))
+            if (!_byPath.TryAdd(full, baseline) || !_currentByPath.TryAdd(full, identity))
                 throw new InvalidOperationException("Concurrent file identity baseline commit collision.");
             return baseline;
         }
@@ -86,13 +94,61 @@ public sealed class FileIdentityStore
     public bool TryGet(string path, out FileIdentityBaseline? baseline) =>
         _byPath.TryGetValue(NormalizeSource(path), out baseline);
 
+    public bool TryGetCurrent(string path, out DurableFileIdentity? identity) =>
+        _currentByPath.TryGetValue(NormalizeSource(path), out identity);
+
     public string[] PathsFor(DurableFileIdentity identity) =>
-        _byPath.Values.Where(x => x.Identity.Equals(identity))
-            .OrderBy(x => x.Sequence)
-            .Select(x => x.OriginalPath)
+        _currentByPath.Where(x => x.Value.Equals(identity))
+            .OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(x => x.Key)
             .ToArray();
 
-    public void VerifyAll() => LoadAndValidateJournal(rebuildState: false);
+    public async Task<FileIdentityTransition> TransitionAsync(
+        string path,
+        DurableFileIdentity expectedCurrent,
+        DurableFileIdentity next,
+        ulong relatedSequence,
+        CancellationToken cancellationToken = default)
+    {
+        if (relatedSequence == 0)
+            throw new ArgumentOutOfRangeException(nameof(relatedSequence));
+        ValidateIdentity(expectedCurrent);
+        ValidateIdentity(next);
+        if (expectedCurrent.Equals(next))
+            throw new InvalidOperationException("File identity transition must change the identity.");
+
+        var full = NormalizeSource(path);
+        await _appendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (!_currentByPath.TryGetValue(full, out var current))
+                throw new InvalidDataException("Cannot transition an unobserved file identity.");
+            if (!current.Equals(expectedCurrent))
+                throw new InvalidDataException("File identity transition does not match current incident identity.");
+
+            var sequence = checked(++_nextTransitionSequence);
+            var payload = new FileIdentityTransitionPayload(
+                sequence, DateTime.UtcNow, full, relatedSequence,
+                expectedCurrent.VolumeSerialHex, expectedCurrent.FileIdHex,
+                next.VolumeSerialHex, next.FileIdHex, _lastTransitionHash);
+            var recordHash = HashTransitionPayload(payload);
+            var line = FileIdentityTransitionLine.FromPayload(payload, recordHash);
+            AppendTransitionLine(line);
+            _lastTransitionHash = recordHash;
+            _currentByPath[full] = next;
+            return line.ToTransition();
+        }
+        finally
+        {
+            _appendGate.Release();
+        }
+    }
+
+    public void VerifyAll()
+    {
+        LoadAndValidateJournal(rebuildState: false);
+        LoadAndValidateTransitions(rebuildState: false);
+    }
 
     private void LoadAndValidateJournal(bool rebuildState = true)
     {
@@ -101,6 +157,7 @@ public sealed class FileIdentityStore
             if (rebuildState)
             {
                 _byPath.Clear();
+                _currentByPath.Clear();
                 _nextSequence = 0;
                 _lastRecordHash = new string('0', 64);
             }
@@ -151,10 +208,103 @@ public sealed class FileIdentityStore
         if (rebuildState)
         {
             _byPath.Clear();
-            foreach (var pair in rebuilt) _byPath[pair.Key] = pair.Value;
+            _currentByPath.Clear();
+            foreach (var pair in rebuilt)
+            {
+                _byPath[pair.Key] = pair.Value;
+                _currentByPath[pair.Key] = pair.Value.Identity;
+            }
             _nextSequence = expectedSequence - 1;
             _lastRecordHash = expectedPrevious;
         }
+    }
+
+    private void LoadAndValidateTransitions(bool rebuildState = true)
+    {
+        if (!File.Exists(_transitionJournal))
+        {
+            if (rebuildState)
+            {
+                _nextTransitionSequence = 0;
+                _lastTransitionHash = new string('0', 64);
+            }
+            return;
+        }
+
+        RejectReparse(_transitionJournal);
+        var expectedPrevious = new string('0', 64);
+        long expectedSequence = 1;
+        var working = _byPath.ToDictionary(x => x.Key, x => x.Value.Identity, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var raw in File.ReadLines(_transitionJournal, Encoding.UTF8))
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                throw new InvalidDataException("Blank file identity transition record.");
+
+            FileIdentityTransitionLine line;
+            try
+            {
+                line = JsonSerializer.Deserialize<FileIdentityTransitionLine>(raw, _json)
+                       ?? throw new InvalidDataException("Invalid file identity transition record.");
+            }
+            catch (JsonException ex)
+            {
+                throw new InvalidDataException("Invalid file identity transition JSON.", ex);
+            }
+
+            if (line.Sequence != expectedSequence || line.RelatedSequence == 0)
+                throw new InvalidDataException("File identity transition sequence is invalid.");
+            if (!IsFixedHex(line.PreviousRecordSha256, 64) ||
+                !line.PreviousRecordSha256.Equals(expectedPrevious, StringComparison.OrdinalIgnoreCase) ||
+                !IsFixedHex(line.RecordSha256, 64))
+                throw new InvalidDataException("File identity transition hash chain is invalid.");
+
+            var oldIdentity = new DurableFileIdentity(line.OldVolumeSerialHex, line.OldFileIdHex);
+            var newIdentity = new DurableFileIdentity(line.NewVolumeSerialHex, line.NewFileIdHex);
+            ValidateIdentity(oldIdentity);
+            ValidateIdentity(newIdentity);
+            if (oldIdentity.Equals(newIdentity))
+                throw new InvalidDataException("File identity transition does not change identity.");
+
+            var calculated = HashTransitionPayload(line.Payload);
+            if (!calculated.Equals(line.RecordSha256, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("File identity transition record hash mismatch.");
+
+            var full = NormalizeSource(line.OriginalPath);
+            if (!working.TryGetValue(full, out var current) || !current.Equals(oldIdentity))
+                throw new InvalidDataException("File identity transition does not continue from current identity.");
+            working[full] = newIdentity;
+
+            expectedPrevious = line.RecordSha256;
+            expectedSequence++;
+        }
+
+        if (rebuildState)
+        {
+            _currentByPath.Clear();
+            foreach (var pair in working) _currentByPath[pair.Key] = pair.Value;
+            _nextTransitionSequence = expectedSequence - 1;
+            _lastTransitionHash = expectedPrevious;
+        }
+    }
+
+    private void AppendTransitionLine(FileIdentityTransitionLine line)
+    {
+        var json = JsonSerializer.Serialize(line, _json) + "\n";
+        var bytes = Encoding.UTF8.GetBytes(json);
+        using var fs = new FileStream(_transitionJournal, FileMode.Append, FileAccess.Write, FileShare.Read,
+            64 * 1024, FileOptions.WriteThrough);
+        fs.Write(bytes);
+        fs.Flush(true);
+    }
+
+    private string HashTransitionPayload(FileIdentityTransitionPayload payload) =>
+        Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(payload, _json)));
+
+    private static void ValidateIdentity(DurableFileIdentity identity)
+    {
+        if (!IsFixedHex(identity.VolumeSerialHex, 16) || !IsFixedHex(identity.FileIdHex, 32))
+            throw new InvalidDataException("Invalid durable file identity.");
     }
 
     private void AppendJournalLine(FileIdentityJournalLine line)
@@ -268,4 +418,67 @@ internal sealed record FileIdentityJournalLine(
     public FileIdentityBaseline ToBaseline() =>
         new(Sequence, CapturedUtc, OriginalPath, VolumeSerialHex, FileIdHex,
             PreviousRecordSha256, RecordSha256);
+}
+
+
+public sealed record FileIdentityTransition(
+    long Sequence,
+    DateTime CapturedUtc,
+    string OriginalPath,
+    ulong RelatedSequence,
+    string OldVolumeSerialHex,
+    string OldFileIdHex,
+    string NewVolumeSerialHex,
+    string NewFileIdHex,
+    string PreviousRecordSha256,
+    string RecordSha256)
+{
+    [JsonIgnore]
+    public DurableFileIdentity OldIdentity => new(OldVolumeSerialHex, OldFileIdHex);
+
+    [JsonIgnore]
+    public DurableFileIdentity NewIdentity => new(NewVolumeSerialHex, NewFileIdHex);
+}
+
+internal sealed record FileIdentityTransitionPayload(
+    long Sequence,
+    DateTime CapturedUtc,
+    string OriginalPath,
+    ulong RelatedSequence,
+    string OldVolumeSerialHex,
+    string OldFileIdHex,
+    string NewVolumeSerialHex,
+    string NewFileIdHex,
+    string PreviousRecordSha256);
+
+internal sealed record FileIdentityTransitionLine(
+    long Sequence,
+    DateTime CapturedUtc,
+    string OriginalPath,
+    ulong RelatedSequence,
+    string OldVolumeSerialHex,
+    string OldFileIdHex,
+    string NewVolumeSerialHex,
+    string NewFileIdHex,
+    string PreviousRecordSha256,
+    string RecordSha256)
+{
+    [JsonIgnore]
+    public FileIdentityTransitionPayload Payload => new(
+        Sequence, CapturedUtc, OriginalPath, RelatedSequence,
+        OldVolumeSerialHex, OldFileIdHex, NewVolumeSerialHex, NewFileIdHex,
+        PreviousRecordSha256);
+
+    public static FileIdentityTransitionLine FromPayload(
+        FileIdentityTransitionPayload payload,
+        string recordHash) => new(
+            payload.Sequence, payload.CapturedUtc, payload.OriginalPath, payload.RelatedSequence,
+            payload.OldVolumeSerialHex, payload.OldFileIdHex,
+            payload.NewVolumeSerialHex, payload.NewFileIdHex,
+            payload.PreviousRecordSha256, recordHash);
+
+    public FileIdentityTransition ToTransition() => new(
+        Sequence, CapturedUtc, OriginalPath, RelatedSequence,
+        OldVolumeSerialHex, OldFileIdHex, NewVolumeSerialHex, NewFileIdHex,
+        PreviousRecordSha256, RecordSha256);
 }

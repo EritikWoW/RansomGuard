@@ -20,6 +20,29 @@ public static class CreateGatePolicy
         return false;
     }
 
+    public static bool IsSuccessfulResultConsistent(CreateDisposition disposition, CreateTargetState target,
+        CreateResult result)
+    {
+        if (target == CreateTargetState.Missing)
+            return result == CreateResult.Created &&
+                   disposition is CreateDisposition.Supersede or CreateDisposition.Create or
+                       CreateDisposition.OpenIf or CreateDisposition.OverwriteIf;
+
+        return disposition switch
+        {
+            CreateDisposition.Supersede => result == CreateResult.Superseded,
+            CreateDisposition.Open => result == CreateResult.Opened,
+            CreateDisposition.OpenIf => result == CreateResult.Opened,
+            CreateDisposition.Overwrite => result == CreateResult.Overwritten,
+            CreateDisposition.OverwriteIf => result == CreateResult.Overwritten,
+            CreateDisposition.Create => false,
+            _ => false
+        };
+    }
+
+    public static bool RequiresStableExistingIdentity(CreateDisposition disposition, CreateTargetState target) =>
+        target == CreateTargetState.File && disposition != CreateDisposition.Supersede;
+
     public static CreatePreservationAction Decide(CreateDisposition disposition, CreateTargetState target,
         uint createOptions = 0)
     {
@@ -68,4 +91,14 @@ public enum CreatePreservationAction
     CaptureExistingPreimage = 1,
     RecordOriginallyAbsent = 2,
     DenyUnsupported = 3
+}
+
+public enum CreateResult : uint
+{
+    Superseded = 0,
+    Opened = 1,
+    Created = 2,
+    Overwritten = 3,
+    Exists = 4,
+    DoesNotExist = 5
 }

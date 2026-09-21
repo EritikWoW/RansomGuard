@@ -673,7 +673,7 @@ FLT_POSTOP_CALLBACK_STATUS RgPostCreate(PFLT_CALLBACK_DATA Data,
 
     RtlZeroMemory(&event, sizeof(event));
     event.ProtocolVersion = RG_PROTOCOL_VERSION;
-    event.EventType = RgEventCreateResult;
+    event.EventType = context->ActivationPreflight ? RgEventActivationPreflight : RgEventCreateResult;
     event.Sequence = (ULONGLONG)InterlockedIncrement64(&gSequence);
     event.RelatedSequence = context->RequestSequence;
     event.CompletionStatus = (ULONG)Data->IoStatus.Status;
@@ -682,6 +682,20 @@ FLT_POSTOP_CALLBACK_STATUS RgPostCreate(PFLT_CALLBACK_DATA Data,
     event.IdentityStatus = RgIdentityUnknown;
     KeQuerySystemTimePrecise(&systemTime);
     event.SystemTime100ns = systemTime.QuadPart;
+
+    if (context->ActivationPreflight && context->PreCreateNameInfo != NULL) {
+        chars = context->PreCreateNameInfo->Name.Length / sizeof(WCHAR);
+        if (chars >= RG_PATH_CHARS) {
+            chars = RG_PATH_CHARS - 1;
+            event.PathStatus = RgPathTruncated;
+        } else {
+            event.PathStatus = RgPathResolved;
+        }
+        if (chars != 0) {
+            RtlCopyMemory(event.Path, context->PreCreateNameInfo->Name.Buffer, chars * sizeof(WCHAR));
+        }
+        event.Path[chars] = L'\0';
+    }
 
     if (NT_SUCCESS(Data->IoStatus.Status)) {
         status = FltGetTunneledName(Data, context->PreCreateNameInfo, &tunneledInfo);
@@ -704,8 +718,24 @@ FLT_POSTOP_CALLBACK_STATUS RgPostCreate(PFLT_CALLBACK_DATA Data,
         }
 
         RgPopulatePostOperationIdentity(&event, FltObjects);
-        RgAttachPagingStreamContext(
-            FltObjects, &event, context->GateDecision, context->RequestSequence);
+
+        if (context->ActivationPreflight) {
+            if (FltObjects == NULL || FltObjects->FileObject == NULL ||
+                FltObjects->FileObject->SectionObjectPointer == NULL ||
+                event.PathStatus != RgPathResolved ||
+                event.IdentityStatus != RgIdentityResolved) {
+                InterlockedExchange(&gActivationHazard, 1);
+            } else if (MmDoesFileHaveUserWritableReferences(
+                           FltObjects->FileObject->SectionObjectPointer) != 0) {
+                event.Flags |= RG_EVENT_FLAG_PREFLIGHT_WRITABLE_VIEW;
+                InterlockedExchange(&gActivationHazard, 1);
+            }
+        } else {
+            RgAttachPagingStreamContext(
+                FltObjects, &event, context->GateDecision, context->RequestSequence);
+        }
+    } else if (context->ActivationPreflight) {
+        InterlockedExchange(&gActivationHazard, 1);
     }
 
     RgQueueRawEvent(&event, RgClientLabGate);
@@ -1282,6 +1312,58 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
     }
     ExReleaseFastMutex(&gPortMutex);
     return status;
+}
+
+static NTSTATUS RgMessage(PVOID ConnectionCookie,
+                          PVOID InputBuffer,
+                          ULONG InputBufferSize,
+                          PVOID OutputBuffer,
+                          ULONG OutputBufferSize,
+                          PULONG ReturnOutputBufferLength)
+{
+    PRG_CONTROL_REQUEST request;
+    PRG_CONTROL_REPLY reply;
+    ULONG status = STATUS_SUCCESS;
+
+    UNREFERENCED_PARAMETER(ConnectionCookie);
+
+    if (ReturnOutputBufferLength == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    *ReturnOutputBufferLength = 0;
+
+    if (InputBuffer == NULL || InputBufferSize != sizeof(RG_CONTROL_REQUEST) ||
+        OutputBuffer == NULL || OutputBufferSize < sizeof(RG_CONTROL_REPLY)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    request = (PRG_CONTROL_REQUEST)InputBuffer;
+    reply = (PRG_CONTROL_REPLY)OutputBuffer;
+    RtlZeroMemory(reply, sizeof(*reply));
+    reply->ProtocolVersion = RG_PROTOCOL_VERSION;
+    reply->Command = request->Command;
+
+    if (request->ProtocolVersion != RG_PROTOCOL_VERSION ||
+        InterlockedCompareExchange(&gClientConnected, 0, 0) == 0 ||
+        RgCurrentClientMode() != RgClientLabGate) {
+        status = STATUS_REVISION_MISMATCH;
+    } else if (request->Command == RgControlQueryActivation) {
+        status = STATUS_SUCCESS;
+    } else if (request->Command == RgControlActivateGate) {
+        if (InterlockedCompareExchange(&gActivationHazard, 0, 0) != 0) {
+            status = STATUS_DEVICE_BUSY;
+        } else {
+            InterlockedExchange(&gGateActivated, 1);
+            status = STATUS_SUCCESS;
+        }
+    } else {
+        status = STATUS_INVALID_PARAMETER;
+    }
+
+    reply->Status = status;
+    reply->GateActivated = (ULONG)InterlockedCompareExchange(&gGateActivated, 0, 0);
+    *ReturnOutputBufferLength = sizeof(*reply);
+    return STATUS_SUCCESS;
 }
 
 static VOID RgDisconnect(PVOID ConnectionCookie)

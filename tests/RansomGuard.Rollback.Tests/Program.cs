@@ -324,8 +324,8 @@ try
         0,
         0x80000000,
         CreateTargetState.Missing,
-        CreatePreservationAction.NoPreservationRequired,
-        string.Empty,
+        CreatePreservationAction.RecordOriginallyAbsent,
+        new string('E', 64),
         null);
     var createFullyUnresolved = await createOps.RecordCompletionAsync(
         304,
@@ -336,6 +336,24 @@ try
         null);
     Check(createFullyUnresolved.State == CreateCompletionState.SucceededNameAndIdentityUnresolved,
         "CREATE success explicitly represents unresolved name and identity");
+
+    var inconsistentCreateIntentRejected = false;
+    try
+    {
+        _ = await createOps.RecordIntentAsync(
+            307,
+            Path.Combine(sourceDir, "create-inconsistent.bin"),
+            CreateDisposition.OpenIf,
+            0,
+            0x80000000,
+            CreateTargetState.Missing,
+            CreatePreservationAction.NoPreservationRequired,
+            string.Empty,
+            null);
+    }
+    catch (InvalidDataException) { inconsistentCreateIntentRejected = true; }
+    Check(inconsistentCreateIntentRejected,
+        "CREATE intent rejects preservation action inconsistent with disposition/target policy");
 
     var createFailedPath = Path.Combine(sourceDir, "create-failed.bin");
     _ = await createOps.RecordIntentAsync(

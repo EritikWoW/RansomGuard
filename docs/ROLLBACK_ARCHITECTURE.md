@@ -57,7 +57,28 @@ The absence journal never deletes a created file automatically. It records recov
 orchestration must decide how to quarantine/remove an incident-created path.
 
 The current existence probe is path-based. A race between that probe and the kernel create is still possible;
-production requires durable file identity plus post-create reconciliation.
+production requires post-create reconciliation.
+
+## Durable existing-file identity
+
+For existing files, the LAB gate now records a separate incident-scoped Windows identity journal before destructive
+preservation. The identity is the `FILE_ID_INFO` pair:
+
+- volume serial number;
+- 128-bit file ID.
+
+The journal is append-only, SHA-256 hash-chained and write-through flushed. Re-observing the same path with the same
+identity reuses the committed baseline. If the same path resolves to a different file identity later in the incident,
+the gate fails closed rather than capturing the replacement file as though it were the original object.
+
+A renamed file may appear under another observed path with the same identity; the identity store keeps those aliases.
+This is groundwork for identity-safe rename recovery, not the completed rename transaction model. Originally-absent
+paths remain governed by the create baseline because replacing one incident-created file with another does not change
+the pre-incident requirement that the path was absent.
+
+The remaining identity gap is kernel/post-create reconciliation: user mode still observes an existing path by opening
+it before preservation, while production handling must bind the completed CREATE/rename operation to the exact kernel
+file object and destination identity.
 
 ## Range recovery
 
@@ -110,7 +131,7 @@ These checks do not yet reconcile an interrupted in-flight kernel request. They 
 
 - post-create identity reconciliation and tunneled-name/file-ID confirmation;
 - rename destination capture and identity-safe rename rollback;
-- durable file identity (volume + file ID), not path identity alone;
+- kernel-side binding of completed operations to durable file identity;
 - bounded concurrent pending-I/O workers;
 - crash/restart reconciliation for requests pending during user-mode failure;
 - memory-mapped/cache-manager write coverage;

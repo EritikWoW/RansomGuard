@@ -206,6 +206,23 @@ try
         CreatePreservationAction.NoPreservationRequired, "FILE_OPEN existing file is non-destructive at CREATE time");
     Check(CreateGatePolicy.Decide(CreateDisposition.OpenIf, CreateTargetState.File) ==
         CreatePreservationAction.NoPreservationRequired, "FILE_OPEN_IF existing file is non-destructive at CREATE time");
+    Check(CreateGatePolicy.Decide(CreateDisposition.Open, CreateTargetState.File, 0,
+            CreateGatePolicy.FileWriteData) == CreatePreservationAction.CaptureExistingPreimage,
+        "FILE_OPEN with FILE_WRITE_DATA pre-preserves existing file before writable handle returns");
+    Check(CreateGatePolicy.Decide(CreateDisposition.OpenIf, CreateTargetState.File, 0,
+            CreateGatePolicy.FileAppendData) == CreatePreservationAction.CaptureExistingPreimage,
+        "FILE_OPEN_IF with FILE_APPEND_DATA pre-preserves existing file before append-capable handle returns");
+    Check(CreateGatePolicy.Decide(CreateDisposition.Open, CreateTargetState.File, 0,
+            CreateGatePolicy.GenericWrite) == CreatePreservationAction.CaptureExistingPreimage,
+        "FILE_OPEN with GENERIC_WRITE pre-preserves existing file for later writable mapping");
+    Check(CreateGatePolicy.Decide(CreateDisposition.Open, CreateTargetState.File, 0,
+            0x80000000u) == CreatePreservationAction.NoPreservationRequired,
+        "GENERIC_READ-only existing file still avoids eager full pre-image");
+    Check(CreateGatePolicy.HasContentWriteAccess(CreateGatePolicy.FileWriteData) &&
+          CreateGatePolicy.HasContentWriteAccess(CreateGatePolicy.FileAppendData) &&
+          CreateGatePolicy.HasContentWriteAccess(CreateGatePolicy.GenericWrite) &&
+          !CreateGatePolicy.HasContentWriteAccess(0x80000000u),
+        "content-write access classifier is conservative and excludes read-only opens");
     Check(CreateGatePolicy.Decide(CreateDisposition.Create, CreateTargetState.File) ==
         CreatePreservationAction.NoPreservationRequired, "FILE_CREATE existing file needs no snapshot because create fails");
     Check(CreateGatePolicy.Decide(CreateDisposition.Open, CreateTargetState.File,

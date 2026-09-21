@@ -14,13 +14,19 @@ pre-mutation preservation path.
 
 ## Current milestone
 
-Version 0.7.2.0 extends the engineering-only single-root pre-write gate with range-aware write copy-on-write:
+The current engineering branch extends the 0.7.2 range-aware write COW gate with protocol v4 CREATE semantics:
+
+`CREATE -> classify disposition -> durable existing-file pre-image OR originally-absent baseline -> allow`
 
 `WRITE -> durable original-length baseline + first touched blocks -> allow mutation`.
 
 Rename, delete and truncate-class operations remain on a conservative full-file pre-image path.
-The gate is intentionally not enabled in the normal bundle and is not production-safe yet.
+An originally-absent path is remembered for the whole incident so later writes do not create a false pre-image
+from data that did not exist before the incident.
 
-The next core milestones are exact create/rename transaction modeling, durable volume/file identity,
+The gate is intentionally not enabled in the normal bundle and is not production-safe yet. CREATE existence
+classification is still path-based; durable volume/file identity and post-create reconciliation remain required.
+
+The next core milestones are identity-safe rename/create reconciliation, durable volume/file identity,
 bounded concurrent and crash-reconciled gating, containment, process-state capture, adaptive crypto analysis,
 and verified recovery orchestration.

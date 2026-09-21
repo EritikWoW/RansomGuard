@@ -1,4 +1,4 @@
-# RansomGuard 0.7.6.0
+# RansomGuard 0.7.7.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
@@ -6,7 +6,7 @@ and recover data through rollback plus adaptive crypto analysis.
 
 ## Core preservation milestone
 
-0.7.6.0 retains the 0.7.2 range-aware COW gate and adds explicit CREATE preservation semantics.
+0.7.7.0 retains the 0.7.2 range-aware COW gate and adds explicit CREATE preservation semantics.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 
@@ -25,7 +25,7 @@ undone by truncating the recovered copy to that length.
 Rename, delete-disposition and explicit truncate/allocation-length operations remain on the conservative
 **full-file pre-image** path for now.
 
-The engineering minifilter protocol is now v7 and reports CREATE, WRITE, RENAME, DELETE and TRUNCATE-class metadata operations. RENAME events also carry a normalized destination path.
+The engineering minifilter protocol is now v8 and reports CREATE, WRITE, RENAME, DELETE and TRUNCATE-class metadata operations. RENAME events also carry a normalized destination path.
 
 For CREATE, the gate distinguishes Windows create dispositions instead of treating every open as destructive:
 existing `FILE_SUPERSEDE`, `FILE_OVERWRITE` and `FILE_OVERWRITE_IF` require a durable full pre-image;
@@ -34,7 +34,7 @@ create-capable dispositions on a missing path durably record that the path was o
 non-destructive opens require no snapshot. Existing-directory delete-on-close is denied until directory-topology rollback exists. Paths marked originally absent do not later manufacture rollback
 pre-images from data created during the same incident.
 
-Protocol v7 now also treats CREATE as a two-phase durable transaction. Before allow, the gate records a
+Protocol v8 now also treats CREATE as a two-phase durable transaction. Before allow, the gate records a
 hash-chained CREATE intent linked to the preservation proof. After the filesystem completes the operation,
 the minifilter reconciles the final tunneled name with `FltGetTunneledName`, queries `FileIdInformation`
 from the actual opened file object, and emits a correlated no-reply `CreateResult`. User mode records the
@@ -46,9 +46,10 @@ destination gets its own identity-bound full pre-image; a missing destination ge
 a hash-chained rename intent records source identity, destination state, flags and exact pre-operation names. Cross-root,
 ambiguous, directory-topology and same-file-alias cases fail closed. After the filesystem completes the rename, the
 minifilter reconciles the result on a safe post-operation path, applies `FltGetTunneledName` for successful operations,
-and sends a correlated `RenameResult`. User mode durably records success, failure, or a successful-but-unresolved final
-name in a separate hash-chained completion journal. If reconciliation cannot be delivered, the intent remains pending
-instead of being treated as completed. Kernel file-ID confirmation of the completed object is still a separate milestone.
+and queries `FileIdInformation` from the actual renamed kernel file object before sending a correlated `RenameResult`.
+User mode durably records the final tunneled name and 128-bit file identity when available, with explicit name-only,
+identity-only or fully unresolved success states. A post-op identity that differs from the pre-op source identity is
+rejected. If reconciliation cannot be delivered, the intent remains pending instead of being treated as completed.
 
 ## Recovery safety
 
@@ -100,7 +101,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.7.6.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.7.7.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 LAB gate documentation:
 
@@ -112,8 +113,8 @@ LAB gate documentation:
 This milestone validates the preservation model and reduces write-path storage amplification.
 It is not yet production ransomware blocking.
 
-Remaining core work includes post-operation kernel file-ID confirmation for completed renames,
-bounded concurrent gate workers, crash reconciliation for pending/missing CREATE/RENAME completion events,
+Remaining core work includes bounded concurrent gate workers,
+crash reconciliation for pending/missing CREATE/RENAME completion events,
 memory-mapped/cache-manager write coverage,
 containment policy, process-state capture, adaptive crypto reconstruction, verified recovery orchestration,
 driver signing and Microsoft-assigned production altitude.

@@ -1,4 +1,14 @@
-# RansomGuard 0.7.10.0
+# RansomGuard 0.7.11.0
+
+- Existing files opened with content-write capable CREATE access now receive a durable full pre-image before the handle is returned.
+- CREATE policy treats FILE_WRITE_DATA, FILE_APPEND_DATA and GENERIC_WRITE as eager-preservation triggers while read-only opens remain non-eager.
+- Writable-open preservation reuses exact FILE_ID_INFO binding, full-preimage SHA-256 verification and CREATE intent-before-allow ordering.
+- Incident-created/originally-absent paths remain governed by their absence baseline and never manufacture a pre-incident image.
+- This establishes a pre-mutation baseline for writable mappings created from handles opened after the LAB gate is active.
+- Protocol remains v9; paging-write callbacks remain non-blocking evidence-only and still do not perform user-mode preservation.
+- Normal product remains AuditOnly; this policy remains engineering LAB-only.
+
+# RansomGuard 0.7.11.0
 
 - Bumped the engineering minifilter protocol to v9 and added a no-reply `PagingWrite` evidence event.
 - Removed the registration-level `SKIP_PAGING_IO` blind spot for IRP_MJ_WRITE callbacks.

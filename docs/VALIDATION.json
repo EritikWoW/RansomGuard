@@ -1,23 +1,22 @@
 {
-  "version": "0.7.10.0",
+  "version": "0.7.11.0",
   "scope": "automated Windows userspace validation plus compile-only x64 minifilter validation",
-  "validated_source_sha": "f41aa917879e892ee9a9e3b7e5210a7a20d43c1f",
+  "validated_source_sha": "b0fc6c2e4975c34c691f75c94df30e0f26596f1c",
   "evidence": {
-    "pull_request": 16,
-    "windows_build_run": 35621084636,
-    "minifilter_compile_run": 35621084786
+    "pull_request": 17,
+    "windows_build_run": 35624906576,
+    "minifilter_compile_run": 35624906552
   },
   "performed": [
-    "validated Directory.Build.props and all Windows manifests at version 0.7.10.0",
+    "validated Directory.Build.props and all Windows manifests at version 0.7.11.0",
     "ran protocol v9 minifilter, rollback, administration, localization, recovery and read-only UI/API source gates",
-    "ran 121 rollback/store tests including paging-write evidence idempotency, conflict rejection, repository verification and journal-corruption rejection",
-    "ran 32 offline recovery/framing tests",
+    "ran 128 rollback/store tests including write-capable CREATE policy, durable DesiredAccess intent validation/reopen, paging evidence, restart evidence and journal corruption rejection",
     "ran 125 administration contract tests",
     "ran 2194 localization resource/contract checks",
     "ran WPF synthetic smoke rendering for 130 frames with no recorded binding errors",
-    "published normal and Engineering LAB 0.7.10.0 userspace ZIPs",
-    "validated protocol-v9 paging source invariants: IRP_MJ_WRITE no longer skips paging I/O, paging callback uses FLT_STREAM_CONTEXT, and paging path forbids synchronous RgGateEvent/file-name/FileId queries",
-    "validated userspace PagingWrite as a no-reply evidence path with a write-through SHA-256 hash-chained paging journal",
+    "published normal and Engineering LAB 0.7.11.0 userspace ZIPs",
+    "validated CREATE ordering for content-write capable existing-file opens: FILE_ID_INFO binding and full pre-image commit precede durable CREATE intent and allow",
+    "validated read-only CREATE remains non-eager and originally-absent incident paths remain absence-governed",
     "compiled and linked RansomGuardMinifilter.sys as Release x64 with protocol v9 and signing disabled",
     "ran x64 ApiValidator against the compiled SYS and received Universal DDI validation success",
     "verified the compile-only minifilter artifact is not Authenticode-signed",
@@ -26,11 +25,12 @@
   "not_performed": [
     "driver installation, loading or volume attachment",
     "live FilterGetMessage/FilterReplyMessage kernel-to-user round trip with the compiled driver",
-    "native writable memory-mapping test on NTFS/ReFS producing a live PagingWrite event",
-    "pre-preservation of writable memory mappings or proof that paging writes are recoverable",
+    "native writable memory-mapping test proving a write-capable CREATE receives pre-image before CreateFileMapping(PAGE_READWRITE)",
+    "section-synchronization attestation for writable mapping creation",
+    "coverage for writable mappings created from file handles that existed before LAB gate activation",
     "live crash/restart fault injection between intent commit and authoritative kernel completion delivery",
     "production driver signing or Microsoft-assigned altitude validation"
   ],
   "safety_boundary": "The blocking minifilter remains Engineering-LAB-only. CI compiles and validates an unsigned artifact but never installs, loads or attaches it. The normal bundle remains AuditOnly.",
-  "next_required_checkpoint": "Run the validated unsigned protocol-v8 driver only in a disposable Windows VM and disposable gate directory; prove live rename tunneled-name plus FILE_ID_INFORMATION reconciliation, including the APC_LEVEL identity-unresolved path and missing-result fault cases, before expanding the gate."
+  "next_required_checkpoint": "Run the validated unsigned protocol-v9 driver only in a disposable Windows VM and disposable gate directory; prove write-capable CREATE pre-image ordering followed by a live writable mapping and PagingWrite evidence, then add section-synchronization attestation without blocking memory-manager callbacks."
 }

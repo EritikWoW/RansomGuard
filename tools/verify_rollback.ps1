@@ -71,7 +71,7 @@ foreach($required in @(
     'IntentRecordSha256',
     'Conflicting duplicate CREATE completion',
     'CREATE intent preservation action does not match the disposition/target policy',
-    'CreateGatePolicy.Decide(disposition, targetState, createOptions)',
+    'CreateGatePolicy.Decide(disposition, targetState, createOptions, desiredAccess)',
     'FileOptions.WriteThrough',
     'Flush(true)'
 )){
@@ -87,6 +87,10 @@ foreach($required in @(
     'CreateDisposition.OverwriteIf',
     'CreateDisposition.OpenIf',
     'FileDeleteOnClose',
+    'FileWriteData',
+    'FileAppendData',
+    'GenericWrite',
+    'HasContentWriteAccess',
     'CreatePreservationAction.DenyUnsupported'
 )){
     if($policyText -notmatch [regex]::Escape($required)){throw "Create gate policy missing invariant: $required"}
@@ -207,5 +211,5 @@ if($repository -notmatch 'new RenameRollbackStore\(renameRoot\)\.VerifyAll\(\)')
 if($repository -notmatch 'new RestartReconciliationStore\(restartRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested restart-state stores.'}
 if($repository -notmatch 'new PagingWriteEvidenceStore\(pagingRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested paging-state stores.'}
 Write-Host 'Rollback source gate PASSED: full-file/range COW, CREATE/RENAME transactions, identity, restart and paging-write evidence journals, hashes, write-through commits and copy-only restore.'
-Write-Host 'Normal service capture remains disabled; v0.7.10 keeps blocking preservation inside the explicit LAB gate only. Paging-write handling is evidence-only.'
+Write-Host 'Normal service capture remains disabled; v0.7.11 keeps blocking preservation inside the explicit LAB gate only. Paging-write handling is evidence-only.'
 

@@ -7,6 +7,12 @@ namespace RansomGuard.Rollback;
 public static class CreateGatePolicy
 {
     public const uint FileDeleteOnClose = 0x00001000;
+    public const uint FileWriteData = 0x00000002;
+    public const uint FileAppendData = 0x00000004;
+    public const uint GenericWrite = 0x40000000;
+
+    public static bool HasContentWriteAccess(uint desiredAccess) =>
+        (desiredAccess & (GenericWrite | FileWriteData | FileAppendData)) != 0;
 
     public static bool TryParseDisposition(uint raw, out CreateDisposition disposition)
     {
@@ -21,9 +27,10 @@ public static class CreateGatePolicy
     }
 
     public static CreatePreservationAction Decide(CreateDisposition disposition, CreateTargetState target,
-        uint createOptions = 0)
+        uint createOptions = 0, uint desiredAccess = 0)
     {
         var deleteOnClose = (createOptions & FileDeleteOnClose) != 0;
+        var contentWriteCapable = HasContentWriteAccess(desiredAccess);
 
         if (target == CreateTargetState.Directory)
             return deleteOnClose
@@ -32,7 +39,7 @@ public static class CreateGatePolicy
 
         if (target == CreateTargetState.File)
         {
-            return deleteOnClose ||
+            return deleteOnClose || contentWriteCapable ||
                    disposition is CreateDisposition.Supersede or CreateDisposition.Overwrite or CreateDisposition.OverwriteIf
                 ? CreatePreservationAction.CaptureExistingPreimage
                 : CreatePreservationAction.NoPreservationRequired;

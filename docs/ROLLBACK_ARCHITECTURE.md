@@ -1,7 +1,7 @@
-# RansomGuard 0.7.10.0 - CREATE completion and identity reconciliation milestone
+# RansomGuard 0.7.11.0 - CREATE completion and identity reconciliation milestone
 
 RansomGuard is moving from detection-only telemetry to `preserve -> contain -> recover`.
-0.7.10.0 retains the deliberately constrained engineering minifilter gate, range-aware WRITE COW,
+0.7.11.0 retains the deliberately constrained engineering minifilter gate, range-aware WRITE COW,
 CREATE/RENAME preservation and rename outcome reconciliation, and adds durable post-CREATE outcome,
 tunneled-name and kernel file-identity reconciliation.
 
@@ -190,7 +190,7 @@ These checks prevent a restart from proceeding on top of corrupt rollback state.
 
 ## Restart reconciliation evidence
 
-0.7.10.0 adds a separate append-only, SHA-256 hash-chained `restart-reconciliation-journal.jsonl` for older CREATE/RENAME intents that have no authoritative completion record.
+0.7.11.0 adds a separate append-only, SHA-256 hash-chained `restart-reconciliation-journal.jsonl` for older CREATE/RENAME intents that have no authoritative completion record.
 
 Before creating a new LAB session, GateClient validates the repository and then scans pending intents whose paths are still under the same explicit LAB root. It records current path state and, for ordinary files, `FILE_ID_INFO` from the exact opened handle. A pure classifier records one of four evidence outcomes:
 
@@ -203,9 +203,23 @@ For RENAME, source identity found at the destination while the source name is ab
 
 Restart evidence is deliberately **not** a CREATE/RENAME completion. The original completion journals remain authoritative only when populated by the correlated kernel post-operation event. Repeated identical restart observations are idempotent.
 
+## Writable-open pre-preservation
+
+0.7.11.0 extends CREATE policy for existing files. If the requested DesiredAccess contains FILE_WRITE_DATA, FILE_APPEND_DATA or GENERIC_WRITE, the LAB gate treats the open as preservation-sensitive even when the CreateDisposition itself is non-destructive.
+
+Ordering is:
+
+1. resolve the existing file inside the explicit LAB root;
+2. bind its current FILE_ID_INFO;
+3. commit the full-file pre-image;
+4. commit the CREATE intent including DesiredAccess;
+5. only then return SnapshotCommitted and allow CREATE to finish.
+
+This is intentionally conservative. It establishes a durable pre-mutation baseline before a write-capable handle can later be used for writable memory mapping. Read-only opens still avoid eager full-file capture. Incident-created paths remain governed by their originally-absent baseline and never acquire a synthetic pre-incident image.
+
 ## Paging-write visibility
 
-0.7.10.0 removes the registration-level `SKIP_PAGING_IO` blind spot without turning paging I/O into a synchronous user-mode gate.
+0.7.11.0 removes the registration-level `SKIP_PAGING_IO` blind spot without turning paging I/O into a synchronous user-mode gate.
 
 After a successful in-scope CREATE, the minifilter attaches a nonpaged `FLT_STREAM_CONTEXT` containing the already-resolved bounded path plus kernel file identity when available. A paging write then:
 
@@ -216,11 +230,11 @@ After a successful in-scope CREATE, the minifilter attaches a nonpaged `FLT_STRE
 
 GateClient persists those observations in a separate write-through SHA-256 hash-chained `paging-write-journal.jsonl`. Repository-wide validation includes that journal.
 
-This closes the observability gap for memory-mapped/cache-manager writes associated with already tracked streams. It does **not** claim that those writes are recoverable: no pre-image is captured from the paging callback itself, and the paging path remains deliberately non-blocking.
+This closes the observability gap for memory-mapped/cache-manager writes associated with already tracked streams. The paging callback itself still captures no pre-image and remains deliberately non-blocking. For a stream whose content-write capable handle was opened after 0.7.11 policy became active, the required full-file pre-image was already committed during CREATE, so mapped mutations through that handle have a conservative recovery baseline.
 
 ## Bounded concurrent gate execution
 
-0.7.10.0 removes the previous global serialization around blocking gate sends. The minifilter now:
+0.7.11.0 removes the previous global serialization around blocking gate sends. The minifilter now:
 - admits at most 8 simultaneous blocking gate requests;
 - fails closed with STATUS_DEVICE_BUSY when that bound is exceeded;
 - holds gPortMutex only long enough to acquire/release a client-port lease;
@@ -233,7 +247,7 @@ Bounded concurrency and conservative restart evidence are implemented. A worker/
 ## Still required before production
 
 - deeper crash recovery for requests interrupted before authoritative kernel completion delivery;
-- safe pre-preservation for writable memory mappings/cache-manager paging writes;
+- section-synchronization attestation and coverage for writable mappings backed by handles that predate LAB gate activation;
 - storage quotas, retention and pressure policy;
 - transition from protected-root health to containment/block policy;
 - process-state capture and adaptive crypto analysis;

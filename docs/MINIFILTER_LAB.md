@@ -1,4 +1,4 @@
-# RansomGuard minifilter engineering lab — v0.7.3.0
+# RansomGuard minifilter engineering lab — v0.7.4.0
 
 The minifilter has two mutually exclusive user-mode connection modes:
 
@@ -34,7 +34,7 @@ Build the engineering package:
 .\build_lab.cmd
 ```
 
-Then, from the generated `RansomGuard-Lab-v0.7.3.0-*` directory, build/install the minifilter only in a
+Then, from the generated `RansomGuard-Lab-v0.7.4.0-*` directory, build/install the minifilter only in a
 Windows test VM using the existing lab scripts.
 
 ## Audit mode
@@ -61,10 +61,13 @@ Or choose another disposable non-system directory:
 
 The first run creates only the gate marker before connecting. Put **copies** of test files into that folder
 before starting the gate. Once connected, CREATE / WRITE / rename / delete-disposition / truncate requests in that folder are gated.
-Protocol v4 distinguishes destructive replacement of an existing file from creation of an originally-absent path.
+Protocol v5 distinguishes destructive replacement of an existing file from creation of an originally-absent path and carries a normalized destination for rename operations.
 It also treats `FILE_DELETE_ON_CLOSE` on an existing file as destructive and captures a full pre-image first;
 existing-directory delete-on-close is denied because directory-topology rollback is not modeled yet.
 An originally-absent path is committed as metadata-only recovery state; it does not cause the recovery library to delete files.
+For rename, source and destination preservation plus a durable pre-operation intent are committed before allow. A destination
+outside the LAB root, an unresolved/truncated destination, an existing directory, or a same-file alias is denied. The intent
+still requires post-operation tunneled-name/file-ID reconciliation before it can be treated as a completed rename.
 
 CREATE classification is still path-based and native post-create/file-ID reconciliation is not complete, so do
 not use the lab gate as a general-purpose protected folder yet.

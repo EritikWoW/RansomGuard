@@ -303,6 +303,8 @@ struct RgEvent
 
 static class Native
 {
+    private const uint WireProtocolVersion = 12;
+
     [DllImport("fltlib.dll", CharSet = CharSet.Unicode)]
     private static extern int FilterConnectCommunicationPort(string lpPortName, uint dwOptions, IntPtr lpContext,
         ushort wSizeOfContext, IntPtr lpSecurityAttributes, out SafeFileHandle hPort);
@@ -318,7 +320,7 @@ static class Native
         const uint FLT_PORT_FLAG_SYNC_HANDLE = 0x00000001;
         var context = new RgConnectContext
         {
-            ProtocolVersion = ProtocolVersion,
+            ProtocolVersion = WireProtocolVersion,
             ClientMode = 1,
             ClientProcessId = processId,
             GateRootLengthBytes = 0,

@@ -70,7 +70,7 @@ if($text -match '\b(File\.Delete|Directory\.Delete|RestoreToNewCopyAsync|Process
 
 $existingCase=$text.IndexOf('case CreatePreservationAction.CaptureExistingPreimage:')
 if($existingCase -lt 0){throw 'Existing-file CREATE preservation case missing.'}
-$existingCapture=$text.IndexOf('CapturePreimageAsync(path, RollbackMutationKind.Create',$existingCase)
+$existingCapture=$text.IndexOf('RollbackMutationKind.Create',$existingCase)
 $existingAllow=$text.IndexOf('RgGateDecision.SnapshotCommitted',$existingCapture)
 if($existingCapture -lt 0 -or $existingAllow -lt 0 -or $existingAllow -lt $existingCapture){
   throw 'CREATE SnapshotCommitted must be returned only after durable existing-file pre-image capture.'

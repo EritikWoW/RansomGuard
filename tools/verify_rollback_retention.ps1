@@ -23,6 +23,8 @@ foreach($required in @(
     'FileShare.None',
     'maintenance.lock',
     'Another rollback maintenance operation currently owns the repository lease',
+    'Rollback repository root does not exist',
+    'RejectReparse(root)',
     'FileOptions.WriteThrough',
     'Flush(true)'
 )){

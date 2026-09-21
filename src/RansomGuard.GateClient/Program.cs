@@ -615,8 +615,9 @@ sealed class DevicePathResolver
 }
 
 enum RgClientMode : uint { Audit = 1, LabGate = 2 }
-enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, RenameResult = 6 }
+enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, RenameResult = 6, CreateResult = 7 }
 enum RgPathStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2, Truncated = 3 }
+enum RgIdentityStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2 }
 enum RgGateDecision : uint { Invalid = 0, SnapshotCommitted = 1, Deny = 2, BaselineCommitted = 3, NoPreservationRequired = 4 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -646,6 +647,8 @@ struct RgEvent
     public ulong RelatedSequence;
     public uint CompletionStatus;
     public ulong CompletionInformation;
+    public uint IdentityStatus;
+    public ulong VolumeSerialNumber, FileIdLow, FileIdHigh;
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 512)] public string? Path;
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 512)] public string? DestinationPath;
 }

@@ -110,6 +110,15 @@ foreach($required in @(
 if($planText -match '\b(Directory\.Delete|File\.Delete|Directory\.Move|File\.Move)\s*\('){
     throw 'Retention planner must remain read-only.'
 }
+if($planText -match [regex]::Escape('File.ReadAllBytes')){
+    throw 'Retention planner must stream session hashing; rollback evidence may be multi-gigabyte.'
+}
+foreach($required in @(
+    'FileOptions.SequentialScan',
+    'SHA256.HashData(stream)'
+)){
+    if($planText -notmatch [regex]::Escape($required)){throw "Retention streaming hash invariant missing: $required"}
+}
 
 $executorText=Get-Content -LiteralPath $retentionExecutor -Raw
 foreach($required in @(

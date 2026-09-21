@@ -143,8 +143,8 @@ public sealed class CreateTransactionStore
             {
                 if (createAction > 3)
                     throw new InvalidDataException("Successful CREATE has an unknown create action.");
-                if (!IsNtSuccess(identityStatus) || postIdentity is null)
-                    throw new InvalidDataException("Successful CREATE is missing a verified kernel file identity.");
+                if (IsNtSuccess(identityStatus) != (postIdentity is not null))
+                    throw new InvalidDataException("CREATE identity status and post identity disagree.");
             }
             else if (postIdentity is not null)
             {
@@ -264,9 +264,11 @@ public sealed class CreateTransactionStore
                 var succeeded = IsNtSuccess(line.CompletionStatus);
                 if (succeeded)
                 {
-                    if (line.CreateAction > 3 || !IsNtSuccess(line.IdentityStatus) ||
-                        line.PostVolumeSerialHex.Length == 0 || line.PostFileIdHex.Length == 0)
-                        throw new InvalidDataException("Successful CREATE transaction lacks reconciled identity evidence.");
+                    if (line.CreateAction > 3)
+                        throw new InvalidDataException("Successful CREATE transaction has an unknown create action.");
+                    var hasPostIdentity = line.PostVolumeSerialHex.Length != 0 && line.PostFileIdHex.Length != 0;
+                    if (IsNtSuccess(line.IdentityStatus) != hasPostIdentity)
+                        throw new InvalidDataException("CREATE transaction identity status and stored identity disagree.");
                 }
                 else if (line.PostVolumeSerialHex.Length != 0 || line.PostFileIdHex.Length != 0)
                 {
@@ -284,8 +286,8 @@ public sealed class CreateTransactionStore
             expectedJournalSequence++;
         }
 
-        if (requireComplete && rebuilt.Values.Any(x => x.Outcome is null))
-            throw new InvalidDataException("Incomplete CREATE transaction found: post-create reconciliation is missing.");
+        if (requireComplete && rebuilt.Values.Any(x => x.Outcome is null || !x.Outcome.IsReconciled))
+            throw new InvalidDataException("Incomplete CREATE transaction found: post-create reconciliation is missing or unverifiable.");
 
         if (rebuildState)
         {
@@ -389,6 +391,11 @@ public sealed record CreateTransactionOutcome(
     [JsonIgnore]
     public DurableFileIdentity? PostIdentity =>
         PostVolumeSerialHex.Length == 0 ? null : new DurableFileIdentity(PostVolumeSerialHex, PostFileIdHex);
+
+    [JsonIgnore]
+    public bool IsReconciled =>
+        unchecked((int)CompletionStatus) < 0 ||
+        (unchecked((int)IdentityStatus) >= 0 && PostIdentity is not null);
 }
 
 public sealed record CreateTransactionState(

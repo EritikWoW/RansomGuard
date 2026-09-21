@@ -18,9 +18,6 @@ public static class RollbackRetentionExecutor
             DateTime.UtcNow);
 
         ValidateRequestedPlan(requestedPlan, current, repositoryFull);
-        if (current.Issues.Count != 0)
-            throw new InvalidDataException(
-                "Retention execution refused because the current plan contains unresolved issues.");
 
         var repository = new RollbackRepository(repositoryFull);
         repository.VerifyAll();

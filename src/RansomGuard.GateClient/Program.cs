@@ -70,17 +70,6 @@ if (headerSize != 16 || eventSize != 2168 || replyHeaderSize != 16 || gateReplyS
 var resolver = new DevicePathResolver();
 var activationSummary = await ActivationPreflight.RunAsync(
     port, options.Root, resolver, activationStore, cts.Token).ConfigureAwait(false);
-var activationReply = Native.Control(port, new RgControlRequest
-{
-    ProtocolVersion = 11,
-    Command = (uint)RgControlCommand.ActivateGate
-});
-if (activationReply.ProtocolVersion != 11 ||
-    activationReply.Command != (uint)RgControlCommand.ActivateGate ||
-    activationReply.Status != 0 ||
-    activationReply.GateActivated != 1)
-    throw new InvalidOperationException(
-        $"Kernel refused LAB activation after preflight. NTSTATUS=0x{activationReply.Status:X8}, active={activationReply.GateActivated}.");
 Console.WriteLine($"Activation preflight: files={activationSummary.FilesChecked}, writable-views=0, kernel gate ACTIVE.");
 
 
@@ -264,15 +253,19 @@ static class ActivationPreflight
         };
 
         var checkedFiles = 0;
-        foreach (var rawPath in Directory.EnumerateFiles(root, "*", options))
+        var heldHandles = new List<SafeFileHandle>();
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var path = Path.GetFullPath(rawPath);
-            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
-                throw new InvalidOperationException($"Activation preflight refuses reparse file: {path}");
+            foreach (var rawPath in Directory.EnumerateFiles(root, "*", options))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var path = Path.GetFullPath(rawPath);
+                if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidOperationException($"Activation preflight refuses reparse file: {path}");
 
-            using var file = Native.OpenPreflight(path);
-            var ev = await ReceivePreflightEventAsync(port, path, resolver, cancellationToken).ConfigureAwait(false);
+                var file = Native.OpenPreflight(path);
+                heldHandles.Add(file);
+                var ev = await ReceivePreflightEventAsync(port, path, resolver, cancellationToken).ConfigureAwait(false);
 
             DurableFileIdentity? identity = null;
             if (ev.IdentityStatus == (uint)RgIdentityStatus.Resolved &&
@@ -297,10 +290,27 @@ static class ActivationPreflight
                 throw new InvalidOperationException(
                     $"Activation refused: '{path}' already has a user-writable mapped view.");
 
-            checkedFiles++;
-        }
+                checkedFiles++;
+            }
 
-        return new ActivationPreflightSummary(checkedFiles);
+            var activationReply = Native.Control(port, new RgControlRequest
+            {
+                ProtocolVersion = 11,
+                Command = (uint)RgControlCommand.ActivateGate
+            });
+            if (activationReply.ProtocolVersion != 11 ||
+                activationReply.Command != (uint)RgControlCommand.ActivateGate ||
+                activationReply.Status != 0 ||
+                activationReply.GateActivated != 1)
+                throw new InvalidOperationException(
+                    $"Kernel refused LAB activation after preflight. NTSTATUS=0x{activationReply.Status:X8}, active={activationReply.GateActivated}.");
+
+            return new ActivationPreflightSummary(checkedFiles);
+        }
+        finally
+        {
+            foreach (var handle in heldHandles) handle.Dispose();
+        }
     }
 
     private static async Task<RgEvent> ReceivePreflightEventAsync(
@@ -1159,12 +1169,12 @@ static class Native
     {
         const uint FileReadAttributes = 0x00000080;
         const uint ShareRead = 0x00000001;
-        const uint ShareWrite = 0x00000002;
-        const uint ShareDelete = 0x00000004;
         const uint OpenExisting = 3;
         const uint FileAttributeNormal = 0x00000080;
 
-        var handle = CreateFileW(path, FileReadAttributes, ShareRead | ShareWrite | ShareDelete,
+        // Hold a read-shared handle through activation. This deliberately denies coexistence with
+        // pre-existing write/delete handles and prevents new write/delete handles from racing the scan.
+        var handle = CreateFileW(path, FileReadAttributes, ShareRead,
             IntPtr.Zero, OpenExisting, FileAttributeNormal, IntPtr.Zero);
         if (handle.IsInvalid)
         {

@@ -39,13 +39,14 @@ var pagingStore = new PagingWriteEvidenceStore(Path.Combine(store.Root, "paging-
 var sectionStore = new WritableSectionEvidenceStore(Path.Combine(store.Root, "section-state"));
 var activationStore = new ActivationPreflightStore(Path.Combine(store.Root, "activation-state"));
 var topologyStore = new ActivationTopologyStore(Path.Combine(store.Root, "activation-topology-state"));
+var containmentStore = new ContainmentEvidenceStore(Path.Combine(store.Root, "containment-state"));
 var storageBudget = new RollbackStorageBudget(
     store.Root,
     checked(options.MaxStoreMiB * RollbackStorageBudget.MiB),
     checked(options.MinFreeMiB * RollbackStorageBudget.MiB));
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
-Console.WriteLine("RansomGuard LAB pre-write gate v0.7.20.0");
+Console.WriteLine("RansomGuard LAB pre-write gate v0.7.21.0");
 Console.WriteLine("LAB ONLY: use only inside a disposable test directory on a test machine/VM.");
 Console.WriteLine($"Protected LAB root : {options.Root}");
 Console.WriteLine($"Kernel NT root     : {ntRoot}");
@@ -59,7 +60,7 @@ Console.WriteLine("Press Ctrl+C to disconnect. The driver then stops gating beca
 
 var context = new RgConnectContext
 {
-    ProtocolVersion = 12,
+    ProtocolVersion = 13,
     ClientMode = (uint)RgClientMode.LabGate,
     ClientProcessId = (ulong)Environment.ProcessId,
     GateRootLengthBytes = checked((uint)(ntRoot.Length * 2)),
@@ -84,8 +85,12 @@ var activationSummary = await ActivationPreflight.RunAsync(
 Console.WriteLine($"Activation preflight: directories={activationSummary.DirectoriesHeld}, files={activationSummary.FilesChecked}, writable-views=0, kernel gate ACTIVE.");
 Console.WriteLine(activationSummary.ContainedProcessId is ulong containedPid
     ? $"LAB containment  : ACTIVE for kernel-bound process pid={containedPid}; disconnect clears the latch."
-    : "LAB containment  : not armed.");
-
+    : "LAB containment  : not pre-armed.");
+using var containmentTrigger = options.ContainAfterPid is int triggerPid
+    ? new LabContainmentTrigger(triggerPid, options.ContainAfterEvents, options.ContainAfterPaths)
+    : null;
+if (containmentTrigger is not null)
+    Console.WriteLine($"LAB transition   : pid={containmentTrigger.ProcessId}; after={options.ContainAfterEvents} preserved mutations across {options.ContainAfterPaths} paths; event-bound PEPROCESS latch.");
 
 using var workerSlots = new SemaphoreSlim(options.GateWorkers, options.GateWorkers);
 var activeWorkers = new List<Task>();
@@ -99,7 +104,7 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
     {
         if ((RgEventType)ev.EventType == RgEventType.WritableSection)
         {
-            if (ev.ProtocolVersion != 12 ||
+            if (ev.ProtocolVersion != 13 ||
                 ev.PathStatus != (uint)RgPathStatus.Resolved ||
                 ev.RelatedSequence == 0 ||
                 ev.CompletionInformation > uint.MaxValue)
@@ -148,7 +153,7 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
 
         if ((RgEventType)ev.EventType == RgEventType.PagingWrite)
         {
-            if (ev.ProtocolVersion != 12 || ev.PathStatus != (uint)RgPathStatus.Resolved)
+            if (ev.ProtocolVersion != 13 || ev.PathStatus != (uint)RgPathStatus.Resolved)
                 throw new InvalidDataException("Invalid paging-write evidence event.");
 
             var trackedPath = resolver.Resolve(ev.Path);
@@ -211,12 +216,79 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
             ev, resolver, options.Root, store, writeStore, createStore, createOperationStore,
             identityStore, renameStore, storageBudget, cts.Token).ConfigureAwait(false);
 
+        var path = resolver.Resolve(ev.Path) ?? ev.Path ?? "<unresolved>";
+        ContainmentTriggerEvidence? containmentRequest = null;
+        if (containmentTrigger?.TryRequest(ev, reply, path, out var triggerEvidence) == true)
+        {
+            containmentRequest = triggerEvidence;
+            await using (var reservation = await storageBudget.ReserveAsync(
+                             RollbackStorageBudget.MetadataReservationBytes,
+                             "containment-request",
+                             cts.Token).ConfigureAwait(false))
+            {
+                _ = await containmentStore.RecordRequestAsync(
+                    ev.Sequence,
+                    ev.ProcessId,
+                    triggerEvidence.ProcessCreationFileTimeUtc,
+                    ev.EventType,
+                    path,
+                    (uint)reply.Decision,
+                    triggerEvidence.EvidenceCount,
+                    triggerEvidence.DistinctPathCount,
+                    cts.Token).ConfigureAwait(false);
+            }
+            reply.Flags |= (uint)RgGateReplyFlags.ContainRequestor;
+        }
+
+        RgControlReply containmentStatus = default;
         lock (replySync)
         {
             Native.Reply(port, header.MessageId, reply);
+            if (containmentRequest is not null)
+            {
+                containmentStatus = Native.Control(port, new RgControlRequest
+                {
+                    ProtocolVersion = 13,
+                    Command = (uint)RgControlCommand.QueryContainment,
+                    TargetProcessId = 0
+                });
+            }
         }
 
-        var path = resolver.Resolve(ev.Path) ?? ev.Path ?? "<unresolved>";
+        if (containmentRequest is not null)
+        {
+            if (containmentStatus.ProtocolVersion != 13 ||
+                containmentStatus.Command != (uint)RgControlCommand.QueryContainment ||
+                containmentStatus.Status != 0 ||
+                containmentStatus.GateActivated != 1 ||
+                containmentStatus.ContainmentActive != 1 ||
+                containmentStatus.ContainedProcessId != ev.ProcessId)
+                throw new InvalidOperationException(
+                    $"Kernel did not confirm event-bound containment for sequence={ev.Sequence}, pid={ev.ProcessId}. status=0x{containmentStatus.Status:X8}, active={containmentStatus.ContainmentActive}, contained={containmentStatus.ContainedProcessId}.");
+
+            await using (var reservation = await storageBudget.ReserveAsync(
+                             RollbackStorageBudget.MetadataReservationBytes,
+                             "containment-kernel-active",
+                             cts.Token).ConfigureAwait(false))
+            {
+                _ = await containmentStore.RecordKernelActiveAsync(
+                    ev.Sequence,
+                    ev.ProcessId,
+                    containmentRequest.ProcessCreationFileTimeUtc,
+                    ev.EventType,
+                    path,
+                    (uint)reply.Decision,
+                    containmentRequest.EvidenceCount,
+                    containmentRequest.DistinctPathCount,
+                    containmentStatus.Status,
+                    containmentStatus.ContainedProcessId,
+                    cts.Token).ConfigureAwait(false);
+            }
+
+            Console.WriteLine(
+                $"LAB CONTAINMENT ACTIVE: pid={ev.ProcessId}; exact gate sequence={ev.Sequence}; preserved-before-latch; process-object bound in kernel.");
+        }
+
         Console.WriteLine(
             $"{DateTime.Now:HH:mm:ss.fff} {((RgEventType)ev.EventType),-20} pid={ev.ProcessId,-7} {reply.Decision,-18} {path}");
     }
@@ -368,10 +440,10 @@ static class ActivationPreflight
 
                 var arm = Native.Control(port, new RgControlRequest
                 {
-                    ProtocolVersion = 12,
+                    ProtocolVersion = 13,
                     Command = (uint)RgControlCommand.ArmPreflight
                 });
-                if (arm.ProtocolVersion != 12 ||
+                if (arm.ProtocolVersion != 13 ||
                     arm.Command != (uint)RgControlCommand.ArmPreflight ||
                     arm.Status != 0 ||
                     arm.GateActivated != 0)
@@ -419,11 +491,11 @@ static class ActivationPreflight
                 : RgControlCommand.ActivateGate;
             var activationReply = Native.Control(port, new RgControlRequest
             {
-                ProtocolVersion = 12,
+                ProtocolVersion = 13,
                 Command = (uint)activationCommand,
                 TargetProcessId = containPid ?? 0
             });
-            if (activationReply.ProtocolVersion != 12 ||
+            if (activationReply.ProtocolVersion != 13 ||
                 activationReply.Command != (uint)activationCommand ||
                 activationReply.Status != 0 ||
                 activationReply.GateActivated != 1)
@@ -485,7 +557,7 @@ static class ActivationPreflight
                     throw new InvalidOperationException("Activation refused: protected-root memory-mapped activity occurred during preflight.");
                 if (type != RgEventType.ActivationPreflight)
                     throw new InvalidDataException($"Unexpected event {type} during activation preflight.");
-                if (ev.ProtocolVersion != 12 || ev.PathStatus != (uint)RgPathStatus.Resolved)
+                if (ev.ProtocolVersion != 13 || ev.PathStatus != (uint)RgPathStatus.Resolved)
                     throw new InvalidDataException("Invalid activation preflight event.");
 
                 var resolved = resolver.Resolve(ev.Path);
@@ -513,7 +585,7 @@ static class CreateReconciliation
         CreateOperationStore operationStore,
         CancellationToken cancellationToken)
     {
-        if (ev.ProtocolVersion != 12 || ev.RelatedSequence == 0)
+        if (ev.ProtocolVersion != 13 || ev.RelatedSequence == 0)
             throw new InvalidDataException("Invalid CREATE completion correlation.");
 
         if (!NtSuccess(ev.CompletionStatus))
@@ -577,7 +649,7 @@ static class RenameReconciliation
         RenameRollbackStore renameStore,
         CancellationToken cancellationToken)
     {
-        if (ev.ProtocolVersion != 12 || ev.RelatedSequence == 0)
+        if (ev.ProtocolVersion != 13 || ev.RelatedSequence == 0)
             throw new InvalidDataException("Invalid rename completion correlation.");
 
         if (!NtSuccess(ev.CompletionStatus))
@@ -644,7 +716,7 @@ static class GateDecision
         {
             // Never preserve or authorize against a truncated path. The kernel only sends a truncated
             // gate event when its known prefix is already inside the explicit LAB root, so deny it here.
-            if (ev.ProtocolVersion != 12 || ev.PathStatus != (uint)RgPathStatus.Resolved)
+            if (ev.ProtocolVersion != 13 || ev.PathStatus != (uint)RgPathStatus.Resolved)
                 return Deny(ev.Sequence, 1);
 
             var path = resolver.Resolve(ev.Path);
@@ -924,7 +996,7 @@ static class GateDecision
 
     private static RgGateReply Allow(ulong sequence, RgGateDecision decision) => new()
     {
-        ProtocolVersion = 12,
+        ProtocolVersion = 13,
         Decision = decision,
         RequestSequence = sequence,
         ErrorCode = 0
@@ -932,7 +1004,7 @@ static class GateDecision
 
     private static RgGateReply Deny(ulong sequence, uint errorCode) => new()
     {
-        ProtocolVersion = 12,
+        ProtocolVersion = 13,
         Decision = RgGateDecision.Deny,
         RequestSequence = sequence,
         ErrorCode = errorCode
@@ -1091,6 +1163,83 @@ static class PathProbe
     }
 }
 
+sealed record ContainmentTriggerEvidence(
+    long ProcessCreationFileTimeUtc,
+    int EvidenceCount,
+    int DistinctPathCount);
+
+sealed class LabContainmentTrigger : IDisposable
+{
+    private readonly Process _process;
+    private readonly long _createdFileTimeUtc;
+    private readonly int _requiredEvents;
+    private readonly int _requiredPaths;
+    private readonly HashSet<string> _paths = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _sync = new();
+    private int _events;
+    private bool _requested;
+
+    public int ProcessId => _process.Id;
+
+    public LabContainmentTrigger(int processId, int requiredEvents, int requiredPaths)
+    {
+        if (processId <= 4 || processId == Environment.ProcessId)
+            throw new ArgumentOutOfRangeException(nameof(processId));
+        if (requiredEvents < 2 || requiredEvents > 64)
+            throw new ArgumentOutOfRangeException(nameof(requiredEvents));
+        if (requiredPaths < 1 || requiredPaths > requiredEvents)
+            throw new ArgumentOutOfRangeException(nameof(requiredPaths));
+
+        _process = Process.GetProcessById(processId);
+        _createdFileTimeUtc = _process.StartTime.ToUniversalTime().ToFileTimeUtc();
+        _ = _process.Handle; // Hold this exact process object open; PID reuse cannot silently re-authorize a replacement.
+        if (_process.HasExited)
+            throw new InvalidOperationException("Containment transition target already exited.");
+        _requiredEvents = requiredEvents;
+        _requiredPaths = requiredPaths;
+    }
+
+    public bool TryRequest(
+        RgEvent ev,
+        RgGateReply reply,
+        string path,
+        out ContainmentTriggerEvidence evidence)
+    {
+        evidence = default!;
+        if (ev.ProcessId != (ulong)_process.Id ||
+            reply.Decision is not (RgGateDecision.SnapshotCommitted or RgGateDecision.BaselineCommitted))
+            return false;
+
+        var type = (RgEventType)ev.EventType;
+        if (type is not (RgEventType.Create or RgEventType.Write or RgEventType.Rename or
+            RgEventType.DeleteDisposition or RgEventType.Truncate))
+            return false;
+
+        lock (_sync)
+        {
+            if (_requested) return false;
+            if (_process.HasExited)
+                throw new InvalidOperationException("Authorized containment transition process exited before the latch.");
+
+            _events++;
+            if (!string.IsNullOrWhiteSpace(path))
+                _paths.Add(Path.GetFullPath(path));
+
+            if (_events < _requiredEvents || _paths.Count < _requiredPaths)
+                return false;
+
+            _requested = true;
+            evidence = new ContainmentTriggerEvidence(
+                _createdFileTimeUtc,
+                _events,
+                _paths.Count);
+            return true;
+        }
+    }
+
+    public void Dispose() => _process.Dispose();
+}
+
 sealed record Options(
     string Root,
     string StoreRoot,
@@ -1099,13 +1248,18 @@ sealed record Options(
     int GateWorkers,
     long MaxStoreMiB,
     long MinFreeMiB,
-    ulong? ContainPid)
+    ulong? ContainPid,
+    int? ContainAfterPid,
+    int ContainAfterEvents,
+    int ContainAfterPaths)
 {
     public const int DefaultGateWorkers = 4;
     public const int MaxGateWorkers = 8;
     public const long DefaultMaxStoreMiB = 8192;
     public const long DefaultMinFreeMiB = 2048;
     public const long MaxConfigMiB = 1048576;
+    public const int DefaultContainAfterEvents = 4;
+    public const int DefaultContainAfterPaths = 2;
 
     public static Options Parse(string[] args)
     {
@@ -1117,6 +1271,10 @@ sealed record Options(
         long maxStoreMiB = DefaultMaxStoreMiB;
         long minFreeMiB = DefaultMinFreeMiB;
         ulong? containPid = null;
+        int? containAfterPid = null;
+        var containAfterEvents = DefaultContainAfterEvents;
+        var containAfterPaths = DefaultContainAfterPaths;
+        var containThresholdSpecified = false;
         for (var i = 0; i < args.Length; i++)
         {
             switch (args[i].ToLowerInvariant())
@@ -1145,15 +1303,41 @@ sealed record Options(
                             "--contain-pid must identify a non-system process other than GateClient.");
                     containPid = parsedPid;
                     break;
+                case "--contain-after-pid" when i + 1 < args.Length:
+                    if (!int.TryParse(args[++i], out var parsedTransitionPid) || parsedTransitionPid <= 4 || parsedTransitionPid == Environment.ProcessId)
+                        throw new ArgumentOutOfRangeException(nameof(args),
+                            "--contain-after-pid must identify a non-system process other than GateClient.");
+                    containAfterPid = parsedTransitionPid;
+                    break;
+                case "--contain-after-events" when i + 1 < args.Length:
+                    if (!int.TryParse(args[++i], out containAfterEvents) || containAfterEvents < 2 || containAfterEvents > 64)
+                        throw new ArgumentOutOfRangeException(nameof(args),
+                            "--contain-after-events must be between 2 and 64.");
+                    containThresholdSpecified = true;
+                    break;
+                case "--contain-after-paths" when i + 1 < args.Length:
+                    if (!int.TryParse(args[++i], out containAfterPaths) || containAfterPaths < 1 || containAfterPaths > 16)
+                        throw new ArgumentOutOfRangeException(nameof(args),
+                            "--contain-after-paths must be between 1 and 16.");
+                    containThresholdSpecified = true;
+                    break;
                 case "--prepare-root": prepare = true; break;
                 default: throw new ArgumentException($"Unknown/incomplete argument: {args[i]}");
             }
         }
         if (string.IsNullOrWhiteSpace(root)) throw new ArgumentException("Pass --root <disposable-test-directory>.");
-        if (prepare && containPid.HasValue)
-            throw new ArgumentException("--contain-pid cannot be combined with --prepare-root.");
+        if (prepare && (containPid.HasValue || containAfterPid.HasValue))
+            throw new ArgumentException("Containment options cannot be combined with --prepare-root.");
+        if (containPid.HasValue && containAfterPid.HasValue)
+            throw new ArgumentException("--contain-pid and --contain-after-pid are mutually exclusive.");
+        if (containThresholdSpecified && !containAfterPid.HasValue)
+            throw new ArgumentException("Containment thresholds require --contain-after-pid.");
+        if (containAfterPaths > containAfterEvents)
+            throw new ArgumentException("--contain-after-paths cannot exceed --contain-after-events.");
         store ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RansomGuardV072", "GateRollback");
-        return new Options(root, store, session, prepare, gateWorkers, maxStoreMiB, minFreeMiB, containPid);
+        return new Options(
+            root, store, session, prepare, gateWorkers, maxStoreMiB, minFreeMiB,
+            containPid, containAfterPid, containAfterEvents, containAfterPaths);
     }
 }
 
@@ -1301,7 +1485,14 @@ struct RgGateReply
     public RgGateDecision Decision;
     public ulong RequestSequence;
     public uint ErrorCode;
-    public uint Reserved;
+    public uint Flags;
+}
+
+[Flags]
+enum RgGateReplyFlags : uint
+{
+    None = 0,
+    ContainRequestor = 0x00000001
 }
 
 enum RgControlCommand : uint { Invalid = 0, ActivateGate = 1, QueryActivation = 2, ArmPreflight = 3, ActivateAndContainProcess = 4, QueryContainment = 5 }

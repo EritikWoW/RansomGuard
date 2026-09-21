@@ -71,6 +71,10 @@ public sealed class RollbackRepository
             var pagingRoot = Path.Combine(store.Root, "paging-state");
             if (Directory.Exists(pagingRoot))
                 new PagingWriteEvidenceStore(pagingRoot).VerifyAll();
+
+            var sectionRoot = Path.Combine(store.Root, "section-state");
+            if (Directory.Exists(sectionRoot))
+                new WritableSectionEvidenceStore(sectionRoot).VerifyAll();
         }
     }
 

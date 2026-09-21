@@ -1,4 +1,4 @@
-# RansomGuard minifilter engineering lab — v0.7.13.0
+# RansomGuard minifilter engineering lab — v0.7.14.0
 
 The minifilter has two mutually exclusive user-mode connection modes:
 
@@ -9,13 +9,13 @@ The minifilter has two mutually exclusive user-mode connection modes:
 The LAB Gate exists to validate preservation ordering. It is **not** a production driver configuration.
 Do not load it on a primary workstation and do not point it at real documents.
 
-On startup, v0.7.13.0 also scans older pending CREATE/RENAME intents under the same LAB root and appends conservative restart evidence (path state + FILE_ID_INFO when available). This evidence is diagnostic/recovery input only and never substitutes for the original kernel completion event.
+On startup, v0.7.14.0 also scans older pending CREATE/RENAME intents under the same LAB root and appends conservative restart evidence (path state + FILE_ID_INFO when available). This evidence is diagnostic/recovery input only and never substitutes for the original kernel completion event.
 
 Protocol v11 also observes paging writes on streams that were successfully opened inside the LAB root. The driver uses a pre-established nonpaged stream context and emits no-reply evidence only; it does not run a filesystem name query or synchronous preservation gate in the paging path. Treat these events as visibility, not as proof that memory-mapped writes are recoverable.
 
 ## Activation preflight
 
-A v0.7.13.0 LAB connection is not active immediately after `FilterConnectCommunicationPort`. GateClient first scans all existing non-reparse files under the disposable root. For every file, the kernel post-CREATE probe records final path/FILE_ID_INFO and tests `MmDoesFileHaveUserWritableReferences`.
+A v0.7.14.0 LAB connection is not active immediately after `FilterConnectCommunicationPort`. GateClient first scans all existing non-reparse files under the disposable root. For every file, the kernel post-CREATE probe records final path/FILE_ID_INFO and tests `MmDoesFileHaveUserWritableReferences`.
 
 If any file already has a user-writable mapped view, if a probe cannot be completed authoritatively, or if section/paging activity occurs while the scan is running, activation is refused. Only a clean scan followed by the explicit `ActivateGate` control message moves the kernel into active gating.
 
@@ -46,7 +46,7 @@ Build the engineering package:
 .\build_lab.cmd
 ```
 
-Then, from the generated `RansomGuard-Lab-v0.7.13.0-*` directory, build/install the minifilter only in a
+Then, from the generated `RansomGuard-Lab-v0.7.14.0-*` directory, build/install the minifilter only in a
 Windows test VM using the existing lab scripts.
 
 ## Audit mode
@@ -106,13 +106,28 @@ Read-only opens remain non-eager. Paths recorded as originally absent remain abs
 
 Open an existing test file with GENERIC_READ | GENERIC_WRITE after the LAB gate is connected, then call `CreateFileMapping(..., PAGE_READWRITE, ...)`. The session should contain a `section-state/writable-section-journal.jsonl` record linked to the CREATE request. For a correctly pre-preserved file the state must be `BaselineVerified`.
 
-The section callback is evidence-only and must not block or deny the Memory Manager operation. A mapping created from a handle that existed before gate activation remains outside this milestone.
+The section callback is evidence-only and must not block or deny the Memory Manager operation. Protocol-v11 activation preflight now detects writable views that existed before GateClient activation; the new 0.7.14 runtime harness exercises that case in a disposable VM.
 
 ## Paging-write evidence test
 
 On a disposable VM, open a test file through the LAB root, create a writable memory mapping, modify a page and flush/unmap it. A protocol-v9 `PagingWrite` record should appear in the session's `paging-state` journal with the tracked path, offset/length and kernel identity when available.
 
-The PagingWrite record proves visibility. For the mapped file to count as pre-preserved, the same session must also contain the full pre-image/CREATE intent committed when its content-write capable handle was opened. Handles that existed before the LAB gate connected are not covered by this milestone.
+The PagingWrite record proves visibility. For the mapped file to count as pre-preserved, the same session must also contain the full pre-image/CREATE intent committed when its content-write capable handle was opened. Activation preflight separately refuses startup when a pre-existing writable mapped view is already present.
+
+## Automated disposable-VM runtime harness
+
+0.7.14 adds a separate manual runtime workflow for a pre-provisioned self-hosted disposable VM:
+
+`.github/workflows/minifilter-runtime-vm.yml`
+
+It is `workflow_dispatch` only and requires the `ransomguard-lab-vm` runner label. The workflow builds and test-signs the exact checked-out driver, then runs `minifilter-tools/run_runtime_vm_integration.ps1`.
+
+The harness verifies two cases:
+
+- a writable mapped view created before GateClient must prevent activation and persist activation-preflight evidence;
+- after a clean activation, a PAGE_READWRITE mapping must produce BaselineVerified section evidence, paging-write evidence and a committed pre-image matching the original SHA-256.
+
+See `docs/RUNTIME_VM.md` for prerequisites. Normal GitHub-hosted CI never loads the driver.
 
 ## What a successful gate test proves
 
@@ -122,7 +137,7 @@ prove production compatibility, crash safety, coverage for pre-existing writable
 containment efficacy, or universal rollback.
 
 
-## Bounded gate concurrency (0.7.13.0)
+## Bounded gate concurrency (0.7.14.0)
 
 The LAB gate no longer serializes the full blocking FltSendMessage duration under the global port mutex. Up to 8 kernel gate requests may be in flight. Additional in-scope destructive I/O fails closed rather than creating an unbounded queue.
 

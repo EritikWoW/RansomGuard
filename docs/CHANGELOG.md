@@ -1,3 +1,19 @@
+# RansomGuard 0.7.17.0
+
+- Added fail-closed rollback storage admission for Engineering LAB gate sessions.
+- Default storage policy is 8192 MiB maximum committed session size plus a 2048 MiB minimum free-space reserve on the rollback-store filesystem.
+- Added explicit LAB tuning flags `--max-store-mib` and `--min-free-mib`; there is no disable/unlimited bypass switch.
+- Storage admission re-measures committed session bytes and combines them with all concurrent in-flight reservations before allowing new preservation work.
+- Blocking WRITE range-COW, full pre-image, CREATE absence-baseline and RENAME source/destination preservation reserve estimated growth before capture.
+- Activation topology/file evidence, paging/write-section evidence and CREATE/RENAME completion journals also reserve metadata capacity before append.
+- Restart reconciliation appends into older sessions are admitted against each older session's own quota/free-space budget before a new gate session starts.
+- Blocking destructive I/O returns fail-closed deny code 13 when session quota or free-space reserve cannot be satisfied.
+- Added estimators that avoid reserving full bytes again for already committed full pre-images, COW blocks/baselines and absence baselines.
+- Added recursive reparse-point refusal while measuring rollback-session storage.
+- Added tests for concurrent reservation accounting, committed-byte remeasurement and idempotent full/range/absence estimates.
+- Added static source gate preventing removal of quota/free-space checks or introduction of runtime budget bypass switches.
+- Normal Audit product behavior remains unchanged; this remains Engineering-LAB preservation policy.
+
 # RansomGuard 0.7.16.0
 
 - Added deterministic verified rollback recovery planning for Engineering LAB sessions.

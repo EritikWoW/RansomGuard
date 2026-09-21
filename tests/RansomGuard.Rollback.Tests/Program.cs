@@ -1277,6 +1277,99 @@ try
     Check(staleRejected && !Directory.Exists(staleOutput),
         "stale recovery plan is rejected before any output is created");
 
+    // Session-level storage admission must account for concurrent reservations and committed bytes.
+    var budgetRoot = Path.Combine(root, "storage-budget-session");
+    Directory.CreateDirectory(budgetRoot);
+    var budget = new RollbackStorageBudget(
+        budgetRoot,
+        1024 * 1024,
+        0);
+
+    var firstReservation = await budget.ReserveAsync(
+        700 * 1024, "first-concurrent-reservation");
+    var concurrentBudgetRejected = false;
+    try
+    {
+        _ = await budget.ReserveAsync(
+            400 * 1024, "second-concurrent-reservation");
+    }
+    catch (RollbackStorageBudgetExceededException)
+    {
+        concurrentBudgetRejected = true;
+    }
+    Check(concurrentBudgetRejected,
+        "storage budget includes in-flight reservations in session quota");
+
+    var reservedStatus = await budget.GetStatusAsync();
+    Check(reservedStatus.ReservedBytes == 700 * 1024 &&
+          reservedStatus.MaxSessionBytes == 1024 * 1024,
+        "storage budget status exposes bounded in-flight reservation");
+
+    await firstReservation.DisposeAsync();
+    var afterRelease = await budget.ReserveAsync(
+        400 * 1024, "reservation-after-release");
+    await afterRelease.DisposeAsync();
+    Check((await budget.GetStatusAsync()).ReservedBytes == 0,
+        "storage reservations release capacity after preservation finishes");
+
+    var committedBudgetFile = Path.Combine(budgetRoot, "committed.bin");
+    await File.WriteAllBytesAsync(committedBudgetFile, new byte[900 * 1024]);
+    var committedBudgetRejected = false;
+    try
+    {
+        _ = await budget.ReserveAsync(
+            200 * 1024, "quota-after-committed-bytes");
+    }
+    catch (RollbackStorageBudgetExceededException)
+    {
+        committedBudgetRejected = true;
+    }
+    Check(committedBudgetRejected,
+        "storage budget re-measures committed session bytes before admission");
+
+    var estimateRepo = new RollbackRepository(Path.Combine(root, "storage-estimator-repo"));
+    var estimateSession = estimateRepo.CreateSession("estimate_case");
+    var estimateSource = Path.Combine(root, "storage-estimator-source");
+    Directory.CreateDirectory(estimateSource);
+
+    var estimateFullPath = Path.Combine(estimateSource, "full.bin");
+    await File.WriteAllBytesAsync(estimateFullPath, new byte[4096]);
+    var firstFullEstimate = RollbackStorageBudget.EstimateFullPreimageBytes(
+        estimateSession, estimateFullPath);
+    Check(firstFullEstimate > 4096,
+        "full pre-image estimator includes file bytes plus commit overhead");
+    _ = await estimateSession.CapturePreimageAsync(
+        estimateFullPath, RollbackMutationKind.Delete);
+    Check(RollbackStorageBudget.EstimateFullPreimageBytes(
+              estimateSession, estimateFullPath) == 0,
+        "full pre-image estimator does not reserve an already committed capture");
+
+    var estimateRange = new RangeRollbackStore(
+        Path.Combine(estimateSession.Root, "write-cow"));
+    var estimateRangePath = Path.Combine(estimateSource, "range.bin");
+    await File.WriteAllBytesAsync(estimateRangePath, new byte[128 * 1024]);
+    var firstRangeEstimate = RollbackStorageBudget.EstimateRangeCaptureBytes(
+        estimateRange, estimateRangePath, 4096, 128);
+    Check(firstRangeEstimate > 128 * 1024,
+        "range estimator reserves uncaptured block plus journal overhead");
+    await estimateRange.CaptureWritePreimageAsync(
+        estimateRangePath, 4096, 128);
+    Check(RollbackStorageBudget.EstimateRangeCaptureBytes(
+              estimateRange, estimateRangePath, 4096, 128) == 0,
+        "range estimator does not reserve an already committed block/baseline");
+
+    var estimateCreate = new CreateRollbackStore(
+        Path.Combine(estimateSession.Root, "create-state"));
+    var estimateAbsentPath = Path.Combine(estimateSource, "absent.bin");
+    Check(RollbackStorageBudget.EstimateOriginallyAbsentBytes(
+              estimateCreate, estimateAbsentPath) ==
+          RollbackStorageBudget.MetadataReservationBytes,
+        "absence estimator reserves metadata before first baseline");
+    _ = await estimateCreate.CaptureAbsentAsync(estimateAbsentPath);
+    Check(RollbackStorageBudget.EstimateOriginallyAbsentBytes(
+              estimateCreate, estimateAbsentPath) == 0,
+        "absence estimator does not reserve an existing baseline again");
+
     Console.WriteLine($"All {passed} rollback tests passed. These are file-store tests, not minifilter integration tests.");
     return 0;
 }

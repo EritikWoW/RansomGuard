@@ -22,7 +22,11 @@ Directory.CreateDirectory(options.StoreRoot);
 var repository = new RollbackRepository(options.StoreRoot);
 repository.VerifyAll(); // Refuse to start a new gate session on top of ambiguous/crash-damaged rollback state.
 var restartSummary = await RestartReconciliation.ObservePendingAsync(
-    repository, options.Root, CancellationToken.None).ConfigureAwait(false);
+    repository,
+    options.Root,
+    checked(options.MaxStoreMiB * RollbackStorageBudget.MiB),
+    checked(options.MinFreeMiB * RollbackStorageBudget.MiB),
+    CancellationToken.None).ConfigureAwait(false);
 var sessionId = options.SessionId ?? $"gate-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}";
 var store = repository.CreateSession(sessionId);
 var writeStore = new RangeRollbackStore(Path.Combine(store.Root, "write-cow"));
@@ -34,9 +38,13 @@ var pagingStore = new PagingWriteEvidenceStore(Path.Combine(store.Root, "paging-
 var sectionStore = new WritableSectionEvidenceStore(Path.Combine(store.Root, "section-state"));
 var activationStore = new ActivationPreflightStore(Path.Combine(store.Root, "activation-state"));
 var topologyStore = new ActivationTopologyStore(Path.Combine(store.Root, "activation-topology-state"));
+var storageBudget = new RollbackStorageBudget(
+    store.Root,
+    checked(options.MaxStoreMiB * RollbackStorageBudget.MiB),
+    checked(options.MinFreeMiB * RollbackStorageBudget.MiB));
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
-Console.WriteLine("RansomGuard LAB pre-write gate v0.7.16.0");
+Console.WriteLine("RansomGuard LAB pre-write gate v0.7.17.0");
 Console.WriteLine("LAB ONLY: use only inside a disposable test directory on a test machine/VM.");
 Console.WriteLine($"Protected LAB root : {options.Root}");
 Console.WriteLine($"Kernel NT root     : {ntRoot}");
@@ -45,6 +53,7 @@ Console.WriteLine($"Rollback store     : {store.Root}");
 Console.WriteLine($"Restart evidence   : observed={restartSummary.Observed}, completed-evidence={restartSummary.SupportsCompleted}, not-completed-evidence={restartSummary.SupportsNotCompleted}, ambiguous={restartSummary.Ambiguous}");
 Console.WriteLine("CREATE/write/rename/delete/truncate in this root are gated by durable preservation semantics.");
 Console.WriteLine($"Bounded gate workers : {options.GateWorkers}");
+Console.WriteLine($"Rollback budget      : max-session={options.MaxStoreMiB} MiB; min-free={options.MinFreeMiB} MiB");
 Console.WriteLine("Press Ctrl+C to disconnect. The driver then stops gating because no client is connected.");
 
 var context = new RgConnectContext
@@ -70,7 +79,7 @@ if (headerSize != 16 || eventSize != 2168 || replyHeaderSize != 16 || gateReplyS
 
 var resolver = new DevicePathResolver();
 var activationSummary = await ActivationPreflight.RunAsync(
-    port, options.Root, resolver, activationStore, topologyStore, cts.Token).ConfigureAwait(false);
+    port, options.Root, resolver, activationStore, topologyStore, storageBudget, cts.Token).ConfigureAwait(false);
 Console.WriteLine($"Activation preflight: directories={activationSummary.DirectoriesHeld}, files={activationSummary.FilesChecked}, writable-views=0, kernel gate ACTIVE.");
 
 
@@ -110,6 +119,10 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
                     ev.FileIdLow.ToString("X16") + ev.FileIdHigh.ToString("X16"));
             }
 
+            await using var sectionReservation = await storageBudget.ReserveAsync(
+                RollbackStorageBudget.MetadataReservationBytes,
+                "writable-section-evidence",
+                cts.Token).ConfigureAwait(false);
             var evidence = await sectionStore.RecordAsync(
                 ev.Sequence,
                 ev.RelatedSequence,
@@ -146,6 +159,10 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
                     ev.FileIdLow.ToString("X16") + ev.FileIdHigh.ToString("X16"));
             }
 
+            await using var pagingReservation = await storageBudget.ReserveAsync(
+                RollbackStorageBudget.MetadataReservationBytes,
+                "paging-write-evidence",
+                cts.Token).ConfigureAwait(false);
             var evidence = await pagingStore.RecordAsync(
                 ev.Sequence,
                 trackedPath,
@@ -161,6 +178,10 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
 
         if ((RgEventType)ev.EventType == RgEventType.CreateResult)
         {
+            await using var createResultReservation = await storageBudget.ReserveAsync(
+                RollbackStorageBudget.MetadataReservationBytes,
+                "create-completion-evidence",
+                cts.Token).ConfigureAwait(false);
             var completion = await CreateReconciliation.HandleAsync(
                 ev, resolver, options.Root, createOperationStore, cts.Token).ConfigureAwait(false);
             Console.WriteLine(
@@ -170,6 +191,10 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
 
         if ((RgEventType)ev.EventType == RgEventType.RenameResult)
         {
+            await using var renameResultReservation = await storageBudget.ReserveAsync(
+                RollbackStorageBudget.MetadataReservationBytes,
+                "rename-completion-evidence",
+                cts.Token).ConfigureAwait(false);
             var completion = await RenameReconciliation.HandleAsync(
                 ev, resolver, options.Root, renameStore, cts.Token).ConfigureAwait(false);
             Console.WriteLine(
@@ -179,7 +204,7 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
 
         var reply = await GateDecision.EvaluateAsync(
             ev, resolver, options.Root, store, writeStore, createStore, createOperationStore,
-            identityStore, renameStore, cts.Token).ConfigureAwait(false);
+            identityStore, renameStore, storageBudget, cts.Token).ConfigureAwait(false);
 
         lock (replySync)
         {
@@ -244,6 +269,7 @@ static class ActivationPreflight
         DevicePathResolver resolver,
         ActivationPreflightStore evidenceStore,
         ActivationTopologyStore topologyStore,
+        RollbackStorageBudget storageBudget,
         CancellationToken cancellationToken)
     {
         var options = new EnumerationOptions
@@ -263,8 +289,14 @@ static class ActivationPreflight
             var rootHandle = Native.OpenPreflightDirectory(rootPath);
             heldHandles.Add(rootHandle);
             var rootIdentity = FileIdentityStore.QueryHandleIdentity(rootHandle);
-            _ = await topologyStore.RecordAsync(rootPath, rootIdentity, isRoot: true, cancellationToken)
-                .ConfigureAwait(false);
+            await using (var rootReservation = await storageBudget.ReserveAsync(
+                             RollbackStorageBudget.MetadataReservationBytes,
+                             "activation-topology-root",
+                             cancellationToken).ConfigureAwait(false))
+            {
+                _ = await topologyStore.RecordAsync(rootPath, rootIdentity, isRoot: true, cancellationToken)
+                    .ConfigureAwait(false);
+            }
             heldDirectories++;
 
             var directories = Directory.EnumerateDirectories(rootPath, "*", options)
@@ -282,8 +314,14 @@ static class ActivationPreflight
                 var directoryHandle = Native.OpenPreflightDirectory(directory);
                 heldHandles.Add(directoryHandle);
                 var directoryIdentity = FileIdentityStore.QueryHandleIdentity(directoryHandle);
-                _ = await topologyStore.RecordAsync(directory, directoryIdentity, isRoot: false, cancellationToken)
-                    .ConfigureAwait(false);
+                await using (var directoryReservation = await storageBudget.ReserveAsync(
+                                 RollbackStorageBudget.MetadataReservationBytes,
+                                 "activation-topology-directory",
+                                 cancellationToken).ConfigureAwait(false))
+                {
+                    _ = await topologyStore.RecordAsync(directory, directoryIdentity, isRoot: false, cancellationToken)
+                        .ConfigureAwait(false);
+                }
                 heldDirectories++;
             }
 
@@ -320,9 +358,15 @@ static class ActivationPreflight
             }
 
             var writableView = (ev.Flags & WritableViewFlag) != 0;
-            _ = await evidenceStore.RecordAsync(
-                ev.Sequence, path, ev.CompletionStatus, writableView, identity, cancellationToken)
-                .ConfigureAwait(false);
+            await using (var fileReservation = await storageBudget.ReserveAsync(
+                             RollbackStorageBudget.MetadataReservationBytes,
+                             "activation-file-evidence",
+                             cancellationToken).ConfigureAwait(false))
+            {
+                _ = await evidenceStore.RecordAsync(
+                    ev.Sequence, path, ev.CompletionStatus, writableView, identity, cancellationToken)
+                    .ConfigureAwait(false);
+            }
 
             if (!NtSuccess(ev.CompletionStatus))
                 throw new InvalidOperationException(
@@ -545,7 +589,8 @@ static class GateDecision
     public static async Task<RgGateReply> EvaluateAsync(RgEvent ev, DevicePathResolver resolver, string root,
         RollbackStore store, RangeRollbackStore writeStore, CreateRollbackStore createStore,
         CreateOperationStore createOperationStore, FileIdentityStore identityStore,
-        RenameRollbackStore renameStore, CancellationToken cancellationToken)
+        RenameRollbackStore renameStore, RollbackStorageBudget storageBudget,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -559,8 +604,15 @@ static class GateDecision
                 return Deny(ev.Sequence, 2);
 
             var eventType = (RgEventType)ev.EventType;
+            await using var eventReservation = await storageBudget.ReserveAsync(
+                RollbackStorageBudget.MetadataReservationBytes,
+                $"gate-event:{eventType}",
+                cancellationToken).ConfigureAwait(false);
+
             if (eventType == RgEventType.Create)
-                return await EvaluateCreateAsync(ev, path, store, createStore, createOperationStore, identityStore, cancellationToken).ConfigureAwait(false);
+                return await EvaluateCreateAsync(
+                    ev, path, store, createStore, createOperationStore, identityStore,
+                    storageBudget, cancellationToken).ConfigureAwait(false);
 
             var state = PathProbe.Get(path);
             if (state != CreateTargetState.File)
@@ -572,7 +624,8 @@ static class GateDecision
 
             if (eventType == RgEventType.Rename)
                 return await EvaluateRenameAsync(ev, resolver, root, path, store, createStore,
-                    identityStore, renameStore, identityBaseline, sourceOriginallyAbsent, cancellationToken).ConfigureAwait(false);
+                    identityStore, renameStore, identityBaseline, sourceOriginallyAbsent,
+                    storageBudget, cancellationToken).ConfigureAwait(false);
 
             // Once a path is known to have been absent at incident start, later non-rename mutations must not
             // manufacture a pre-image from data that was created during the incident.
@@ -583,6 +636,10 @@ static class GateDecision
             {
                 if (ev.ByteOffset < 0)
                     return Deny(ev.Sequence, 6);
+                var estimate = RollbackStorageBudget.EstimateRangeCaptureBytes(
+                    writeStore, path, ev.ByteOffset, ev.Length);
+                await using var captureReservation = await storageBudget.ReserveAsync(
+                    estimate, "range-write-preimage", cancellationToken).ConfigureAwait(false);
                 await writeStore.CaptureWritePreimageAsync(path, ev.ByteOffset, ev.Length,
                         identityBaseline.Identity, cancellationToken)
                     .ConfigureAwait(false);
@@ -595,11 +652,20 @@ static class GateDecision
                     RgEventType.Truncate => RollbackMutationKind.Write,
                     _ => throw new InvalidOperationException("Unsupported gate event type.")
                 };
+                var estimate = RollbackStorageBudget.EstimateFullPreimageBytes(store, path);
+                await using var captureReservation = await storageBudget.ReserveAsync(
+                    estimate, $"full-preimage:{eventType}", cancellationToken).ConfigureAwait(false);
                 _ = await store.CapturePreimageAsync(path, mutation, identityBaseline.Identity, cancellationToken)
                     .ConfigureAwait(false);
             }
 
             return Allow(ev.Sequence, RgGateDecision.SnapshotCommitted);
+        }
+        catch (RollbackStorageBudgetExceededException ex)
+        {
+            Console.Error.WriteLine(
+                $"Rollback storage budget denied {ex.Purpose}: requested={ex.RequestedBytes}, actual={ex.ActualSessionBytes}, reserved={ex.ReservedBytes}, free={ex.AvailableFreeBytes}, max={ex.MaxSessionBytes}, minFree={ex.MinFreeBytes}.");
+            return Deny(ev.Sequence, 13);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -623,6 +689,7 @@ static class GateDecision
         RenameRollbackStore renameStore,
         FileIdentityBaseline sourceIdentity,
         bool sourceOriginallyAbsent,
+        RollbackStorageBudget storageBudget,
         CancellationToken cancellationToken)
     {
         if (ev.DestinationPathStatus != (uint)RgPathStatus.Resolved)
@@ -636,6 +703,9 @@ static class GateDecision
         // must not become a false pre-incident pre-image.
         if (!sourceOriginallyAbsent)
         {
+            var sourceEstimate = RollbackStorageBudget.EstimateFullPreimageBytes(store, sourcePath);
+            await using var sourceReservation = await storageBudget.ReserveAsync(
+                sourceEstimate, "rename-source-preimage", cancellationToken).ConfigureAwait(false);
             _ = await store.CapturePreimageAsync(sourcePath, RollbackMutationKind.Rename,
                     sourceIdentity.Identity, cancellationToken)
                 .ConfigureAwait(false);
@@ -658,12 +728,19 @@ static class GateDecision
                     // Record pre-incident absence so recovery can distinguish a rename-created name
                     // from a destination that existed before the incident.
                     if (!createStore.WasOriginallyAbsent(destinationPath))
+                    {
+                        var absenceEstimate = RollbackStorageBudget.EstimateOriginallyAbsentBytes(
+                            createStore, destinationPath);
+                        await using var absenceReservation = await storageBudget.ReserveAsync(
+                            absenceEstimate, "rename-destination-absence", cancellationToken).ConfigureAwait(false);
                         _ = await createStore.CaptureAbsentAsync(destinationPath, cancellationToken)
                             .ConfigureAwait(false);
+                    }
                     destinationState = RenameDestinationState.OriginallyAbsent;
                     break;
 
                 case CreateTargetState.File:
+                {
                     var destinationBaseline = await identityStore.CaptureOrVerifyAsync(destinationPath, cancellationToken)
                         .ConfigureAwait(false);
                     destinationIdentity = destinationBaseline.Identity;
@@ -673,11 +750,16 @@ static class GateDecision
                         return Deny(ev.Sequence, 11);
                     }
 
+                    var destinationEstimate = RollbackStorageBudget.EstimateFullPreimageBytes(
+                        store, destinationPath);
+                    await using var destinationReservation = await storageBudget.ReserveAsync(
+                        destinationEstimate, "rename-destination-preimage", cancellationToken).ConfigureAwait(false);
                     _ = await store.CapturePreimageAsync(destinationPath, RollbackMutationKind.RenameDestination,
                             destinationIdentity, cancellationToken)
                         .ConfigureAwait(false);
                     destinationState = RenameDestinationState.ExistingFile;
                     break;
+                }
 
                 default:
                     // Directory topology replacement/rename is outside the current recovery model.
@@ -703,7 +785,8 @@ static class GateDecision
 
     private static async Task<RgGateReply> EvaluateCreateAsync(RgEvent ev, string path,
         RollbackStore store, CreateRollbackStore createStore, CreateOperationStore createOperationStore,
-        FileIdentityStore identityStore, CancellationToken cancellationToken)
+        FileIdentityStore identityStore, RollbackStorageBudget storageBudget,
+        CancellationToken cancellationToken)
     {
         var rawDisposition = (ev.Flags >> 24) & 0xFF;
         if (!CreateGatePolicy.TryParseDisposition(rawDisposition, out var disposition))
@@ -728,9 +811,13 @@ static class GateDecision
             switch (action)
             {
                 case CreatePreservationAction.CaptureExistingPreimage:
+                {
                     var identityBaseline = await identityStore.CaptureOrVerifyAsync(path, cancellationToken)
                         .ConfigureAwait(false);
                     originalIdentity = identityBaseline.Identity;
+                    var fullEstimate = RollbackStorageBudget.EstimateFullPreimageBytes(store, path);
+                    await using var fullReservation = await storageBudget.ReserveAsync(
+                        fullEstimate, "create-existing-preimage", cancellationToken).ConfigureAwait(false);
                     var capture = await store.CapturePreimageAsync(
                             path,
                             RollbackMutationKind.Create,
@@ -739,11 +826,19 @@ static class GateDecision
                         .ConfigureAwait(false);
                     preservationRecordSha256 = capture.RecordSha256;
                     break;
+                }
 
                 case CreatePreservationAction.RecordOriginallyAbsent:
-                    var absent = await createStore.CaptureAbsentAsync(path, cancellationToken)
-                        .ConfigureAwait(false);
-                    preservationRecordSha256 = absent.RecordSha256;
+                    var absenceEstimate = RollbackStorageBudget.EstimateOriginallyAbsentBytes(
+                        createStore, path);
+                    await using (var absenceReservation = await storageBudget.ReserveAsync(
+                                     absenceEstimate, "create-absence-baseline", cancellationToken)
+                               .ConfigureAwait(false))
+                    {
+                        var absent = await createStore.CaptureAbsentAsync(path, cancellationToken)
+                            .ConfigureAwait(false);
+                        preservationRecordSha256 = absent.RecordSha256;
+                    }
                     break;
 
                 case CreatePreservationAction.DenyUnsupported:
@@ -801,6 +896,8 @@ static class RestartReconciliation
     public static async Task<RestartReconciliationSummary> ObservePendingAsync(
         RollbackRepository repository,
         string currentRoot,
+        long maxSessionBytes,
+        long minFreeBytes,
         CancellationToken cancellationToken)
     {
         var observed = 0;
@@ -812,6 +909,8 @@ static class RestartReconciliation
         {
             cancellationToken.ThrowIfCancellationRequested();
             var session = repository.OpenSession(sessionId);
+            var storageBudget = new RollbackStorageBudget(
+                session.Root, maxSessionBytes, minFreeBytes);
             var restartStore = new RestartReconciliationStore(Path.Combine(session.Root, "restart-state"));
 
             var createRoot = Path.Combine(session.Root, "create-state");
@@ -826,6 +925,10 @@ static class RestartReconciliation
 
                     var current = PathProbe.ObserveForRestart(intent.OriginalPath);
                     var evidence = RestartReconciliationClassifier.ClassifyCreate(intent, current);
+                    await using var restartCreateReservation = await storageBudget.ReserveAsync(
+                        RollbackStorageBudget.MetadataReservationBytes,
+                        "restart-create-evidence",
+                        cancellationToken).ConfigureAwait(false);
                     _ = await restartStore.RecordObservationAsync(
                             RestartOperationKind.Create,
                             intent.RequestSequence,
@@ -853,6 +956,10 @@ static class RestartReconciliation
                     var source = PathProbe.ObserveForRestart(intent.SourcePath);
                     var destination = PathProbe.ObserveForRestart(intent.DestinationPath);
                     var evidence = RestartReconciliationClassifier.ClassifyRename(intent, source, destination);
+                    await using var restartRenameReservation = await storageBudget.ReserveAsync(
+                        RollbackStorageBudget.MetadataReservationBytes,
+                        "restart-rename-evidence",
+                        cancellationToken).ConfigureAwait(false);
                     _ = await restartStore.RecordObservationAsync(
                             RestartOperationKind.Rename,
                             intent.RequestSequence,
@@ -936,10 +1043,20 @@ static class PathProbe
     }
 }
 
-sealed record Options(string Root, string StoreRoot, string? SessionId, bool PrepareOnly, int GateWorkers)
+sealed record Options(
+    string Root,
+    string StoreRoot,
+    string? SessionId,
+    bool PrepareOnly,
+    int GateWorkers,
+    long MaxStoreMiB,
+    long MinFreeMiB)
 {
     public const int DefaultGateWorkers = 4;
     public const int MaxGateWorkers = 8;
+    public const long DefaultMaxStoreMiB = 8192;
+    public const long DefaultMinFreeMiB = 2048;
+    public const long MaxConfigMiB = 1048576;
 
     public static Options Parse(string[] args)
     {
@@ -948,6 +1065,8 @@ sealed record Options(string Root, string StoreRoot, string? SessionId, bool Pre
         string? session = null;
         var prepare = false;
         var gateWorkers = DefaultGateWorkers;
+        long maxStoreMiB = DefaultMaxStoreMiB;
+        long minFreeMiB = DefaultMinFreeMiB;
         for (var i = 0; i < args.Length; i++)
         {
             switch (args[i].ToLowerInvariant())
@@ -960,13 +1079,23 @@ sealed record Options(string Root, string StoreRoot, string? SessionId, bool Pre
                         throw new ArgumentOutOfRangeException(nameof(args),
                             $"--gate-workers must be between 1 and {MaxGateWorkers}.");
                     break;
+                case "--max-store-mib" when i + 1 < args.Length:
+                    if (!long.TryParse(args[++i], out maxStoreMiB) || maxStoreMiB < 64 || maxStoreMiB > MaxConfigMiB)
+                        throw new ArgumentOutOfRangeException(nameof(args),
+                            $"--max-store-mib must be between 64 and {MaxConfigMiB}.");
+                    break;
+                case "--min-free-mib" when i + 1 < args.Length:
+                    if (!long.TryParse(args[++i], out minFreeMiB) || minFreeMiB < 64 || minFreeMiB > MaxConfigMiB)
+                        throw new ArgumentOutOfRangeException(nameof(args),
+                            $"--min-free-mib must be between 64 and {MaxConfigMiB}.");
+                    break;
                 case "--prepare-root": prepare = true; break;
                 default: throw new ArgumentException($"Unknown/incomplete argument: {args[i]}");
             }
         }
         if (string.IsNullOrWhiteSpace(root)) throw new ArgumentException("Pass --root <disposable-test-directory>.");
         store ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RansomGuardV072", "GateRollback");
-        return new Options(root, store, session, prepare, gateWorkers);
+        return new Options(root, store, session, prepare, gateWorkers, maxStoreMiB, minFreeMiB);
     }
 }
 

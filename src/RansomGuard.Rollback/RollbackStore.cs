@@ -39,6 +39,9 @@ public sealed class RollbackStore
 
     public IReadOnlyCollection<RollbackCapture> Captures => _firstCapture.Values.OrderBy(x => x.Sequence).ToArray();
 
+    public bool TryGetCapture(string path, out RollbackCapture? capture) =>
+        _firstCapture.TryGetValue(NormalizeSource(path), out capture);
+
     public Task<RollbackCapture> CapturePreimageAsync(string path, RollbackMutationKind mutation,
         CancellationToken cancellationToken = default) =>
         CapturePreimageCoreAsync(path, mutation, null, cancellationToken);

@@ -1,4 +1,4 @@
-# RansomGuard 0.7.16.0
+# RansomGuard 0.7.17.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
@@ -6,7 +6,7 @@ and recover data through rollback plus adaptive crypto analysis.
 
 ## Core preservation milestone
 
-0.7.16.0 retains the 0.7.2 range-aware COW gate and adds explicit CREATE preservation semantics.
+0.7.17.0 retains the 0.7.2 range-aware COW gate and adds explicit CREATE preservation semantics.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 
@@ -69,6 +69,8 @@ Protocol v11 also removes the previous blind skip of paging-write callbacks. Aft
 
 0.7.16 adds deterministic verified rollback recovery planning and copy-out execution for Engineering LAB sessions. The planner revalidates the rollback repository, hashes all session journals, produces a stable PlanId, and classifies actions as Ready, Review, Blocked or Informational. Only full-preimage and range-COW copy-out actions can be Ready. The executor rebuilds the current plan before execution, refuses stale/tampered evidence, writes only into a new output tree, records SHA-256 for recovered files, and never deletes, renames or overwrites live source/evidence paths.
 
+0.7.17 adds fail-closed rollback storage admission. Each LAB session has a concurrency-safe storage budget that combines actual committed session bytes, all in-flight reservations, and current filesystem free space. Defaults are 8192 MiB maximum session storage and a 2048 MiB free-space reserve; LAB runs may tighten these with `--max-store-mib` and `--min-free-mib`. WRITE range-COW, full pre-images, absence baselines, activation evidence, paging/section evidence and CREATE/RENAME completion journals all reserve capacity before writing. Blocking destructive I/O is denied when quota/free-space admission fails rather than allowing an unpreserved mutation.
+
 ## Recovery safety
 
 Range recovery:
@@ -91,6 +93,7 @@ The blocking gate is still deliberately restricted:
 - requires `.ransomguard-gate-lab-root`;
 - refuses an entire drive, Windows, Program Files, ProgramData and reparse roots;
 - rollback storage must be outside the gated root;
+- rollback storage is bounded by a per-session quota plus a minimum filesystem free-space reserve; admission failure fails closed;
 - out-of-root or name-query-failed I/O fails open;
 - a path truncated after an already verified in-root prefix is denied rather than preserved against an ambiguous name;
 - in-scope preservation failure or timeout fails closed;
@@ -119,7 +122,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.7.16.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.7.17.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 Manual disposable-VM runtime workflow:
 
@@ -142,5 +145,5 @@ Restart evidence for pending/missing CREATE/RENAME completion events is durable 
 
 Remaining core work includes deeper crash recovery for in-flight kernel requests,
 broader live NTFS/ReFS/fault-injection coverage beyond the automated disposable-VM mapping harness,
-containment policy, process-state capture, adaptive crypto reconstruction, production recovery UI/topology orchestration,
+retention/cleanup policy for completed rollback sessions, containment policy, process-state capture, adaptive crypto reconstruction, production recovery UI/topology orchestration,
 driver signing and Microsoft-assigned production altitude.

@@ -1,3 +1,14 @@
+# Unreleased - protocol v4 CREATE semantics
+
+- Added explicit `IRP_MJ_CREATE` events to the engineering minifilter protocol.
+- Protocol v4 carries CreateDisposition/CreateOptions and desired access without changing the fixed event size.
+- Existing `FILE_SUPERSEDE`, `FILE_OVERWRITE` and `FILE_OVERWRITE_IF` targets require a durable full-file pre-image before allow.
+- Missing targets for create-capable dispositions receive a durable hash-chained `originally absent` baseline.
+- Incident-created paths do not later manufacture range/full pre-images from data that did not exist before the incident.
+- Added explicit gate replies for committed absence baselines and non-destructive opens that require no preservation.
+- Added a pure create-disposition policy and matrix tests, plus repository-wide validation of nested `create-state` journals.
+- Normal product remains AuditOnly; CREATE gating remains engineering LAB-only and still needs identity-safe post-create reconciliation.
+
 # RansomGuard 0.7.2.0
 
 - Added range-aware 1 MiB copy-on-write preservation for gated WRITE operations.

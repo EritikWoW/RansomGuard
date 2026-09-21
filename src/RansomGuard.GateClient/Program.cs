@@ -5,8 +5,6 @@ using System.Runtime.InteropServices;
 using System.Text;
 
 const string PortName = @"\RansomGuardMinifilterPort";
-const uint ProtocolVersion = 3;
-
 var options = Options.Parse(args);
 if (options.PrepareOnly)
 {

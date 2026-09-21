@@ -18,6 +18,8 @@ foreach($required in @(
   'ProtocolVersion = 4',
   'CreatePreservationAction.CaptureExistingPreimage',
   'CreatePreservationAction.RecordOriginallyAbsent',
+  'CreatePreservationAction.DenyUnsupported',
+  'CreateGatePolicy.Decide(disposition, state, createOptions)',
   'RgGateDecision.SnapshotCommitted',
   'RgGateDecision.BaselineCommitted',
   'RgGateDecision.NoPreservationRequired',

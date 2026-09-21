@@ -4,11 +4,13 @@ $store=Join-Path $root 'src\RansomGuard.Rollback\RollbackStore.cs'
 $program=Join-Path $root 'src\RansomGuard.Service\Program.cs'
 $rangeStore=Join-Path $root 'src\RansomGuard.Rollback\RangeRollbackStore.cs'
 $createStore=Join-Path $root 'src\RansomGuard.Rollback\CreateRollbackStore.cs'
+$createOperationStore=Join-Path $root 'src\RansomGuard.Rollback\CreateOperationStore.cs'
 $createPolicy=Join-Path $root 'src\RansomGuard.Rollback\CreateGatePolicy.cs'
 $identityStore=Join-Path $root 'src\RansomGuard.Rollback\FileIdentityStore.cs'
 $renameStore=Join-Path $root 'src\RansomGuard.Rollback\RenameRollbackStore.cs'
 if(-not(Test-Path -LiteralPath $rangeStore)){throw 'RangeRollbackStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $createStore)){throw 'CreateRollbackStore.cs missing.'}
+if(-not(Test-Path -LiteralPath $createOperationStore)){throw 'CreateOperationStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $createPolicy)){throw 'CreateGatePolicy.cs missing.'}
 if(-not(Test-Path -LiteralPath $identityStore)){throw 'FileIdentityStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $renameStore)){throw 'RenameRollbackStore.cs missing.'}
@@ -50,6 +52,26 @@ foreach($required in @(
 if($createText -match 'File\.Delete\(' -or $createText -match 'Directory\.Delete\('){
     throw 'Create rollback source gate FAILED: absence baseline store must not delete created data.'
 }
+$createOperationText=Get-Content -LiteralPath $createOperationStore -Raw
+foreach($required in @(
+    'create-intent-journal.jsonl',
+    'create-completion-journal.jsonl',
+    'RecordIntentAsync',
+    'RecordCompletionAsync',
+    'PendingIntents',
+    'CreateCompletionState.Succeeded',
+    'CreateCompletionState.SucceededNameUnresolved',
+    'CreateCompletionState.SucceededIdentityUnresolved',
+    'CreateCompletionState.SucceededNameAndIdentityUnresolved',
+    'CreateCompletionState.Failed',
+    'IntentRecordSha256',
+    'Conflicting duplicate CREATE completion',
+    'FileOptions.WriteThrough',
+    'Flush(true)'
+)){
+    if($createOperationText -notmatch [regex]::Escape($required)){throw "CREATE operation source gate missing invariant: $required"}
+}
+
 $policyText=Get-Content -LiteralPath $createPolicy -Raw
 foreach($required in @(
     'CreatePreservationAction.CaptureExistingPreimage',
@@ -136,7 +158,8 @@ if($gate -notmatch 'repository\.VerifyAll\(\)'){throw 'LAB gate must validate al
 $repository=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Rollback\RollbackRepository.cs') -Raw
 if($repository -notmatch 'new RangeRollbackStore\(rangeRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested write-cow stores.'}
 if($repository -notmatch 'new CreateRollbackStore\(createRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested create-state stores.'}
+if($repository -notmatch 'new CreateOperationStore\(createRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include CREATE intent/completion journals.'}
 if($repository -notmatch 'new FileIdentityStore\(identityRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested identity-state stores.'}
 if($repository -notmatch 'new RenameRollbackStore\(renameRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested rename-state stores.'}
-Write-Host 'Rollback source gate PASSED: full-file, range-COW, create-baseline, durable file-identity, rename-intent and rename-completion journals, hashes, crash-artifact rejection, write-through commits, first-state semantics, copy-only restore.'
-Write-Host 'Normal service capture remains disabled; v0.7.5 keeps blocking preservation inside the explicit LAB gate only.'
+Write-Host 'Rollback source gate PASSED: full-file, range-COW, create-baseline, CREATE intent/completion, durable file-identity, rename-intent/completion journals, hashes, crash-artifact rejection, write-through commits, first-state semantics, copy-only restore.'
+Write-Host 'Normal service capture remains disabled; v0.7.6 keeps blocking preservation inside the explicit LAB gate only.'

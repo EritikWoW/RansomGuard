@@ -169,7 +169,7 @@ public sealed class RenameRollbackStore
                         existing.CompletionStatus == completionStatus &&
                         existing.CompletionInformation == completionInformation &&
                         existing.FinalDestinationPath.Equals(finalPath, StringComparison.OrdinalIgnoreCase) &&
-                        Nullable.Equals(existing.FinalIdentity, finalIdentity))
+                        Equals(existing.FinalIdentity, finalIdentity))
                         return existing;
 
                     throw new InvalidDataException("Conflicting duplicate rename completion.");

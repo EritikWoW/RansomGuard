@@ -348,14 +348,16 @@ try
     var renameDestination = Path.Combine(sourceDir, "rename-destination.bin");
 
     var renameAbsent = await renameStore.CaptureIntentAsync(
-        101, renameSource, renameDestination, sourceIdentity,
+        101, renameSource, renameDestination, sourceIdentity, false,
         RenameDestinationState.OriginallyAbsent, null, 0, 10);
     Check(renameAbsent.Sequence == 1, "rename intent records first transaction sequence");
     Check(renameAbsent.DestinationState == RenameDestinationState.OriginallyAbsent,
         "rename intent records originally-absent destination");
+    Check(!renameAbsent.SourceOriginallyAbsent,
+        "rename intent distinguishes pre-incident source from incident-created source");
 
     var renameExisting = await renameStore.CaptureIntentAsync(
-        102, renameSource, renameDestination, sourceIdentity,
+        102, renameSource, renameDestination, sourceIdentity, false,
         RenameDestinationState.ExistingFile, destinationIdentity, 1, 65);
     Check(renameExisting.DestinationIdentity == destinationIdentity,
         "rename intent records existing destination identity");
@@ -363,7 +365,7 @@ try
         "rename intent records rename flags and information class");
 
     var renameSame = await renameStore.CaptureIntentAsync(
-        103, renameSource, renameSource, sourceIdentity,
+        103, renameSource, renameSource, sourceIdentity, false,
         RenameDestinationState.SameAsSource, sourceIdentity, 0, 10);
     Check(renameSame.DestinationState == RenameDestinationState.SameAsSource,
         "rename intent supports same-path/case-only topology");
@@ -376,7 +378,7 @@ try
     try
     {
         _ = await renameStore.CaptureIntentAsync(
-            104, renameSource, renameDestination, sourceIdentity,
+            104, renameSource, renameDestination, sourceIdentity, false,
             RenameDestinationState.ExistingFile, null, 0, 10);
     }
     catch (InvalidDataException) { invalidRenameStateRejected = true; }
@@ -394,8 +396,10 @@ try
     var nestedRenameSession = nestedRenameRepo.CreateSession("nested_rename");
     var nestedRenameState = new RenameRollbackStore(Path.Combine(nestedRenameSession.Root, "rename-state"));
     await nestedRenameState.CaptureIntentAsync(
-        201, renameSource, renameDestination, sourceIdentity,
+        201, renameSource, renameDestination, sourceIdentity, true,
         RenameDestinationState.OriginallyAbsent, null, 0, 10);
+    Check(nestedRenameState.Intents.Single().SourceOriginallyAbsent,
+        "rename intent records incident-created source without manufacturing source pre-image");
     var nestedRenameJournal = await File.ReadAllBytesAsync(nestedRenameState.JournalPath);
     nestedRenameJournal[^2] ^= 1;
     await File.WriteAllBytesAsync(nestedRenameState.JournalPath, nestedRenameJournal);

@@ -1,5 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- Official WDK/SDK NuGet route for reproducible CI. Local installed-WDK builds continue when these packages are absent. -->
+  <Import Project="$(ProjectDir)..\..\packages\Microsoft.Windows.WDK.x64.10.0.28000.2526\build\native\Microsoft.Windows.WDK.x64.props"
+          Condition="Exists('$(ProjectDir)..\..\packages\Microsoft.Windows.WDK.x64.10.0.28000.2526\build\native\Microsoft.Windows.WDK.x64.props') and '$(Platform)' == 'x64'" />
+  <Import Project="$(ProjectDir)..\..\packages\Microsoft.Windows.SDK.CPP.x64.10.0.28000.2526\build\native\Microsoft.Windows.SDK.cpp.x64.props"
+          Condition="Exists('$(ProjectDir)..\..\packages\Microsoft.Windows.SDK.CPP.x64.10.0.28000.2526\build\native\Microsoft.Windows.SDK.cpp.x64.props') and '$(Platform)' == 'x64'" />
+  <Import Project="$(ProjectDir)..\..\packages\Microsoft.Windows.SDK.CPP.10.0.28000.2526\build\native\Microsoft.Windows.SDK.cpp.props"
+          Condition="Exists('$(ProjectDir)..\..\packages\Microsoft.Windows.SDK.CPP.10.0.28000.2526\build\native\Microsoft.Windows.SDK.cpp.props')" />
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
     <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
@@ -18,6 +25,9 @@
   <!-- Force x64 native build tools for the x64 driver and WDK validation utilities. -->
   <PropertyGroup>
     <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+    <!-- build_minifilter.ps1 supplies these for a machine-installed WDK. NuGet CI inherits paths from WDK props. -->
+    <RGDriverExtraIncludes Condition="'$(RGKitsRoot)'!='' and '$(RGWdkVersion)'!=''">$(RGKitsRoot)\Include\$(RGWdkVersion)\km;$(RGKitsRoot)\Include\$(RGWdkVersion)\shared</RGDriverExtraIncludes>
+    <RGDriverExtraLibs Condition="'$(RGKitsRoot)'!='' and '$(RGWdkVersion)'!=''">$(RGKitsRoot)\Lib\$(RGWdkVersion)\km\x64</RGDriverExtraLibs>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>Driver</ConfigurationType>
@@ -45,22 +55,22 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <WarningLevel>Level4</WarningLevel><TreatWarningAsError>true</TreatWarningAsError>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\..\native\shared;$(RGKitsRoot)\Include\$(RGWdkVersion)\km;$(RGKitsRoot)\Include\$(RGWdkVersion)\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\..\native\shared;$(RGDriverExtraIncludes);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>_AMD64_;AMD64;DBG=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <SpectreMitigation>Spectre</SpectreMitigation>
     </ClCompile>
-    <Link><AdditionalLibraryDirectories>$(RGKitsRoot)\Lib\$(RGWdkVersion)\km\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories><AdditionalDependencies>FltMgr.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <Link><AdditionalLibraryDirectories>$(RGDriverExtraLibs);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories><AdditionalDependencies>FltMgr.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
     <DriverSign><FileDigestAlgorithm>sha256</FileDigestAlgorithm></DriverSign>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <WarningLevel>Level4</WarningLevel><TreatWarningAsError>true</TreatWarningAsError>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\..\native\shared;$(RGKitsRoot)\Include\$(RGWdkVersion)\km;$(RGKitsRoot)\Include\$(RGWdkVersion)\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\..\native\shared;$(RGDriverExtraIncludes);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>_AMD64_;AMD64;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <SpectreMitigation>Spectre</SpectreMitigation>
       <WholeProgramOptimization>true</WholeProgramOptimization>
     </ClCompile>
-    <Link><AdditionalLibraryDirectories>$(RGKitsRoot)\Lib\$(RGWdkVersion)\km\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories><AdditionalDependencies>FltMgr.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <Link><AdditionalLibraryDirectories>$(RGDriverExtraLibs);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories><AdditionalDependencies>FltMgr.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
     <DriverSign><FileDigestAlgorithm>sha256</FileDigestAlgorithm></DriverSign>
   </ItemDefinitionGroup>
   <ItemGroup>

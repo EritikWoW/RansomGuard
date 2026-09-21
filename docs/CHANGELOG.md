@@ -1,3 +1,14 @@
+# RansomGuard 0.7.10.0
+
+- Bumped the engineering minifilter protocol to v9 and added a no-reply `PagingWrite` evidence event.
+- Removed the registration-level `SKIP_PAGING_IO` blind spot for IRP_MJ_WRITE callbacks.
+- Successful in-scope CREATE completion now seeds a nonpaged `FLT_STREAM_CONTEXT` with the bounded tracked path and kernel file identity when available.
+- Paging-write callbacks read only that stream context and explicitly avoid filesystem name queries, `FltQueryInformationFile`, and synchronous `RgGateEvent` calls.
+- GateClient persists paging-write observations in a separate write-through SHA-256 hash-chained `paging-write-journal.jsonl`.
+- Added repository-wide paging-state verification, idempotent/conflict tests, journal-corruption tests and kernel/userspace source gates.
+- This milestone closes paging-write observability only; memory-mapped/cache-manager modifications are not yet claimed recoverable until safe pre-preservation is implemented.
+- Normal product remains AuditOnly; protocol-v9 paging visibility remains engineering LAB-only.
+
 # RansomGuard 0.7.9.0
 
 - Added conservative crash/restart reconciliation evidence for pending CREATE and RENAME intents without changing protocol v8.

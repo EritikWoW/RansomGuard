@@ -640,18 +640,21 @@ try
     Check(fullyUnresolvedCompletion.State == RenameCompletionState.SucceededNameAndIdentityUnresolved,
         "rename success explicitly represents unresolved final name and identity");
 
+    var mismatchStore = new RenameRollbackStore(Path.Combine(root, "rename-identity-mismatch"));
+    _ = await mismatchStore.CaptureIntentAsync(
+        108, renameSource, renameDestination, sourceIdentity, false,
+        RenameDestinationState.OriginallyAbsent, null, 0, 10);
     var wrongFinalIdentityRejected = false;
     try
     {
-        _ = await renameStore.CaptureIntentAsync(
-            108, renameSource, renameDestination, sourceIdentity, false,
-            RenameDestinationState.OriginallyAbsent, null, 0, 10);
-        _ = await renameStore.RecordCompletionAsync(
+        _ = await mismatchStore.RecordCompletionAsync(
             108, RenameCompletionState.Succeeded, 0, 0, renameDestination, destinationIdentity);
     }
     catch (InvalidDataException) { wrongFinalIdentityRejected = true; }
     Check(wrongFinalIdentityRejected,
         "rename completion rejects a final kernel identity different from the committed source identity");
+    Check(mismatchStore.PendingIntents.Single().RequestSequence == 108,
+        "identity-mismatched rename remains pending instead of being promoted to completed");
 
     var reopenedRename = new RenameRollbackStore(renameRoot);
     Check(reopenedRename.Completions.Count == 5,

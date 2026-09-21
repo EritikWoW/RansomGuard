@@ -1,11 +1,11 @@
 #pragma once
 
 // Wire protocol between the RansomGuard lab minifilter and user-mode clients.
-// v10 retains protocol-v9 preservation/reconciliation and adds no-reply writable-section attestation.
-// Section-synchronization callbacks never synchronously call the user-mode preservation gate.
+// v11 adds an explicit activation preflight and user->kernel activation handshake.
+// The LAB gate starts fail-closed until existing files are checked for pre-existing writable mappings.
 // The production bundle still does not install or enable the driver.
 
-#define RG_PROTOCOL_VERSION 10u
+#define RG_PROTOCOL_VERSION 11u
 #define RG_PATH_CHARS 512u
 #define RG_GATE_ROOT_CHARS 260u
 #define RG_PORT_NAME L"\\RansomGuardMinifilterPort"
@@ -14,6 +14,7 @@
 #define RG_CREATE_DISPOSITION_MASK 0xFF000000u
 #define RG_CREATE_OPTIONS_MASK 0x00FFFFFFu
 #define RG_EVENT_FLAG_PAGING_IO 0x00000001u
+#define RG_EVENT_FLAG_PREFLIGHT_WRITABLE_VIEW 0x00000002u
 
 typedef enum _RG_EVENT_TYPE {
     RgEventInvalid = 0,
@@ -25,7 +26,8 @@ typedef enum _RG_EVENT_TYPE {
     RgEventRenameResult = 6,
     RgEventCreateResult = 7,
     RgEventPagingWrite = 8,
-    RgEventWritableSection = 9
+    RgEventWritableSection = 9,
+    RgEventActivationPreflight = 10
 } RG_EVENT_TYPE;
 
 typedef enum _RG_PATH_STATUS {
@@ -53,6 +55,12 @@ typedef enum _RG_GATE_DECISION {
     RgGateBaselineCommitted = 3,
     RgGateNoPreservationRequired = 4
 } RG_GATE_DECISION;
+
+typedef enum _RG_CONTROL_COMMAND {
+    RgControlInvalid = 0,
+    RgControlActivateGate = 1,
+    RgControlQueryActivation = 2
+} RG_CONTROL_COMMAND;
 
 #pragma pack(push, 1)
 typedef struct _RG_CONNECT_CONTEXT {
@@ -96,4 +104,18 @@ typedef struct _RG_GATE_REPLY {
     unsigned long ErrorCode;
     unsigned long Reserved;
 } RG_GATE_REPLY, *PRG_GATE_REPLY;
+
+typedef struct _RG_CONTROL_REQUEST {
+    unsigned long ProtocolVersion;
+    unsigned long Command;
+    unsigned long Reserved0;
+    unsigned long Reserved1;
+} RG_CONTROL_REQUEST, *PRG_CONTROL_REQUEST;
+
+typedef struct _RG_CONTROL_REPLY {
+    unsigned long ProtocolVersion;
+    unsigned long Command;
+    unsigned long Status;
+    unsigned long GateActivated;
+} RG_CONTROL_REPLY, *PRG_CONTROL_REPLY;
 #pragma pack(pop)

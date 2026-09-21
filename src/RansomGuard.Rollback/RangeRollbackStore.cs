@@ -33,6 +33,10 @@ public sealed class RangeRollbackStore
     public int BlockSize => _blockSize;
     public int BaselineCount => _baselines.Count;
     public int BlockCount => _blocks.Count;
+    public IReadOnlyCollection<RangeRollbackBaseline> Baselines =>
+        _baselines.Values.OrderBy(x => x.Sequence).ToArray();
+    public IReadOnlyCollection<RangeRollbackBlock> Blocks =>
+        _blocks.Values.OrderBy(x => x.Sequence).ToArray();
 
     public RangeRollbackStore(string root, int blockSize = DefaultBlockSize)
     {

@@ -229,6 +229,7 @@ public static class WritableSectionAttestation
 
     public static WritableSectionAttestationState Evaluate(
         CreateOperationIntent? intent,
+        CreateOperationCompletion? completion,
         string trackedPath,
         uint preservationDecision)
     {
@@ -236,7 +237,10 @@ public static class WritableSectionAttestation
             return WritableSectionAttestationState.MissingCreateIntent;
 
         var full = Path.GetFullPath(trackedPath);
-        if (!intent.OriginalPath.Equals(full, StringComparison.OrdinalIgnoreCase))
+        var expectedPath = !string.IsNullOrWhiteSpace(completion?.FinalPath)
+            ? Path.GetFullPath(completion.FinalPath)
+            : intent.OriginalPath;
+        if (!expectedPath.Equals(full, StringComparison.OrdinalIgnoreCase))
             return WritableSectionAttestationState.PathMismatch;
 
         return intent.PreservationAction switch

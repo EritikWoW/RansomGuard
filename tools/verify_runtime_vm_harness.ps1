@@ -41,6 +41,9 @@ foreach($required in @(
     'Win32_ComputerSystem',
     'install_minifilter_lab.ps1',
     'unload_minifilter_lab.ps1',
+    'predirectory',
+    'preexistingDirectoryHandleRejected',
+    'hold-dir-delete',
     'preexisting-map.bin',
     'writableViewPresent',
     'postactivation-map.bin',
@@ -86,7 +89,10 @@ foreach($path in @($runtimeScript,$packageScript,$workflowPath)){
 $helper=Get-Content -LiteralPath $helperSource -Raw
 foreach($required in @(
     'hold-map',
+    'hold-dir-delete',
     'map-write',
+    'DeleteAccess',
+    'FileFlagBackupSemantics',
     'CreateFileMappingW',
     'MapViewOfFile',
     'FlushViewOfFile',
@@ -106,6 +112,14 @@ if($closeMap -lt 0 -or $closeFile -lt 0 -or $ready -lt 0 -or $closeMap -gt $read
     throw 'Pre-existing mapping scenario must close file/mapping handles before advertising the held mapped view.'
 }
 
+$dirHoldStart=$helper.IndexOf('static void HoldDirectoryDeleteHandle')
+$dirHoldEnd=$helper.IndexOf('static void MapAndWrite',$dirHoldStart)
+if($dirHoldStart -lt 0 -or $dirHoldEnd -lt 0){throw 'HoldDirectoryDeleteHandle source block missing.'}
+$dirHold=$helper.Substring($dirHoldStart,$dirHoldEnd-$dirHoldStart)
+foreach($required in @('DeleteAccess','ShareRead | ShareWrite | ShareDelete','FileFlagBackupSemantics','CreateFileW','readyMarker','releaseMarker')){
+    if($dirHold -notmatch [regex]::Escape($required)){throw "Directory DELETE-handle runtime helper missing invariant: $required"}
+}
+
 $install=Get-Content -LiteralPath $installScript -Raw
 if($install -notmatch [regex]::Escape("ValidateSet('','LAB-MINIFILTER')") -or
    $install -notmatch [regex]::Escape('$Confirmation')){
@@ -121,4 +135,4 @@ foreach($required in @(
     if($buildText -notmatch [regex]::Escape($required)){throw "Engineering LAB build missing runtime harness packaging invariant: $required"}
 }
 
-Write-Host 'Runtime VM harness source gate PASSED: manual self-hosted VM only, exact-commit signed driver provenance, two real mapping scenarios, no boot/trust/Defender mutation.' -ForegroundColor Green
+Write-Host 'Runtime VM harness source gate PASSED: manual self-hosted VM only, exact-commit signed driver provenance, directory-handle plus two real mapping scenarios, no boot/trust/Defender mutation.' -ForegroundColor Green

@@ -28,7 +28,7 @@ var identityStore = new FileIdentityStore(Path.Combine(store.Root, "identity-sta
 var renameStore = new RenameRollbackStore(Path.Combine(store.Root, "rename-state"));
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
-Console.WriteLine("RansomGuard LAB pre-write gate v0.7.4.0");
+Console.WriteLine("RansomGuard LAB pre-write gate v0.7.5.0");
 Console.WriteLine("LAB ONLY: use only inside a disposable test directory on a test machine/VM.");
 Console.WriteLine($"Protected LAB root : {options.Root}");
 Console.WriteLine($"Kernel NT root     : {ntRoot}");
@@ -39,7 +39,7 @@ Console.WriteLine("Press Ctrl+C to disconnect. The driver then stops gating beca
 
 var context = new RgConnectContext
 {
-    ProtocolVersion = 5,
+    ProtocolVersion = 6,
     ClientMode = (uint)RgClientMode.LabGate,
     ClientProcessId = (ulong)Environment.ProcessId,
     GateRootLengthBytes = checked((uint)(ntRoot.Length * 2)),
@@ -54,7 +54,7 @@ var headerSize = Marshal.SizeOf<FilterMessageHeader>();
 var eventSize = Marshal.SizeOf<RgEvent>();
 var replyHeaderSize = Marshal.SizeOf<FilterReplyHeader>();
 var gateReplySize = Marshal.SizeOf<RgGateReply>();
-if (headerSize != 16 || eventSize != 2120 || replyHeaderSize != 16 || gateReplySize != 24)
+if (headerSize != 16 || eventSize != 2140 || replyHeaderSize != 16 || gateReplySize != 24)
     throw new InvalidOperationException($"Unexpected protocol sizes: message={headerSize}, event={eventSize}, replyHeader={replyHeaderSize}, gateReply={gateReplySize}");
 
 var resolver = new DevicePathResolver();
@@ -72,6 +72,16 @@ try
 
         var header = Marshal.PtrToStructure<FilterMessageHeader>(buffer);
         var ev = Marshal.PtrToStructure<RgEvent>(IntPtr.Add(buffer, headerSize));
+
+        if ((RgEventType)ev.EventType == RgEventType.RenameResult)
+        {
+            var completion = await RenameReconciliation.HandleAsync(
+                ev, resolver, options.Root, renameStore, cts.Token).ConfigureAwait(false);
+            Console.WriteLine(
+                $"{DateTime.Now:HH:mm:ss.fff} {RgEventType.RenameResult,-20} request={ev.RelatedSequence,-7} {completion.State,-24} status=0x{completion.CompletionStatus:X8} {completion.FinalDestinationPath}");
+            continue;
+        }
+
         var reply = await GateDecision.EvaluateAsync(ev, resolver, options.Root, store, writeStore, createStore, identityStore, renameStore, cts.Token);
         Native.Reply(port, header.MessageId, reply);
 
@@ -84,6 +94,59 @@ finally
     Marshal.FreeHGlobal(buffer);
 }
 
+static class RenameReconciliation
+{
+    public static async Task<RenameRollbackCompletion> HandleAsync(
+        RgEvent ev,
+        DevicePathResolver resolver,
+        string root,
+        RenameRollbackStore renameStore,
+        CancellationToken cancellationToken)
+    {
+        if (ev.ProtocolVersion != 6 || ev.RelatedSequence == 0)
+            throw new InvalidDataException("Invalid rename completion correlation.");
+
+        if (!NtSuccess(ev.CompletionStatus))
+        {
+            return await renameStore.RecordCompletionAsync(
+                    ev.RelatedSequence,
+                    RenameCompletionState.Failed,
+                    ev.CompletionStatus,
+                    ev.CompletionInformation,
+                    null,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        if (ev.DestinationPathStatus == (uint)RgPathStatus.Resolved)
+        {
+            var finalPath = resolver.Resolve(ev.DestinationPath);
+            if (!string.IsNullOrWhiteSpace(finalPath) && PathPolicy.Under(finalPath, root))
+            {
+                return await renameStore.RecordCompletionAsync(
+                        ev.RelatedSequence,
+                        RenameCompletionState.Succeeded,
+                        ev.CompletionStatus,
+                        ev.CompletionInformation,
+                        finalPath,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        return await renameStore.RecordCompletionAsync(
+                ev.RelatedSequence,
+                RenameCompletionState.SucceededNameUnresolved,
+                ev.CompletionStatus,
+                ev.CompletionInformation,
+                null,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static bool NtSuccess(uint status) => (status & 0x80000000u) == 0;
+}
+
 static class GateDecision
 {
     public static async Task<RgGateReply> EvaluateAsync(RgEvent ev, DevicePathResolver resolver, string root,
@@ -94,7 +157,7 @@ static class GateDecision
         {
             // Never preserve or authorize against a truncated path. The kernel only sends a truncated
             // gate event when its known prefix is already inside the explicit LAB root, so deny it here.
-            if (ev.ProtocolVersion != 5 || ev.PathStatus != (uint)RgPathStatus.Resolved)
+            if (ev.ProtocolVersion != 6 || ev.PathStatus != (uint)RgPathStatus.Resolved)
                 return Deny(ev.Sequence, 1);
 
             var path = resolver.Resolve(ev.Path);
@@ -287,7 +350,7 @@ static class GateDecision
 
     private static RgGateReply Allow(ulong sequence, RgGateDecision decision) => new()
     {
-        ProtocolVersion = 5,
+        ProtocolVersion = 6,
         Decision = decision,
         RequestSequence = sequence,
         ErrorCode = 0
@@ -295,7 +358,7 @@ static class GateDecision
 
     private static RgGateReply Deny(ulong sequence, uint errorCode) => new()
     {
-        ProtocolVersion = 5,
+        ProtocolVersion = 6,
         Decision = RgGateDecision.Deny,
         RequestSequence = sequence,
         ErrorCode = errorCode
@@ -440,7 +503,7 @@ sealed class DevicePathResolver
 }
 
 enum RgClientMode : uint { Audit = 1, LabGate = 2 }
-enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5 }
+enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, RenameResult = 6 }
 enum RgPathStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2, Truncated = 3 }
 enum RgGateDecision : uint { Invalid = 0, SnapshotCommitted = 1, Deny = 2, BaselineCommitted = 3, NoPreservationRequired = 4 }
 
@@ -468,6 +531,9 @@ struct RgEvent
     public ulong ProcessId, ThreadId;
     public long ByteOffset;
     public uint Length, FileInformationClass, DroppedBeforeThis, DestinationPathStatus;
+    public ulong RelatedSequence;
+    public uint CompletionStatus;
+    public ulong CompletionInformation;
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 512)] public string? Path;
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 512)] public string? DestinationPath;
 }

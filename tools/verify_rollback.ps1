@@ -81,7 +81,13 @@ foreach($required in @(
 $renameText=Get-Content -LiteralPath $renameStore -Raw
 foreach($required in @(
     'rename-journal.jsonl',
+    'rename-completion-journal.jsonl',
     'CaptureIntentAsync',
+    'RecordCompletionAsync',
+    'PendingIntents',
+    'RenameCompletionState.Succeeded',
+    'RenameCompletionState.SucceededNameUnresolved',
+    'RenameCompletionState.Failed',
     'RenameDestinationState.OriginallyAbsent',
     'RenameDestinationState.ExistingFile',
     'RenameDestinationState.SameAsSource',
@@ -91,7 +97,10 @@ foreach($required in @(
     'FileOptions.WriteThrough',
     'Flush(true)',
     'Rename rollback journal hash chain mismatch',
-    'post-operation reconciliation'
+    'Rename completion journal hash chain mismatch',
+    'Rename completion intent hash mismatch',
+    'Conflicting duplicate rename completion',
+    'IntentRecordSha256'
 )){
     if($renameText -notmatch [regex]::Escape($required)){throw "Rename rollback source gate missing invariant: $required"}
 }
@@ -129,5 +138,5 @@ if($repository -notmatch 'new RangeRollbackStore\(rangeRoot\)\.VerifyAll\(\)'){t
 if($repository -notmatch 'new CreateRollbackStore\(createRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested create-state stores.'}
 if($repository -notmatch 'new FileIdentityStore\(identityRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested identity-state stores.'}
 if($repository -notmatch 'new RenameRollbackStore\(renameRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested rename-state stores.'}
-Write-Host 'Rollback source gate PASSED: full-file, range-COW, create-baseline, durable file-identity and rename-intent journals, hashes, crash-artifact rejection, write-through commits, first-state semantics, copy-only restore.'
-Write-Host 'Normal service capture remains disabled; v0.7.4 keeps blocking preservation inside the explicit LAB gate only.'
+Write-Host 'Rollback source gate PASSED: full-file, range-COW, create-baseline, durable file-identity, rename-intent and rename-completion journals, hashes, crash-artifact rejection, write-through commits, first-state semantics, copy-only restore.'
+Write-Host 'Normal service capture remains disabled; v0.7.5 keeps blocking preservation inside the explicit LAB gate only.'

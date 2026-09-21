@@ -15,11 +15,18 @@ foreach($required in @(
   'RenameRollbackStore',
   'CaptureOrVerifyAsync',
   'CaptureIntentAsync',
+  'RecordCompletionAsync',
+  'RenameCompletionState.Succeeded',
+  'RenameCompletionState.SucceededNameUnresolved',
+  'RenameCompletionState.Failed',
+  'RgEventType.RenameResult',
+  'ev.RelatedSequence',
+  'ev.CompletionStatus',
   'CaptureAbsentAsync',
   'CreateGatePolicy.TryParseDisposition',
   '(ev.Flags >> 24) & 0xFF',
   'ev.Flags & 0x00FFFFFF',
-  'ProtocolVersion = 5',
+  'ProtocolVersion = 6',
   'CreatePreservationAction.CaptureExistingPreimage',
   'CreatePreservationAction.RecordOriginallyAbsent',
   'CreatePreservationAction.DenyUnsupported',
@@ -79,6 +86,15 @@ if($createIdentity -lt 0 -or $createIdentity -gt $existingCapture){
   throw 'Destructive CREATE must capture/verify file identity before full pre-image capture.'
 }
 
+$resultBranch=$text.IndexOf('if ((RgEventType)ev.EventType == RgEventType.RenameResult)')
+$resultPersist=$text.IndexOf('RenameReconciliation.HandleAsync(',$resultBranch)
+$resultContinue=$text.IndexOf('continue;',$resultPersist)
+$resultReply=$text.IndexOf('Native.Reply(',$resultBranch)
+if($resultBranch -lt 0 -or $resultPersist -lt 0 -or $resultContinue -lt 0 -or
+   ($resultReply -ge 0 -and $resultReply -lt $resultContinue)){
+  throw 'RenameResult must be persisted as completion metadata and must not receive FilterReplyMessage.'
+}
+
 $renameBranch=$text.IndexOf('if (eventType == RgEventType.Rename)')
 $renameSourceCapture=$text.IndexOf('CapturePreimageAsync(sourcePath, RollbackMutationKind.Rename',$renameBranch)
 $renameIntent=$text.IndexOf('renameStore.CaptureIntentAsync(',$renameSourceCapture)
@@ -88,4 +104,4 @@ if($renameBranch -lt 0 -or $renameSourceCapture -lt 0 -or $renameIntent -lt 0 -o
   throw 'RENAME must preserve source/destination state and durably commit rename intent before allow.'
 }
 
-Write-Host 'LAB gate client source check PASSED: explicit disposable root, protocol-v5 CREATE/RENAME semantics, durable FILE_ID_INFO identity binding, range COW for writes, source/destination pre-image preservation, durable rename intents and originally-absent baselines, no destructive/process-control APIs.'
+Write-Host 'LAB gate client source check PASSED: explicit disposable root, protocol-v6 CREATE/RENAME semantics, durable FILE_ID_INFO identity binding, range COW for writes, source/destination pre-image preservation, durable rename intents/completions and originally-absent baselines, no destructive/process-control APIs.'

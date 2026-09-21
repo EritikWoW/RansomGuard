@@ -1,30 +1,41 @@
 {
-  "version": "0.7.3.0",
+  "version": "0.7.5.0",
   "scope": "automated Windows userspace validation plus compile-only x64 minifilter validation",
+  "evidence": {
+    "pull_request": 7,
+    "windows_build_run": 35592763317,
+    "minifilter_compile_run": 35592763402
+  },
   "performed": [
-    "validated Directory.Build.props and all Windows manifests at version 0.7.3.0",
-    "ran normal plus Engineering LAB userspace build on GitHub Actions Windows runner",
-    "ran protocol v4 minifilter, rollback, administration, localization and recovery source gates",
-    "ran 56 rollback/store policy tests including CREATE disposition/options and FILE_DELETE_ON_CLOSE cases",
+    "validated Directory.Build.props and all Windows manifests at version 0.7.5.0",
+    "ran protocol v6 minifilter, rollback, administration, localization, recovery and read-only UI/API source gates",
+    "ran 121 core policy tests",
+    "ran 32 offline recovery/framing tests",
+    "ran 102 scoped trust policy tests",
+    "ran 125 administration contract tests",
+    "ran 2194 localization resource/contract checks",
+    "ran 87 rollback/store tests including rename intent/completion correlation, pending semantics, duplicate-conflict rejection and completion-journal corruption",
     "ran WPF synthetic smoke rendering for 130 frames with no recorded binding errors",
-    "published normal and Engineering LAB 0.7.3.0 userspace ZIPs",
+    "published normal and Engineering LAB 0.7.5.0 userspace ZIPs",
     "restored pinned Microsoft Windows WDK x64 and SDK C++ 10.0.28000.2526 packages",
-    "compiled and linked RansomGuardMinifilter.sys as Release x64 with signing disabled",
+    "compiled and linked RansomGuardMinifilter.sys as Release x64 with protocol v6 and signing disabled",
     "ran x64 ApiValidator against the compiled SYS and received Universal DDI validation success",
     "verified the compile-only minifilter artifact is not Authenticode-signed",
     "uploaded the unsigned SYS, INF, protocol header and SHA256SUMS as a CI artifact"
   ],
   "not_performed": [
     "driver installation, loading or volume attachment",
-    "live FilterGetMessage/FilterReplyMessage kernel-to-user round trip",
-    "native IRP_MJ_CREATE or IRP_MJ_WRITE blocking test on NTFS/ReFS",
-    "post-create tunneled-name and durable volume/file-ID reconciliation",
+    "live FilterGetMessage/FilterReplyMessage kernel-to-user round trip with the compiled driver",
+    "native protocol-v6 IRP_MJ_CREATE, IRP_MJ_WRITE or IRP_MJ_SET_INFORMATION blocking/reconciliation test on NTFS/ReFS",
+    "live FltGetTunneledName rename-result delivery and Windows file-name tunneling fault cases",
+    "post-operation kernel file-ID confirmation for completed rename/create operations",
+    "post-create completion reconciliation",
     "Driver Verifier, HLK or WHCP validation",
-    "power-loss or kernel/user-mode crash recovery",
+    "power-loss or kernel/user-mode crash recovery including missing post-operation result delivery",
     "memory-mapped and cache-manager write coverage",
     "performance and tail-latency benchmarking under real filesystem load",
     "production driver signing or Microsoft-assigned production altitude"
   ],
   "safety_boundary": "The blocking minifilter remains Engineering-LAB-only. CI compiles and validates an unsigned artifact but never installs, loads or attaches it. The normal bundle remains AuditOnly.",
-  "next_required_checkpoint": "Run the validated unsigned driver only in a disposable Windows VM and disposable gate directory, then prove live protocol-v4 CREATE/WRITE ordering and post-create identity reconciliation before expanding the kernel gate."
+  "next_required_checkpoint": "Run the validated unsigned driver only in a disposable Windows VM and disposable gate directory, prove live protocol-v6 rename completion/tunneled-name behavior, then bind completed CREATE/RENAME operations to durable kernel file identity before expanding the gate."
 }

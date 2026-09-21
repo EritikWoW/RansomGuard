@@ -1,8 +1,8 @@
-# RansomGuard 0.7.4.0 - rename-destination preservation milestone
+# RansomGuard 0.7.5.0 - rename completion reconciliation milestone
 
 RansomGuard is moving from detection-only telemetry to `preserve -> contain -> recover`.
-0.7.3.0 retains the deliberately constrained engineering minifilter gate, range-aware WRITE COW,
-and adds explicit CREATE preservation semantics.
+0.7.5.0 retains the deliberately constrained engineering minifilter gate, range-aware WRITE COW,
+CREATE preservation and rename-destination preservation, and adds durable post-rename outcome reconciliation.
 
 ## WRITE ordering
 
@@ -29,7 +29,7 @@ Rename, delete-disposition, end-of-file, allocation-length and valid-data-length
 full-file pre-image store. These operations can destroy or relocate information in ways that are not yet modeled
 as block-only transactions.
 
-Protocol v5 exposes five mutation classes and adds a normalized destination path/status to RENAME events:
+Protocol v6 exposes five mutation classes and adds a normalized destination path/status to RENAME events:
 
 - CREATE
 - WRITE
@@ -39,7 +39,7 @@ Protocol v5 exposes five mutation classes and adds a normalized destination path
 
 ## CREATE ordering
 
-For `IRP_MJ_CREATE`, protocol v4 carries the original Windows CreateDisposition/CreateOptions before
+For `IRP_MJ_CREATE`, protocol v6 carries the original Windows CreateDisposition/CreateOptions before
 the create completes.
 
 - If an existing file is opened with `FILE_SUPERSEDE`, `FILE_OVERWRITE` or `FILE_OVERWRITE_IF`,
@@ -86,7 +86,7 @@ exact kernel file object and destination identity.
 
 ## RENAME destination ordering
 
-For a rename inside the LAB root, protocol v5 carries the normalized destination obtained by the minifilter with
+For a rename inside the LAB root, protocol v6 carries the normalized destination obtained by the minifilter with
 `FltGetDestinationFileNameInformation`.
 
 Before returning `SnapshotCommitted`, user mode:
@@ -100,9 +100,25 @@ Before returning `SnapshotCommitted`, user mode:
    destination state, rename flags, information class and kernel request sequence.
 
 The rename intent is deliberately a **pre-operation intent**, not proof that the filesystem completed the rename.
-Microsoft documents that normalized names obtained before CREATE/RENAME can be invalidated by file-name tunneling;
-post-operation `FltGetTunneledName` plus completed file identity reconciliation remains required before recovery can
-apply topology changes automatically.
+
+## RENAME completion reconciliation
+
+After an allowed rename returns from the filesystem, the minifilter executes a post-operation completion path:
+
+1. the pre-operation normalized destination name-info object is retained in the completion context;
+2. `FltDoCompletionProcessingWhenSafe` moves reconciliation to a safe post-operation context when required;
+3. a failed rename emits a correlated result carrying the final NTSTATUS and no successful topology claim;
+4. on success, `FltGetTunneledName` reconciles the retained pre-operation destination against Windows file-name tunneling;
+5. the driver emits a no-reply protocol-v6 `RenameResult` correlated by the original kernel request sequence;
+6. `RenameRollbackStore` appends a separate write-through SHA-256 hash-chained completion record linked to the exact intent hash.
+
+A completion may be `Succeeded`, `SucceededNameUnresolved`, or `Failed`. If the safe post path cannot run,
+the result cannot be delivered, or user mode stops before persisting it, the intent remains **pending**. Recovery must
+never infer success from the presence of a pre-operation intent alone.
+
+This milestone confirms the filesystem outcome and reconciled final name when available. It does **not** yet bind that
+completed name to a post-operation kernel file ID; identity confirmation of the completed object remains required before
+automatic topology recovery can be considered production-safe.
 
 ## Range recovery
 
@@ -146,18 +162,18 @@ Rollback startup validation now treats ambiguous durable state as a hard failure
 - unjournaled range `.block` objects are rejected;
 - leftover `.tmp` artifacts are rejected as incomplete capture evidence;
 - range block geometry must exactly match the recorded original file length and configured block size;
-- repository-wide verification descends into each session's nested `write-cow` and `create-state` stores;
+- repository-wide verification descends into each session's nested `write-cow`, `create-state`, `identity-state` and `rename-state` stores;
+- rename completion records are hash-chained separately and cryptographically linked to their exact pre-operation intent;
 - the LAB gate validates all existing sessions before opening a new one.
 
 These checks do not yet reconcile an interrupted in-flight kernel request. They prevent a restart from proceeding on top of rollback state whose commit boundary is ambiguous.
 
 ## Still required before production
 
-- post-create and post-rename tunneled-name/file-ID confirmation;
-- completed-operation reconciliation for durable rename intents;
-- kernel-side binding of completed operations to durable file identity;
+- post-create completion reconciliation;
+- post-operation kernel file-ID confirmation for completed create/rename operations;
 - bounded concurrent pending-I/O workers;
-- crash/restart reconciliation for requests pending during user-mode failure;
+- crash/restart reconciliation for requests pending during user-mode failure or missing rename-result delivery;
 - memory-mapped/cache-manager write coverage;
 - storage quotas, retention and pressure policy;
 - transition from protected-root health to containment/block policy;

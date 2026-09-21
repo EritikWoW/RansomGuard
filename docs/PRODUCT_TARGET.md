@@ -14,7 +14,7 @@ pre-mutation preservation path.
 
 ## Current milestone
 
-The current engineering branch extends the range-aware write COW gate with protocol v5 CREATE and RENAME destination semantics:
+The current engineering branch extends the range-aware write COW gate with protocol v6 CREATE, RENAME destination and rename-completion semantics:
 
 `CREATE -> classify disposition -> durable existing-file pre-image OR originally-absent baseline -> allow`
 
@@ -29,10 +29,12 @@ preservation is now additionally bound to a durable Windows `FILE_ID_INFO` ident
 (volume serial + 128-bit file ID), so a path that changes to a different file during one incident is rejected.
 CREATE existence classification itself is still path-based; post-create/kernel identity reconciliation remains required.
 
-Protocol v5 now carries the normalized pre-operation rename destination. Before allowing a rename, the LAB gate
-preserves the source, preserves an existing destination or commits its absence, and durably records a rename intent.
-That intent is not treated as completion because Windows name tunneling can change the final normalized component.
+Protocol v6 carries the normalized pre-operation rename destination and a correlated post-operation `RenameResult`.
+Before allowing a rename, the LAB gate preserves the source, preserves an existing destination or commits its absence,
+and durably records a rename intent. After completion, the minifilter resolves the tunneled final name on a safe post-op
+path and user mode appends a second hash-chained record for success, failure, or unresolved successful completion.
+A missing result leaves the intent pending; pre-operation intent is never promoted to success by inference.
 
-The next core milestones are post-create/post-rename tunneled-name reconciliation, kernel binding of completed operations
-to durable file identity, bounded concurrent and crash-reconciled gating, containment, process-state capture,
+The next core milestones are post-create reconciliation, kernel file-ID binding of completed create/rename operations,
+bounded concurrent and crash-reconciled gating, containment, process-state capture,
 adaptive crypto analysis, and verified recovery orchestration.

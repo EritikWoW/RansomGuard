@@ -373,6 +373,42 @@ try
     renameStore.VerifyAll();
     Check(new RenameRollbackStore(renameRoot).Intents.Count == 3,
         "rename intent journal rebuilds after reopen");
+    Check(renameStore.PendingIntents.Count == 3,
+        "rename intents remain pending until post-operation completion is recorded");
+
+    var renameSucceeded = await renameStore.RecordCompletionAsync(
+        101, RenameCompletionState.Succeeded, 0, 0, renameDestination);
+    Check(renameSucceeded.State == RenameCompletionState.Succeeded &&
+          renameSucceeded.FinalDestinationPath.Equals(renameDestination, StringComparison.OrdinalIgnoreCase),
+        "successful rename completion records final destination");
+
+    var renameFailed = await renameStore.RecordCompletionAsync(
+        102, RenameCompletionState.Failed, 0xC0000035u, 0, null);
+    Check(renameFailed.State == RenameCompletionState.Failed,
+        "failed rename completion is recorded separately from intent");
+
+    var renameUnresolved = await renameStore.RecordCompletionAsync(
+        103, RenameCompletionState.SucceededNameUnresolved, 0, 0, null);
+    Check(renameUnresolved.State == RenameCompletionState.SucceededNameUnresolved,
+        "successful rename with unresolved tunneled name remains non-authoritative");
+    Check(renameStore.PendingIntents.Count == 0,
+        "completed rename intents leave no pending reconciliation");
+
+    var reopenedRename = new RenameRollbackStore(renameRoot);
+    Check(reopenedRename.Completions.Count == 3,
+        "rename completion journal rebuilds after reopen");
+    Check(reopenedRename.PendingIntents.Count == 0,
+        "reopened rename state preserves completion correlation");
+
+    var conflictingRenameCompletionRejected = false;
+    try
+    {
+        _ = await renameStore.RecordCompletionAsync(
+            101, RenameCompletionState.Failed, 0xC0000001u, 0, null);
+    }
+    catch (InvalidDataException) { conflictingRenameCompletionRejected = true; }
+    Check(conflictingRenameCompletionRejected,
+        "conflicting duplicate rename completion is rejected");
 
     var invalidRenameStateRejected = false;
     try
@@ -391,6 +427,21 @@ try
     try { _ = new RenameRollbackStore(renameRoot); }
     catch (InvalidDataException) { renameJournalRejected = true; }
     Check(renameJournalRejected, "rename intent journal corruption is rejected");
+
+    var completionCorruptionRoot = Path.Combine(root, "rename-completion-corruption");
+    var completionCorruptionStore = new RenameRollbackStore(completionCorruptionRoot);
+    _ = await completionCorruptionStore.CaptureIntentAsync(
+        150, renameSource, renameDestination, sourceIdentity, false,
+        RenameDestinationState.OriginallyAbsent, null, 0, 10);
+    _ = await completionCorruptionStore.RecordCompletionAsync(
+        150, RenameCompletionState.Succeeded, 0, 0, renameDestination);
+    var completionJournalBytes = await File.ReadAllBytesAsync(completionCorruptionStore.CompletionJournalPath);
+    completionJournalBytes[^2] ^= 1;
+    await File.WriteAllBytesAsync(completionCorruptionStore.CompletionJournalPath, completionJournalBytes);
+    var completionJournalRejected = false;
+    try { _ = new RenameRollbackStore(completionCorruptionRoot); }
+    catch (InvalidDataException) { completionJournalRejected = true; }
+    Check(completionJournalRejected, "rename completion journal corruption is rejected");
 
     var nestedRenameRepo = new RollbackRepository(Path.Combine(root, "nested-rename-repo"));
     var nestedRenameSession = nestedRenameRepo.CreateSession("nested_rename");

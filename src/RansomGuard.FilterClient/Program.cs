@@ -4,10 +4,10 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 
 const string PortName = @"\RansomGuardMinifilterPort";
-const int ProtocolVersion = 5;
+const int ProtocolVersion = 6;
 
 var options = Options.Parse(args);
-Console.WriteLine("RansomGuard Minifilter AUDIT client v0.7.4.0");
+Console.WriteLine("RansomGuard Minifilter AUDIT client v0.7.5.0");
 Console.WriteLine("READ-ONLY: this client cannot block, suspend, kill, rename, delete, or modify files.");
 Console.WriteLine("It only receives metadata emitted by the lab minifilter.");
 Console.WriteLine();
@@ -33,7 +33,7 @@ using var writer = new StreamWriter(new FileStream(logPath, FileMode.CreateNew, 
 var headerSize = Marshal.SizeOf<FilterMessageHeader>();
 var eventSize = Marshal.SizeOf<RgEvent>();
 if (headerSize != 16) throw new InvalidOperationException($"Unexpected FILTER_MESSAGE_HEADER size: {headerSize}");
-if (eventSize != 2120) throw new InvalidOperationException($"Protocol struct size mismatch: {eventSize}, expected 2120");
+if (eventSize != 2140) throw new InvalidOperationException($"Protocol struct size mismatch: {eventSize}, expected 2140");
 var bufferSize = checked(headerSize + eventSize);
 var buffer = Marshal.AllocHGlobal(bufferSize);
 var lastFlush = Stopwatch.StartNew();
@@ -267,7 +267,7 @@ sealed class AuditStats
     };
 }
 
-enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5 }
+enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, RenameResult = 6 }
 enum RgPathStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2, Truncated = 3 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -291,6 +291,9 @@ struct RgEvent
     public ulong ProcessId, ThreadId;
     public long ByteOffset;
     public uint Length, FileInformationClass, DroppedBeforeThis, DestinationPathStatus;
+    public ulong RelatedSequence;
+    public uint CompletionStatus;
+    public ulong CompletionInformation;
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 512)] public string? Path;
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 512)] public string? DestinationPath;
 }
@@ -312,7 +315,7 @@ static class Native
         const uint FLT_PORT_FLAG_SYNC_HANDLE = 0x00000001;
         var context = new RgConnectContext
         {
-            ProtocolVersion = 5,
+            ProtocolVersion = 6,
             ClientMode = 1,
             ClientProcessId = processId,
             GateRootLengthBytes = 0,

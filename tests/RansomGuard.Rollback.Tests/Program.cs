@@ -1415,6 +1415,132 @@ try
     Check(corruptLifecycleRejected,
         "repository verification includes rollback lifecycle corruption");
 
+    // Retention planning requires clean lifecycle + resolved recovery + explicit current-plan release.
+    var retentionRepoRoot = Path.Combine(root, "retention-repo");
+    var retentionRepo = new RollbackRepository(retentionRepoRoot);
+
+    _ = retentionRepo.CreateSession("legacy_unmarked");
+
+    var openSession = retentionRepo.CreateSession("open_unclean");
+    var openLifecycle = new RollbackSessionLifecycleStore(openSession.Root);
+    _ = await openLifecycle.RecordOpenedAsync();
+
+    var notReleasedSession = retentionRepo.CreateSession("not_released");
+    var notReleasedLifecycle = new RollbackSessionLifecycleStore(notReleasedSession.Root);
+    _ = await notReleasedLifecycle.RecordOpenedAsync();
+    _ = await notReleasedLifecycle.RecordClosedCleanlyAsync();
+
+    var pendingSession = retentionRepo.CreateSession("pending_create");
+    var pendingLifecycle = new RollbackSessionLifecycleStore(pendingSession.Root);
+    _ = await pendingLifecycle.RecordOpenedAsync();
+    var pendingCreateStore = new CreateOperationStore(Path.Combine(pendingSession.Root, "create-state"));
+    _ = await pendingCreateStore.RecordIntentAsync(
+        12001,
+        Path.Combine(root, "retention-pending.bin"),
+        CreateDisposition.Open,
+        0,
+        0,
+        CreateTargetState.Missing,
+        CreatePreservationAction.NoPreservationRequired,
+        string.Empty,
+        null);
+    _ = await pendingLifecycle.RecordClosedCleanlyAsync();
+
+    var eligibleSession = retentionRepo.CreateSession("eligible");
+    var eligibleLifecycle = new RollbackSessionLifecycleStore(eligibleSession.Root);
+    _ = await eligibleLifecycle.RecordOpenedAsync();
+    _ = await eligibleLifecycle.RecordClosedCleanlyAsync();
+    var eligibleRecovery = RollbackRecoveryPlanner.Build(retentionRepoRoot, "eligible");
+    var eligibleRelease = await RollbackRetentionPlanner.ReleaseAsync(
+        retentionRepoRoot, "eligible", eligibleRecovery.PlanId);
+    Check(eligibleRelease.RecoveryPlanId == eligibleRecovery.PlanId,
+        "retention release binds exact current recovery PlanId");
+    var repeatedEligibleRelease = await RollbackRetentionPlanner.ReleaseAsync(
+        retentionRepoRoot, "eligible", eligibleRecovery.PlanId);
+    Check(repeatedEligibleRelease.RecordSha256 == eligibleRelease.RecordSha256,
+        "identical retention release is idempotent");
+
+    var staleSession = retentionRepo.CreateSession("stale_release");
+    var staleLifecycle = new RollbackSessionLifecycleStore(staleSession.Root);
+    _ = await staleLifecycle.RecordOpenedAsync();
+    _ = await staleLifecycle.RecordClosedCleanlyAsync();
+    var staleRecovery = RollbackRecoveryPlanner.Build(retentionRepoRoot, "stale_release");
+    _ = await RollbackRetentionPlanner.ReleaseAsync(
+        retentionRepoRoot, "stale_release", staleRecovery.PlanId);
+    var stalePaging = new PagingWriteEvidenceStore(Path.Combine(staleSession.Root, "paging-state"));
+    _ = await stalePaging.RecordAsync(
+        12002,
+        Path.Combine(root, "stale-release.bin"),
+        0,
+        4096,
+        null,
+        1);
+
+    var planNow = eligibleLifecycle.ClosedUtc!.Value.AddHours(1);
+    var retentionPlan = RollbackRetentionPlanner.Build(
+        retentionRepoRoot, minimumAgeHours: 0, nowUtc: planNow);
+
+    Check(retentionPlan.Sessions.Single(x => x.SessionId == "legacy_unmarked").Decision ==
+          RollbackRetentionDecision.LegacyUnmarked,
+        "legacy session without lifecycle is never purge-eligible");
+    Check(retentionPlan.Sessions.Single(x => x.SessionId == "open_unclean").Decision ==
+          RollbackRetentionDecision.NotClosedCleanly,
+        "opened-only session is never purge-eligible");
+    Check(retentionPlan.Sessions.Single(x => x.SessionId == "not_released").Decision ==
+          RollbackRetentionDecision.NotReleased,
+        "clean session without explicit release is not purge-eligible");
+    Check(retentionPlan.Sessions.Single(x => x.SessionId == "pending_create").Decision ==
+          RollbackRetentionDecision.PendingTransactions,
+        "pending CREATE keeps retention blocked even after clean close");
+    Check(retentionPlan.Sessions.Single(x => x.SessionId == "eligible").Decision ==
+          RollbackRetentionDecision.Eligible,
+        "clean resolved session with matching release becomes eligible");
+    Check(retentionPlan.Sessions.Single(x => x.SessionId == "stale_release").Decision ==
+          RollbackRetentionDecision.ReleaseStale,
+        "new rollback evidence invalidates an older retention release");
+
+    var youngPlan = RollbackRetentionPlanner.Build(
+        retentionRepoRoot,
+        minimumAgeHours: 24,
+        nowUtc: eligibleLifecycle.ClosedUtc!.Value.AddHours(1));
+    Check(youngPlan.Sessions.Single(x => x.SessionId == "eligible").Decision ==
+          RollbackRetentionDecision.TooYoung,
+        "minimum age remains an independent retention barrier");
+
+    var repeatedRetentionPlan = RollbackRetentionPlanner.Build(
+        retentionRepoRoot, minimumAgeHours: 0, nowUtc: planNow.AddMinutes(20));
+    Check(repeatedRetentionPlan.PlanId == retentionPlan.PlanId,
+        "retention PlanId is stable while evidence and eligibility decision are unchanged");
+    Check(retentionPlan.EligibleBytes ==
+          retentionPlan.Sessions.Where(x => x.Decision == RollbackRetentionDecision.Eligible)
+              .Sum(x => x.SizeBytes),
+        "retention plan reports only eligible bytes as purgeable");
+
+    var pendingReleaseRejected = false;
+    var pendingRecovery = RollbackRecoveryPlanner.Build(retentionRepoRoot, "pending_create");
+    try
+    {
+        _ = await RollbackRetentionPlanner.ReleaseAsync(
+            retentionRepoRoot, "pending_create", pendingRecovery.PlanId);
+    }
+    catch (InvalidDataException) { pendingReleaseRejected = true; }
+    Check(pendingReleaseRejected,
+        "retention release refuses sessions with pending CREATE/RENAME transactions");
+
+    var retentionReleaseStore = new RollbackRetentionReleaseStore(retentionRepoRoot);
+    retentionReleaseStore.VerifyAll();
+    var releaseJournalBytes = await File.ReadAllBytesAsync(retentionReleaseStore.JournalPath);
+    releaseJournalBytes[^2] ^= 1;
+    await File.WriteAllBytesAsync(retentionReleaseStore.JournalPath, releaseJournalBytes);
+    var corruptReleaseRejected = false;
+    try
+    {
+        _ = RollbackRetentionPlanner.Build(retentionRepoRoot, minimumAgeHours: 0, nowUtc: planNow);
+    }
+    catch (InvalidDataException) { corruptReleaseRejected = true; }
+    Check(corruptReleaseRejected,
+        "retention planner rejects corrupted repository-level release journal");
+
     Console.WriteLine($"All {passed} rollback tests passed. These are file-store tests, not minifilter integration tests.");
     return 0;
 }

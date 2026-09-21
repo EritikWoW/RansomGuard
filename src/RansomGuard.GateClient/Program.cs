@@ -360,7 +360,10 @@ await using (var lifecycleReservation = await storageBudget.ReserveAsync(
                  "session-lifecycle-terminal",
                  CancellationToken.None).ConfigureAwait(false))
 {
-    if (workerFailureCount == 0 && pendingCreateCount == 0 && pendingRenameCount == 0)
+    if (workerFailureCount == 0 &&
+        pendingCreateCount == 0 &&
+        pendingRenameCount == 0 &&
+        pendingContainmentAckCount == 0)
     {
         _ = await lifecycleStore.MarkCompletedAsync(lifecycleReason, CancellationToken.None)
             .ConfigureAwait(false);

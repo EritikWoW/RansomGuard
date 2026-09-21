@@ -5,7 +5,7 @@ if (!OperatingSystem.IsWindows())
     throw new PlatformNotSupportedException("RansomGuard minifilter runtime harness is Windows-only.");
 
 if (args.Length == 0)
-    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | map-write --file <path>");
+    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | map-write --file <path>");
 
 var command = args[0].ToLowerInvariant();
 var options = Parse(args.Skip(1).ToArray());
@@ -15,6 +15,12 @@ switch (command)
     case "hold-map":
         HoldMappedView(
             Require(options, "--file"),
+            Require(options, "--ready"),
+            Require(options, "--release"));
+        break;
+    case "hold-dir-delete":
+        HoldDirectoryDeleteHandle(
+            Require(options, "--directory"),
             Require(options, "--ready"),
             Require(options, "--release"));
         break;
@@ -71,6 +77,46 @@ static void HoldMappedView(string filePath, string readyMarker, string releaseMa
         if (view != IntPtr.Zero) _ = Native.UnmapViewOfFile(view);
         if (mapping != IntPtr.Zero) _ = Native.CloseHandle(mapping);
         file.Dispose();
+    }
+}
+
+static void HoldDirectoryDeleteHandle(string directoryPath, string readyMarker, string releaseMarker)
+{
+    if (!Directory.Exists(directoryPath))
+        throw new DirectoryNotFoundException(directoryPath);
+    if ((File.GetAttributes(directoryPath) & FileAttributes.ReparsePoint) != 0)
+        throw new InvalidOperationException("Runtime harness refuses reparse-point directories.");
+
+    Directory.CreateDirectory(Path.GetDirectoryName(readyMarker)!);
+    if (File.Exists(readyMarker)) File.Delete(readyMarker);
+    if (File.Exists(releaseMarker)) File.Delete(releaseMarker);
+
+    const uint DeleteAccess = 0x00010000;
+    const uint ShareRead = 0x00000001;
+    const uint ShareWrite = 0x00000002;
+    const uint ShareDelete = 0x00000004;
+    const uint OpenExisting = 3;
+    const uint FileFlagBackupSemantics = 0x02000000;
+
+    using var directory = Native.CreateFileW(
+        directoryPath,
+        DeleteAccess,
+        ShareRead | ShareWrite | ShareDelete,
+        IntPtr.Zero,
+        OpenExisting,
+        FileFlagBackupSemantics,
+        IntPtr.Zero);
+    if (directory.IsInvalid)
+        throw new System.ComponentModel.Win32Exception(
+            Marshal.GetLastWin32Error(), $"CreateFileW DELETE directory handle failed for '{directoryPath}'.");
+
+    File.WriteAllText(readyMarker, $"pid={Environment.ProcessId};directory={directoryPath};utc={DateTime.UtcNow:O}");
+    var deadline = DateTime.UtcNow.AddMinutes(5);
+    while (!File.Exists(releaseMarker))
+    {
+        if (DateTime.UtcNow >= deadline)
+            throw new TimeoutException("Timed out waiting for directory-handle release marker.");
+        Thread.Sleep(100);
     }
 }
 

@@ -67,10 +67,12 @@ existing-directory delete-on-close is denied because directory-topology rollback
 An originally-absent path is committed as metadata-only recovery state; it does not cause the recovery library to delete files.
 For rename, source and destination preservation plus a durable pre-operation intent are committed before allow. A destination
 outside the LAB root, an unresolved/truncated destination, an existing directory, or a same-file alias is denied. After the
-filesystem completes the operation, protocol v8 emits a correlated no-reply `RenameResult`. Successful renames reconcile the retained destination name through `FltGetTunneledName` and independently query
-`FileIdInformation` from the completed kernel file object. User mode records both when available and rejects a final
-identity that differs from the pre-operation source identity. If reconciliation cannot be delivered, the durable intent
-remains pending and must not be treated as completed.
+filesystem completes the operation, protocol v8 emits a correlated no-reply `RenameResult`. Successful renames
+reconcile the retained destination name through `FltGetTunneledName`. The driver queries `FileIdInformation` from the
+completed kernel file object only at PASSIVE_LEVEL with special kernel APCs enabled; otherwise identity is explicitly
+unresolved. User mode records both name and identity when available and rejects a final identity that differs from the
+pre-operation source identity. If reconciliation cannot be delivered, the durable intent remains pending and must not
+be treated as completed.
 
 For CREATE, the gate now also commits a durable operation intent before allow. After completion, protocol v8 emits
 a correlated no-reply `CreateResult`: successful operations reconcile the tunneled final name and query

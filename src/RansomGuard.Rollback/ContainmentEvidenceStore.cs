@@ -143,8 +143,8 @@ public sealed class ContainmentEvidenceStore
             (kernelStatus != 0 || containmentActive || containedProcessId != 0))
             throw new InvalidDataException("Containment request evidence cannot claim kernel activation.");
         if (phase == ContainmentEvidencePhase.KernelActive &&
-            (!containmentActive || containedProcessId != processId))
-            throw new InvalidDataException("Kernel-active containment evidence must bind the requested PID.");
+            (kernelStatus != 0 || !containmentActive || containedProcessId != processId))
+            throw new InvalidDataException("Kernel-active containment evidence must report STATUS_SUCCESS and bind the requested PID.");
 
         var full = NormalizePath(path);
 
@@ -306,6 +306,7 @@ public sealed class ContainmentEvidenceStore
             else
             {
                 if (!requested.TryGetValue(line.KernelSequence, out var request) ||
+                    line.KernelStatus != 0 ||
                     !line.ContainmentActive ||
                     line.ContainedProcessId != line.ProcessId ||
                     request.ProcessId != line.ProcessId ||

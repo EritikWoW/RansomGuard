@@ -236,6 +236,215 @@ try
     Check(CreateGatePolicy.Decide(CreateDisposition.Create, CreateTargetState.Directory) ==
         CreatePreservationAction.NoPreservationRequired, "directory CREATE does not claim file-content preservation");
 
+    // CREATE operations are two-phase: pre-operation preservation intent plus correlated post-operation outcome.
+    var createOpsRoot = Path.Combine(root, "create-operation-state");
+    var createOps = new CreateOperationStore(createOpsRoot);
+    var createOriginalIdentity = new DurableFileIdentity(
+        "0011223344556677", "0123456789ABCDEFFEDCBA9876543210");
+    var createFinalIdentity = new DurableFileIdentity(
+        "0011223344556677", "11112222333344445555666677778888");
+    var createOperationPath = Path.Combine(sourceDir, "create-operation.bin");
+
+    var createIntent = await createOps.RecordIntentAsync(
+        301,
+        createOperationPath,
+        CreateDisposition.Overwrite,
+        0,
+        0x40000000,
+        CreateTargetState.File,
+        CreatePreservationAction.CaptureExistingPreimage,
+        new string('A', 64),
+        createOriginalIdentity);
+    Check(createIntent.RequestSequence == 301 && createOps.PendingIntents.Count == 1,
+        "CREATE intent remains pending until post-operation reconciliation");
+    Check(createIntent.OriginalIdentity == createOriginalIdentity,
+        "CREATE intent records original identity for preserved existing file");
+
+    var createSucceeded = await createOps.RecordCompletionAsync(
+        301,
+        CreateCompletionState.Succeeded,
+        0,
+        1,
+        createOperationPath,
+        createFinalIdentity);
+    Check(createSucceeded.FinalIdentity == createFinalIdentity &&
+          createSucceeded.FinalPath.Equals(createOperationPath, StringComparison.OrdinalIgnoreCase),
+        "CREATE authoritative success records final path and kernel identity");
+    Check(createOps.PendingIntents.Count == 0,
+        "CREATE authoritative completion clears pending intent");
+
+    var createAbsentPath = Path.Combine(sourceDir, "create-absent-operation.bin");
+    _ = await createOps.RecordIntentAsync(
+        302,
+        createAbsentPath,
+        CreateDisposition.Create,
+        0,
+        0x40000000,
+        CreateTargetState.Missing,
+        CreatePreservationAction.RecordOriginallyAbsent,
+        new string('B', 64),
+        null);
+    var createIdentityUnresolved = await createOps.RecordCompletionAsync(
+        302,
+        CreateCompletionState.SucceededIdentityUnresolved,
+        0,
+        2,
+        createAbsentPath,
+        null);
+    Check(createIdentityUnresolved.State == CreateCompletionState.SucceededIdentityUnresolved,
+        "CREATE success can retain final name while marking kernel identity unresolved");
+
+    var createNameUnresolvedPath = Path.Combine(sourceDir, "create-name-unresolved.bin");
+    _ = await createOps.RecordIntentAsync(
+        303,
+        createNameUnresolvedPath,
+        CreateDisposition.Open,
+        0,
+        0x80000000,
+        CreateTargetState.File,
+        CreatePreservationAction.NoPreservationRequired,
+        string.Empty,
+        null);
+    var createNameUnresolved = await createOps.RecordCompletionAsync(
+        303,
+        CreateCompletionState.SucceededNameUnresolved,
+        0,
+        1,
+        null,
+        createOriginalIdentity);
+    Check(createNameUnresolved.State == CreateCompletionState.SucceededNameUnresolved &&
+          createNameUnresolved.FinalIdentity == createOriginalIdentity,
+        "CREATE success can retain kernel identity while marking tunneled name unresolved");
+
+    var createFullyUnresolvedPath = Path.Combine(sourceDir, "create-fully-unresolved.bin");
+    _ = await createOps.RecordIntentAsync(
+        304,
+        createFullyUnresolvedPath,
+        CreateDisposition.OpenIf,
+        0,
+        0x80000000,
+        CreateTargetState.Missing,
+        CreatePreservationAction.NoPreservationRequired,
+        string.Empty,
+        null);
+    var createFullyUnresolved = await createOps.RecordCompletionAsync(
+        304,
+        CreateCompletionState.SucceededNameAndIdentityUnresolved,
+        0,
+        1,
+        null,
+        null);
+    Check(createFullyUnresolved.State == CreateCompletionState.SucceededNameAndIdentityUnresolved,
+        "CREATE success explicitly represents unresolved name and identity");
+
+    var createFailedPath = Path.Combine(sourceDir, "create-failed.bin");
+    _ = await createOps.RecordIntentAsync(
+        305,
+        createFailedPath,
+        CreateDisposition.Open,
+        0,
+        0x80000000,
+        CreateTargetState.Missing,
+        CreatePreservationAction.NoPreservationRequired,
+        string.Empty,
+        null);
+    var createFailed = await createOps.RecordCompletionAsync(
+        305,
+        CreateCompletionState.Failed,
+        0xC0000034u,
+        0,
+        null,
+        null);
+    Check(createFailed.State == CreateCompletionState.Failed,
+        "CREATE failed filesystem operation is recorded separately from intent");
+
+    var createPendingPath = Path.Combine(sourceDir, "create-pending.bin");
+    _ = await createOps.RecordIntentAsync(
+        306,
+        createPendingPath,
+        CreateDisposition.Create,
+        0,
+        0x40000000,
+        CreateTargetState.Missing,
+        CreatePreservationAction.RecordOriginallyAbsent,
+        new string('C', 64),
+        null);
+    Check(createOps.PendingIntents.Single().RequestSequence == 306,
+        "missing CREATE result leaves intent pending rather than inferring success");
+
+    var reopenedCreateOps = new CreateOperationStore(createOpsRoot);
+    Check(reopenedCreateOps.Completions.Count == 5 &&
+          reopenedCreateOps.PendingIntents.Single().RequestSequence == 306,
+        "CREATE intent/completion correlation rebuilds after reopen");
+
+    var exactCreateCompletion = await createOps.RecordCompletionAsync(
+        301,
+        CreateCompletionState.Succeeded,
+        0,
+        1,
+        createOperationPath,
+        createFinalIdentity);
+    Check(exactCreateCompletion.RecordSha256 == createSucceeded.RecordSha256,
+        "exact duplicate CREATE completion is idempotent");
+
+    var conflictingCreateCompletionRejected = false;
+    try
+    {
+        _ = await createOps.RecordCompletionAsync(
+            301,
+            CreateCompletionState.Failed,
+            0xC0000001u,
+            0,
+            null,
+            null);
+    }
+    catch (InvalidDataException) { conflictingCreateCompletionRejected = true; }
+    Check(conflictingCreateCompletionRejected,
+        "conflicting duplicate CREATE completion is rejected");
+
+    var missingCreateIntentRejected = false;
+    try
+    {
+        _ = await createOps.RecordCompletionAsync(
+            999,
+            CreateCompletionState.Failed,
+            0xC0000001u,
+            0,
+            null,
+            null);
+    }
+    catch (InvalidDataException) { missingCreateIntentRejected = true; }
+    Check(missingCreateIntentRejected,
+        "CREATE completion without committed intent is rejected");
+
+    var createCompletionCorruptionRoot = Path.Combine(root, "create-completion-corruption");
+    var createCompletionCorruption = new CreateOperationStore(createCompletionCorruptionRoot);
+    _ = await createCompletionCorruption.RecordIntentAsync(
+        401,
+        createAbsentPath,
+        CreateDisposition.Create,
+        0,
+        0x40000000,
+        CreateTargetState.Missing,
+        CreatePreservationAction.RecordOriginallyAbsent,
+        new string('D', 64),
+        null);
+    _ = await createCompletionCorruption.RecordCompletionAsync(
+        401,
+        CreateCompletionState.Succeeded,
+        0,
+        1,
+        createAbsentPath,
+        createFinalIdentity);
+    var createCompletionBytes = await File.ReadAllBytesAsync(createCompletionCorruption.CompletionJournalPath);
+    createCompletionBytes[^2] ^= 1;
+    await File.WriteAllBytesAsync(createCompletionCorruption.CompletionJournalPath, createCompletionBytes);
+    var createCompletionCorruptionRejected = false;
+    try { _ = new CreateOperationStore(createCompletionCorruptionRoot); }
+    catch (InvalidDataException) { createCompletionCorruptionRejected = true; }
+    Check(createCompletionCorruptionRejected,
+        "CREATE completion journal corruption is rejected");
+
     // Repository-wide verification must include nested write-cow and create-state stores.
     var nestedRepo = new RollbackRepository(Path.Combine(root, "nested-repo"));
     var nestedSession = nestedRepo.CreateSession("nested");

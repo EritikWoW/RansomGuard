@@ -1,4 +1,4 @@
-# RansomGuard 0.7.15.0
+# RansomGuard 0.7.16.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
@@ -6,7 +6,7 @@ and recover data through rollback plus adaptive crypto analysis.
 
 ## Core preservation milestone
 
-0.7.15.0 retains the 0.7.2 range-aware COW gate and adds explicit CREATE preservation semantics.
+0.7.16.0 retains the 0.7.2 range-aware COW gate and adds explicit CREATE preservation semantics.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 
@@ -67,6 +67,8 @@ Protocol v11 also removes the previous blind skip of paging-write callbacks. Aft
 
 0.7.15 extends activation preflight from files to directory topology. Before file probing begins, GateClient opens the protected root and every ordinary non-reparse directory with FILE_READ_ATTRIBUTES and FILE_SHARE_READ only, records each directory FILE_ID_INFO in a write-through hash-chained activation-topology journal, and keeps all directory handles open until the kernel accepts ActivateGate. A pre-existing directory handle with write/delete/delete-on-close access therefore causes a sharing failure before activation, while new external CREATE/rename/delete operations are already denied by the NotActivated kernel barrier. This closes the main pre-existing directory-handle race without changing protocol v11.
 
+0.7.16 adds deterministic verified rollback recovery planning and copy-out execution for Engineering LAB sessions. The planner revalidates the rollback repository, hashes all session journals, produces a stable PlanId, and classifies actions as Ready, Review, Blocked or Informational. Only full-preimage and range-COW copy-out actions can be Ready. The executor rebuilds the current plan before execution, refuses stale/tampered evidence, writes only into a new output tree, records SHA-256 for recovered files, and never deletes, renames or overwrites live source/evidence paths.
+
 ## Recovery safety
 
 Range recovery:
@@ -117,7 +119,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.7.15.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.7.16.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 Manual disposable-VM runtime workflow:
 
@@ -127,6 +129,7 @@ LAB gate documentation:
 
     docs\MINIFILTER_LAB.md
     docs\ROLLBACK_ARCHITECTURE.md
+    docs\ROLLBACK_RECOVERY.md
 
 ## Current boundary
 
@@ -139,5 +142,5 @@ Restart evidence for pending/missing CREATE/RENAME completion events is durable 
 
 Remaining core work includes deeper crash recovery for in-flight kernel requests,
 broader live NTFS/ReFS/fault-injection coverage beyond the automated disposable-VM mapping harness,
-containment policy, process-state capture, adaptive crypto reconstruction, verified recovery orchestration,
+containment policy, process-state capture, adaptive crypto reconstruction, production recovery UI/topology orchestration,
 driver signing and Microsoft-assigned production altitude.

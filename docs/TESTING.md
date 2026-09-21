@@ -1,3 +1,18 @@
+## 0.7.14 disposable runtime VM coverage
+
+Normal Windows/WDK CI remains non-runtime: it validates userspace tests, source boundaries, x64 driver compilation and Universal DDI compatibility without loading the driver.
+
+A separate manual `Minifilter runtime VM` workflow exists for a pre-provisioned self-hosted disposable Windows VM. It is not triggered by push, pull request or schedule.
+
+The runtime harness validates:
+
+- **pre-existing mapping refusal** — a PAGE_READWRITE view is created and the original file handle is closed before GateClient starts; protocol-v11 activation must fail and the activation journal must report `writableViewPresent=true`;
+- **post-activation mapped write** — clean activation succeeds, a content-write-capable open commits the full pre-image, PAGE_READWRITE section creation records `BaselineVerified`, a flushed mapped mutation produces paging-write evidence, the pre-image SHA-256 equals the original file SHA-256, and the live file SHA-256 changes.
+
+The workflow signs and loads the driver built from the exact checked-out SHA. Driver test-signing configuration and the test certificate must already exist inside the disposable VM; RansomGuard scripts do not enable TESTSIGNING, disable Secure Boot/Defender, or install trust roots.
+
+Passing this workflow is evidence for the tested VM/filesystem/build only. It does not replace Driver Verifier campaigns, reboot/crash fault injection, ReFS coverage, production signing or Microsoft altitude validation.
+
 # Testing and validation
 
 Build executes existing policy tests plus RansomGuard.Recovery.Tests (offline only).

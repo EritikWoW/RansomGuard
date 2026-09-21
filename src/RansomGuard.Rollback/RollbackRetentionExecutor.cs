@@ -364,20 +364,40 @@ public static class RollbackRetentionExecutor
         if (!Directory.Exists(full))
             return;
 
-        RollbackRetentionPlanner.ValidateTreeHasNoReparse(full);
+        var files = new List<string>();
+        var directories = new List<string>();
+        var pending = new Stack<string>();
+        pending.Push(full);
 
-        var directories = Directory.EnumerateDirectories(full, "*", SearchOption.AllDirectories)
-            .OrderByDescending(x => x.Length)
-            .ToArray();
+        while (pending.Count > 0)
+        {
+            var directory = pending.Pop();
+            RejectReparse(directory);
 
-        foreach (var file in Directory.EnumerateFiles(full, "*", SearchOption.AllDirectories))
+            foreach (var file in Directory.EnumerateFiles(
+                         directory, "*", SearchOption.TopDirectoryOnly))
+            {
+                RejectReparse(file);
+                files.Add(file);
+            }
+
+            foreach (var child in Directory.EnumerateDirectories(
+                         directory, "*", SearchOption.TopDirectoryOnly))
+            {
+                RejectReparse(child);
+                directories.Add(child);
+                pending.Push(child);
+            }
+        }
+
+        foreach (var file in files)
         {
             RejectReparse(file);
             File.SetAttributes(file, FileAttributes.Normal);
             File.Delete(file);
         }
 
-        foreach (var directory in directories)
+        foreach (var directory in directories.OrderByDescending(x => x.Length))
         {
             RejectReparse(directory);
             Directory.Delete(directory, recursive: false);

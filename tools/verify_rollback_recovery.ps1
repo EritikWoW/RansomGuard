@@ -7,8 +7,9 @@ $cli=Join-Path $root 'src\RansomGuard.RollbackRecoveryCli\Program.cs'
 $project=Join-Path $root 'src\RansomGuard.RollbackRecoveryCli\RansomGuard.RollbackRecoveryCli.csproj'
 $build=Join-Path $root 'build_windows.ps1'
 $launcher=Join-Path $root 'rollback_recovery.cmd'
+$tests=Join-Path $root 'tests\RansomGuard.Rollback.Tests\Program.cs'
 
-foreach($path in @($planner,$executor,$restart,$cli,$project,$build,$launcher)){
+foreach($path in @($planner,$executor,$restart,$cli,$project,$build,$launcher,$tests)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Verified rollback recovery source missing: $path"}
 }
 
@@ -141,6 +142,19 @@ if($publishPos -lt 0 -or $labPublishPos -lt 0 -or $publishPos -lt $labPublishPos
 $launcherText=Get-Content -LiteralPath $launcher -Raw
 if($launcherText -notmatch [regex]::Escape('RollbackRecovery\RansomGuard.RollbackRecovery.exe')){
     throw 'Rollback recovery launcher must target the LAB-only executable.'
+}
+
+$testText=Get-Content -LiteralPath $tests -Raw
+foreach($required in @(
+    'restart assessment accepts only exact consistent decisive evidence',
+    'restart assessment keeps conflicting observations unresolved',
+    'restart assessment does not borrow evidence from another request or intent',
+    'consistent restart CREATE evidence becomes review-only crash recovery',
+    'consistent restart RENAME evidence becomes review-only crash recovery',
+    'ambiguous restart RENAME evidence remains blocked',
+    'stale recovery plan is rejected before any output is created'
+)){
+    if($testText -notmatch [regex]::Escape($required)){throw "Crash reconciliation recovery test invariant missing: $required"}
 }
 
 Write-Host 'Verified rollback recovery source gate PASSED: deterministic plans, consistent restart-evidence review, copy-out-only Ready actions, stale-plan refusal, no manufactured completion, no automatic delete/rename/overwrite.' -ForegroundColor Green

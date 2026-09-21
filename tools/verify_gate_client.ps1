@@ -42,7 +42,7 @@ foreach($required in @(
   'CreatePreservationAction.CaptureExistingPreimage',
   'CreatePreservationAction.RecordOriginallyAbsent',
   'CreatePreservationAction.DenyUnsupported',
-  'CreateGatePolicy.Decide(disposition, observedState, createOptions)',
+  'CreateGatePolicy.Decide(disposition, observedState, createOptions, ev.Length)',
   'RgGateDecision.SnapshotCommitted',
   'RgGateDecision.BaselineCommitted',
   'RgGateDecision.NoPreservationRequired',
@@ -116,6 +116,10 @@ if($createIdentity -lt 0 -or $createIdentity -gt $existingCapture){
   throw 'Destructive CREATE must capture/verify file identity before full pre-image capture.'
 }
 
+if($text -notmatch [regex]::Escape('CreateGatePolicy.Decide(disposition, observedState, createOptions, ev.Length)')){
+  throw 'CREATE preservation policy must receive the kernel DesiredAccess field.'
+}
+
 $resultBranch=$text.IndexOf('if ((RgEventType)ev.EventType == RgEventType.RenameResult)')
 $resultPersist=$text.IndexOf('RenameReconciliation.HandleAsync(',$resultBranch)
 $resultReturn=$text.IndexOf('return;',$resultPersist)
@@ -186,4 +190,4 @@ if($restartBlock -notmatch [regex]::Escape('PathPolicy.Under(intent.OriginalPath
   throw 'Restart reconciliation must remain scoped to the explicitly selected LAB root.'
 }
 
-Write-Host 'LAB gate client source check PASSED: explicit disposable root, protocol-v9 CREATE/RENAME semantics, bounded workers, durable FILE_ID_INFO binding, restart evidence, non-blocking paging-write evidence, range COW, durable intents/completions, no destructive/process-control APIs.'
+Write-Host 'LAB gate client source check PASSED: protocol-v9 CREATE/RENAME semantics, eager pre-image for content-write capable opens, bounded workers, durable FILE_ID_INFO binding, restart/paging evidence, range COW, durable intents/completions, no destructive/process-control APIs.'

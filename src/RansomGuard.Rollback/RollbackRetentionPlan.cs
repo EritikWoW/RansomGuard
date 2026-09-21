@@ -301,7 +301,14 @@ public static class RollbackRetentionPlanner
                      .OrderBy(x => Path.GetRelativePath(root, x), StringComparer.OrdinalIgnoreCase))
         {
             var relative = Path.GetRelativePath(root, file).Replace('\\', '/');
-            var fileHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(file)));
+            using var stream = new FileStream(
+                file,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                1024 * 1024,
+                FileOptions.SequentialScan);
+            var fileHash = Convert.ToHexString(SHA256.HashData(stream));
             aggregate.AppendData(Encoding.UTF8.GetBytes(relative + "\0" + fileHash + "\n"));
         }
         return Convert.ToHexString(aggregate.GetHashAndReset());

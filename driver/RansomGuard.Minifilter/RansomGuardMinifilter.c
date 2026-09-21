@@ -23,15 +23,22 @@ static VOID RgQueueEvent(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJ
                          _In_ RG_EVENT_TYPE EventType, _In_ ULONG FileInformationClass);
 static VOID RgQueueRawEvent(_In_ const RG_EVENT *Event, _In_ LONG ClientMode);
 static VOID RgSendWorker(_In_ PVOID Parameter);
+static NTSTATUS RgCreateCreatePostContext(_Inout_ PFLT_CALLBACK_DATA Data,
+                                          _In_ ULONGLONG RequestSequence,
+                                          _Outptr_ PRG_POST_CONTEXT *PostContext);
 static NTSTATUS RgCreateRenamePostContext(_Inout_ PFLT_CALLBACK_DATA Data,
                                           _In_ PCFLT_RELATED_OBJECTS FltObjects,
                                           _In_ ULONGLONG RequestSequence,
                                           _Outptr_ PRG_POST_CONTEXT *PostContext);
 static VOID RgFreePostContext(_In_opt_ PRG_POST_CONTEXT PostContext);
-static FLT_POSTOP_CALLBACK_STATUS RgPostSetInformationSafe(_Inout_ PFLT_CALLBACK_DATA Data,
-                                                           _In_ PCFLT_RELATED_OBJECTS FltObjects,
-                                                           _In_opt_ PVOID CompletionContext,
-                                                           _In_ FLT_POST_OPERATION_FLAGS Flags);
+static FLT_POSTOP_CALLBACK_STATUS RgPostNameOperation(_Inout_ PFLT_CALLBACK_DATA Data,
+                                                      _In_ PCFLT_RELATED_OBJECTS FltObjects,
+                                                      _In_opt_ PVOID CompletionContext,
+                                                      _In_ FLT_POST_OPERATION_FLAGS Flags);
+static FLT_POSTOP_CALLBACK_STATUS RgPostNameOperationSafe(_Inout_ PFLT_CALLBACK_DATA Data,
+                                                          _In_ PCFLT_RELATED_OBJECTS FltObjects,
+                                                          _In_opt_ PVOID CompletionContext,
+                                                          _In_ FLT_POST_OPERATION_FLAGS Flags);
 static NTSTATUS RgConnect(_In_ PFLT_PORT ClientPort, _In_opt_ PVOID ServerPortCookie,
                           _In_reads_bytes_opt_(SizeOfContext) PVOID ConnectionContext,
                           _In_ ULONG SizeOfContext, _Outptr_result_maybenull_ PVOID *ConnectionPortCookie);
@@ -47,7 +54,7 @@ static LONG RgCurrentClientMode(VOID);
 static FLT_PREOP_CALLBACK_STATUS RgCompleteDenied(_Inout_ PFLT_CALLBACK_DATA Data);
 
 static const FLT_OPERATION_REGISTRATION gCallbacks[] = {
-    { IRP_MJ_CREATE, 0, RgPreCreate, NULL, NULL },
+    { IRP_MJ_CREATE, 0, RgPreCreate, RgPostCreate, NULL },
     { IRP_MJ_WRITE, FLTFL_OPERATION_REGISTRATION_SKIP_PAGING_IO, RgPreWrite, NULL, NULL },
     { IRP_MJ_SET_INFORMATION, 0, RgPreSetInformation, RgPostSetInformation, NULL },
     { IRP_MJ_OPERATION_END }

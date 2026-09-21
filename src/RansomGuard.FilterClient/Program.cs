@@ -4,10 +4,10 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 
 const string PortName = @"\RansomGuardMinifilterPort";
-const int ProtocolVersion = 11;
+const int ProtocolVersion = 12;
 
 var options = Options.Parse(args);
-Console.WriteLine("RansomGuard Minifilter AUDIT client v0.7.18.0");
+Console.WriteLine("RansomGuard Minifilter AUDIT client v0.7.20.0");
 Console.WriteLine("READ-ONLY: this client cannot block, suspend, kill, rename, delete, or modify files.");
 Console.WriteLine("It only receives metadata emitted by the lab minifilter.");
 Console.WriteLine();
@@ -318,7 +318,7 @@ static class Native
         const uint FLT_PORT_FLAG_SYNC_HANDLE = 0x00000001;
         var context = new RgConnectContext
         {
-            ProtocolVersion = 8,
+            ProtocolVersion = ProtocolVersion,
             ClientMode = 1,
             ClientProcessId = processId,
             GateRootLengthBytes = 0,

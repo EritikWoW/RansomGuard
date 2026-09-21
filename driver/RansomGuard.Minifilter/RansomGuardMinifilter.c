@@ -1006,15 +1006,12 @@ static VOID RgDisconnect(PVOID ConnectionCookie)
     InterlockedExchange64(&gClientProcessId, 0);
     gGateRootLengthBytes = 0;
     RtlSecureZeroMemory(gGateRoot, sizeof(gGateRoot));
-    ExReleaseFastMutex(&gPortMutex);
-
-    RgWaitForPortUsers();
-
-    ExAcquireFastMutex(&gPortMutex);
     if (gClientPort != NULL) {
         FltCloseClientPort(gFilter, &gClientPort);
     }
     ExReleaseFastMutex(&gPortMutex);
+
+    RgWaitForPortUsers();
 }
 
 NTSTATUS RgInstanceSetup(PCFLT_RELATED_OBJECTS FltObjects, FLT_INSTANCE_SETUP_FLAGS Flags,
@@ -1047,12 +1044,12 @@ NTSTATUS RgUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
         gServerPort = NULL;
     }
 
-    RgWaitForPortUsers();
     ExAcquireFastMutex(&gPortMutex);
     if (gClientPort != NULL) {
         FltCloseClientPort(gFilter, &gClientPort);
     }
     ExReleaseFastMutex(&gPortMutex);
+    RgWaitForPortUsers();
 
     ExWaitForRundownProtectionRelease(&gRundown);
     if (gFilter != NULL) {

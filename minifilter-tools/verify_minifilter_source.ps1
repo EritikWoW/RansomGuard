@@ -92,9 +92,10 @@ if($src -notmatch 'InterlockedIncrement\(&gGateInFlight\)' -or
    $src -notmatch 'STATUS_DEVICE_BUSY'){
     throw 'Kernel gate must fail closed when the bounded in-flight admission limit is exceeded.'
 }
-$gateStart=$src.IndexOf('static BOOLEAN RgGateEvent(const RG_EVENT *Event, PULONG ErrorCode)')
+$gateStart=$src.IndexOf('static BOOLEAN RgGateEvent(const RG_EVENT *Event, PULONG ErrorCode, PULONG Decision)')
+if($gateStart -lt 0){throw 'RgGateEvent source block missing or signature drifted.'}
 $gateEnd=$src.IndexOf('static VOID RgQueueEvent(PFLT_CALLBACK_DATA Data',$gateStart)
-if($gateStart -lt 0 -or $gateEnd -lt 0){throw 'RgGateEvent source block missing.'}
+if($gateEnd -lt 0){throw 'RgQueueEvent boundary after RgGateEvent is missing.'}
 $gateBlock=$src.Substring($gateStart,$gateEnd-$gateStart)
 if($gateBlock -match 'ExAcquireFastMutex\(&gPortMutex\)'){
     throw 'RgGateEvent must not hold gPortMutex while waiting for user-mode preservation.'
@@ -108,8 +109,9 @@ if($src -match 'IRP_MJ_WRITE\s*,\s*FLTFL_OPERATION_REGISTRATION_SKIP_PAGING_IO')
     throw 'Paging-write visibility requires IRP_MJ_WRITE callbacks to receive paging I/O.'
 }
 $pagingStart=$src.IndexOf('static VOID RgObservePagingWrite(PFLT_CALLBACK_DATA Data')
+if($pagingStart -lt 0){throw 'Paging-write observation source block missing.'}
 $pagingEnd=$src.IndexOf('FLT_POSTOP_CALLBACK_STATUS RgPostSetInformation',$pagingStart)
-if($pagingStart -lt 0 -or $pagingEnd -lt 0){throw 'Paging-write observation source block missing.'}
+if($pagingEnd -lt 0){throw 'Paging-write observation end boundary missing.'}
 $pagingBlock=$src.Substring($pagingStart,$pagingEnd-$pagingStart)
 foreach($forbidden in @('RgGateEvent(','FltGetFileNameInformation(','FltGetFileNameInformationUnsafe(','FltQueryInformationFile(')){
     if($pagingBlock.Contains($forbidden)){throw "Paging-write path must remain non-blocking and name-query free: $forbidden"}
@@ -120,8 +122,9 @@ if($pagingBlock -notmatch [regex]::Escape('FltGetStreamContext') -or
 }
 
 $sectionStart=$src.IndexOf('FLT_PREOP_CALLBACK_STATUS RgPreAcquireForSectionSynchronization(')
+if($sectionStart -lt 0){throw 'Writable-section synchronization callback source block missing.'}
 $sectionEnd=$src.IndexOf('FLT_PREOP_CALLBACK_STATUS RgPreWrite(',$sectionStart)
-if($sectionStart -lt 0 -or $sectionEnd -lt 0){throw 'Writable-section synchronization callback source block missing.'}
+if($sectionEnd -lt 0){throw 'Writable-section synchronization callback end boundary missing.'}
 $sectionBlock=$src.Substring($sectionStart,$sectionEnd-$sectionStart)
 foreach($forbidden in @('RgGateEvent(','FltGetFileNameInformation(','FltGetFileNameInformationUnsafe(','FltQueryInformationFile(','STATUS_ACCESS_DENIED','FLT_PREOP_COMPLETE')){
     if($sectionBlock.Contains($forbidden)){throw "Writable-section callback must remain no-reply/non-blocking: $forbidden"}

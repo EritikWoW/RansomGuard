@@ -20,6 +20,9 @@ public static class CreateGatePolicy
         return false;
     }
 
+    public static bool RequiresCompletionTracking(CreateDisposition disposition, uint createOptions = 0) =>
+        disposition != CreateDisposition.Open || (createOptions & FileDeleteOnClose) != 0;
+
     public static CreatePreservationAction Decide(CreateDisposition disposition, CreateTargetState target,
         uint createOptions = 0)
     {

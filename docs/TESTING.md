@@ -111,6 +111,24 @@ These tests and compile gates do not prove real filesystem tunneling behavior, c
 fault injection, or all NTFS/ReFS create edge cases. Those remain isolated Windows-VM validation work.
 
 
+## 0.7.16 verified rollback recovery coverage
+
+Rollback tests build one mixed durable session containing a full pre-image, overlapping range-COW evidence, a range-only damaged file, an originally-absent CREATE, a pending CREATE, an authoritative successful RENAME and a pending RENAME.
+
+The expected plan is checked exactly:
+
+- only full-preimage and range-only COW are Ready;
+- COW for a path that already has a full pre-image is Informational;
+- originally-absent and authoritative topology changes are Review;
+- pending CREATE/RENAME are Blocked;
+- automatic topology mutation remains disabled.
+
+The test then damages the live full-preimage and range-COW sources, executes the plan, and requires recovered output bytes to equal the originals while the damaged live sources remain unchanged. The execution report must contain SHA-256 values and Review/Blocked counts with no topology mutation.
+
+A new completion record is then appended after plan creation; execution with the old plan must be rejected before the requested output directory exists.
+
+Static source gates additionally require fresh-plan reconstruction inside the executor, forbid use of caller-supplied action arrays, forbid delete/move primitives in planner/executor/CLI, restrict Ready execution to full-preimage/range-COW, and reject destructive CLI verbs.
+
 ## Manual disposable-VM minifilter runtime gate
 
 0.7.15 uses `.github/workflows/minifilter-runtime-vm.yml`, a manual workflow that is intentionally excluded from push/pull-request CI. It requires a self-hosted Windows VM runner labeled `ransomguard-lab-vm`, Administrator execution, installed WDK/VS tooling, preconfigured lab signing, and an already trusted certificate/private key referenced by the environment secret `RANSOMGUARD_LAB_CERT_THUMBPRINT`.

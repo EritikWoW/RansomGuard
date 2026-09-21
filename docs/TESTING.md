@@ -129,6 +129,25 @@ A new completion record is then appended after plan creation; execution with the
 
 Static source gates additionally require fresh-plan reconstruction inside the executor, forbid use of caller-supplied action arrays, forbid delete/move primitives in planner/executor/CLI, restrict Ready execution to full-preimage/range-COW, and reject destructive CLI verbs.
 
+## 0.7.17 rollback storage-budget coverage
+
+Userspace rollback tests validate session-level storage admission without loading the driver.
+
+Coverage includes:
+
+- two concurrent reservations whose combined size exceeds the session quota; the second must be rejected while the first remains held;
+- reservation release returning transient capacity to zero;
+- actual committed session bytes being re-measured before the next admission;
+- full-preimage estimator charging source bytes before first capture and zero after that capture is committed;
+- range-COW estimator charging only the uncaptured original block/baseline and zero for the same already committed block;
+- originally-absent estimator charging bounded metadata only before the first baseline.
+
+The source gate requires DriveInfo/AvailableFreeSpace enforcement, session quota plus in-flight reservations, recursive reparse refusal, fail-closed GateClient denial code 13, defaults of 8192 MiB session / 2048 MiB free reserve, and budget admission on blocking preservation plus activation/paging/section/completion evidence.
+
+The gate also rejects source changes that introduce an unlimited/disable/bypass storage mode.
+
+These tests validate userspace accounting/policy. Native low-disk behavior under real Filter Manager load still requires the disposable-VM/fault-injection campaign.
+
 ## Manual disposable-VM minifilter runtime gate
 
 0.7.15 uses `.github/workflows/minifilter-runtime-vm.yml`, a manual workflow that is intentionally excluded from push/pull-request CI. It requires a self-hosted Windows VM runner labeled `ransomguard-lab-vm`, Administrator execution, installed WDK/VS tooling, preconfigured lab signing, and an already trusted certificate/private key referenced by the environment secret `RANSOMGUARD_LAB_CERT_THUMBPRINT`.

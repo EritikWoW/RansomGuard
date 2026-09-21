@@ -146,7 +146,7 @@ $workerEvaluate=$text.IndexOf('GateDecision.EvaluateAsync(',$text.IndexOf('async
 if($workerDispatch -lt 0 -or $workerEvaluate -lt 0){
   throw 'Gate messages must be dispatched through the bounded worker path.'
 }
-if($text -notmatch 'GateWorkerss*<s*1' -or $text -notmatch 'GateWorkerss*>s*MaxGateWorkers'){
+if($text -notmatch 'GateWorkers\s*<\s*1' -or $text -notmatch 'GateWorkers\s*>\s*MaxGateWorkers'){
   throw 'Gate worker argument must remain explicitly bounded.'
 }
 

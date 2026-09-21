@@ -830,6 +830,41 @@ try
     Check(nestedRestartRejected,
         "repository verification includes nested restart reconciliation journal");
 
+    // Paging-write visibility is durable evidence only; it does not claim preservation.
+    var pagingRoot = Path.Combine(root, "paging-evidence");
+    var paging = new PagingWriteEvidenceStore(pagingRoot);
+    var pagingPath = Path.Combine(sourceDir, "mapped.bin");
+    var pagingFirst = await paging.RecordAsync(
+        401, pagingPath, 4096, 8192, sourceIdentity, 1);
+    Check(pagingFirst.Sequence == 1 && pagingFirst.Identity == sourceIdentity,
+        "paging-write evidence records tracked path, range and durable identity");
+    var pagingDuplicate = await paging.RecordAsync(
+        401, pagingPath, 4096, 8192, sourceIdentity, 1);
+    Check(pagingDuplicate.Sequence == pagingFirst.Sequence && paging.Records.Count == 1,
+        "paging-write evidence is idempotent for the same kernel sequence");
+    var conflictingPagingRejected = false;
+    try { _ = await paging.RecordAsync(401, pagingPath, 8192, 4096, sourceIdentity, 1); }
+    catch (InvalidDataException) { conflictingPagingRejected = true; }
+    Check(conflictingPagingRejected,
+        "conflicting duplicate paging-write kernel sequence is rejected");
+    paging.VerifyAll();
+    Check(new PagingWriteEvidenceStore(pagingRoot).Records.Count == 1,
+        "paging-write evidence journal rebuilds after reopen");
+
+    var nestedPagingRepo = new RollbackRepository(Path.Combine(root, "nested-paging-repo"));
+    var nestedPagingSession = nestedPagingRepo.CreateSession("nested_paging");
+    var nestedPaging = new PagingWriteEvidenceStore(Path.Combine(nestedPagingSession.Root, "paging-state"));
+    _ = await nestedPaging.RecordAsync(
+        402, pagingPath, 0, 4096, sourceIdentity, 1);
+    var pagingJournalBytes = await File.ReadAllBytesAsync(nestedPaging.JournalPath);
+    pagingJournalBytes[^2] ^= 1;
+    await File.WriteAllBytesAsync(nestedPaging.JournalPath, pagingJournalBytes);
+    var nestedPagingRejected = false;
+    try { nestedPagingRepo.VerifyAll(); }
+    catch (InvalidDataException) { nestedPagingRejected = true; }
+    Check(nestedPagingRejected,
+        "repository verification includes nested paging-write evidence journal");
+
     Console.WriteLine($"All {passed} rollback tests passed. These are file-store tests, not minifilter integration tests.");
     return 0;
 }

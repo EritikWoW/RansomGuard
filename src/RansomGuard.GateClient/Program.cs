@@ -84,8 +84,6 @@ finally
 
 static class GateDecision
 {
-    private const uint FileDirectoryFile = 0x00000001;
-
     public static async Task<RgGateReply> EvaluateAsync(RgEvent ev, DevicePathResolver resolver, string root,
         RollbackStore store, RangeRollbackStore writeStore, CreateRollbackStore createStore,
         CancellationToken cancellationToken)
@@ -155,16 +153,11 @@ static class GateDecision
 
         var createOptions = ev.Flags & 0x00FFFFFF;
 
-        // Directory topology recovery is not part of this milestone; file mutations beneath a
-        // directory remain gated independently.
-        if ((createOptions & FileDirectoryFile) != 0)
-            return Allow(ev.Sequence, RgGateDecision.NoPreservationRequired);
-
         if (createStore.WasOriginallyAbsent(path))
             return Allow(ev.Sequence, RgGateDecision.BaselineCommitted);
 
         var state = PathProbe.Get(path);
-        var action = CreateGatePolicy.Decide(disposition, state);
+        var action = CreateGatePolicy.Decide(disposition, state, createOptions);
         switch (action)
         {
             case CreatePreservationAction.CaptureExistingPreimage:
@@ -176,9 +169,14 @@ static class GateDecision
                 _ = await createStore.CaptureAbsentAsync(path, cancellationToken).ConfigureAwait(false);
                 return Allow(ev.Sequence, RgGateDecision.BaselineCommitted);
 
+            case CreatePreservationAction.DenyUnsupported:
+                // Directory delete-on-close/topology rollback is not modeled yet.
+                return Deny(ev.Sequence, 8);
+
             default:
-                // FILE_OPEN/OPEN_IF on an existing file are non-destructive at CREATE time.
-                // FILE_CREATE on an existing file and FILE_OPEN/OVERWRITE on a missing file fail naturally.
+                // FILE_OPEN/OPEN_IF on an existing file are non-destructive at CREATE time unless
+                // FILE_DELETE_ON_CLOSE is present. FILE_CREATE on an existing file and
+                // FILE_OPEN/OVERWRITE on a missing file fail naturally.
                 return Allow(ev.Sequence, RgGateDecision.NoPreservationRequired);
         }
     }

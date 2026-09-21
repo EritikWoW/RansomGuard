@@ -155,7 +155,7 @@ $unloadScript=Join-Path $PSScriptRoot 'unload_minifilter_lab.ps1'
 
 $summary=[ordered]@{
     schema=1
-    version='0.7.15.0'
+    version='0.7.16.0'
     startedUtc=(Get-Date).ToUniversalTime().ToString('o')
     vm=$vm
     rootBase=$RootBase

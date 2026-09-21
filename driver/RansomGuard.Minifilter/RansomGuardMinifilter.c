@@ -266,11 +266,6 @@ FLT_PREOP_CALLBACK_STATUS RgPreAcquireForSectionSynchronization(
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    if (InterlockedCompareExchange(&gGateActivated, 0, 0) == 0) {
-        // A writable mapping created while startup preflight is running invalidates activation.
-        InterlockedExchange(&gActivationHazard, 1);
-    }
-
     // FSFilter section-synchronization callbacks must not become a blocking user-mode policy gate.
     // Attest the already-committed CREATE baseline through the stream context and let the operation continue.
     RgObserveWritableSection(Data, FltObjects);
@@ -287,10 +282,6 @@ FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJE
     UNREFERENCED_PARAMETER(CompletionContext);
 
     if (RgIsPagingWrite(Data)) {
-        if (RgCurrentClientMode() == RgClientLabGate &&
-            InterlockedCompareExchange(&gGateActivated, 0, 0) == 0) {
-            InterlockedExchange(&gActivationHazard, 1);
-        }
         RgObservePagingWrite(Data, FltObjects);
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }

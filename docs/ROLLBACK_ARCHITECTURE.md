@@ -1,8 +1,8 @@
-# RansomGuard 0.7.5.0 - rename completion reconciliation milestone
+# RansomGuard 0.7.6.0 - CREATE completion reconciliation milestone
 
 RansomGuard is moving from detection-only telemetry to `preserve -> contain -> recover`.
-0.7.5.0 retains the deliberately constrained engineering minifilter gate, range-aware WRITE COW,
-CREATE preservation and rename-destination preservation, and adds durable post-rename outcome reconciliation.
+0.7.6.0 retains the deliberately constrained engineering minifilter gate, range-aware WRITE COW,
+CREATE preservation and rename reconciliation, and adds durable post-CREATE outcome reconciliation.
 
 ## WRITE ordering
 
@@ -29,7 +29,7 @@ Rename, delete-disposition, end-of-file, allocation-length and valid-data-length
 full-file pre-image store. These operations can destroy or relocate information in ways that are not yet modeled
 as block-only transactions.
 
-Protocol v6 exposes five mutation classes and adds a normalized destination path/status to RENAME events:
+Protocol v7 exposes five mutation classes and adds a normalized destination path/status to RENAME events:
 
 - CREATE
 - WRITE
@@ -39,7 +39,7 @@ Protocol v6 exposes five mutation classes and adds a normalized destination path
 
 ## CREATE ordering
 
-For `IRP_MJ_CREATE`, protocol v6 carries the original Windows CreateDisposition/CreateOptions before
+For `IRP_MJ_CREATE`, protocol v7 carries the original Windows CreateDisposition/CreateOptions before
 the create completes.
 
 - If an existing file is opened with `FILE_SUPERSEDE`, `FILE_OVERWRITE` or `FILE_OVERWRITE_IF`,
@@ -56,8 +56,22 @@ the create completes.
 The absence journal never deletes a created file automatically. It records recovery intent only; final recovery
 orchestration must decide how to quarantine/remove an incident-created path.
 
-The current existence probe is path-based. A race between that probe and the kernel create is still possible;
-production requires post-create reconciliation.
+The existence probe is still path-based. Protocol v7 now records the actual post-operation outcome and tunneled final name, but production still requires post-operation kernel file-ID binding before the completed CREATE can be trusted as an identity-safe topology change.
+
+## CREATE completion reconciliation
+
+For tracked CREATE-class operations, preservation and completion are now modeled as two durable phases:
+
+1. user mode classifies the requested disposition/options and commits any required existing-file pre-image or originally-absent baseline;
+2. a write-through SHA-256 hash-chained CREATE intent is committed, including request sequence, requested path, disposition/options, target state, durable identity when present, and the exact preservation-record hash;
+3. only then may the minifilter continue the original CREATE;
+4. the minifilter retains pre-operation normalized name information and runs post-operation reconciliation through `FltDoCompletionProcessingWhenSafe`;
+5. successful operations use `FltGetTunneledName` to reconcile the final normalized name and emit a correlated no-reply `CreateResult`;
+6. user mode appends a second hash-chained completion record as `Succeeded`, `SucceededNameUnresolved`, or `Failed`.
+
+A missing result never upgrades the intent to success; it remains pending. Plain non-destructive `FILE_OPEN` requests are not journaled as CREATE transactions, though later WRITE operations remain independently gated.
+
+This confirms operation outcome and final name when available. It does not yet prove that the completed file object has the expected post-operation kernel file ID.
 
 ## Durable existing-file identity
 
@@ -86,7 +100,7 @@ exact kernel file object and destination identity.
 
 ## RENAME destination ordering
 
-For a rename inside the LAB root, protocol v6 carries the normalized destination obtained by the minifilter with
+For a rename inside the LAB root, protocol v7 carries the normalized destination obtained by the minifilter with
 `FltGetDestinationFileNameInformation`.
 
 Before returning `SnapshotCommitted`, user mode:
@@ -170,7 +184,6 @@ These checks do not yet reconcile an interrupted in-flight kernel request. They 
 
 ## Still required before production
 
-- post-create completion reconciliation;
 - post-operation kernel file-ID confirmation for completed create/rename operations;
 - bounded concurrent pending-I/O workers;
 - crash/restart reconciliation for requests pending during user-mode failure or missing rename-result delivery;

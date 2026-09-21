@@ -27,7 +27,10 @@ foreach($required in @(
   'RecordCompletionAsync',
   'RenameCompletionState.Succeeded',
   'RenameCompletionState.SucceededNameUnresolved',
+  'RenameCompletionState.SucceededIdentityUnresolved',
+  'RenameCompletionState.SucceededNameAndIdentityUnresolved',
   'RenameCompletionState.Failed',
+  'FinalIdentity',
   'RgEventType.RenameResult',
   'ev.RelatedSequence',
   'ev.CompletionStatus',
@@ -35,7 +38,7 @@ foreach($required in @(
   'CreateGatePolicy.TryParseDisposition',
   '(ev.Flags >> 24) & 0xFF',
   'ev.Flags & 0x00FFFFFF',
-  'ProtocolVersion = 7',
+  'ProtocolVersion = 8',
   'CreatePreservationAction.CaptureExistingPreimage',
   'CreatePreservationAction.RecordOriginallyAbsent',
   'CreatePreservationAction.DenyUnsupported',
@@ -133,4 +136,4 @@ if($renameBranch -lt 0 -or $renameSourceCapture -lt 0 -or $renameIntent -lt 0 -o
   throw 'RENAME must preserve source/destination state and durably commit rename intent before allow.'
 }
 
-Write-Host 'LAB gate client source check PASSED: explicit disposable root, protocol-v7 CREATE/RENAME semantics, durable FILE_ID_INFO identity binding, range COW for writes, durable CREATE/RENAME intents and completions, originally-absent baselines, no destructive/process-control APIs.'
+Write-Host 'LAB gate client source check PASSED: explicit disposable root, protocol-v8 CREATE/RENAME semantics with post-rename kernel identity, durable FILE_ID_INFO identity binding, range COW for writes, durable CREATE/RENAME intents and completions, originally-absent baselines, no destructive/process-control APIs.'

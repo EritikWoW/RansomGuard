@@ -78,7 +78,7 @@ internal static class UiSmokeTest
                     window.Model.SelectedPage=page;
                     await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
                     window.UpdateLayout();
-                    window.ApplyResponsiveLayoutForTest();
+                    window.ApplyResponsiveLayoutForTest(1300, 1600);
                     window.UpdateLayout();
                     refinements[$"{language}-{theme}-{page}"]=CheckUiRefinement(window,page);
                     if(page=="overview") layouts[$"{language}-{theme}-reference-1600"]=OverviewLayout(window,true);
@@ -123,7 +123,7 @@ internal static class UiSmokeTest
                 window.Model.TextScale=1.2; window.Model.SelectedPage="overview";
                 await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
                 window.UpdateLayout();
-                window.ApplyResponsiveLayoutForTest();
+                window.ApplyResponsiveLayoutForTest(760, 1060);
                 window.UpdateLayout();
                 Save(window,Path.Combine(directory,$"{theme}-compact-large-text.png"));
                 captures.Add($"{language}/{theme}-compact-large-text.png");
@@ -131,7 +131,7 @@ internal static class UiSmokeTest
                 window.Model.SelectedPage="overview";
                 await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
                 window.UpdateLayout();
-                window.ApplyResponsiveLayoutForTest();
+                window.ApplyResponsiveLayoutForTest(1050, 1335);
                 window.UpdateLayout();
                 layouts[$"{language}-{theme}-user-1335"]=OverviewLayout(window,true);
                 Save(window,Path.Combine(directory,$"{theme}-overview-1335.png"));
@@ -243,7 +243,8 @@ internal static class UiSmokeTest
         if(expectWide)
         {
             if(window.FindName("StatusCards") is not System.Windows.Controls.Primitives.UniformGrid cards || cards.Columns!=4)
-                throw new InvalidOperationException("Reference desktop layout must retain four status cards.");
+                throw new InvalidOperationException(
+                    $"Reference desktop layout must retain four status cards. ActualWidth={window.ActualWidth:F1}; MainContentWidth={window.MainContent.ActualWidth:F1}; Columns={(window.FindName("StatusCards") as System.Windows.Controls.Primitives.UniformGrid)?.Columns.ToString() ?? "missing"}; TextScale={window.Model.TextScale:F2}.");
             if(window.FindName("LocationsCard") is not FrameworkElement locations || System.Windows.Controls.Grid.GetColumn(locations)!=2)
                 throw new InvalidOperationException("Reference desktop locations panel must be right of activity.");
         }

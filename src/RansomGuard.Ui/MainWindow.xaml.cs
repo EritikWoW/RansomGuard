@@ -54,15 +54,21 @@ public partial class MainWindow : Window
             Dispatcher.BeginInvoke(new Action(UpdateOverviewLayout));
     }
     private void MainContent_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateOverviewLayout();
-    internal void ApplyResponsiveLayoutForTest() => UpdateOverviewLayout();
+    internal void ApplyResponsiveLayoutForTest(double mainContentWidth, double windowWidth)
+        => ApplyOverviewLayout(mainContentWidth, windowWidth);
     private void UpdateOverviewLayout()
     {
         // Preserve the reference's four-card and 2x2 composition at desktop sizes.
         // At narrow widths, reflow instead of shrinking text or clipping controls.
         if(MainContent is null || OverviewPanels is null || StatusCards is null || RecentTable is null) return;
-        bool stacked=MainContent.ActualWidth < 980 || (MainContent.ActualWidth < 1120 && _vm.TextScale > 1.1);
-        SidebarColumn.Width=new GridLength(ActualWidth < 1420 ? 232 : 260);
-        HeaderConnection.Visibility=MainContent.ActualWidth < 850 ? Visibility.Collapsed : Visibility.Visible;
+        ApplyOverviewLayout(MainContent.ActualWidth, ActualWidth);
+    }
+    private void ApplyOverviewLayout(double mainContentWidth, double windowWidth)
+    {
+        if(OverviewPanels is null || StatusCards is null || RecentTable is null) return;
+        bool stacked=mainContentWidth < 980 || (mainContentWidth < 1120 && _vm.TextScale > 1.1);
+        SidebarColumn.Width=new GridLength(windowWidth < 1420 ? 232 : 260);
+        HeaderConnection.Visibility=mainContentWidth < 850 ? Visibility.Collapsed : Visibility.Visible;
         StatusCards.Columns=stacked ? 2 : 4;
         OverviewPanels.ColumnDefinitions[0].Width=new GridLength(stacked ? 1 : 1.4,GridUnitType.Star);
         OverviewPanels.ColumnDefinitions[1].Width=new GridLength(stacked ? 0 : 18);

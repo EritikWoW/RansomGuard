@@ -4,10 +4,10 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 
 const string PortName = @"\RansomGuardMinifilterPort";
-const int ProtocolVersion = 10;
+const int ProtocolVersion = 11;
 
 var options = Options.Parse(args);
-Console.WriteLine("RansomGuard Minifilter AUDIT client v0.7.12.0");
+Console.WriteLine("RansomGuard Minifilter AUDIT client v0.7.13.0");
 Console.WriteLine("READ-ONLY: this client cannot block, suspend, kill, rename, delete, or modify files.");
 Console.WriteLine("It only receives metadata emitted by the lab minifilter.");
 Console.WriteLine();
@@ -267,7 +267,7 @@ sealed class AuditStats
     };
 }
 
-enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, RenameResult = 6, CreateResult = 7, PagingWrite = 8, WritableSection = 9 }
+enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, RenameResult = 6, CreateResult = 7, PagingWrite = 8, WritableSection = 9, ActivationPreflight = 10 }
 enum RgPathStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2, Truncated = 3 }
 enum RgIdentityStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2 }
 

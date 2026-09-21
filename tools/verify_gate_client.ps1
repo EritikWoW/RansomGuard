@@ -38,7 +38,7 @@ foreach($required in @(
   'CreateGatePolicy.TryParseDisposition',
   '(ev.Flags >> 24) & 0xFF',
   'ev.Flags & 0x00FFFFFF',
-  'ProtocolVersion = 10',
+  'ProtocolVersion = 11',
   'CreatePreservationAction.CaptureExistingPreimage',
   'CreatePreservationAction.RecordOriginallyAbsent',
   'CreatePreservationAction.DenyUnsupported',
@@ -80,7 +80,15 @@ foreach($required in @(
   'RgEventType.WritableSection',
   'WritableSectionAttestation.Evaluate',
   'sectionStore.RecordAsync',
-  'BaselineVerified'
+  'BaselineVerified',
+  'ActivationPreflight.RunAsync',
+  'ActivationPreflightStore',
+  'Native.OpenPreflight',
+  'Native.Control',
+  'RgControlCommand.ActivateGate',
+  'FilterSendMessage',
+  'RgEventType.ActivationPreflight',
+  'Activation refused:'
 )){
   if($text -notmatch [regex]::Escape($required)){throw "Gate client invariant missing: $required"}
 }
@@ -182,6 +190,32 @@ if($renameBranch -lt 0 -or $renameSourceCapture -lt 0 -or $renameIntent -lt 0 -o
   throw 'RENAME must preserve source/destination state and durably commit rename intent before allow.'
 }
 
+$connect=$text.IndexOf('using var port = Native.Connect(')
+$preflight=$text.IndexOf('ActivationPreflight.RunAsync(',$connect)
+$workerLoop=$text.IndexOf('while (!cts.IsCancellationRequested)',$preflight)
+if($connect -lt 0 -or $preflight -lt 0 -or $workerLoop -lt 0 -or
+   $connect -gt $preflight -or $preflight -gt $workerLoop){
+  throw 'LAB gate must connect and complete activation preflight before the normal receive loop.'
+}
+$preflightStart=$text.IndexOf('static class ActivationPreflight')
+$preflightEnd=$text.IndexOf('readonly record struct ActivationPreflightSummary',$preflightStart)
+if($preflightStart -lt 0 -or $preflightEnd -lt 0){throw 'ActivationPreflight implementation missing.'}
+$preflightBlock=$text.Substring($preflightStart,$preflightEnd-$preflightStart)
+foreach($required in @('Directory.EnumerateFiles','FileAttributes.ReparsePoint','Native.OpenPreflight','ActivationPreflightStore','RgEventType.ActivationPreflight','RgEventType.PagingWrite','RgEventType.WritableSection','heldHandles','RgControlCommand.ArmPreflight','RgControlCommand.ActivateGate','Native.Control')){
+  if($preflightBlock -notmatch [regex]::Escape($required)){throw "Activation preflight missing invariant: $required"}
+}
+$armInPreflight=$preflightBlock.IndexOf('RgControlCommand.ArmPreflight')
+$openInPreflight=$preflightBlock.IndexOf('Native.OpenPreflight(path)')
+$activateInPreflight=$preflightBlock.IndexOf('RgControlCommand.ActivateGate')
+$disposeInPreflight=$preflightBlock.IndexOf('foreach (var handle in heldHandles) handle.Dispose()')
+if($armInPreflight -lt 0 -or $openInPreflight -lt 0 -or $armInPreflight -gt $openInPreflight){
+  throw 'Every intentional preflight file open must be armed in kernel first.'
+}
+if($activateInPreflight -lt 0 -or $disposeInPreflight -lt 0 -or $activateInPreflight -gt $disposeInPreflight){
+  throw 'Activation must occur while share-read preflight handles are still held.'
+}
+if($preflightBlock -match 'Native\.Reply\('){throw 'Activation preflight events must remain no-reply evidence.'}
+
 $workerDispatch=$text.IndexOf('Task.Run(() => ProcessMessageAsync(header, ev))')
 $workerEvaluate=$text.IndexOf('GateDecision.EvaluateAsync(',$text.IndexOf('async Task ProcessMessageAsync'))
 if($workerDispatch -lt 0 -or $workerEvaluate -lt 0){
@@ -209,4 +243,4 @@ if($restartBlock -notmatch [regex]::Escape('PathPolicy.Under(intent.OriginalPath
   throw 'Restart reconciliation must remain scoped to the explicitly selected LAB root.'
 }
 
-Write-Host 'LAB gate client source check PASSED: protocol-v10 CREATE/RENAME semantics, eager writable-open pre-image, no-reply section attestation, bounded workers, durable identity/restart/paging evidence, no destructive/process-control APIs.'
+Write-Host 'LAB gate client source check PASSED: protocol-v11 activation preflight, eager writable-open pre-image, no-reply section/paging evidence, bounded workers, durable identity/restart evidence, no destructive/process-control APIs.'

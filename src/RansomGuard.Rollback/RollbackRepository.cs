@@ -75,6 +75,10 @@ public sealed class RollbackRepository
             var sectionRoot = Path.Combine(store.Root, "section-state");
             if (Directory.Exists(sectionRoot))
                 new WritableSectionEvidenceStore(sectionRoot).VerifyAll();
+
+            var activationRoot = Path.Combine(store.Root, "activation-state");
+            if (Directory.Exists(activationRoot))
+                new ActivationPreflightStore(activationRoot).VerifyAll();
         }
     }
 

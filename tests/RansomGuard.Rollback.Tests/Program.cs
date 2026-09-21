@@ -1020,6 +1020,53 @@ try
     Check(nestedSectionRejected,
         "repository verification includes nested writable-section evidence journal");
 
+    // Activation preflight persists kernel evidence before the LAB gate can become active.
+    var activationRoot = Path.Combine(root, "activation-evidence");
+    var activation = new ActivationPreflightStore(activationRoot);
+    var activationPath = Path.Combine(sourceDir, "activation.bin");
+    var activationSafe = await activation.RecordAsync(
+        601, activationPath, 0, false, createOriginalIdentity);
+    Check(activationSafe.Sequence == 1 &&
+          !activationSafe.WritableViewPresent &&
+          activationSafe.Identity == createOriginalIdentity,
+        "activation preflight records a clean identity-bound file probe");
+    var activationDuplicate = await activation.RecordAsync(
+        601, activationPath, 0, false, createOriginalIdentity);
+    Check(activationDuplicate.Sequence == activationSafe.Sequence &&
+          activation.Records.Count == 1,
+        "activation preflight evidence is idempotent for identical kernel sequence");
+    var activationConflictRejected = false;
+    try
+    {
+        _ = await activation.RecordAsync(
+            601, activationPath, 0, true, createOriginalIdentity);
+    }
+    catch (InvalidDataException) { activationConflictRejected = true; }
+    Check(activationConflictRejected,
+        "activation preflight rejects conflicting duplicate kernel sequence");
+    _ = await activation.RecordAsync(
+        602, activationPath, 0, true, createOriginalIdentity);
+    Check(activation.Records.Single(x => x.KernelSequence == 602).WritableViewPresent,
+        "activation preflight persists pre-existing writable-view evidence");
+    activation.VerifyAll();
+    Check(new ActivationPreflightStore(activationRoot).Records.Count == 2,
+        "activation preflight journal rebuilds after reopen");
+
+    var nestedActivationRepo = new RollbackRepository(Path.Combine(root, "nested-activation-repo"));
+    var nestedActivationSession = nestedActivationRepo.CreateSession("nested_activation");
+    var nestedActivation = new ActivationPreflightStore(
+        Path.Combine(nestedActivationSession.Root, "activation-state"));
+    _ = await nestedActivation.RecordAsync(
+        603, activationPath, 0, false, createOriginalIdentity);
+    var activationJournalBytes = await File.ReadAllBytesAsync(nestedActivation.JournalPath);
+    activationJournalBytes[^2] ^= 1;
+    await File.WriteAllBytesAsync(nestedActivation.JournalPath, activationJournalBytes);
+    var nestedActivationRejected = false;
+    try { nestedActivationRepo.VerifyAll(); }
+    catch (InvalidDataException) { nestedActivationRejected = true; }
+    Check(nestedActivationRejected,
+        "repository verification includes nested activation-preflight journal");
+
     Console.WriteLine($"All {passed} rollback tests passed. These are file-store tests, not minifilter integration tests.");
     return 0;
 }

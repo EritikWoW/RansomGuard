@@ -1,7 +1,7 @@
-# RansomGuard 0.7.12.0 - CREATE completion and identity reconciliation milestone
+# RansomGuard 0.7.13.0 - CREATE completion and identity reconciliation milestone
 
 RansomGuard is moving from detection-only telemetry to `preserve -> contain -> recover`.
-0.7.12.0 retains the deliberately constrained engineering minifilter gate, range-aware WRITE COW,
+0.7.13.0 retains the deliberately constrained engineering minifilter gate, range-aware WRITE COW,
 CREATE/RENAME preservation and rename outcome reconciliation, and adds durable post-CREATE outcome,
 tunneled-name and kernel file-identity reconciliation.
 
@@ -190,7 +190,7 @@ These checks prevent a restart from proceeding on top of corrupt rollback state.
 
 ## Restart reconciliation evidence
 
-0.7.12.0 adds a separate append-only, SHA-256 hash-chained `restart-reconciliation-journal.jsonl` for older CREATE/RENAME intents that have no authoritative completion record.
+0.7.13.0 adds a separate append-only, SHA-256 hash-chained `restart-reconciliation-journal.jsonl` for older CREATE/RENAME intents that have no authoritative completion record.
 
 Before creating a new LAB session, GateClient validates the repository and then scans pending intents whose paths are still under the same explicit LAB root. It records current path state and, for ordinary files, `FILE_ID_INFO` from the exact opened handle. A pure classifier records one of four evidence outcomes:
 
@@ -205,7 +205,7 @@ Restart evidence is deliberately **not** a CREATE/RENAME completion. The origina
 
 ## Writable-open pre-preservation
 
-0.7.12.0 extends CREATE policy for existing files. If the requested DesiredAccess contains FILE_WRITE_DATA, FILE_APPEND_DATA or GENERIC_WRITE, the LAB gate treats the open as preservation-sensitive even when the CreateDisposition itself is non-destructive.
+0.7.13.0 extends CREATE policy for existing files. If the requested DesiredAccess contains FILE_WRITE_DATA, FILE_APPEND_DATA or GENERIC_WRITE, the LAB gate treats the open as preservation-sensitive even when the CreateDisposition itself is non-destructive.
 
 Ordering is:
 
@@ -219,15 +219,29 @@ This is intentionally conservative. It establishes a durable pre-mutation baseli
 
 ## Writable-section attestation
 
-0.7.12.0 registers `IRP_MJ_ACQUIRE_FOR_SECTION_SYNCHRONIZATION` as a no-reply observation path. For `SyncTypeCreateSection` with `PAGE_READWRITE` or `PAGE_EXECUTE_READWRITE`, the callback reads the existing nonpaged stream context and emits a correlated `WritableSection` event. The context carries the CREATE request sequence and the actual preservation decision returned before the handle was allowed.
+0.7.13.0 registers `IRP_MJ_ACQUIRE_FOR_SECTION_SYNCHRONIZATION` as a no-reply observation path. For `SyncTypeCreateSection` with `PAGE_READWRITE` or `PAGE_EXECUTE_READWRITE`, the callback reads the existing nonpaged stream context and emits a correlated `WritableSection` event. The context carries the CREATE request sequence and the actual preservation decision returned before the handle was allowed.
 
 GateClient resolves that request against the durable CREATE intent/completion and appends `writable-section-journal.jsonl`. A mapping is `BaselineVerified` only when the recorded CREATE preservation action and kernel gate decision agree. Missing intents, no-preservation mappings, path mismatches and decision mismatches remain explicit evidence states.
 
 The section callback never calls `RgGateEvent`, never performs a file-name query, never calls `FltQueryInformationFile`, and never completes/denies the FSFilter operation. This follows the Filter Manager constraint that section-synchronization is not a general user-mode policy gate.
 
+## Activation preflight
+
+0.7.13.0 closes the major "mapping existed before GateClient" startup gap with an explicit activation barrier.
+
+1. A LAB connection starts with the kernel gate in `NotActivated` state.
+2. External CREATE plus non-paging WRITE/rename/delete/truncate-class mutations under the explicit root are fail-closed during preflight.
+3. GateClient enumerates existing non-reparse files and opens each only for attributes.
+4. The minifilter recognizes those gate-client opens only while activation is pending. In post-CREATE, at PASSIVE_LEVEL, it binds the final path/FILE_ID_INFO and calls `MmDoesFileHaveUserWritableReferences(FileObject->SectionObjectPointer)`.
+5. Each result is queued as a no-reply `ActivationPreflight` event and persisted in a write-through SHA-256 hash-chained `activation-preflight-journal.jsonl`.
+6. GateClient retains every successful probe handle with `FILE_SHARE_READ` only until activation. This forces pre-existing write/delete handles to surface as sharing failures and prevents new write/delete handles from racing the remaining scan; a mapped view whose handles were already closed is still detected by `MmDoesFileHaveUserWritableReferences`.
+7. Failed/unresolved probes or a detected writable mapped view latch `gActivationHazard`. Only after every file is clean does GateClient call `FilterSendMessage` with `ActivateGate`; the kernel refuses activation while the hazard latch is set.
+
+The activation callback does not perform rollback I/O. `MmDoesFileHaveUserWritableReferences` is used only from post-CREATE, where Filter Manager guarantees PASSIVE_LEVEL. The normal paging and section callbacks remain no-reply/non-blocking.
+
 ## Paging-write visibility
 
-0.7.12.0 removes the registration-level `SKIP_PAGING_IO` blind spot without turning paging I/O into a synchronous user-mode gate.
+0.7.13.0 removes the registration-level `SKIP_PAGING_IO` blind spot without turning paging I/O into a synchronous user-mode gate.
 
 After a successful in-scope CREATE, the minifilter attaches a nonpaged `FLT_STREAM_CONTEXT` containing the already-resolved bounded path plus kernel file identity when available. A paging write then:
 
@@ -242,7 +256,7 @@ This closes the observability gap for memory-mapped/cache-manager writes associa
 
 ## Bounded concurrent gate execution
 
-0.7.12.0 removes the previous global serialization around blocking gate sends. The minifilter now:
+0.7.13.0 removes the previous global serialization around blocking gate sends. The minifilter now:
 - admits at most 8 simultaneous blocking gate requests;
 - fails closed with STATUS_DEVICE_BUSY when that bound is exceeded;
 - holds gPortMutex only long enough to acquire/release a client-port lease;
@@ -255,7 +269,7 @@ Bounded concurrency and conservative restart evidence are implemented. A worker/
 ## Still required before production
 
 - deeper crash recovery for requests interrupted before authoritative kernel completion delivery;
-- coverage for writable mappings backed by handles that predate LAB gate activation plus live section/paging integration validation;
+- live VM validation of activation-preflight, section and paging ordering, including fault injection and pre-existing mapping cases;
 - storage quotas, retention and pressure policy;
 - transition from protected-root health to containment/block policy;
 - process-state capture and adaptive crypto analysis;

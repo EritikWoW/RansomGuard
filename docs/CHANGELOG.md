@@ -1,3 +1,17 @@
+# RansomGuard 0.7.13.0
+
+- Bumped the engineering minifilter protocol to v11 with an explicit startup activation barrier.
+- New LAB connections begin in kernel `NotActivated` state; external in-root CREATE/WRITE/metadata mutations fail closed until activation succeeds.
+- GateClient performs a full existing-file preflight before entering the normal receive loop.
+- Preflight opens are recognized only for the connected GateClient process while activation is pending.
+- Post-CREATE preflight checks `MmDoesFileHaveUserWritableReferences` on the real stream section pointers and binds `FILE_ID_INFO`.
+- Added no-reply `ActivationPreflight` events and a write-through SHA-256 hash-chained `activation-preflight-journal.jsonl`.
+- GateClient holds every successful probe handle with read-only sharing through activation, exposing pre-existing write/delete handles as sharing failures and preventing new write/delete handles from racing the scan.
+- Handle-less pre-existing writable mappings are detected by `MmDoesFileHaveUserWritableReferences`; failed/unresolved probes or detected writable views latch the kernel activation hazard.
+- GateClient uses `FilterSendMessage` / `RgControlActivateGate`; the kernel refuses activation while any hazard is latched.
+- Added repository verification, corruption/idempotency tests and kernel/userspace source gates for activation ordering.
+- Normal product remains AuditOnly; activation preflight remains Engineering-LAB-only pending live disposable-VM validation.
+
 # RansomGuard 0.7.12.0
 
 - Bumped the engineering minifilter protocol to v10 with a no-reply `WritableSection` attestation event.

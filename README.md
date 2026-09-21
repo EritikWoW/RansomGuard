@@ -1,4 +1,4 @@
-# RansomGuard 0.7.12.0
+# RansomGuard 0.7.13.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
@@ -6,7 +6,7 @@ and recover data through rollback plus adaptive crypto analysis.
 
 ## Core preservation milestone
 
-0.7.12.0 retains the 0.7.2 range-aware COW gate and adds explicit CREATE preservation semantics.
+0.7.13.0 retains the 0.7.2 range-aware COW gate and adds explicit CREATE preservation semantics.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 
@@ -25,7 +25,7 @@ undone by truncating the recovered copy to that length.
 Rename, delete-disposition and explicit truncate/allocation-length operations remain on the conservative
 **full-file pre-image** path for now.
 
-The engineering minifilter protocol is now v8 and reports CREATE, WRITE, RENAME, DELETE and TRUNCATE-class metadata operations. RENAME events also carry a normalized destination path.
+The engineering minifilter protocol is now v11 and reports CREATE, WRITE, RENAME, DELETE and TRUNCATE-class metadata operations. RENAME events also carry a normalized destination path.
 
 For CREATE, the gate distinguishes Windows create dispositions instead of treating every open as destructive:
 existing `FILE_SUPERSEDE`, `FILE_OVERWRITE` and `FILE_OVERWRITE_IF` require a durable full pre-image;
@@ -34,7 +34,7 @@ create-capable dispositions on a missing path durably record that the path was o
 non-destructive opens require no snapshot. Existing-directory delete-on-close is denied until directory-topology rollback exists. Paths marked originally absent do not later manufacture rollback
 pre-images from data created during the same incident.
 
-Protocol v10 now also treats CREATE as a two-phase durable transaction. Before allow, the gate records a
+Protocol v11 now also treats CREATE as a two-phase durable transaction. Before allow, the gate records a
 hash-chained CREATE intent linked to the preservation proof. After the filesystem completes the operation,
 the minifilter reconciles the final tunneled name with `FltGetTunneledName`, queries `FileIdInformation`
 from the actual opened file object, and emits a correlated no-reply `CreateResult`. User mode records the
@@ -55,11 +55,13 @@ rejected. If reconciliation cannot be delivered, the intent remains pending inst
 
 On LAB gate restart, every older pending CREATE/RENAME intent under the same explicit root is now re-observed before a new session starts. RansomGuard records current path/file-identity evidence in a separate write-through SHA-256 hash-chained restart journal. Evidence can support completed, support not-completed, be indeterminate, or ambiguous. It never manufactures a filesystem completion record: authoritative completion still requires the original kernel post-operation result.
 
-Protocol v10 also removes the previous blind skip of paging-write callbacks. After a successful in-scope CREATE, the minifilter attaches a nonpaged stream context containing the bounded tracked path and kernel file identity when available. A later paging write retrieves only that stream context and queues a no-reply `PagingWrite` event; it does not query file names, call the blocking gate, or perform filesystem I/O in the paging path. GateClient persists these observations in a separate hash-chained `paging-write-journal.jsonl`. PagingWrite itself remains visibility/evidence only. Starting with 0.7.11, mappings created from newly opened content-write capable handles have a full pre-image committed before the handle returns; this gives those mappings a recovery baseline without doing rollback I/O in the paging callback.
+Protocol v11 also removes the previous blind skip of paging-write callbacks. After a successful in-scope CREATE, the minifilter attaches a nonpaged stream context containing the bounded tracked path and kernel file identity when available. A later paging write retrieves only that stream context and queues a no-reply `PagingWrite` event; it does not query file names, call the blocking gate, or perform filesystem I/O in the paging path. GateClient persists these observations in a separate hash-chained `paging-write-journal.jsonl`. PagingWrite itself remains visibility/evidence only. Starting with 0.7.11, mappings created from newly opened content-write capable handles have a full pre-image committed before the handle returns; this gives those mappings a recovery baseline without doing rollback I/O in the paging callback.
 
 0.7.11 added a conservative pre-preservation rule for existing files opened with content-write capable access. If CREATE requests FILE_WRITE_DATA, FILE_APPEND_DATA or GENERIC_WRITE, the LAB gate binds the current FILE_ID_INFO and commits a full pre-image plus CREATE intent before allowing the handle to return. This gives later writable mappings created from that handle a pre-mutation baseline without performing user-mode rollback work in paging I/O. Read-only opens remain non-eager, and incident-created paths still use the originally-absent baseline.
 
 0.7.12 adds no-reply writable-section attestation. Before the Memory Manager creates a PAGE_READWRITE/PAGE_EXECUTE_READWRITE section, the minifilter reads the established stream context and emits a correlated `WritableSection` event carrying the originating CREATE request and preservation decision. GateClient links that event to the durable CREATE intent/completion and records whether the mapping is `BaselineVerified` or exposes an explicit invariant gap. The section callback never performs user-mode preservation or name/file-ID queries.
+
+0.7.13 adds a fail-closed activation preflight for mappings/handles that existed before GateClient connected. A LAB connection begins in kernel `NotActivated` state. GateClient opens each existing file only for attributes; the minifilter checks the real stream with `MmDoesFileHaveUserWritableReferences`, binds `FILE_ID_INFO`, and emits a no-reply `ActivationPreflight` event. External in-root CREATE/WRITE/metadata mutations are denied until the scan completes. GateClient keeps every successfully probed file open with read-only sharing until activation, so pre-existing write/delete handles cause sharing violations and new write/delete handles cannot race the scan. A pre-existing mapped view with no live handle is detected by `MmDoesFileHaveUserWritableReferences`. GateClient sends `ActivateGate` only after every file is clean; the kernel also refuses activation when an authoritative preflight probe latched a hazard. Results are persisted in a write-through SHA-256 hash-chained `activation-preflight-journal.jsonl`.
 
 ## Recovery safety
 
@@ -111,7 +113,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.7.12.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.7.13.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 LAB gate documentation:
 

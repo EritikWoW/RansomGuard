@@ -3,6 +3,8 @@
 C_ASSERT(sizeof(RG_EVENT) == 2168);
 C_ASSERT(sizeof(RG_CONNECT_CONTEXT) == 544);
 C_ASSERT(sizeof(RG_GATE_REPLY) == 24);
+C_ASSERT(sizeof(RG_CONTROL_REQUEST) == 16);
+C_ASSERT(sizeof(RG_CONTROL_REPLY) == 16);
 
 static PFLT_FILTER gFilter = NULL;
 static PFLT_PORT gServerPort = NULL;
@@ -16,6 +18,9 @@ static volatile LONG gUnloading = 0;
 static volatile LONG gClientConnected = 0;
 static volatile LONG gClientMode = 0;
 static volatile LONG64 gClientProcessId = 0;
+static volatile LONG gGateActivated = 0;
+static volatile LONG gActivationHazard = 0;
+static volatile LONG gPreflightProbeArmed = 0;
 static volatile LONG gPending = 0;
 static volatile LONG gDropped = 0;
 static volatile LONG64 gSequence = 0;
@@ -44,11 +49,18 @@ static NTSTATUS RgConnect(_In_ PFLT_PORT ClientPort, _In_opt_ PVOID ServerPortCo
                           _In_reads_bytes_opt_(SizeOfContext) PVOID ConnectionContext,
                           _In_ ULONG SizeOfContext, _Outptr_result_maybenull_ PVOID *ConnectionPortCookie);
 static VOID RgDisconnect(_In_opt_ PVOID ConnectionCookie);
+static NTSTATUS RgMessage(_In_opt_ PVOID ConnectionCookie,
+                          _In_reads_bytes_opt_(InputBufferSize) PVOID InputBuffer,
+                          _In_ ULONG InputBufferSize,
+                          _Out_writes_bytes_to_opt_(OutputBufferSize, *ReturnOutputBufferLength) PVOID OutputBuffer,
+                          _In_ ULONG OutputBufferSize,
+                          _Out_ PULONG ReturnOutputBufferLength);
 static NTSTATUS RgPopulateEvent(_Out_ PRG_EVENT Event, _Inout_ PFLT_CALLBACK_DATA Data,
                                 _In_ PCFLT_RELATED_OBJECTS FltObjects,
                                 _In_ RG_EVENT_TYPE EventType, _In_ ULONG FileInformationClass);
 static VOID RgPopulateRenameDestination(_Inout_ PRG_EVENT Event, _Inout_ PFLT_CALLBACK_DATA Data,
                                         _In_ PCFLT_RELATED_OBJECTS FltObjects);
+static BOOLEAN RgEventPathMatchesGateRoot(_In_ const RG_EVENT *Event);
 static BOOLEAN RgEventIsInsideGateRoot(_In_ const RG_EVENT *Event);
 static BOOLEAN RgGateEvent(_In_ const RG_EVENT *Event, _Out_opt_ PULONG ErrorCode,
                            _Out_opt_ PULONG Decision);
@@ -189,9 +201,31 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
     }
 
     status = RgPopulateEvent(&event, Data, FltObjects, RgEventCreate, 0);
-    if (!NT_SUCCESS(status) || !RgEventIsInsideGateRoot(&event)) {
+    if (!NT_SUCCESS(status)) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    if (InterlockedCompareExchange(&gGateActivated, 0, 0) == 0 &&
+        event.ProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId, 0, 0) &&
+        RgEventPathMatchesGateRoot(&event) &&
+        InterlockedExchange(&gPreflightProbeArmed, 0) == 1) {
+        status = RgCreateCreatePostContext(Data, event.Sequence, &postContext);
+        if (!NT_SUCCESS(status)) {
+            return RgCompleteDenied(Data);
+        }
+        postContext->ActivationPreflight = 1;
+        *CompletionContext = postContext;
+        return FLT_PREOP_SUCCESS_WITH_CALLBACK;
+    }
+
+    if (!RgEventIsInsideGateRoot(&event)) {
         // LAB gate remains explicitly scoped. Unresolved/out-of-root CREATEs fail open.
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    if (InterlockedCompareExchange(&gGateActivated, 0, 0) == 0) {
+        // During activation preflight, no external handle may enter the protected root.
+        return RgCompleteDenied(Data);
     }
 
     status = RgCreateCreatePostContext(Data, event.Sequence, &postContext);
@@ -274,6 +308,10 @@ FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJE
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
+    if (InterlockedCompareExchange(&gGateActivated, 0, 0) == 0) {
+        return RgCompleteDenied(Data);
+    }
+
     if (!RgGateEvent(&event, &gateError, NULL)) {
         UNREFERENCED_PARAMETER(gateError);
         return RgCompleteDenied(Data);
@@ -315,6 +353,10 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
     status = RgPopulateEvent(&event, Data, FltObjects, eventType, infoClass);
     if (!NT_SUCCESS(status) || !RgEventIsInsideGateRoot(&event)) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    if (InterlockedCompareExchange(&gGateActivated, 0, 0) == 0) {
+        return RgCompleteDenied(Data);
     }
 
     if (eventType == RgEventRename) {
@@ -624,7 +666,7 @@ FLT_POSTOP_CALLBACK_STATUS RgPostCreate(PFLT_CALLBACK_DATA Data,
 
     RtlZeroMemory(&event, sizeof(event));
     event.ProtocolVersion = RG_PROTOCOL_VERSION;
-    event.EventType = RgEventCreateResult;
+    event.EventType = context->ActivationPreflight ? RgEventActivationPreflight : RgEventCreateResult;
     event.Sequence = (ULONGLONG)InterlockedIncrement64(&gSequence);
     event.RelatedSequence = context->RequestSequence;
     event.CompletionStatus = (ULONG)Data->IoStatus.Status;
@@ -633,6 +675,20 @@ FLT_POSTOP_CALLBACK_STATUS RgPostCreate(PFLT_CALLBACK_DATA Data,
     event.IdentityStatus = RgIdentityUnknown;
     KeQuerySystemTimePrecise(&systemTime);
     event.SystemTime100ns = systemTime.QuadPart;
+
+    if (context->ActivationPreflight && context->PreCreateNameInfo != NULL) {
+        chars = context->PreCreateNameInfo->Name.Length / sizeof(WCHAR);
+        if (chars >= RG_PATH_CHARS) {
+            chars = RG_PATH_CHARS - 1;
+            event.PathStatus = RgPathTruncated;
+        } else {
+            event.PathStatus = RgPathResolved;
+        }
+        if (chars != 0) {
+            RtlCopyMemory(event.Path, context->PreCreateNameInfo->Name.Buffer, chars * sizeof(WCHAR));
+        }
+        event.Path[chars] = L'\0';
+    }
 
     if (NT_SUCCESS(Data->IoStatus.Status)) {
         status = FltGetTunneledName(Data, context->PreCreateNameInfo, &tunneledInfo);
@@ -655,8 +711,24 @@ FLT_POSTOP_CALLBACK_STATUS RgPostCreate(PFLT_CALLBACK_DATA Data,
         }
 
         RgPopulatePostOperationIdentity(&event, FltObjects);
-        RgAttachPagingStreamContext(
-            FltObjects, &event, context->GateDecision, context->RequestSequence);
+
+        if (context->ActivationPreflight) {
+            if (FltObjects == NULL || FltObjects->FileObject == NULL ||
+                FltObjects->FileObject->SectionObjectPointer == NULL ||
+                event.PathStatus != RgPathResolved ||
+                event.IdentityStatus != RgIdentityResolved) {
+                InterlockedExchange(&gActivationHazard, 1);
+            } else if (MmDoesFileHaveUserWritableReferences(
+                           FltObjects->FileObject->SectionObjectPointer) != 0) {
+                event.Flags |= RG_EVENT_FLAG_PREFLIGHT_WRITABLE_VIEW;
+                InterlockedExchange(&gActivationHazard, 1);
+            }
+        } else {
+            RgAttachPagingStreamContext(
+                FltObjects, &event, context->GateDecision, context->RequestSequence);
+        }
+    } else if (context->ActivationPreflight) {
+        InterlockedExchange(&gActivationHazard, 1);
     }
 
     RgQueueRawEvent(&event, RgClientLabGate);
@@ -931,19 +1003,13 @@ static FLT_POSTOP_CALLBACK_STATUS RgPostSetInformationSafe(PFLT_CALLBACK_DATA Da
     return FLT_POSTOP_FINISHED_PROCESSING;
 }
 
-static BOOLEAN RgEventIsInsideGateRoot(const RG_EVENT *Event)
+static BOOLEAN RgEventPathMatchesGateRoot(const RG_EVENT *Event)
 {
     UNICODE_STRING eventPath;
     UNICODE_STRING root;
     BOOLEAN result = FALSE;
-    ULONGLONG requestorPid;
 
     if (Event->PathStatus != RgPathResolved && Event->PathStatus != RgPathTruncated) {
-        return FALSE;
-    }
-
-    requestorPid = Event->ProcessId;
-    if (requestorPid == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId, 0, 0)) {
         return FALSE;
     }
 
@@ -966,6 +1032,18 @@ static BOOLEAN RgEventIsInsideGateRoot(const RG_EVENT *Event)
     }
     ExReleaseFastMutex(&gPortMutex);
     return result;
+}
+
+static BOOLEAN RgEventIsInsideGateRoot(const RG_EVENT *Event)
+{
+    ULONGLONG requestorPid;
+
+    requestorPid = Event->ProcessId;
+    if (requestorPid == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId, 0, 0)) {
+        return FALSE;
+    }
+
+    return RgEventPathMatchesGateRoot(Event);
 }
 
 static BOOLEAN RgGateEvent(const RG_EVENT *Event, PULONG ErrorCode, PULONG Decision)
@@ -1211,6 +1289,9 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
         gClientPort = ClientPort;
         gClientMode = (LONG)context->ClientMode;
         InterlockedExchange64(&gClientProcessId, (LONG64)context->ClientProcessId);
+        InterlockedExchange(&gGateActivated, context->ClientMode == RgClientLabGate ? 0 : 1);
+        InterlockedExchange(&gActivationHazard, 0);
+        InterlockedExchange(&gPreflightProbeArmed, 0);
 
         if (context->ClientMode == RgClientLabGate) {
             RtlCopyMemory(gGateRoot, context->GateRoot, rootBytes);
@@ -1227,6 +1308,67 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
     return status;
 }
 
+static NTSTATUS RgMessage(PVOID ConnectionCookie,
+                          PVOID InputBuffer,
+                          ULONG InputBufferSize,
+                          PVOID OutputBuffer,
+                          ULONG OutputBufferSize,
+                          PULONG ReturnOutputBufferLength)
+{
+    PRG_CONTROL_REQUEST request;
+    PRG_CONTROL_REPLY reply;
+    NTSTATUS status = STATUS_SUCCESS;
+
+    UNREFERENCED_PARAMETER(ConnectionCookie);
+
+    if (ReturnOutputBufferLength == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    *ReturnOutputBufferLength = 0;
+
+    if (InputBuffer == NULL || InputBufferSize != sizeof(RG_CONTROL_REQUEST) ||
+        OutputBuffer == NULL || OutputBufferSize < sizeof(RG_CONTROL_REPLY)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    request = (PRG_CONTROL_REQUEST)InputBuffer;
+    reply = (PRG_CONTROL_REPLY)OutputBuffer;
+    RtlZeroMemory(reply, sizeof(*reply));
+    reply->ProtocolVersion = RG_PROTOCOL_VERSION;
+    reply->Command = request->Command;
+
+    if (request->ProtocolVersion != RG_PROTOCOL_VERSION ||
+        InterlockedCompareExchange(&gClientConnected, 0, 0) == 0 ||
+        RgCurrentClientMode() != RgClientLabGate) {
+        status = STATUS_REVISION_MISMATCH;
+    } else if (request->Command == RgControlQueryActivation) {
+        status = STATUS_SUCCESS;
+    } else if (request->Command == RgControlArmPreflight) {
+        if (InterlockedCompareExchange(&gGateActivated, 0, 0) != 0 ||
+            InterlockedCompareExchange(&gActivationHazard, 0, 0) != 0) {
+            status = STATUS_DEVICE_BUSY;
+        } else {
+            InterlockedExchange(&gPreflightProbeArmed, 1);
+            status = STATUS_SUCCESS;
+        }
+    } else if (request->Command == RgControlActivateGate) {
+        if (InterlockedCompareExchange(&gActivationHazard, 0, 0) != 0 ||
+            InterlockedCompareExchange(&gPreflightProbeArmed, 0, 0) != 0) {
+            status = STATUS_DEVICE_BUSY;
+        } else {
+            InterlockedExchange(&gGateActivated, 1);
+            status = STATUS_SUCCESS;
+        }
+    } else {
+        status = STATUS_INVALID_PARAMETER;
+    }
+
+    reply->Status = (ULONG)status;
+    reply->GateActivated = (ULONG)InterlockedCompareExchange(&gGateActivated, 0, 0);
+    *ReturnOutputBufferLength = sizeof(*reply);
+    return STATUS_SUCCESS;
+}
+
 static VOID RgDisconnect(PVOID ConnectionCookie)
 {
     UNREFERENCED_PARAMETER(ConnectionCookie);
@@ -1235,6 +1377,9 @@ static VOID RgDisconnect(PVOID ConnectionCookie)
     InterlockedExchange(&gClientConnected, 0);
     InterlockedExchange(&gClientMode, 0);
     InterlockedExchange64(&gClientProcessId, 0);
+    InterlockedExchange(&gGateActivated, 0);
+    InterlockedExchange(&gActivationHazard, 0);
+    InterlockedExchange(&gPreflightProbeArmed, 0);
     gGateRootLengthBytes = 0;
     RtlSecureZeroMemory(gGateRoot, sizeof(gGateRoot));
     if (gClientPort != NULL) {
@@ -1320,7 +1465,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, securityDescriptor);
 
     status = FltCreateCommunicationPort(gFilter, &gServerPort, &objectAttributes,
-        NULL, RgConnect, RgDisconnect, NULL, 1);
+        NULL, RgConnect, RgDisconnect, RgMessage, 1);
     FltFreeSecurityDescriptor(securityDescriptor);
 
     if (!NT_SUCCESS(status)) {

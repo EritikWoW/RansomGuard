@@ -1,4 +1,4 @@
-# RansomGuard minifilter engineering lab — v0.7.8.0
+# RansomGuard minifilter engineering lab — v0.7.9.0
 
 The minifilter has two mutually exclusive user-mode connection modes:
 
@@ -34,7 +34,7 @@ Build the engineering package:
 .\build_lab.cmd
 ```
 
-Then, from the generated `RansomGuard-Lab-v0.7.8.0-*` directory, build/install the minifilter only in a
+Then, from the generated `RansomGuard-Lab-v0.7.9.0-*` directory, build/install the minifilter only in a
 Windows test VM using the existing lab scripts.
 
 ## Audit mode
@@ -92,7 +92,7 @@ prove production compatibility, crash safety, memory-mapped-write coverage, larg
 containment efficacy, or universal rollback.
 
 
-## Bounded gate concurrency (0.7.8.0)
+## Bounded gate concurrency (0.7.9.0)
 
 The LAB gate no longer serializes the full blocking FltSendMessage duration under the global port mutex. Up to 8 kernel gate requests may be in flight. Additional in-scope destructive I/O fails closed rather than creating an unbounded queue.
 
@@ -101,3 +101,14 @@ GateClient uses a bounded worker pool. Default: 4 workers. Override only in a di
     --gate-workers <1..8>
 
 The upper bound intentionally matches the kernel admission ceiling. This change improves independent timeout behavior and allows preservation work on unrelated files to overlap; it does not make the prototype production-safe.
+
+
+## Crash ambiguity quarantine (0.7.9.0)
+
+If a prior LAB session contains a durable CREATE or RENAME intent without its correlated completion record, a new blocking gate session is refused. The missing completion may mean the filesystem operation succeeded but its result was lost, or that the operation never completed; RansomGuard does not infer either outcome from current files.
+
+Read-only inspection:
+
+    RansomGuard.GateClient.exe --inspect-pending --store <rollback-store>
+
+This mode does not require `--root`, does not connect to the minifilter, and does not mutate completion state. It prints exact pending CREATE/RENAME request sequences grouped by session. There is intentionally no force/bypass option.

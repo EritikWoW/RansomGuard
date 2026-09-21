@@ -39,7 +39,7 @@ foreach($required in @(
   'CreatePreservationAction.CaptureExistingPreimage',
   'CreatePreservationAction.RecordOriginallyAbsent',
   'CreatePreservationAction.DenyUnsupported',
-  'CreateGatePolicy.Decide(disposition, state, createOptions)',
+  'CreateGatePolicy.Decide(disposition, observedState, createOptions)',
   'RgGateDecision.SnapshotCommitted',
   'RgGateDecision.BaselineCommitted',
   'RgGateDecision.NoPreservationRequired',

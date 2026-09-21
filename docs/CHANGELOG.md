@@ -2,6 +2,7 @@
 
 - Added conservative restart-evidence assessment for pending CREATE/RENAME operations, bound to exact operation kind, kernel request sequence and intent record SHA-256.
 - Recovery planning may move a pending CREATE/RENAME from Blocked to Review only when all matching durable restart observations consistently support completion or consistently support non-completion.
+- Consistency includes observed source/destination path state and durable file identity; same-decision evidence with topology or FILE_ID_INFO drift remains unresolved.
 - No evidence, ambiguous/indeterminate evidence, or conflicting observations remain Blocked.
 - Crash-reconciled topology actions are never Ready; automatic delete, rename, overwrite and in-place restore remain forbidden.
 - Restart reconciliation still never writes authoritative CREATE/RENAME completion records; correlated kernel post-operation completion journals remain the only authoritative source.

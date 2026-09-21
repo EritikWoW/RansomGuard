@@ -491,7 +491,7 @@ static class GateDecision
         }
         else
         {
-            action = CreateGatePolicy.Decide(disposition, observedState, createOptions);
+            action = CreateGatePolicy.Decide(disposition, observedState, createOptions, ev.Length);
             switch (action)
             {
                 case CreatePreservationAction.CaptureExistingPreimage:

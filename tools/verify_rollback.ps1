@@ -73,7 +73,9 @@ foreach($required in @(
     'CREATE intent preservation action does not match the disposition/target policy',
     'CreateGatePolicy.Decide(disposition, targetState, createOptions)',
     'FileOptions.WriteThrough',
-    'Flush(true)'
+    'Flush(true)',
+    'allowLegacyWriteCapableNoPreservation',
+    'desiredAccess'
 )){
     if($createOperationText -notmatch [regex]::Escape($required)){throw "CREATE operation source gate missing invariant: $required"}
 }
@@ -87,7 +89,12 @@ foreach($required in @(
     'CreateDisposition.OverwriteIf',
     'CreateDisposition.OpenIf',
     'FileDeleteOnClose',
-    'CreatePreservationAction.DenyUnsupported'
+    'CreatePreservationAction.DenyUnsupported',
+    'FileWriteData',
+    'GenericWrite',
+    'MaximumAllowed',
+    'RequestsWriteCapableHandle',
+    'successfulOpenMayWrite'
 )){
     if($policyText -notmatch [regex]::Escape($required)){throw "Create gate policy missing invariant: $required"}
 }

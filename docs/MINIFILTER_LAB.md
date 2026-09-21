@@ -1,4 +1,4 @@
-# RansomGuard minifilter engineering lab — v0.7.11.0
+# RansomGuard minifilter engineering lab — v0.7.12.0
 
 The minifilter has two mutually exclusive user-mode connection modes:
 
@@ -9,9 +9,9 @@ The minifilter has two mutually exclusive user-mode connection modes:
 The LAB Gate exists to validate preservation ordering. It is **not** a production driver configuration.
 Do not load it on a primary workstation and do not point it at real documents.
 
-On startup, v0.7.11.0 also scans older pending CREATE/RENAME intents under the same LAB root and appends conservative restart evidence (path state + FILE_ID_INFO when available). This evidence is diagnostic/recovery input only and never substitutes for the original kernel completion event.
+On startup, v0.7.12.0 also scans older pending CREATE/RENAME intents under the same LAB root and appends conservative restart evidence (path state + FILE_ID_INFO when available). This evidence is diagnostic/recovery input only and never substitutes for the original kernel completion event.
 
-Protocol v9 also observes paging writes on streams that were successfully opened inside the LAB root. The driver uses a pre-established nonpaged stream context and emits no-reply evidence only; it does not run a filesystem name query or synchronous preservation gate in the paging path. Treat these events as visibility, not as proof that memory-mapped writes are recoverable.
+Protocol v10 also observes paging writes on streams that were successfully opened inside the LAB root. The driver uses a pre-established nonpaged stream context and emits no-reply evidence only; it does not run a filesystem name query or synchronous preservation gate in the paging path. Treat these events as visibility, not as proof that memory-mapped writes are recoverable.
 
 ## Safety boundaries
 
@@ -38,7 +38,7 @@ Build the engineering package:
 .\build_lab.cmd
 ```
 
-Then, from the generated `RansomGuard-Lab-v0.7.11.0-*` directory, build/install the minifilter only in a
+Then, from the generated `RansomGuard-Lab-v0.7.12.0-*` directory, build/install the minifilter only in a
 Windows test VM using the existing lab scripts.
 
 ## Audit mode
@@ -65,20 +65,20 @@ Or choose another disposable non-system directory:
 
 The first run creates only the gate marker before connecting. Put **copies** of test files into that folder
 before starting the gate. Once connected, CREATE / WRITE / rename / delete-disposition / truncate requests in that folder are gated.
-Protocol v9 distinguishes destructive replacement of an existing file from creation of an originally-absent path and carries a normalized destination for rename operations.
+Protocol v10 distinguishes destructive replacement of an existing file from creation of an originally-absent path and carries a normalized destination for rename operations.
 It also treats `FILE_DELETE_ON_CLOSE` on an existing file as destructive and captures a full pre-image first;
 existing-directory delete-on-close is denied because directory-topology rollback is not modeled yet.
 An originally-absent path is committed as metadata-only recovery state; it does not cause the recovery library to delete files.
 For rename, source and destination preservation plus a durable pre-operation intent are committed before allow. A destination
 outside the LAB root, an unresolved/truncated destination, an existing directory, or a same-file alias is denied. After the
-filesystem completes the operation, protocol v9 emits a correlated no-reply `RenameResult`. Successful renames
+filesystem completes the operation, protocol v10 emits a correlated no-reply `RenameResult`. Successful renames
 reconcile the retained destination name through `FltGetTunneledName`. The driver queries `FileIdInformation` from the
 completed kernel file object only at PASSIVE_LEVEL with special kernel APCs enabled; otherwise identity is explicitly
 unresolved. User mode records both name and identity when available and rejects a final identity that differs from the
 pre-operation source identity. If reconciliation cannot be delivered, the durable intent remains pending and must not
 be treated as completed.
 
-For CREATE, the gate now also commits a durable operation intent before allow. After completion, protocol v9 emits
+For CREATE, the gate now also commits a durable operation intent before allow. After completion, protocol v10 emits
 a correlated no-reply `CreateResult`: successful operations reconcile the tunneled final name and query
 `FileIdInformation` from the actual completed file object; failed operations record their NTSTATUS without claiming
 success. Missing or partially resolved completion data remains explicit, and missing delivery leaves the intent pending.
@@ -94,6 +94,12 @@ For an existing test file, opening it with FILE_WRITE_DATA, FILE_APPEND_DATA or 
 
 Read-only opens remain non-eager. Paths recorded as originally absent remain absence-governed even if they are later reopened writable.
 
+## Writable-section attestation test
+
+Open an existing test file with GENERIC_READ | GENERIC_WRITE after the LAB gate is connected, then call `CreateFileMapping(..., PAGE_READWRITE, ...)`. The session should contain a `section-state/writable-section-journal.jsonl` record linked to the CREATE request. For a correctly pre-preserved file the state must be `BaselineVerified`.
+
+The section callback is evidence-only and must not block or deny the Memory Manager operation. A mapping created from a handle that existed before gate activation remains outside this milestone.
+
 ## Paging-write evidence test
 
 On a disposable VM, open a test file through the LAB root, create a writable memory mapping, modify a page and flush/unmap it. A protocol-v9 `PagingWrite` record should appear in the session's `paging-state` journal with the tracked path, offset/length and kernel identity when available.
@@ -108,7 +114,7 @@ prove production compatibility, crash safety, coverage for pre-existing writable
 containment efficacy, or universal rollback.
 
 
-## Bounded gate concurrency (0.7.11.0)
+## Bounded gate concurrency (0.7.12.0)
 
 The LAB gate no longer serializes the full blocking FltSendMessage duration under the global port mutex. Up to 8 kernel gate requests may be in flight. Additional in-scope destructive I/O fails closed rather than creating an unbounded queue.
 

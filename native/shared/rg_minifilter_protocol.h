@@ -1,11 +1,11 @@
 #pragma once
 
 // Wire protocol between the RansomGuard lab minifilter and user-mode clients.
-// v9 retains CREATE/RENAME reconciliation and adds non-blocking paging-write evidence.
-// Paging-write events are visibility only and never synchronously gated through user mode.
+// v10 retains protocol-v9 preservation/reconciliation and adds no-reply writable-section attestation.
+// Section-synchronization callbacks never synchronously call the user-mode preservation gate.
 // The production bundle still does not install or enable the driver.
 
-#define RG_PROTOCOL_VERSION 9u
+#define RG_PROTOCOL_VERSION 10u
 #define RG_PATH_CHARS 512u
 #define RG_GATE_ROOT_CHARS 260u
 #define RG_PORT_NAME L"\\RansomGuardMinifilterPort"
@@ -24,7 +24,8 @@ typedef enum _RG_EVENT_TYPE {
     RgEventCreate = 5,
     RgEventRenameResult = 6,
     RgEventCreateResult = 7,
-    RgEventPagingWrite = 8
+    RgEventPagingWrite = 8,
+    RgEventWritableSection = 9
 } RG_EVENT_TYPE;
 
 typedef enum _RG_PATH_STATUS {

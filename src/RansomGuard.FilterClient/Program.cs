@@ -4,10 +4,10 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 
 const string PortName = @"\RansomGuardMinifilterPort";
-const int ProtocolVersion = 9;
+const int ProtocolVersion = 10;
 
 var options = Options.Parse(args);
-Console.WriteLine("RansomGuard Minifilter AUDIT client v0.7.11.0");
+Console.WriteLine("RansomGuard Minifilter AUDIT client v0.7.12.0");
 Console.WriteLine("READ-ONLY: this client cannot block, suspend, kill, rename, delete, or modify files.");
 Console.WriteLine("It only receives metadata emitted by the lab minifilter.");
 Console.WriteLine();
@@ -240,14 +240,14 @@ static class ProcessInfo
 
 sealed class AuditStats
 {
-    private long _events, _inScope, _create, _write, _pagingWrite, _rename, _delete, _truncate, _driverDropped, _resolved, _unresolved;
+    private long _events, _inScope, _create, _write, _pagingWrite, _writableSection, _rename, _delete, _truncate, _driverDropped, _resolved, _unresolved;
     private readonly Queue<double> _lag = new();
     public void Observe(RgEvent e, double lag, bool inScope, bool resolved)
     {
         _events++; if (inScope) _inScope++;
         if (resolved) _resolved++; else _unresolved++;
         _driverDropped += e.DroppedBeforeThis;
-        switch ((RgEventType)e.EventType) { case RgEventType.Create: _create++; break; case RgEventType.Write: _write++; break; case RgEventType.PagingWrite: _pagingWrite++; break; case RgEventType.Rename: _rename++; break; case RgEventType.DeleteDisposition: _delete++; break; case RgEventType.Truncate: _truncate++; break; }
+        switch ((RgEventType)e.EventType) { case RgEventType.Create: _create++; break; case RgEventType.Write: _write++; break; case RgEventType.PagingWrite: _pagingWrite++; break; case RgEventType.WritableSection: _writableSection++; break; case RgEventType.Rename: _rename++; break; case RgEventType.DeleteDisposition: _delete++; break; case RgEventType.Truncate: _truncate++; break; }
         _lag.Enqueue(lag); while (_lag.Count > 10000) _lag.Dequeue();
     }
     private double P(double q)
@@ -256,18 +256,18 @@ sealed class AuditStats
         var a = _lag.OrderBy(x => x).ToArray();
         return a[(int)Math.Clamp(Math.Ceiling(q * a.Length) - 1, 0, a.Length - 1)];
     }
-    public string OneLine() => $"events={_events} scope={_inScope} create={_create} write={_write} pagingWrite={_pagingWrite} rename={_rename} delete={_delete} truncate={_truncate} driverDropped={_driverDropped} unresolved={_unresolved} lag p50={P(.50):F1} p95={P(.95):F1} p99={P(.99):F1} max={(_lag.Count == 0 ? 0 : _lag.Max()):F1}ms";
+    public string OneLine() => $"events={_events} scope={_inScope} create={_create} write={_write} pagingWrite={_pagingWrite} writableSection={_writableSection} rename={_rename} delete={_delete} truncate={_truncate} driverDropped={_driverDropped} unresolved={_unresolved} lag p50={P(.50):F1} p95={P(.95):F1} p99={P(.99):F1} max={(_lag.Count == 0 ? 0 : _lag.Max()):F1}ms";
     public object Snapshot(Options o, string logPath) => new
     {
         Schema = 1, CapturedUtc = DateTime.UtcNow, ReadOnly = true,
         o.Roots, o.AllLocal, LogPath = logPath,
-        Events = _events, InScope = _inScope, Creates = _create, Writes = _write, PagingWrites = _pagingWrite, Renames = _rename, DeleteDispositions = _delete, Truncates = _truncate,
+        Events = _events, InScope = _inScope, Creates = _create, Writes = _write, PagingWrites = _pagingWrite, WritableSections = _writableSection, Renames = _rename, DeleteDispositions = _delete, Truncates = _truncate,
         DriverReportedDropped = _driverDropped, ResolvedPaths = _resolved, UnresolvedPaths = _unresolved,
         DeliveryMs = new { P50 = P(.50), P95 = P(.95), P99 = P(.99), Max = _lag.Count == 0 ? 0 : _lag.Max() }
     };
 }
 
-enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, RenameResult = 6, CreateResult = 7, PagingWrite = 8 }
+enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, RenameResult = 6, CreateResult = 7, PagingWrite = 8, WritableSection = 9 }
 enum RgPathStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2, Truncated = 3 }
 enum RgIdentityStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2 }
 

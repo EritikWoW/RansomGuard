@@ -50,7 +50,8 @@ static NTSTATUS RgPopulateEvent(_Out_ PRG_EVENT Event, _Inout_ PFLT_CALLBACK_DAT
 static VOID RgPopulateRenameDestination(_Inout_ PRG_EVENT Event, _Inout_ PFLT_CALLBACK_DATA Data,
                                         _In_ PCFLT_RELATED_OBJECTS FltObjects);
 static BOOLEAN RgEventIsInsideGateRoot(_In_ const RG_EVENT *Event);
-static BOOLEAN RgGateEvent(_In_ const RG_EVENT *Event, _Out_opt_ PULONG ErrorCode);
+static BOOLEAN RgGateEvent(_In_ const RG_EVENT *Event, _Out_opt_ PULONG ErrorCode,
+                           _Out_opt_ PULONG Decision);
 static BOOLEAN RgAcquireClientPort(_In_ LONG ExpectedMode);
 static VOID RgReleaseClientPort(VOID);
 static VOID RgWaitForPortUsers(VOID);
@@ -59,7 +60,11 @@ static BOOLEAN RgIsPagingWrite(_In_ PFLT_CALLBACK_DATA Data);
 static VOID RgObservePagingWrite(_Inout_ PFLT_CALLBACK_DATA Data,
                                  _In_ PCFLT_RELATED_OBJECTS FltObjects);
 static VOID RgAttachPagingStreamContext(_In_ PCFLT_RELATED_OBJECTS FltObjects,
-                                        _In_ const RG_EVENT *CreateResult);
+                                        _In_ const RG_EVENT *CreateResult,
+                                        _In_ ULONG PreservationDecision,
+                                        _In_ ULONGLONG CreateRequestSequence);
+static VOID RgObserveWritableSection(_Inout_ PFLT_CALLBACK_DATA Data,
+                                     _In_ PCFLT_RELATED_OBJECTS FltObjects);
 static VOID RgStreamContextCleanup(_In_ PFLT_CONTEXT Context,
                                    _In_ FLT_CONTEXT_TYPE ContextType);
 static FLT_PREOP_CALLBACK_STATUS RgCompleteDenied(_Inout_ PFLT_CALLBACK_DATA Data);
@@ -73,6 +78,7 @@ static const FLT_OPERATION_REGISTRATION gCallbacks[] = {
     { IRP_MJ_CREATE, 0, RgPreCreate, RgPostCreate, NULL },
     { IRP_MJ_WRITE, 0, RgPreWrite, NULL, NULL },
     { IRP_MJ_SET_INFORMATION, 0, RgPreSetInformation, RgPostSetInformation, NULL },
+    { IRP_MJ_ACQUIRE_FOR_SECTION_SYNCHRONIZATION, 0, RgPreAcquireForSectionSynchronization, NULL, NULL },
     { IRP_MJ_OPERATION_END }
 };
 
@@ -165,6 +171,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
     NTSTATUS status;
     LONG mode;
     ULONG gateError = 0;
+    ULONG gateDecision = RgGateDeny;
 
     *CompletionContext = NULL;
     if (!RgShouldObserve(Data)) {
@@ -192,14 +199,45 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
         return RgCompleteDenied(Data);
     }
 
-    if (!RgGateEvent(&event, &gateError)) {
+    if (!RgGateEvent(&event, &gateError, &gateDecision)) {
         UNREFERENCED_PARAMETER(gateError);
         RgFreePostContext(postContext);
         return RgCompleteDenied(Data);
     }
 
+    postContext->GateDecision = gateDecision;
     *CompletionContext = postContext;
     return FLT_PREOP_SUCCESS_WITH_CALLBACK;
+}
+
+FLT_PREOP_CALLBACK_STATUS RgPreAcquireForSectionSynchronization(
+    PFLT_CALLBACK_DATA Data,
+    PCFLT_RELATED_OBJECTS FltObjects,
+    PVOID *CompletionContext)
+{
+    ULONG protection;
+
+    *CompletionContext = NULL;
+
+    if (InterlockedCompareExchange(&gUnloading, 0, 0) != 0 ||
+        InterlockedCompareExchange(&gClientConnected, 0, 0) == 0 ||
+        RgCurrentClientMode() != RgClientLabGate) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    if (Data->Iopb->Parameters.AcquireForSectionSynchronization.SyncType != SyncTypeCreateSection) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    protection = Data->Iopb->Parameters.AcquireForSectionSynchronization.PageProtection & 0xFFu;
+    if (protection != PAGE_READWRITE && protection != PAGE_EXECUTE_READWRITE) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    // FSFilter section-synchronization callbacks must not become a blocking user-mode policy gate.
+    // Attest the already-committed CREATE baseline through the stream context and let the operation continue.
+    RgObserveWritableSection(Data, FltObjects);
+    return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
 
 FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjects, PVOID *CompletionContext)
@@ -236,7 +274,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJE
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    if (!RgGateEvent(&event, &gateError)) {
+    if (!RgGateEvent(&event, &gateError, NULL)) {
         UNREFERENCED_PARAMETER(gateError);
         return RgCompleteDenied(Data);
     }
@@ -286,7 +324,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
         }
     }
 
-    if (!RgGateEvent(&event, &gateError)) {
+    if (!RgGateEvent(&event, &gateError, NULL)) {
         UNREFERENCED_PARAMETER(gateError);
         RgFreePostContext(postContext);
         return RgCompleteDenied(Data);
@@ -617,7 +655,8 @@ FLT_POSTOP_CALLBACK_STATUS RgPostCreate(PFLT_CALLBACK_DATA Data,
         }
 
         RgPopulatePostOperationIdentity(&event, FltObjects);
-        RgAttachPagingStreamContext(FltObjects, &event);
+        RgAttachPagingStreamContext(
+            FltObjects, &event, context->GateDecision, context->RequestSequence);
     }
 
     RgQueueRawEvent(&event, RgClientLabGate);
@@ -637,15 +676,27 @@ static VOID RgStreamContextCleanup(PFLT_CONTEXT Context, FLT_CONTEXT_TYPE Contex
 }
 
 static VOID RgAttachPagingStreamContext(PCFLT_RELATED_OBJECTS FltObjects,
-                                        const RG_EVENT *CreateResult)
+                                        const RG_EVENT *CreateResult,
+                                        ULONG PreservationDecision,
+                                        ULONGLONG CreateRequestSequence)
 {
     PRG_STREAM_CONTEXT context = NULL;
+    PRG_STREAM_CONTEXT oldContext = NULL;
     NTSTATUS status;
+    FLT_SET_CONTEXT_OPERATION operation;
 
     if (FltObjects == NULL || FltObjects->FileObject == NULL || CreateResult == NULL ||
         CreateResult->PathStatus != RgPathResolved) {
         return;
     }
+
+    // Stream contexts are shared across handles. A later preservation-sensitive CREATE must
+    // upgrade a context that may have been seeded by an earlier read-only open. Conversely,
+    // a read-only open must never downgrade an already protected stream.
+    operation = (PreservationDecision == RgGateSnapshotCommitted ||
+                 PreservationDecision == RgGateBaselineCommitted)
+        ? FLT_SET_CONTEXT_REPLACE_IF_EXISTS
+        : FLT_SET_CONTEXT_KEEP_IF_EXISTS;
 
     status = FltAllocateContext(
         gFilter,
@@ -661,6 +712,8 @@ static VOID RgAttachPagingStreamContext(PCFLT_RELATED_OBJECTS FltObjects,
     RtlZeroMemory(context, sizeof(*context));
     context->PathStatus = CreateResult->PathStatus;
     context->IdentityStatus = CreateResult->IdentityStatus;
+    context->PreservationDecision = PreservationDecision;
+    context->CreateRequestSequence = CreateRequestSequence;
     context->VolumeSerialNumber = CreateResult->VolumeSerialNumber;
     context->FileIdLow = CreateResult->FileIdLow;
     context->FileIdHigh = CreateResult->FileIdHigh;
@@ -669,15 +722,18 @@ static VOID RgAttachPagingStreamContext(PCFLT_RELATED_OBJECTS FltObjects,
     status = FltSetStreamContext(
         FltObjects->Instance,
         FltObjects->FileObject,
-        FLT_SET_CONTEXT_KEEP_IF_EXISTS,
+        operation,
         context,
-        NULL);
+        (PFLT_CONTEXT *)&oldContext);
 
     if (!NT_SUCCESS(status) && status != STATUS_FLT_CONTEXT_ALREADY_DEFINED &&
         status != STATUS_NOT_SUPPORTED) {
         InterlockedIncrement(&gDropped);
     }
 
+    if (oldContext != NULL) {
+        FltReleaseContext(oldContext);
+    }
     FltReleaseContext(context);
 }
 
@@ -723,6 +779,48 @@ static VOID RgObservePagingWrite(PFLT_CALLBACK_DATA Data,
     // Paging I/O can run in memory-manager/cache-manager contexts where filesystem name
     // queries or synchronous user-mode preservation can deadlock. Emit bounded no-reply
     // evidence only; do not call RgGateEvent from the paging path.
+    RgQueueRawEvent(&event, RgClientLabGate);
+    FltReleaseContext(context);
+}
+
+static VOID RgObserveWritableSection(PFLT_CALLBACK_DATA Data,
+                                     PCFLT_RELATED_OBJECTS FltObjects)
+{
+    PRG_STREAM_CONTEXT context = NULL;
+    RG_EVENT event;
+    LARGE_INTEGER systemTime;
+    NTSTATUS status;
+
+    if (FltObjects == NULL || FltObjects->FileObject == NULL) {
+        return;
+    }
+
+    status = FltGetStreamContext(
+        FltObjects->Instance,
+        FltObjects->FileObject,
+        (PFLT_CONTEXT *)&context);
+    if (!NT_SUCCESS(status) || context == NULL) {
+        return;
+    }
+
+    RtlZeroMemory(&event, sizeof(event));
+    event.ProtocolVersion = RG_PROTOCOL_VERSION;
+    event.EventType = RgEventWritableSection;
+    event.PathStatus = context->PathStatus;
+    event.IdentityStatus = context->IdentityStatus;
+    event.Flags = Data->Iopb->Parameters.AcquireForSectionSynchronization.PageProtection;
+    event.Sequence = (ULONGLONG)InterlockedIncrement64(&gSequence);
+    event.RelatedSequence = context->CreateRequestSequence;
+    event.CompletionInformation = context->PreservationDecision;
+    KeQuerySystemTimePrecise(&systemTime);
+    event.SystemTime100ns = systemTime.QuadPart;
+    event.ProcessId = (ULONGLONG)(ULONG_PTR)FltGetRequestorProcessId(Data);
+    event.ThreadId = (ULONGLONG)(ULONG_PTR)PsGetCurrentThreadId();
+    event.VolumeSerialNumber = context->VolumeSerialNumber;
+    event.FileIdLow = context->FileIdLow;
+    event.FileIdHigh = context->FileIdHigh;
+    RtlCopyMemory(event.Path, context->Path, sizeof(event.Path));
+
     RgQueueRawEvent(&event, RgClientLabGate);
     FltReleaseContext(context);
 }
@@ -870,7 +968,7 @@ static BOOLEAN RgEventIsInsideGateRoot(const RG_EVENT *Event)
     return result;
 }
 
-static BOOLEAN RgGateEvent(const RG_EVENT *Event, PULONG ErrorCode)
+static BOOLEAN RgGateEvent(const RG_EVENT *Event, PULONG ErrorCode, PULONG Decision)
 {
     LARGE_INTEGER timeout;
     RG_GATE_REPLY reply;
@@ -880,6 +978,9 @@ static BOOLEAN RgGateEvent(const RG_EVENT *Event, PULONG ErrorCode)
     LONG inFlight;
 
     RtlZeroMemory(&reply, sizeof(reply));
+    if (Decision != NULL) {
+        *Decision = RgGateDeny;
+    }
     timeout.QuadPart = -(RG_GATE_TIMEOUT_MS * 10LL * 1000LL);
 
     inFlight = InterlockedIncrement(&gGateInFlight);
@@ -914,6 +1015,9 @@ static BOOLEAN RgGateEvent(const RG_EVENT *Event, PULONG ErrorCode)
     allow = (reply.Decision == RgGateSnapshotCommitted ||
              reply.Decision == RgGateBaselineCommitted ||
              reply.Decision == RgGateNoPreservationRequired);
+    if (allow && Decision != NULL) {
+        *Decision = reply.Decision;
+    }
     return allow;
 }
 

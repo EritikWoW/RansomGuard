@@ -85,8 +85,9 @@ partial reconciliation, fully unresolved success, reopen/rebuild correlation, pe
 duplicate rejection, source-identity mismatch rejection, and completion-journal corruption detection.
 
 The minifilter source gate requires the safe post-operation path, `FltDoCompletionProcessingWhenSafe`,
-`FltGetTunneledName`, `FltQueryInformationFile(..., FileIdInformation, ...)`, the correlated `RenameResult`
-event, and protocol-v8 completion identity fields. The GateClient
+`FltGetTunneledName`, and an explicit PASSIVE_LEVEL plus special-kernel-APC guard before
+`FltQueryInformationFile(..., FileIdInformation, ...)`. It also requires the correlated `RenameResult` event
+and protocol-v8 completion identity fields. The GateClient
 source gate additionally requires result persistence without `FilterReplyMessage`.
 
 These tests and compile gates do not prove real filesystem tunneling behavior or completion-message delivery under

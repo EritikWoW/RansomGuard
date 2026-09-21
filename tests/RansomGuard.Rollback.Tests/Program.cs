@@ -1370,6 +1370,178 @@ try
               estimateCreate, estimateAbsentPath) == 0,
         "absence estimator does not reserve an existing baseline again");
 
+    // Retention lifecycle and cleanup must never select Active/Faulted/Held/pending sessions.
+    var retentionRepoRoot = Path.Combine(root, "retention-repo");
+    var retentionRepo = new RollbackRepository(retentionRepoRoot);
+    var retentionSource = Path.Combine(root, "retention-source");
+    Directory.CreateDirectory(retentionSource);
+    var retentionNow = DateTime.UtcNow;
+
+    var oldSession = retentionRepo.CreateSession("old_completed");
+    var oldSource = Path.Combine(retentionSource, "old.bin");
+    await File.WriteAllBytesAsync(oldSource, new byte[16 * 1024]);
+    _ = await oldSession.CapturePreimageAsync(oldSource, RollbackMutationKind.Delete);
+    var oldLifecycle = new RollbackSessionLifecycleStore(oldSession.Root);
+    _ = await oldLifecycle.MarkCompletedAtAsync(
+        "test-old-completed", retentionNow.AddDays(-40));
+
+    var heldSession = retentionRepo.CreateSession("held_completed");
+    var heldSource = Path.Combine(retentionSource, "held.bin");
+    await File.WriteAllBytesAsync(heldSource, new byte[8 * 1024]);
+    _ = await heldSession.CapturePreimageAsync(heldSource, RollbackMutationKind.Delete);
+    var heldLifecycle = new RollbackSessionLifecycleStore(heldSession.Root);
+    _ = await heldLifecycle.MarkCompletedAtAsync(
+        "test-held-completed", retentionNow.AddDays(-45));
+    _ = await heldLifecycle.SetHoldAsync("legal-hold");
+
+    var activeSession = retentionRepo.CreateSession("active_session");
+    var activeLifecycle = new RollbackSessionLifecycleStore(activeSession.Root);
+    Check(activeLifecycle.Snapshot.State == RollbackSessionLifecycleState.Active,
+        "new rollback session lifecycle starts Active");
+
+    var faultedSession = retentionRepo.CreateSession("faulted_session");
+    var faultedLifecycle = new RollbackSessionLifecycleStore(faultedSession.Root);
+    _ = await faultedLifecycle.MarkFaultedAsync("synthetic-worker-failure");
+
+    var pendingSession = retentionRepo.CreateSession("pending_completed");
+    var pendingCreateRoot = Path.Combine(pendingSession.Root, "create-state");
+    var pendingCreateOps = new CreateOperationStore(pendingCreateRoot);
+    _ = await pendingCreateOps.RecordIntentAsync(
+        12001,
+        Path.Combine(retentionSource, "pending.bin"),
+        CreateDisposition.Create,
+        0,
+        CreateGatePolicy.GenericWrite,
+        CreateTargetState.Missing,
+        CreatePreservationAction.NoPreservationRequired,
+        string.Empty,
+        null);
+    var pendingLifecycle = new RollbackSessionLifecycleStore(pendingSession.Root);
+    _ = await pendingLifecycle.MarkCompletedAtAsync(
+        "synthetic-invalid-completed", retentionNow.AddDays(-50));
+
+    var retentionPlanHeld = RollbackRetentionPlanner.Build(retentionRepoRoot);
+    Check(retentionPlanHeld.Actions.Any(x =>
+              x.Kind == RollbackRetentionActionKind.PurgeCompletedSession &&
+              x.SessionId == "old_completed") &&
+          !retentionPlanHeld.Actions.Any(x => x.SessionId == "held_completed") &&
+          !retentionPlanHeld.Actions.Any(x => x.SessionId == "active_session") &&
+          !retentionPlanHeld.Actions.Any(x => x.SessionId == "faulted_session") &&
+          !retentionPlanHeld.Actions.Any(x => x.SessionId == "pending_completed"),
+        "retention planner selects only eligible completed unheld sessions");
+    Check(retentionPlanHeld.HeldSessions == 1 &&
+          retentionPlanHeld.ProtectedSessions >= 3 &&
+          retentionPlanHeld.Issues.Any(x =>
+              x.SessionId == "pending_completed" &&
+              x.Reason.Contains("pending CREATE/RENAME", StringComparison.Ordinal)),
+        "retention planner reports held/protected/pending sessions");
+
+    var staleRetentionPlan = retentionPlanHeld;
+    _ = await oldLifecycle.SetHoldAsync("temporary-hold-after-plan");
+    var staleRetentionRejected = false;
+    try
+    {
+        _ = await RollbackRetentionExecutor.ExecuteAsync(
+            retentionRepoRoot, staleRetentionPlan);
+    }
+    catch (InvalidDataException) { staleRetentionRejected = true; }
+    Check(staleRetentionRejected &&
+          Directory.Exists(oldSession.Root),
+        "retention executor rejects stale plan after lifecycle hold change");
+
+    _ = await oldLifecycle.ReleaseHoldAsync("release-test-hold");
+    var executableRetentionPlan = RollbackRetentionPlanner.Build(retentionRepoRoot);
+    var retentionExecution = await RollbackRetentionExecutor.ExecuteAsync(
+        retentionRepoRoot, executableRetentionPlan);
+    Check(retentionExecution.Succeeded &&
+          retentionExecution.Items.Any(x =>
+              x.SessionId == "old_completed" &&
+              x.State == RollbackRetentionExecutionState.Succeeded) &&
+          !Directory.Exists(Path.Combine(retentionRepoRoot, "Sessions", "old_completed")) &&
+          !Directory.Exists(Path.Combine(retentionRepoRoot, "Retired", "old_completed")),
+        "retention executor quarantines and purges eligible completed session");
+    var retentionJournal = new RollbackRetentionStore(
+        retentionRepoRoot, createIfMissing: false);
+    var oldRetentionEvents = retentionJournal.Records
+        .Where(x => x.SessionId == "old_completed")
+        .Select(x => x.EventType)
+        .ToArray();
+    Check(oldRetentionEvents.SequenceEqual(new[]
+          {
+              RollbackRetentionEventType.PurgeStarted,
+              RollbackRetentionEventType.Quarantined,
+              RollbackRetentionEventType.PurgeCompleted
+          }),
+        "retention journal records started/quarantined/completed purge chain");
+
+    // Capacity pressure may select an otherwise unexpired completed session, but never younger than MinPressureAge.
+    var capacityRepoRoot = Path.Combine(root, "retention-capacity-repo");
+    var capacityRepo = new RollbackRepository(capacityRepoRoot);
+    for (var n = 0; n < 2; n++)
+    {
+        var session = capacityRepo.CreateSession($"capacity_{n}");
+        var path = Path.Combine(retentionSource, $"capacity-{n}.bin");
+        await File.WriteAllBytesAsync(path, new byte[12 * 1024]);
+        _ = await session.CapturePreimageAsync(path, RollbackMutationKind.Delete);
+        _ = await new RollbackSessionLifecycleStore(session.Root).MarkCompletedAtAsync(
+            "capacity-test", retentionNow.AddDays(-2 - n));
+    }
+    var capacityPlan = RollbackRetentionPlanner.Build(
+        capacityRepoRoot,
+        new RollbackRetentionPolicy(
+            TimeSpan.FromDays(30),
+            MaxCompletedBytes: 1,
+            MinPressureAge: TimeSpan.FromDays(1)));
+    Check(capacityPlan.Actions.Any(x =>
+              x.Kind == RollbackRetentionActionKind.PurgeCompletedSession &&
+              x.Reason == "completed-storage-capacity-pressure") &&
+          capacityPlan.PlannedReclaimBytes > 0,
+        "retention planner selects oldest eligible sessions under capacity pressure");
+
+    // Incomplete purge must resume safely from Retired after a crash between move and Quarantined receipt.
+    var resumeRepoRoot = Path.Combine(root, "retention-resume-repo");
+    var resumeRepo = new RollbackRepository(resumeRepoRoot);
+    var resumeSession = resumeRepo.CreateSession("resume_case");
+    var resumeSource = Path.Combine(retentionSource, "resume.bin");
+    await File.WriteAllBytesAsync(resumeSource, new byte[4096]);
+    _ = await resumeSession.CapturePreimageAsync(
+        resumeSource, RollbackMutationKind.Delete);
+    _ = await new RollbackSessionLifecycleStore(resumeSession.Root)
+        .MarkCompletedAtAsync("resume-test", retentionNow.AddDays(-60));
+
+    var resumeDigest = RollbackRetentionPlanner.ComputeSessionDigest(
+        resumeSession.Root);
+    var resumeBytes = RollbackRetentionPlanner.MeasureTreeBytes(
+        resumeSession.Root);
+    var interruptedPlanId = new string('A', 64);
+    var resumeRetention = new RollbackRetentionStore(resumeRepoRoot);
+    _ = await resumeRetention.RecordAsync(
+        RollbackRetentionEventType.PurgeStarted,
+        interruptedPlanId,
+        "resume_case",
+        resumeDigest,
+        resumeBytes,
+        "synthetic-crash-resume");
+
+    var resumeRetiredRoot = Path.Combine(resumeRepoRoot, "Retired");
+    Directory.CreateDirectory(resumeRetiredRoot);
+    var resumeRetiredPath = Path.Combine(resumeRetiredRoot, "resume_case");
+    Directory.Move(resumeSession.Root, resumeRetiredPath);
+
+    var resumePlan = RollbackRetentionPlanner.Build(resumeRepoRoot);
+    Check(resumePlan.Actions.Any(x =>
+              x.Kind == RollbackRetentionActionKind.ResumePurgeFromRetired &&
+              x.SessionId == "resume_case"),
+        "retention planner detects moved incomplete purge after crash");
+    var resumeExecution = await RollbackRetentionExecutor.ExecuteAsync(
+        resumeRepoRoot, resumePlan);
+    Check(resumeExecution.Succeeded &&
+          !Directory.Exists(resumeRetiredPath) &&
+          new RollbackRetentionStore(resumeRepoRoot, createIfMissing: false)
+              .LatestForSession("resume_case")?.EventType ==
+              RollbackRetentionEventType.PurgeCompleted,
+        "retention executor resumes quarantined purge and commits completion receipt");
+
     Console.WriteLine($"All {passed} rollback tests passed. These are file-store tests, not minifilter integration tests.");
     return 0;
 }

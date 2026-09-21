@@ -1,3 +1,13 @@
+# RansomGuard 0.7.6.0
+- Protocol v7 adds a correlated no-reply `CreateResult` event for post-operation CREATE outcomes.
+- The gate durably records a hash-chained CREATE intent linked to its preservation proof before returning any allow decision.
+- Successful post-CREATE reconciliation uses `FltGetTunneledName` and queries `FileIdInformation` from the actual completed kernel file object.
+- Added a separate write-through SHA-256 hash-chained `create-completion-journal.jsonl` linked to the exact CREATE intent hash and kernel request sequence.
+- CREATE completion distinguishes authoritative success, unresolved name, unresolved identity, fully unresolved success, and filesystem failure; missing delivery leaves the intent pending.
+- GateClient persists `CreateResult` without `FilterReplyMessage`; normal product remains AuditOnly and the blocking path remains LAB-only.
+- Added CREATE intent/completion correlation, reopen, duplicate-conflict, pending-state and journal-corruption tests plus protocol-v7 kernel/userspace source gates.
+- Completed CREATEs now carry kernel file identity when available; completed RENAME still needs post-operation kernel file-ID binding.
+
 # RansomGuard 0.7.5.0
 - Protocol v6 adds a correlated no-reply `RenameResult` event for post-operation rename outcomes.
 - The minifilter retains the pre-operation destination name-info, uses `FltDoCompletionProcessingWhenSafe`, and reconciles successful renames with `FltGetTunneledName`.

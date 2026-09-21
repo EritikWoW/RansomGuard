@@ -1,4 +1,4 @@
-# RansomGuard minifilter engineering lab — v0.7.5.0
+# RansomGuard minifilter engineering lab — v0.7.6.0
 
 The minifilter has two mutually exclusive user-mode connection modes:
 
@@ -34,7 +34,7 @@ Build the engineering package:
 .\build_lab.cmd
 ```
 
-Then, from the generated `RansomGuard-Lab-v0.7.5.0-*` directory, build/install the minifilter only in a
+Then, from the generated `RansomGuard-Lab-v0.7.6.0-*` directory, build/install the minifilter only in a
 Windows test VM using the existing lab scripts.
 
 ## Audit mode
@@ -61,17 +61,17 @@ Or choose another disposable non-system directory:
 
 The first run creates only the gate marker before connecting. Put **copies** of test files into that folder
 before starting the gate. Once connected, CREATE / WRITE / rename / delete-disposition / truncate requests in that folder are gated.
-Protocol v6 distinguishes destructive replacement of an existing file from creation of an originally-absent path and carries a normalized destination for rename operations.
+Protocol v7 distinguishes destructive replacement of an existing file from creation of an originally-absent path, carries a normalized destination for rename operations, and emits correlated post-operation results for tracked CREATE and RENAME operations.
 It also treats `FILE_DELETE_ON_CLOSE` on an existing file as destructive and captures a full pre-image first;
 existing-directory delete-on-close is denied because directory-topology rollback is not modeled yet.
 An originally-absent path is committed as metadata-only recovery state; it does not cause the recovery library to delete files.
 For rename, source and destination preservation plus a durable pre-operation intent are committed before allow. A destination
 outside the LAB root, an unresolved/truncated destination, an existing directory, or a same-file alias is denied. After the
-filesystem completes the operation, protocol v6 emits a correlated no-reply `RenameResult`. Successful renames reconcile
+filesystem completes the operation, protocol v7 emits a correlated no-reply `RenameResult`. Successful renames reconcile
 the retained destination name through `FltGetTunneledName`; failures are recorded as failures. If reconciliation cannot be
 delivered, the durable intent remains pending and must not be treated as completed. Post-operation file-ID binding is not yet implemented.
 
-CREATE classification is still path-based and native post-create/file-ID reconciliation is not complete, so do
+Tracked CREATE operations now commit a durable pre-operation intent after preservation and record a correlated `CreateResult` after completion. Successful CREATE results reconcile the tunneled final name; failures are recorded as failures, and missing results remain pending. CREATE existence classification is still path-based and post-operation kernel file-ID binding is not complete, so do
 not use the lab gate as a general-purpose protected folder yet.
 
 Stop the client with Ctrl+C before unloading the filter.

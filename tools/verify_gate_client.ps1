@@ -11,6 +11,8 @@ foreach($required in @(
   'CapturePreimageAsync',
   'CaptureWritePreimageAsync',
   'CreateRollbackStore',
+  'FileIdentityStore',
+  'CaptureOrVerifyAsync',
   'CaptureAbsentAsync',
   'CreateGatePolicy.TryParseDisposition',
   '(ev.Flags >> 24) & 0xFF',
@@ -58,10 +60,15 @@ if($absentCapture -lt 0 -or $absentAllow -lt 0 -or $absentAllow -lt $absentCaptu
   throw 'CREATE BaselineCommitted must be returned only after durable absence-baseline capture.'
 }
 
+$identityCapture=$text.IndexOf('identityStore.CaptureOrVerifyAsync(path')
 $writeBranch=$text.IndexOf('if (eventType == RgEventType.Write)')
 $writeCapture=$text.IndexOf('CaptureWritePreimageAsync(path',$writeBranch)
-if($writeBranch -lt 0 -or $writeCapture -lt 0){
-  throw 'WRITE range-COW capture ordering invariant missing.'
+if($identityCapture -lt 0 -or $writeBranch -lt 0 -or $writeCapture -lt 0 -or $identityCapture -gt $writeCapture){
+  throw 'Existing-file identity must be durably captured/verified before WRITE preservation.'
+}
+$createIdentity=$text.IndexOf('identityStore.CaptureOrVerifyAsync(path',$existingCase)
+if($createIdentity -lt 0 -or $createIdentity -gt $existingCapture){
+  throw 'Destructive CREATE must capture/verify file identity before full pre-image capture.'
 }
 
-Write-Host 'LAB gate client source check PASSED: explicit disposable root, protocol-v4 CREATE semantics, range COW for writes, full pre-image for destructive replacement/metadata operations, durable originally-absent baselines, no destructive/process-control APIs.'
+Write-Host 'LAB gate client source check PASSED: explicit disposable root, protocol-v4 CREATE semantics, durable FILE_ID_INFO identity binding, range COW for writes, full pre-image for destructive replacement/metadata operations, durable originally-absent baselines, no destructive/process-control APIs.'

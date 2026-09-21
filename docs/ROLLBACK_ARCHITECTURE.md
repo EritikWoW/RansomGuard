@@ -29,12 +29,33 @@ Rename, delete-disposition, end-of-file, allocation-length and valid-data-length
 full-file pre-image store. These operations can destroy or relocate information in ways that are not yet modeled
 as block-only transactions.
 
-Protocol v3 therefore exposes four mutation classes:
+Protocol v4 exposes five mutation classes:
 
+- CREATE
 - WRITE
 - RENAME
 - DELETE
 - TRUNCATE
+
+## CREATE ordering
+
+For `IRP_MJ_CREATE`, protocol v4 carries the original Windows CreateDisposition/CreateOptions before
+the create completes.
+
+- If an existing file is opened with `FILE_SUPERSEDE`, `FILE_OVERWRITE` or `FILE_OVERWRITE_IF`,
+  the gate commits a conservative full-file pre-image before allowing the operation.
+- If the target is missing and the disposition can create it (`FILE_SUPERSEDE`, `FILE_CREATE`,
+  `FILE_OPEN_IF`, `FILE_OVERWRITE_IF`), `CreateRollbackStore` commits an append-only SHA-256
+  hash-chained `originally absent` baseline.
+- `FILE_OPEN` / existing `FILE_OPEN_IF` need no preservation at CREATE time; later WRITE is still gated.
+- Once a path is marked originally absent, later WRITE/rename/delete/truncate events do not capture incident-created
+  bytes as if they were pre-incident data.
+
+The absence journal never deletes a created file automatically. It records recovery intent only; final recovery
+orchestration must decide how to quarantine/remove an incident-created path.
+
+The current existence probe is path-based. A race between that probe and the kernel create is still possible;
+production requires durable file identity plus post-create reconciliation.
 
 ## Range recovery
 
@@ -76,14 +97,14 @@ Rollback startup validation now treats ambiguous durable state as a hard failure
 - unjournaled range `.block` objects are rejected;
 - leftover `.tmp` artifacts are rejected as incomplete capture evidence;
 - range block geometry must exactly match the recorded original file length and configured block size;
-- repository-wide verification also descends into each session's nested `write-cow` store;
+- repository-wide verification descends into each session's nested `write-cow` and `create-state` stores;
 - the LAB gate validates all existing sessions before opening a new one.
 
 These checks do not yet reconcile an interrupted in-flight kernel request. They prevent a restart from proceeding on top of rollback state whose commit boundary is ambiguous.
 
 ## Still required before production
 
-- explicit create/new-file transaction semantics;
+- post-create identity reconciliation and tunneled-name/file-ID confirmation;
 - rename destination capture and identity-safe rename rollback;
 - durable file identity (volume + file ID), not path identity alone;
 - bounded concurrent pending-I/O workers;

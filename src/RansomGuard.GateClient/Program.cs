@@ -22,7 +22,8 @@ if (PathPolicy.Under(options.StoreRoot, options.Root))
 Directory.CreateDirectory(options.StoreRoot);
 var repository = new RollbackRepository(options.StoreRoot);
 var sessionId = options.SessionId ?? $"gate-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}";
-var store = repository.CreateSession(sessionId);\nvar writeStore = new RangeRollbackStore(Path.Combine(store.Root, "write-cow"));
+var store = repository.CreateSession(sessionId);
+var writeStore = new RangeRollbackStore(Path.Combine(store.Root, "write-cow"));
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
 Console.WriteLine("RansomGuard LAB pre-write gate v0.7.2.0");

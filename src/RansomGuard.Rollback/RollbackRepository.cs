@@ -63,6 +63,10 @@ public sealed class RollbackRepository
             var renameRoot = Path.Combine(store.Root, "rename-state");
             if (Directory.Exists(renameRoot))
                 new RenameRollbackStore(renameRoot).VerifyAll();
+
+            var restartRoot = Path.Combine(store.Root, "restart-state");
+            if (Directory.Exists(restartRoot))
+                new RestartReconciliationStore(restartRoot).VerifyAll();
         }
     }
 

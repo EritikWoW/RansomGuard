@@ -1,6 +1,6 @@
 #include "RansomGuardMinifilter.h"
 
-C_ASSERT(sizeof(RG_EVENT) == 2140);
+C_ASSERT(sizeof(RG_EVENT) == 2168);
 C_ASSERT(sizeof(RG_CONNECT_CONTEXT) == 544);
 C_ASSERT(sizeof(RG_GATE_REPLY) == 24);
 
@@ -27,7 +27,12 @@ static NTSTATUS RgCreateRenamePostContext(_Inout_ PFLT_CALLBACK_DATA Data,
                                           _In_ PCFLT_RELATED_OBJECTS FltObjects,
                                           _In_ ULONGLONG RequestSequence,
                                           _Outptr_ PRG_POST_CONTEXT *PostContext);
+static NTSTATUS RgCreateCreatePostContext(_Inout_ PFLT_CALLBACK_DATA Data,
+                                          _In_ ULONGLONG RequestSequence,
+                                          _Outptr_ PRG_POST_CONTEXT *PostContext);
 static VOID RgFreePostContext(_In_opt_ PRG_POST_CONTEXT PostContext);
+static VOID RgPopulatePostCreateIdentity(_Inout_ PRG_EVENT Event,
+                                         _In_ PCFLT_RELATED_OBJECTS FltObjects);
 static FLT_POSTOP_CALLBACK_STATUS RgPostSetInformationSafe(_Inout_ PFLT_CALLBACK_DATA Data,
                                                            _In_ PCFLT_RELATED_OBJECTS FltObjects,
                                                            _In_opt_ PVOID CompletionContext,
@@ -47,7 +52,7 @@ static LONG RgCurrentClientMode(VOID);
 static FLT_PREOP_CALLBACK_STATUS RgCompleteDenied(_Inout_ PFLT_CALLBACK_DATA Data);
 
 static const FLT_OPERATION_REGISTRATION gCallbacks[] = {
-    { IRP_MJ_CREATE, 0, RgPreCreate, NULL, NULL },
+    { IRP_MJ_CREATE, 0, RgPreCreate, RgPostCreate, NULL },
     { IRP_MJ_WRITE, FLTFL_OPERATION_REGISTRATION_SKIP_PAGING_IO, RgPreWrite, NULL, NULL },
     { IRP_MJ_SET_INFORMATION, 0, RgPreSetInformation, RgPostSetInformation, NULL },
     { IRP_MJ_OPERATION_END }
@@ -128,11 +133,12 @@ static FLT_PREOP_CALLBACK_STATUS RgCompleteDenied(PFLT_CALLBACK_DATA Data)
 FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjects, PVOID *CompletionContext)
 {
     RG_EVENT event;
+    PRG_POST_CONTEXT postContext = NULL;
     NTSTATUS status;
     LONG mode;
     ULONG gateError = 0;
 
-    UNREFERENCED_PARAMETER(CompletionContext);
+    *CompletionContext = NULL;
     if (!RgShouldObserve(Data)) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
@@ -153,12 +159,19 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    if (!RgGateEvent(&event, &gateError)) {
-        UNREFERENCED_PARAMETER(gateError);
+    status = RgCreateCreatePostContext(Data, event.Sequence, &postContext);
+    if (!NT_SUCCESS(status)) {
         return RgCompleteDenied(Data);
     }
 
-    return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    if (!RgGateEvent(&event, &gateError)) {
+        UNREFERENCED_PARAMETER(gateError);
+        RgFreePostContext(postContext);
+        return RgCompleteDenied(Data);
+    }
+
+    *CompletionContext = postContext;
+    return FLT_PREOP_SUCCESS_WITH_CALLBACK;
 }
 
 FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjects, PVOID *CompletionContext)

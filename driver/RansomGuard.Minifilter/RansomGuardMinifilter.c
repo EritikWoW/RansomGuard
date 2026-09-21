@@ -1357,7 +1357,8 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
     }
 
     ExAcquireFastMutex(&gPortMutex);
-    if (gClientPort != NULL || InterlockedCompareExchange(&gUnloading, 0, 0) != 0) {
+    if (gClientPort != NULL || gContainedProcess != NULL ||
+        InterlockedCompareExchange(&gUnloading, 0, 0) != 0) {
         status = STATUS_DEVICE_BUSY;
     } else {
         if (InterlockedExchange(&gPortRundownCompleted, 0) != 0) {
@@ -1495,6 +1496,8 @@ static VOID RgDisconnect(PVOID ConnectionCookie)
 {
     UNREFERENCED_PARAMETER(ConnectionCookie);
 
+    RgClearContainedProcess();
+
     ExAcquireFastMutex(&gPortMutex);
     InterlockedExchange(&gClientConnected, 0);
     InterlockedExchange(&gClientMode, 0);
@@ -1536,6 +1539,7 @@ NTSTATUS RgUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
     InterlockedExchange(&gUnloading, 1);
     InterlockedExchange(&gClientConnected, 0);
     InterlockedExchange(&gClientMode, 0);
+    RgClearContainedProcess();
 
     if (gServerPort != NULL) {
         FltCloseCommunicationPort(gServerPort);

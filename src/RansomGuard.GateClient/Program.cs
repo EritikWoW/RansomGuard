@@ -36,7 +36,7 @@ var activationStore = new ActivationPreflightStore(Path.Combine(store.Root, "act
 var topologyStore = new ActivationTopologyStore(Path.Combine(store.Root, "activation-topology-state"));
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
-Console.WriteLine("RansomGuard LAB pre-write gate v0.7.15.0");
+Console.WriteLine("RansomGuard LAB pre-write gate v0.7.16.0");
 Console.WriteLine("LAB ONLY: use only inside a disposable test directory on a test machine/VM.");
 Console.WriteLine($"Protected LAB root : {options.Root}");
 Console.WriteLine($"Kernel NT root     : {ntRoot}");

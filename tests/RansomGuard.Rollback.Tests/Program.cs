@@ -1370,6 +1370,51 @@ try
               estimateCreate, estimateAbsentPath) == 0,
         "absence estimator does not reserve an existing baseline again");
 
+    // Retention lifecycle is explicit: only Opened -> ClosedCleanly may ever become purge-eligible.
+    var lifecycleRepo = new RollbackRepository(Path.Combine(root, "lifecycle-repo"));
+    var lifecycleSession = lifecycleRepo.CreateSession("clean_session");
+    var lifecycle = new RollbackSessionLifecycleStore(lifecycleSession.Root);
+    var opened = await lifecycle.RecordOpenedAsync();
+    Check(opened.State == RollbackSessionLifecycleState.Opened &&
+          lifecycle.IsOpened && !lifecycle.IsClosedCleanly,
+        "rollback lifecycle commits explicit Opened state");
+    var duplicateOpened = await lifecycle.RecordOpenedAsync();
+    Check(duplicateOpened.RecordSha256 == opened.RecordSha256 &&
+          lifecycle.Records.Count == 1,
+        "rollback lifecycle Opened record is idempotent");
+    var closed = await lifecycle.RecordClosedCleanlyAsync();
+    Check(closed.State == RollbackSessionLifecycleState.ClosedCleanly &&
+          lifecycle.IsClosedCleanly &&
+          lifecycle.ClosedUtc >= lifecycle.OpenedUtc,
+        "rollback lifecycle commits explicit ClosedCleanly terminal state");
+    var duplicateClosed = await lifecycle.RecordClosedCleanlyAsync();
+    Check(duplicateClosed.RecordSha256 == closed.RecordSha256 &&
+          lifecycle.Records.Count == 2,
+        "rollback lifecycle ClosedCleanly record is idempotent");
+    lifecycle.VerifyAll();
+    var reopenedLifecycle = new RollbackSessionLifecycleStore(lifecycleSession.Root);
+    Check(reopenedLifecycle.IsClosedCleanly && reopenedLifecycle.Records.Count == 2,
+        "rollback lifecycle rebuilds clean close after reopen");
+
+    var crashSession = lifecycleRepo.CreateSession("crash_session");
+    var crashLifecycle = new RollbackSessionLifecycleStore(crashSession.Root);
+    _ = await crashLifecycle.RecordOpenedAsync();
+    Check(crashLifecycle.IsOpened && !crashLifecycle.IsClosedCleanly,
+        "opened-only rollback lifecycle remains non-clean after simulated crash");
+
+    var corruptSession = lifecycleRepo.CreateSession("corrupt_session");
+    var corruptLifecycle = new RollbackSessionLifecycleStore(corruptSession.Root);
+    _ = await corruptLifecycle.RecordOpenedAsync();
+    _ = await corruptLifecycle.RecordClosedCleanlyAsync();
+    var lifecycleBytes = await File.ReadAllBytesAsync(corruptLifecycle.JournalPath);
+    lifecycleBytes[^2] ^= 1;
+    await File.WriteAllBytesAsync(corruptLifecycle.JournalPath, lifecycleBytes);
+    var corruptLifecycleRejected = false;
+    try { lifecycleRepo.VerifyAll(); }
+    catch (InvalidDataException) { corruptLifecycleRejected = true; }
+    Check(corruptLifecycleRejected,
+        "repository verification includes rollback lifecycle corruption");
+
     Console.WriteLine($"All {passed} rollback tests passed. These are file-store tests, not minifilter integration tests.");
     return 0;
 }

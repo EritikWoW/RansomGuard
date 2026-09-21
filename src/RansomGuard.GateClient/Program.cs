@@ -33,9 +33,10 @@ var renameStore = new RenameRollbackStore(Path.Combine(store.Root, "rename-state
 var pagingStore = new PagingWriteEvidenceStore(Path.Combine(store.Root, "paging-state"));
 var sectionStore = new WritableSectionEvidenceStore(Path.Combine(store.Root, "section-state"));
 var activationStore = new ActivationPreflightStore(Path.Combine(store.Root, "activation-state"));
+var topologyStore = new ActivationTopologyStore(Path.Combine(store.Root, "activation-topology-state"));
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
-Console.WriteLine("RansomGuard LAB pre-write gate v0.7.14.0");
+Console.WriteLine("RansomGuard LAB pre-write gate v0.7.15.0");
 Console.WriteLine("LAB ONLY: use only inside a disposable test directory on a test machine/VM.");
 Console.WriteLine($"Protected LAB root : {options.Root}");
 Console.WriteLine($"Kernel NT root     : {ntRoot}");
@@ -69,8 +70,8 @@ if (headerSize != 16 || eventSize != 2168 || replyHeaderSize != 16 || gateReplyS
 
 var resolver = new DevicePathResolver();
 var activationSummary = await ActivationPreflight.RunAsync(
-    port, options.Root, resolver, activationStore, cts.Token).ConfigureAwait(false);
-Console.WriteLine($"Activation preflight: files={activationSummary.FilesChecked}, writable-views=0, kernel gate ACTIVE.");
+    port, options.Root, resolver, activationStore, topologyStore, cts.Token).ConfigureAwait(false);
+Console.WriteLine($"Activation preflight: directories={activationSummary.DirectoriesHeld}, files={activationSummary.FilesChecked}, writable-views=0, kernel gate ACTIVE.");
 
 
 using var workerSlots = new SemaphoreSlim(options.GateWorkers, options.GateWorkers);
@@ -242,6 +243,7 @@ static class ActivationPreflight
         string root,
         DevicePathResolver resolver,
         ActivationPreflightStore evidenceStore,
+        ActivationTopologyStore topologyStore,
         CancellationToken cancellationToken)
     {
         var options = new EnumerationOptions
@@ -253,10 +255,39 @@ static class ActivationPreflight
         };
 
         var checkedFiles = 0;
+        var heldDirectories = 0;
         var heldHandles = new List<SafeFileHandle>();
         try
         {
-            foreach (var rawPath in Directory.EnumerateFiles(root, "*", options))
+            var rootPath = Path.GetFullPath(root);
+            var rootHandle = Native.OpenPreflightDirectory(rootPath);
+            heldHandles.Add(rootHandle);
+            var rootIdentity = FileIdentityStore.QueryHandleIdentity(rootHandle);
+            _ = await topologyStore.RecordAsync(rootPath, rootIdentity, isRoot: true, cancellationToken)
+                .ConfigureAwait(false);
+            heldDirectories++;
+
+            var directories = Directory.EnumerateDirectories(rootPath, "*", options)
+                .Select(Path.GetFullPath)
+                .OrderBy(x => x.Count(ch => ch == Path.DirectorySeparatorChar))
+                .ThenBy(x => x, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            foreach (var directory in directories)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidOperationException($"Activation preflight refuses reparse directory: {directory}");
+
+                var directoryHandle = Native.OpenPreflightDirectory(directory);
+                heldHandles.Add(directoryHandle);
+                var directoryIdentity = FileIdentityStore.QueryHandleIdentity(directoryHandle);
+                _ = await topologyStore.RecordAsync(directory, directoryIdentity, isRoot: false, cancellationToken)
+                    .ConfigureAwait(false);
+                heldDirectories++;
+            }
+
+            foreach (var rawPath in Directory.EnumerateFiles(rootPath, "*", options))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var path = Path.GetFullPath(rawPath);
@@ -317,7 +348,7 @@ static class ActivationPreflight
                 throw new InvalidOperationException(
                     $"Kernel refused LAB activation after preflight. NTSTATUS=0x{activationReply.Status:X8}, active={activationReply.GateActivated}.");
 
-            return new ActivationPreflightSummary(checkedFiles);
+            return new ActivationPreflightSummary(checkedFiles, heldDirectories);
         }
         finally
         {
@@ -379,7 +410,7 @@ static class ActivationPreflight
     private static bool NtSuccess(uint status) => (status & 0x80000000u) == 0;
 }
 
-readonly record struct ActivationPreflightSummary(int FilesChecked);
+readonly record struct ActivationPreflightSummary(int FilesChecked, int DirectoriesHeld);
 
 static class CreateReconciliation
 {
@@ -1195,6 +1226,25 @@ static class Native
             var error = Marshal.GetLastWin32Error();
             handle.Dispose();
             throw new Win32Exception(error, $"Activation preflight could not open '{path}'.");
+        }
+        return handle;
+    }
+
+    public static SafeFileHandle OpenPreflightDirectory(string path)
+    {
+        const uint FileReadAttributes = 0x00000080;
+        const uint ShareRead = 0x00000001;
+        const uint OpenExisting = 3;
+        const uint FileFlagBackupSemantics = 0x02000000;
+
+        var handle = CreateFileW(path, FileReadAttributes, ShareRead,
+            IntPtr.Zero, OpenExisting, FileFlagBackupSemantics, IntPtr.Zero);
+        if (handle.IsInvalid)
+        {
+            var error = Marshal.GetLastWin32Error();
+            handle.Dispose();
+            throw new Win32Exception(error,
+                $"Activation topology preflight could not hold directory '{path}' with read-only sharing.");
         }
         return handle;
     }

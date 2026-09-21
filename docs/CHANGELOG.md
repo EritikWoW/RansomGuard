@@ -1,3 +1,15 @@
+# RansomGuard 0.7.15.0
+
+- Extended activation preflight from ordinary files to the protected directory topology without changing protocol v11.
+- GateClient now opens the protected root and every ordinary non-reparse directory with FILE_READ_ATTRIBUTES plus FILE_SHARE_READ only before file probing.
+- Directory handles remain open through the explicit kernel ActivateGate handshake, so pre-existing write/delete/delete-on-close directory handles fail activation through Windows share-access enforcement.
+- Each held directory is bound to FILE_ID_INFO and persisted in a write-through SHA-256 hash-chained activation-topology journal.
+- Added repository-wide activation-topology verification, identity-drift/idempotency/corruption tests and GateClient source gates.
+- Extended the disposable-VM runtime harness with a pre-existing directory DELETE-handle scenario; activation must fail before the holder releases that handle.
+- Source gates require FILE_FLAG_BACKUP_SEMANTICS, forbid ShareWrite/ShareDelete in the topology-open helper, require the root handle before recursive directory enumeration, and require activation before handle release.
+- New external protected-root CREATE/rename/delete activity remains blocked by the protocol-v11 NotActivated kernel barrier during topology/file preflight.
+- Normal product remains AuditOnly; topology preflight remains Engineering-LAB-only pending broader live VM/fault-injection coverage.
+
 # RansomGuard 0.7.14.0
 
 - Added a manual disposable-VM minifilter runtime workflow on a dedicated self-hosted `ransomguard-lab-vm` runner.

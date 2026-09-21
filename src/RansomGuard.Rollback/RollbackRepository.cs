@@ -79,6 +79,10 @@ public sealed class RollbackRepository
             var activationRoot = Path.Combine(store.Root, "activation-state");
             if (Directory.Exists(activationRoot))
                 new ActivationPreflightStore(activationRoot).VerifyAll();
+
+            var topologyRoot = Path.Combine(store.Root, "activation-topology-state");
+            if (Directory.Exists(topologyRoot))
+                new ActivationTopologyStore(topologyRoot).VerifyAll();
         }
     }
 

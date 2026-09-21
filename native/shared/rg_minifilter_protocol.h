@@ -13,6 +13,7 @@
 #define RG_CREATE_DISPOSITION_SHIFT 24u
 #define RG_CREATE_DISPOSITION_MASK 0xFF000000u
 #define RG_CREATE_OPTIONS_MASK 0x00FFFFFFu
+#define RG_EVENT_FLAG_PAGING_IO 0x00000001u
 
 typedef enum _RG_EVENT_TYPE {
     RgEventInvalid = 0,
@@ -22,7 +23,8 @@ typedef enum _RG_EVENT_TYPE {
     RgEventTruncate = 4,
     RgEventCreate = 5,
     RgEventRenameResult = 6,
-    RgEventCreateResult = 7
+    RgEventCreateResult = 7,
+    RgEventPagingWrite = 8
 } RG_EVENT_TYPE;
 
 typedef enum _RG_PATH_STATUS {

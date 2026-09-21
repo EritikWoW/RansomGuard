@@ -92,8 +92,9 @@ static class GateDecision
     {
         try
         {
-            if (ev.ProtocolVersion != 4 ||
-                (ev.PathStatus != (uint)RgPathStatus.Resolved && ev.PathStatus != (uint)RgPathStatus.Truncated))
+            // Never preserve or authorize against a truncated path. The kernel only sends a truncated
+            // gate event when its known prefix is already inside the explicit LAB root, so deny it here.
+            if (ev.ProtocolVersion != 4 || ev.PathStatus != (uint)RgPathStatus.Resolved)
                 return Deny(ev.Sequence, 1);
 
             var path = resolver.Resolve(ev.Path);

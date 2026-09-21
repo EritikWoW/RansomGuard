@@ -100,7 +100,7 @@ foreach($required in @(
     'Rename completion journal hash chain mismatch',
     'Rename completion intent hash mismatch',
     'Conflicting duplicate rename completion',
-    'post-operation'
+    'IntentRecordSha256'
 )){
     if($renameText -notmatch [regex]::Escape($required)){throw "Rename rollback source gate missing invariant: $required"}
 }

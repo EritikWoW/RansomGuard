@@ -623,7 +623,7 @@ try
     Check(renameStore.PendingIntents.Count == 0,
         "completed rename intents leave no pending reconciliation");
 
-    var identityUnresolvedIntent = await renameStore.CaptureIntentAsync(
+    _ = await renameStore.CaptureIntentAsync(
         106, renameSource, renameDestination, sourceIdentity, false,
         RenameDestinationState.OriginallyAbsent, null, 0, 10);
     var identityUnresolvedCompletion = await renameStore.RecordCompletionAsync(
@@ -632,7 +632,7 @@ try
           identityUnresolvedCompletion.FinalIdentity is null,
         "rename success can explicitly retain final name while kernel identity is unresolved");
 
-    var fullyUnresolvedIntent = await renameStore.CaptureIntentAsync(
+    _ = await renameStore.CaptureIntentAsync(
         107, renameSource, renameDestination, sourceIdentity, false,
         RenameDestinationState.OriginallyAbsent, null, 0, 10);
     var fullyUnresolvedCompletion = await renameStore.RecordCompletionAsync(

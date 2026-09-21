@@ -201,11 +201,16 @@ $preflightStart=$text.IndexOf('static class ActivationPreflight')
 $preflightEnd=$text.IndexOf('readonly record struct ActivationPreflightSummary',$preflightStart)
 if($preflightStart -lt 0 -or $preflightEnd -lt 0){throw 'ActivationPreflight implementation missing.'}
 $preflightBlock=$text.Substring($preflightStart,$preflightEnd-$preflightStart)
-foreach($required in @('Directory.EnumerateFiles','FileAttributes.ReparsePoint','Native.OpenPreflight','ActivationPreflightStore','RgEventType.ActivationPreflight','RgEventType.PagingWrite','RgEventType.WritableSection','heldHandles','RgControlCommand.ActivateGate','Native.Control')){
+foreach($required in @('Directory.EnumerateFiles','FileAttributes.ReparsePoint','Native.OpenPreflight','ActivationPreflightStore','RgEventType.ActivationPreflight','RgEventType.PagingWrite','RgEventType.WritableSection','heldHandles','RgControlCommand.ArmPreflight','RgControlCommand.ActivateGate','Native.Control')){
   if($preflightBlock -notmatch [regex]::Escape($required)){throw "Activation preflight missing invariant: $required"}
 }
+$armInPreflight=$preflightBlock.IndexOf('RgControlCommand.ArmPreflight')
+$openInPreflight=$preflightBlock.IndexOf('Native.OpenPreflight(path)')
 $activateInPreflight=$preflightBlock.IndexOf('RgControlCommand.ActivateGate')
 $disposeInPreflight=$preflightBlock.IndexOf('foreach (var handle in heldHandles) handle.Dispose()')
+if($armInPreflight -lt 0 -or $openInPreflight -lt 0 -or $armInPreflight -gt $openInPreflight){
+  throw 'Every intentional preflight file open must be armed in kernel first.'
+}
 if($activateInPreflight -lt 0 -or $disposeInPreflight -lt 0 -or $activateInPreflight -gt $disposeInPreflight){
   throw 'Activation must occur while share-read preflight handles are still held.'
 }

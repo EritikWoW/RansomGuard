@@ -885,6 +885,30 @@ try
           decisiveAssessment.LatestRecordSha256 == assessmentCompleted.RecordSha256,
         "restart assessment accepts only exact consistent decisive evidence");
 
+    var restartIdentityDriftStore = new RestartReconciliationStore(
+        Path.Combine(root, "restart-assessment-identity-drift"));
+    _ = await restartIdentityDriftStore.RecordObservationAsync(
+        RestartOperationKind.Create,
+        restartCreateIntent.RequestSequence,
+        restartCreateIntent.RecordSha256,
+        RestartEvidenceState.SupportsCompleted,
+        restartCreateIntent.OriginalPath,
+        new RestartPathObservation(RestartPathState.File, sourceIdentity));
+    _ = await restartIdentityDriftStore.RecordObservationAsync(
+        RestartOperationKind.Create,
+        restartCreateIntent.RequestSequence,
+        restartCreateIntent.RecordSha256,
+        RestartEvidenceState.SupportsCompleted,
+        restartCreateIntent.OriginalPath,
+        new RestartPathObservation(RestartPathState.File, createOriginalIdentity));
+    var identityDriftAssessment = restartIdentityDriftStore.Assess(
+        RestartOperationKind.Create,
+        restartCreateIntent.RequestSequence,
+        restartCreateIntent.RecordSha256);
+    Check(identityDriftAssessment.State == RestartEvidenceAssessmentState.Unresolved &&
+          identityDriftAssessment.ObservationCount == 2,
+        "restart assessment rejects same-decision evidence with identity drift");
+
     _ = await restartAssessmentStore.RecordObservationAsync(
         RestartOperationKind.Create,
         restartCreateIntent.RequestSequence,

@@ -6,6 +6,7 @@
 - Storage admission re-measures committed session bytes and combines them with all concurrent in-flight reservations before allowing new preservation work.
 - Blocking WRITE range-COW, full pre-image, CREATE absence-baseline and RENAME source/destination preservation reserve estimated growth before capture.
 - Activation topology/file evidence, paging/write-section evidence and CREATE/RENAME completion journals also reserve metadata capacity before append.
+- Restart reconciliation appends into older sessions are admitted against each older session's own quota/free-space budget before a new gate session starts.
 - Blocking destructive I/O returns fail-closed deny code 13 when session quota or free-space reserve cannot be satisfied.
 - Added estimators that avoid reserving full bytes again for already committed full pre-images, COW blocks/baselines and absence baselines.
 - Added recursive reparse-point refusal while measuring rollback-session storage.

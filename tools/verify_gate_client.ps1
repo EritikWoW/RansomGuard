@@ -38,7 +38,7 @@ foreach($required in @(
   'CreateGatePolicy.TryParseDisposition',
   '(ev.Flags >> 24) & 0xFF',
   'ev.Flags & 0x00FFFFFF',
-  'ProtocolVersion = 12',
+  'ProtocolVersion = 13',
   'CreatePreservationAction.CaptureExistingPreimage',
   'CreatePreservationAction.RecordOriginallyAbsent',
   'CreatePreservationAction.DenyUnsupported',
@@ -96,6 +96,14 @@ foreach($required in @(
   'TargetProcessId = containPid ?? 0',
   'ContainmentActive',
   'ContainedProcessId',
+  'ContainmentEvidenceStore',
+  'RgEventType.ContainmentActivated',
+  'RgGateReplyFlags.ContainRequestor',
+  'LabContainmentTrigger',
+  '--contain-after-pid',
+  'RecordRequestAsync',
+  'RecordKernelActiveAsync',
+  'pendingContainmentAckCount',
   'FilterSendMessage',
   'RgEventType.ActivationPreflight',
   'Activation refused:'
@@ -258,9 +266,54 @@ if($preflightBlock -match 'Native\.Reply\('){throw 'Activation preflight events 
 $containOption=$text.IndexOf('case "--contain-pid"')
 $containRejectSystem=$text.IndexOf('parsedPid <= 4',$containOption)
 $containRejectSelf=$text.IndexOf('parsedPid == Environment.ProcessId',$containOption)
-$containPrepareReject=$text.IndexOf('--contain-pid cannot be combined with --prepare-root')
+$containPrepareReject=$text.IndexOf('Containment options cannot be combined with --prepare-root')
 if($containOption -lt 0 -or $containRejectSystem -lt 0 -or $containRejectSelf -lt 0 -or $containPrepareReject -lt 0){
   throw 'LAB containment CLI must reject system/self PID and prepare-only combinations.'
+}
+
+$transitionOption=$text.IndexOf('case "--contain-after-pid"')
+$transitionRejectSystem=$text.IndexOf('parsedTransitionPid <= 4',$transitionOption)
+$transitionRejectSelf=$text.IndexOf('parsedTransitionPid == Environment.ProcessId',$transitionOption)
+$transitionMutualExclusion=$text.IndexOf('--contain-pid and --contain-after-pid are mutually exclusive.')
+$transitionThresholdBinding=$text.IndexOf('Containment thresholds require --contain-after-pid.')
+if($transitionOption -lt 0 -or $transitionRejectSystem -lt 0 -or $transitionRejectSelf -lt 0 -or
+   $transitionMutualExclusion -lt 0 -or $transitionThresholdBinding -lt 0){
+  throw 'Event-bound containment CLI must be explicit, single-target and threshold-bounded.'
+}
+
+$triggerStart=$text.IndexOf('sealed class LabContainmentTrigger')
+$triggerEnd=$text.IndexOf('sealed record Options(',$triggerStart)
+if($triggerStart -lt 0 -or $triggerEnd -lt 0){throw 'LabContainmentTrigger implementation missing.'}
+$triggerBlock=$text.Substring($triggerStart,$triggerEnd-$triggerStart)
+foreach($required in @(
+  'Process.GetProcessById(processId)',
+  '_ = _process.Handle',
+  '_process.HasExited',
+  'SnapshotCommitted or RgGateDecision.BaselineCommitted',
+  '_events < _requiredEvents',
+  '_paths.Count < _requiredPaths'
+)){
+  if($triggerBlock -notmatch [regex]::Escape($required)){throw "Event-bound containment trigger invariant missing: $required"}
+}
+
+$processStart=$text.IndexOf('async Task ProcessMessageAsync')
+$processEnd=$text.IndexOf('try',$text.IndexOf('while (!cts.IsCancellationRequested)'))
+if($processStart -lt 0 -or $processEnd -lt 0){throw 'ProcessMessageAsync source block missing.'}
+$processBlock=$text.Substring($processStart,$processEnd-$processStart)
+$requestPersist=$processBlock.IndexOf('containmentStore.RecordRequestAsync(')
+$replyFlag=$processBlock.IndexOf('reply.Flags |= (uint)RgGateReplyFlags.ContainRequestor',$requestPersist)
+$replySend=$processBlock.IndexOf('Native.Reply(port, header.MessageId, reply)',$replyFlag)
+if($requestPersist -lt 0 -or $replyFlag -lt 0 -or $replySend -lt 0 -or
+   $requestPersist -gt $replyFlag -or $replyFlag -gt $replySend){
+  throw 'Containment request evidence must be durable before the event-bound reply flag is sent.'
+}
+$activationBranch=$processBlock.IndexOf('RgEventType.ContainmentActivated')
+$activationPersist=$processBlock.IndexOf('containmentStore.RecordKernelActiveAsync(',$activationBranch)
+$activationReturn=$processBlock.IndexOf('return;',$activationPersist)
+$activationReply=$processBlock.IndexOf('Native.Reply(',$activationBranch)
+if($activationBranch -lt 0 -or $activationPersist -lt 0 -or $activationReturn -lt 0 -or
+   ($activationReply -ge 0 -and $activationReply -lt $activationReturn)){
+  throw 'ContainmentActivated must persist as no-reply kernel evidence.'
 }
 
 $workerDispatch=$text.IndexOf('Task.Run(() => ProcessMessageAsync(header, ev))')
@@ -290,4 +343,4 @@ if($restartBlock -notmatch [regex]::Escape('PathPolicy.Under(intent.OriginalPath
   throw 'Restart reconciliation must remain scoped to the explicitly selected LAB root.'
 }
 
-Write-Host 'LAB gate client source check PASSED: protocol-v12 activation-bound containment, file+topology preflight, eager writable-open pre-image, no-reply section/paging evidence, bounded workers, durable identity/restart evidence, no destructive/process-control APIs.'
+Write-Host 'LAB gate client source check PASSED: protocol-v13 event-bound containment, activation preflight, durable request/activation evidence, bounded workers, identity/restart evidence, no destructive/process-control APIs.'

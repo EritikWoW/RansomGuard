@@ -249,6 +249,7 @@ static class ActivationPreflight
         DevicePathResolver resolver,
         ActivationPreflightStore evidenceStore,
         ActivationTopologyStore topologyStore,
+        RollbackStorageBudget storageBudget,
         CancellationToken cancellationToken)
     {
         var options = new EnumerationOptions
@@ -268,8 +269,14 @@ static class ActivationPreflight
             var rootHandle = Native.OpenPreflightDirectory(rootPath);
             heldHandles.Add(rootHandle);
             var rootIdentity = FileIdentityStore.QueryHandleIdentity(rootHandle);
-            _ = await topologyStore.RecordAsync(rootPath, rootIdentity, isRoot: true, cancellationToken)
-                .ConfigureAwait(false);
+            await using (var rootReservation = await storageBudget.ReserveAsync(
+                             RollbackStorageBudget.MetadataReservationBytes,
+                             "activation-topology-root",
+                             cancellationToken).ConfigureAwait(false))
+            {
+                _ = await topologyStore.RecordAsync(rootPath, rootIdentity, isRoot: true, cancellationToken)
+                    .ConfigureAwait(false);
+            }
             heldDirectories++;
 
             var directories = Directory.EnumerateDirectories(rootPath, "*", options)
@@ -287,8 +294,14 @@ static class ActivationPreflight
                 var directoryHandle = Native.OpenPreflightDirectory(directory);
                 heldHandles.Add(directoryHandle);
                 var directoryIdentity = FileIdentityStore.QueryHandleIdentity(directoryHandle);
-                _ = await topologyStore.RecordAsync(directory, directoryIdentity, isRoot: false, cancellationToken)
-                    .ConfigureAwait(false);
+                await using (var directoryReservation = await storageBudget.ReserveAsync(
+                                 RollbackStorageBudget.MetadataReservationBytes,
+                                 "activation-topology-directory",
+                                 cancellationToken).ConfigureAwait(false))
+                {
+                    _ = await topologyStore.RecordAsync(directory, directoryIdentity, isRoot: false, cancellationToken)
+                        .ConfigureAwait(false);
+                }
                 heldDirectories++;
             }
 
@@ -325,9 +338,15 @@ static class ActivationPreflight
             }
 
             var writableView = (ev.Flags & WritableViewFlag) != 0;
-            _ = await evidenceStore.RecordAsync(
-                ev.Sequence, path, ev.CompletionStatus, writableView, identity, cancellationToken)
-                .ConfigureAwait(false);
+            await using (var fileReservation = await storageBudget.ReserveAsync(
+                             RollbackStorageBudget.MetadataReservationBytes,
+                             "activation-file-evidence",
+                             cancellationToken).ConfigureAwait(false))
+            {
+                _ = await evidenceStore.RecordAsync(
+                    ev.Sequence, path, ev.CompletionStatus, writableView, identity, cancellationToken)
+                    .ConfigureAwait(false);
+            }
 
             if (!NtSuccess(ev.CompletionStatus))
                 throw new InvalidOperationException(

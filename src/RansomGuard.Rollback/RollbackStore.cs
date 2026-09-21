@@ -39,8 +39,16 @@ public sealed class RollbackStore
 
     public IReadOnlyCollection<RollbackCapture> Captures => _firstCapture.Values.OrderBy(x => x.Sequence).ToArray();
 
-    public async Task<RollbackCapture> CapturePreimageAsync(string path, RollbackMutationKind mutation,
-        CancellationToken cancellationToken = default)
+    public Task<RollbackCapture> CapturePreimageAsync(string path, RollbackMutationKind mutation,
+        CancellationToken cancellationToken = default) =>
+        CapturePreimageCoreAsync(path, mutation, null, cancellationToken);
+
+    public Task<RollbackCapture> CapturePreimageAsync(string path, RollbackMutationKind mutation,
+        DurableFileIdentity expectedIdentity, CancellationToken cancellationToken = default) =>
+        CapturePreimageCoreAsync(path, mutation, expectedIdentity, cancellationToken);
+
+    private async Task<RollbackCapture> CapturePreimageCoreAsync(string path, RollbackMutationKind mutation,
+        DurableFileIdentity? expectedIdentity, CancellationToken cancellationToken)
     {
         var full = NormalizeSource(path);
         if (_firstCapture.TryGetValue(full, out var existing)) return existing;
@@ -62,6 +70,12 @@ public sealed class RollbackStore
             using var input = new FileStream(full, FileMode.Open, FileAccess.Read,
                 FileShare.Read | FileShare.Write | FileShare.Delete, 1024 * 1024,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
+            if (expectedIdentity is not null)
+            {
+                var actualIdentity = FileIdentityStore.QueryHandleIdentity(input.SafeFileHandle);
+                if (actualIdentity != expectedIdentity)
+                    throw new InvalidDataException("Full pre-image source handle identity does not match the expected incident identity.");
+            }
             using var output = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None,
                 1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan | FileOptions.WriteThrough);
             using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);

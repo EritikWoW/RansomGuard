@@ -201,12 +201,13 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
 {
     RG_EVENT_TYPE eventType = RgEventInvalid;
     RG_EVENT event;
+    PRG_POST_CONTEXT postContext = NULL;
     NTSTATUS status;
     LONG mode;
     ULONG gateError = 0;
     ULONG infoClass;
 
-    UNREFERENCED_PARAMETER(CompletionContext);
+    *CompletionContext = NULL;
     if (!RgShouldObserve(Data)) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
@@ -231,9 +232,22 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
+    if (eventType == RgEventRename) {
+        status = RgCreateRenamePostContext(Data, FltObjects, event.Sequence, &postContext);
+        if (!NT_SUCCESS(status)) {
+            return RgCompleteDenied(Data);
+        }
+    }
+
     if (!RgGateEvent(&event, &gateError)) {
         UNREFERENCED_PARAMETER(gateError);
+        RgFreePostContext(postContext);
         return RgCompleteDenied(Data);
+    }
+
+    if (postContext != NULL) {
+        *CompletionContext = postContext;
+        return FLT_PREOP_SUCCESS_WITH_CALLBACK;
     }
 
     return FLT_PREOP_SUCCESS_NO_CALLBACK;

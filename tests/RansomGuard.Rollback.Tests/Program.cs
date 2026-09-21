@@ -235,8 +235,115 @@ try
     Check(!CreateGatePolicy.TryParseDisposition(6, out _), "unknown create disposition is rejected");
     Check(CreateGatePolicy.Decide(CreateDisposition.Create, CreateTargetState.Directory) ==
         CreatePreservationAction.NoPreservationRequired, "directory CREATE does not claim file-content preservation");
+    Check(!CreateGatePolicy.RequiresCompletionTracking(CreateDisposition.Open),
+        "plain FILE_OPEN does not create a post-op transaction record");
+    Check(CreateGatePolicy.RequiresCompletionTracking(CreateDisposition.Open, CreateGatePolicy.FileDeleteOnClose),
+        "FILE_OPEN with delete-on-close requires post-op tracking");
+    foreach (var disposition in new[]
+    {
+        CreateDisposition.Supersede, CreateDisposition.Create, CreateDisposition.OpenIf,
+        CreateDisposition.Overwrite, CreateDisposition.OverwriteIf
+    })
+        Check(CreateGatePolicy.RequiresCompletionTracking(disposition),
+            $"{disposition} requires post-op CREATE tracking");
 
-    // Repository-wide verification must include nested write-cow and create-state stores.
+    // CREATE transaction journal separates pre-op preservation intent from actual filesystem outcome.
+    var createTransactionRoot = Path.Combine(root, "create-operation-state");
+    var createTransactions = new CreateTransactionStore(createTransactionRoot);
+    var syntheticIdentity = new DurableFileIdentity(
+        "0011223344556677", "00112233445566778899AABBCCDDEEFF");
+    var syntheticPreimageHash = new string('A', 64);
+    var syntheticAbsentHash = new string('B', 64);
+
+    var createExistingIntent = await createTransactions.CaptureIntentAsync(
+        201, existingCreatePath, CreateDisposition.OverwriteIf, 0, 0x00120116,
+        CreateTargetState.File, false, CreatePreservationAction.CaptureExistingPreimage,
+        syntheticIdentity, syntheticPreimageHash);
+    Check(createExistingIntent.RequestSequence == 201 &&
+          createExistingIntent.PreservationRecordSha256 == syntheticPreimageHash,
+        "CREATE intent links destructive existing-file operation to durable pre-image hash");
+
+    var createAbsentIntent = await createTransactions.CaptureIntentAsync(
+        202, Path.Combine(sourceDir, "create-intent-missing.bin"), CreateDisposition.Create, 0, 0x00120116,
+        CreateTargetState.Missing, true, CreatePreservationAction.RecordOriginallyAbsent,
+        null, syntheticAbsentHash);
+    Check(createAbsentIntent.OriginallyAbsent &&
+          createAbsentIntent.PreservationRecordSha256 == syntheticAbsentHash,
+        "CREATE intent links originally-absent operation to durable absence baseline");
+
+    var createNoPreserveIntent = await createTransactions.CaptureIntentAsync(
+        203, existingCreatePath, CreateDisposition.OpenIf, 0, 0x00120089,
+        CreateTargetState.File, false, CreatePreservationAction.NoPreservationRequired,
+        syntheticIdentity, string.Empty);
+    Check(createNoPreserveIntent.PreservationAction == CreatePreservationAction.NoPreservationRequired,
+        "non-destructive tracked CREATE intent carries no false preservation hash");
+    Check(createTransactions.PendingIntents.Count == 3,
+        "CREATE intents remain pending until post-operation completion is recorded");
+
+    var createSucceeded = await createTransactions.RecordCompletionAsync(
+        201, CreateCompletionState.Succeeded, 0, 2, existingCreatePath);
+    Check(createSucceeded.State == CreateCompletionState.Succeeded &&
+          createSucceeded.FinalPath.Equals(existingCreatePath, StringComparison.OrdinalIgnoreCase),
+        "successful CREATE completion records final normalized path and information");
+
+    var createFailed = await createTransactions.RecordCompletionAsync(
+        202, CreateCompletionState.Failed, 0xC0000035u, 0, null);
+    Check(createFailed.State == CreateCompletionState.Failed,
+        "failed CREATE completion is distinct from its pre-op intent");
+
+    var createNameUnresolved = await createTransactions.RecordCompletionAsync(
+        203, CreateCompletionState.SucceededNameUnresolved, 0, 1, null);
+    Check(createNameUnresolved.State == CreateCompletionState.SucceededNameUnresolved,
+        "successful CREATE with unresolved tunneled name remains non-authoritative");
+    Check(createTransactions.PendingIntents.Count == 0,
+        "completed CREATE intents leave no pending reconciliation");
+
+    var reopenedCreateTransactions = new CreateTransactionStore(createTransactionRoot);
+    Check(reopenedCreateTransactions.Intents.Count == 3 &&
+          reopenedCreateTransactions.Completions.Count == 3 &&
+          reopenedCreateTransactions.PendingIntents.Count == 0,
+        "CREATE transaction intent/completion correlation rebuilds after reopen");
+
+    var conflictingCreateCompletionRejected = false;
+    try
+    {
+        _ = await createTransactions.RecordCompletionAsync(
+            201, CreateCompletionState.Failed, 0xC0000001u, 0, null);
+    }
+    catch (InvalidDataException) { conflictingCreateCompletionRejected = true; }
+    Check(conflictingCreateCompletionRejected,
+        "conflicting duplicate CREATE completion is rejected");
+
+    var invalidCreateIntentRejected = false;
+    try
+    {
+        _ = await createTransactions.CaptureIntentAsync(
+            204, newPath, CreateDisposition.OverwriteIf, 0, 0,
+            CreateTargetState.File, true, CreatePreservationAction.CaptureExistingPreimage,
+            syntheticIdentity, syntheticPreimageHash);
+    }
+    catch (InvalidDataException) { invalidCreateIntentRejected = true; }
+    Check(invalidCreateIntentRejected,
+        "CREATE intent rejects contradictory originally-absent existing-preimage state");
+
+    var createCompletionCorruptionRoot = Path.Combine(root, "create-operation-corruption");
+    var createCompletionCorruption = new CreateTransactionStore(createCompletionCorruptionRoot);
+    _ = await createCompletionCorruption.CaptureIntentAsync(
+        205, existingCreatePath, CreateDisposition.OpenIf, 0, 0,
+        CreateTargetState.File, false, CreatePreservationAction.NoPreservationRequired,
+        syntheticIdentity, string.Empty);
+    _ = await createCompletionCorruption.RecordCompletionAsync(
+        205, CreateCompletionState.Succeeded, 0, 1, existingCreatePath);
+    var createCompletionJournalBytes = await File.ReadAllBytesAsync(createCompletionCorruption.CompletionJournalPath);
+    createCompletionJournalBytes[^2] ^= 1;
+    await File.WriteAllBytesAsync(createCompletionCorruption.CompletionJournalPath, createCompletionJournalBytes);
+    var createCompletionJournalRejected = false;
+    try { _ = new CreateTransactionStore(createCompletionCorruptionRoot); }
+    catch (InvalidDataException) { createCompletionJournalRejected = true; }
+    Check(createCompletionJournalRejected,
+        "CREATE completion journal corruption is rejected");
+
+    // Repository-wide verification must include nested write-cow, create-state and CREATE transaction stores.
     var nestedRepo = new RollbackRepository(Path.Combine(root, "nested-repo"));
     var nestedSession = nestedRepo.CreateSession("nested");
     var nestedSource = Path.Combine(sourceDir, "nested.bin");
@@ -264,6 +371,23 @@ try
     try { nestedCreateRepo.VerifyAll(); }
     catch (InvalidDataException) { nestedCreateRejected = true; }
     Check(nestedCreateRejected, "repository verification includes nested create-state journal");
+
+    var nestedCreateOperationRepo = new RollbackRepository(Path.Combine(root, "nested-create-operation-repo"));
+    var nestedCreateOperationSession = nestedCreateOperationRepo.CreateSession("nested_create_operation");
+    var nestedCreateOperationState = new CreateTransactionStore(
+        Path.Combine(nestedCreateOperationSession.Root, "create-operation-state"));
+    _ = await nestedCreateOperationState.CaptureIntentAsync(
+        250, existingCreatePath, CreateDisposition.OpenIf, 0, 0,
+        CreateTargetState.File, false, CreatePreservationAction.NoPreservationRequired,
+        syntheticIdentity, string.Empty);
+    var nestedCreateOperationJournal = await File.ReadAllBytesAsync(nestedCreateOperationState.IntentJournalPath);
+    nestedCreateOperationJournal[^2] ^= 1;
+    await File.WriteAllBytesAsync(nestedCreateOperationState.IntentJournalPath, nestedCreateOperationJournal);
+    var nestedCreateOperationRejected = false;
+    try { nestedCreateOperationRepo.VerifyAll(); }
+    catch (InvalidDataException) { nestedCreateOperationRejected = true; }
+    Check(nestedCreateOperationRejected,
+        "repository verification includes nested CREATE transaction journal");
 
     // Durable Windows identity distinguishes path aliases from path replacement.
     var identityRoot = Path.Combine(root, "identity-state");

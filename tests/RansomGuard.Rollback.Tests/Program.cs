@@ -166,7 +166,37 @@ try
     catch (InvalidDataException) { rangeTempRejected = true; }
     Check(rangeTempRejected, "incomplete range temp artifact is rejected");
 
-    // Repository-wide verification must include nested write-cow stores.
+    // Create semantics record durable absence rather than inventing a zero-byte pre-image.
+    var createRoot = Path.Combine(root, "create-state");
+    var createStore = new CreateRollbackStore(createRoot);
+    var newPath = Path.Combine(sourceDir, "new-during-incident.bin");
+    var absent = await createStore.CaptureAbsentAsync(newPath);
+    Check(absent.Sequence == 1, "create baseline records first absent path");
+    Check(createStore.WasOriginallyAbsent(newPath), "create baseline marks path originally absent");
+    var absentAgain = await createStore.CaptureAbsentAsync(newPath);
+    Check(absentAgain.RecordSha256 == absent.RecordSha256, "create absence baseline is first-wins");
+    await File.WriteAllTextAsync(newPath, "created later");
+    createStore.VerifyAll();
+    Check(true, "create baseline remains valid after the path is created");
+    var reopenedCreate = new CreateRollbackStore(createRoot);
+    Check(reopenedCreate.WasOriginallyAbsent(newPath), "create baseline rebuilds after reopen");
+
+    var existingCreatePath = Path.Combine(sourceDir, "already-exists.bin");
+    await File.WriteAllTextAsync(existingCreatePath, "original");
+    var existingCreateRejected = false;
+    try { await createStore.CaptureAbsentAsync(existingCreatePath); }
+    catch (InvalidOperationException) { existingCreateRejected = true; }
+    Check(existingCreateRejected, "create absence baseline rejects an existing target");
+
+    var createJournalBytes = await File.ReadAllBytesAsync(createStore.JournalPath);
+    createJournalBytes[^2] ^= 1;
+    await File.WriteAllBytesAsync(createStore.JournalPath, createJournalBytes);
+    var createJournalRejected = false;
+    try { _ = new CreateRollbackStore(createRoot); }
+    catch (InvalidDataException) { createJournalRejected = true; }
+    Check(createJournalRejected, "create baseline journal corruption is rejected");
+
+    // Repository-wide verification must include nested write-cow and create-state stores.
     var nestedRepo = new RollbackRepository(Path.Combine(root, "nested-repo"));
     var nestedSession = nestedRepo.CreateSession("nested");
     var nestedSource = Path.Combine(sourceDir, "nested.bin");
@@ -181,6 +211,19 @@ try
     try { nestedRepo.VerifyAll(); }
     catch (InvalidDataException) { nestedRejected = true; }
     Check(nestedRejected, "repository verification includes nested range COW hashes");
+
+    var nestedCreateRepo = new RollbackRepository(Path.Combine(root, "nested-create-repo"));
+    var nestedCreateSession = nestedCreateRepo.CreateSession("nested_create");
+    var nestedCreateState = new CreateRollbackStore(Path.Combine(nestedCreateSession.Root, "create-state"));
+    var nestedMissing = Path.Combine(sourceDir, "nested-created.bin");
+    await nestedCreateState.CaptureAbsentAsync(nestedMissing);
+    var nestedCreateJournal = await File.ReadAllBytesAsync(nestedCreateState.JournalPath);
+    nestedCreateJournal[^2] ^= 1;
+    await File.WriteAllBytesAsync(nestedCreateState.JournalPath, nestedCreateJournal);
+    var nestedCreateRejected = false;
+    try { nestedCreateRepo.VerifyAll(); }
+    catch (InvalidDataException) { nestedCreateRejected = true; }
+    Check(nestedCreateRejected, "repository verification includes nested create-state journal");
 
     Console.WriteLine($"All {passed} rollback tests passed. These are file-store tests, not minifilter integration tests.");
     return 0;

@@ -216,7 +216,8 @@ try {
     }
     $unexpected=@(Get-ChildItem -LiteralPath $release -File -Recurse | Where-Object {
         $_.Extension -in @('.sys','.cat','.inf','.dmp','.pdb','.cs','.xaml','.svg') -or
-        $_.Name -like '*Simulator*' -or $_.Name -like '*FilterClient*' -or $_.Name -like '*GateClient*'
+        $_.Name -like '*Simulator*' -or $_.Name -like '*FilterClient*' -or $_.Name -like '*GateClient*' -or
+        $_.Name -like '*RuntimeHarness*'
     })
     if($unexpected.Count -gt 0){throw 'Audit bundle contains engineering-only files.'}
     Write-Host '[5/6] Run synthetic WPF rendering test, including all four activity icons.'

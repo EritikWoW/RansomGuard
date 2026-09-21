@@ -29,11 +29,14 @@ foreach($required in @(
     'FltSendMessage',
     'RgGateSnapshotCommitted',
     'FLT_PREOP_COMPLETE',
-    'STATUS_ACCESS_DENIED'
+    'STATUS_ACCESS_DENIED',
+    'RgEventTruncate',
+    'FileEndOfFileInformation',
+    'FileAllocationInformation'
 )){
     if($src -notmatch [regex]::Escape($required)){throw "LAB write-gate invariant missing: $required"}
 }
-if($proto -notmatch '#define\s+RG_PROTOCOL_VERSION\s+2u'){throw 'Minifilter protocol must be v2 for gate replies.'}
+if($proto -notmatch '#define\s+RG_PROTOCOL_VERSION\s+3u'){throw 'Minifilter protocol must be v3 for range-COW gate replies.'}
 if($proto -notmatch 'RG_GATE_ROOT_CHARS'){throw 'Protocol must carry an explicit bounded gate root.'}
 if($src -notmatch 'Unresolved/out-of-root paths fail open'){throw 'LAB gate must document fail-open behavior outside the explicitly resolved gate root.'}
 if($src -notmatch 'requestorPid\s*==\s*\(ULONGLONG\)InterlockedCompareExchange64\(&gClientProcessId'){throw 'Gate client PID must be excluded to prevent rollback-store self-deadlock.'}
@@ -42,7 +45,7 @@ if($infText -notmatch 'Instance1\.Flags\s*=\s*0x1'){throw 'Automatic volume atta
 if($infText -notmatch 'Instance1\.Altitude\s*=\s*"370099\.4242"'){throw 'Unexpected LAB altitude. Review altitude policy manually.'}
 Write-Host 'LAB pre-write gate source check PASSED.' -ForegroundColor Green
 Write-Host 'Gate scope: one explicit NT root negotiated by the single connected client.'
-Write-Host 'In-scope WRITE/RENAME/DELETE require a committed user-mode pre-image reply.'
+Write-Host 'In-scope WRITE/RENAME/DELETE/TRUNCATE require a committed user-mode pre-image reply.'
 Write-Host 'Out-of-scope/unresolved I/O remains fail-open; no process-control or kernel file-writing APIs are present.'
 Write-Host 'Demand start: yes; automatic attachment suppressed: yes.'
 Write-Host 'x64 build/validation tools required; ApiValidator remains enabled.'

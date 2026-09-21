@@ -68,6 +68,11 @@ static BOOLEAN RgIsInterestingSetInfo(_In_ FILE_INFORMATION_CLASS InformationCla
     case FileDispositionInformationEx:
         *EventType = RgEventDeleteDisposition;
         return TRUE;
+    case FileEndOfFileInformation:
+    case FileAllocationInformation:
+    case FileValidDataLengthInformation:
+        *EventType = RgEventTruncate;
+        return TRUE;
     default:
         return FALSE;
     }

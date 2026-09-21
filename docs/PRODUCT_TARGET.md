@@ -14,10 +14,13 @@ pre-mutation preservation path.
 
 ## Current milestone
 
-Version 0.7.1.0 adds an engineering-only single-root pre-write gate to prove the ordering:
+Version 0.7.2.0 extends the engineering-only single-root pre-write gate with range-aware write copy-on-write:
 
-`I/O arrives -> durable first pre-image commit -> allow mutation`.
+`WRITE -> durable original-length baseline + first touched blocks -> allow mutation`.
 
-It is intentionally not enabled in the normal bundle and is not production-safe yet. The next milestones
-are production-grade range copy-on-write, exact create/rename/delete transaction modeling, containment,
-process-state capture, adaptive crypto analysis, and verified recovery orchestration.
+Rename, delete and truncate-class operations remain on a conservative full-file pre-image path.
+The gate is intentionally not enabled in the normal bundle and is not production-safe yet.
+
+The next core milestones are exact create/rename transaction modeling, durable volume/file identity,
+bounded concurrent and crash-reconciled gating, containment, process-state capture, adaptive crypto analysis,
+and verified recovery orchestration.

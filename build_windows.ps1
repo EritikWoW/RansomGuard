@@ -223,7 +223,7 @@ try {
     foreach($bundle in @($release,$labRelease)){
         if([string]::IsNullOrWhiteSpace($bundle)){continue}
         $isLab=$bundle -eq $labRelease
-        $state=[ordered]@{schema=1;version=$productVersion;profile=$(if($isLab){'EngineeringLab'}else{'AuditConsole'});ordinaryApps='AuditOnly';uiTransport='PushFramedPipeV2';recovery='OfflineRGTEST03';rollback='DurablePreimageStoreFoundation';scopedTrust='ExactHashContextAuditOnly';uiAdministration='SameExeUacOwnServiceAndReviewedRules';driverInstalledByBuild=$false;kernelWriteGateActive=$false;labKernelGateAvailable=$isLab;labKernelGate='ExplicitSingleRootPreWriteSnapshotCommit';uiTestPassed=$true}
+        $state=[ordered]@{schema=1;version=$productVersion;profile=$(if($isLab){'EngineeringLab'}else{'AuditConsole'});ordinaryApps='AuditOnly';uiTransport='PushFramedPipeV2';recovery='OfflineRGTEST03';rollback='DurableRangeCowLabFoundation';scopedTrust='ExactHashContextAuditOnly';uiAdministration='SameExeUacOwnServiceAndReviewedRules';driverInstalledByBuild=$false;kernelWriteGateActive=$false;labKernelGateAvailable=$isLab;labKernelGate='ExplicitSingleRootRangeCowAndFullMetadataPreimage';uiTestPassed=$true}
         $state | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $bundle 'BUILD_STATUS.json') -Encoding UTF8
         $hashes=Get-ChildItem -LiteralPath $bundle -File -Recurse | Sort-Object FullName | ForEach-Object {
             '{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash,$_.FullName.Substring($bundle.Length+1)
@@ -241,7 +241,7 @@ try {
         if(Test-Path -LiteralPath $lock){Copy-Item -LiteralPath $lock -Destination (Join-Path $lockDir ((Split-Path $projectDir -Leaf)+'.packages.lock.json'))}
     }
     Write-Host "WPF activity-card screenshots: $logs\ui-$stamp\Dark-activity-card.png / Light-activity-card.png"
-    Write-Host 'Normal bundle: UI + AUDIT engine + durable rollback-store foundation. No driver. It DOES NOT yet block ransomware or capture pre-images automatically.'
+    Write-Host 'Normal bundle: UI + AUDIT engine + durable rollback foundations. No driver. It DOES NOT yet block ransomware or capture pre-images automatically.'
     Write-Host 'No old release, user configuration, incident, backup or installed driver was removed.'
     exit 0
 }

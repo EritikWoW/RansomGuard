@@ -1,3 +1,16 @@
+# RansomGuard 0.7.2.0
+
+- Added range-aware 1 MiB copy-on-write preservation for gated WRITE operations.
+- The first write to a file durably records its original length; only original blocks intersecting writes are captured, and each block is captured at most once per incident.
+- Range objects and baselines use an append-only SHA-256 hash-chained journal with write-through/Flush(true) commits.
+- Added copy-only range reconstruction: damaged source is never overwritten; captured blocks are SHA-256 verified before overlay and the original file length is restored.
+- Appends beyond the original EOF are reversible from the baseline length without storing nonexistent blocks.
+- Range recovery refuses a damaged source shorter than the original baseline rather than guessing missing bytes.
+- Protocol bumped to v3 and added explicit TRUNCATE-class events for end-of-file/allocation/valid-data-length changes.
+- Rename, delete and truncate-class operations continue to use conservative full-file pre-images.
+- Added rollback tests for multi-block writes, repeated writes to one block, append rollback and range-journal verification.
+- Normal product remains AuditOnly; the blocking minifilter path remains engineering LAB-only.
+
 # RansomGuard 0.7.1.0
 
 - Added protocol v2 for the engineering minifilter path with an explicit single-root LAB pre-write gate.

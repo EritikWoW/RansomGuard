@@ -1,10 +1,10 @@
 #pragma once
 
 // Wire protocol between the RansomGuard lab minifilter and user-mode clients.
-// v2 adds an explicitly scoped LAB pre-write gate. The production bundle still
+// v3 adds range-aware write COW plus explicit truncate gating. The production bundle still
 // does not install or enable the driver.
 
-#define RG_PROTOCOL_VERSION 2u
+#define RG_PROTOCOL_VERSION 3u
 #define RG_PATH_CHARS 512u
 #define RG_GATE_ROOT_CHARS 260u
 #define RG_PORT_NAME L"\\RansomGuardMinifilterPort"
@@ -13,7 +13,7 @@ typedef enum _RG_EVENT_TYPE {
     RgEventInvalid = 0,
     RgEventWrite = 1,
     RgEventRename = 2,
-    RgEventDeleteDisposition = 3
+    RgEventDeleteDisposition = 3,\n    RgEventTruncate = 4
 } RG_EVENT_TYPE;
 
 typedef enum _RG_PATH_STATUS {

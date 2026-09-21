@@ -52,6 +52,48 @@ try
     Check(laterCapture.OriginalSha256 == Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(source))),
         "new incident captures the current file, not an ancient global pre-image");
 
+    // Range-aware COW captures only original blocks touched by writes and restores to a new copy.
+    var cowSource = Path.Combine(sourceDir, "cow.bin");
+    var cowOriginal = Enumerable.Range(0, 3 * 1024 * 1024 + 12345)
+        .Select(i => (byte)(i % 251)).ToArray();
+    await File.WriteAllBytesAsync(cowSource, cowOriginal);
+    var cow = new RangeRollbackStore(Path.Combine(root, "cow-session"));
+    await cow.CaptureWritePreimageAsync(cowSource, 512 * 1024, 4096);
+    Check(cow.BaselineCount == 1, "range COW records one file baseline");
+    Check(cow.BlockCount == 1, "range COW captures first touched block only");
+
+    await using (var rw = new FileStream(cowSource, FileMode.Open, FileAccess.Write, FileShare.Read))
+    {
+        rw.Position = 512 * 1024;
+        await rw.WriteAsync(new byte[4096]);
+        rw.Position = 2 * 1024 * 1024 + 2000;
+        await cow.CaptureWritePreimageAsync(cowSource, rw.Position, 8192);
+        await rw.WriteAsync(Enumerable.Repeat((byte)0xCC, 8192).ToArray());
+    }
+    Check(cow.BlockCount == 2, "range COW captures a newly touched block later in the incident");
+
+    var cowRecoveryDir = Path.Combine(root, "cow-recovered");
+    var cowRecovered = await cow.RestoreToNewCopyAsync(cowSource, cowRecoveryDir);
+    Check(File.ReadAllBytes(cowRecovered).SequenceEqual(cowOriginal),
+        "range COW reconstructs original bytes from damaged file plus captured blocks");
+    Check(!File.ReadAllBytes(cowSource).SequenceEqual(cowOriginal),
+        "range COW recovery never overwrites damaged source");
+
+    var appendSource = Path.Combine(sourceDir, "append.bin");
+    var appendOriginal = Encoding.UTF8.GetBytes("APPEND-BASELINE");
+    await File.WriteAllBytesAsync(appendSource, appendOriginal);
+    var appendCow = new RangeRollbackStore(Path.Combine(root, "append-session"));
+    await appendCow.CaptureWritePreimageAsync(appendSource, appendOriginal.Length, 2048);
+    await using (var append = new FileStream(appendSource, FileMode.Append, FileAccess.Write, FileShare.Read))
+        await append.WriteAsync(new byte[2048]);
+    Check(appendCow.BlockCount == 0, "append beyond original EOF needs baseline but no original data block");
+    var appendRecovered = await appendCow.RestoreToNewCopyAsync(appendSource, Path.Combine(root, "append-recovered"));
+    Check(File.ReadAllBytes(appendRecovered).SequenceEqual(appendOriginal),
+        "range COW recovery truncates appended bytes to original length");
+
+    cow.VerifyAll(); Check(true, "range COW journal and block hashes verify");
+    appendCow.VerifyAll(); Check(true, "append-only range COW baseline verifies");
+
     var journal = reopened.JournalPath;
     var journalBytes = await File.ReadAllBytesAsync(journal);
     journalBytes[^2] ^= 1;

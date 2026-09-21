@@ -1,72 +1,99 @@
-# RansomGuard 0.7.1.0 - pre-write gate milestone
+# RansomGuard 0.7.2.0 - range-aware pre-write COW milestone
 
 RansomGuard is moving from detection-only telemetry to `preserve -> contain -> recover`.
-Version 0.7.1.0 connects the durable rollback primitive from 0.7.0.0 to a deliberately constrained
-**engineering-only** minifilter gate so the preservation ordering can be validated on Windows before a
-production filter is attempted.
+0.7.2.0 keeps the deliberately constrained engineering minifilter gate and changes ordinary WRITE
+preservation from whole-file snapshots to incident-scoped range/block copy-on-write.
 
-## Required ordering
+## WRITE ordering
 
-For an I/O request inside the explicitly negotiated LAB root:
+For a WRITE inside the explicitly negotiated LAB root:
 
-1. The minifilter observes WRITE, rename, or delete-disposition before the filesystem mutation completes.
-2. It sends the normalized source path and operation metadata to the single connected gate client.
-3. The originating I/O remains waiting for a bounded reply.
-4. `RansomGuard.GateClient` verifies that the path still belongs to the exact disposable LAB root.
-5. `RansomGuard.Rollback` captures the incident's first pre-image, computes SHA-256, flushes the object,
-   commits the hash-chained journal entry, and flushes the journal.
-6. Only after that durable commit does user mode reply `SnapshotCommitted`.
-7. The minifilter allows the original operation only for that reply and matching request sequence.
-8. Capture failure, malformed reply, timeout, or an explicit deny causes the in-scope LAB I/O to return
-   `STATUS_ACCESS_DENIED`.
+1. The minifilter observes the write before it is completed.
+2. The request remains pending while the event is sent to the single LAB gate client.
+3. The gate client resolves and revalidates the exact disposable root/path.
+4. On the first write to a file, `RangeRollbackStore` durably records the original file length.
+5. Every original 1 MiB block intersecting the pending write is captured at most once for the session.
+6. Each block is SHA-256 hashed, written with write-through semantics, and committed to an append-only
+   SHA-256 hash-chained journal.
+7. Only after all required blocks are committed does user mode reply `SnapshotCommitted`.
+8. The minifilter allows the original write only for the matching successful reply.
+9. Capture failure, malformed reply, timeout, unsupported negative/special offset, or explicit deny
+   returns `STATUS_ACCESS_DENIED` for that in-scope LAB operation.
 
-This ordering is the core invariant we need for real anti-encryption protection: the source version must
-exist durably before the destructive mutation is allowed to proceed.
+Writes that start at or beyond the original EOF still commit the original-length baseline. No old bytes
+exist to copy, so rollback removes the append by restoring the recorded original length.
+
+## Rename / delete / truncate ordering
+
+Rename, delete-disposition, end-of-file, allocation-length and valid-data-length operations use the conservative
+full-file pre-image store. These operations can destroy or relocate information in ways that are not yet modeled
+as block-only transactions.
+
+Protocol v3 therefore exposes four mutation classes:
+
+- WRITE
+- RENAME
+- DELETE
+- TRUNCATE
+
+## Range recovery
+
+Range recovery never modifies the damaged source.
+
+It creates a new `.ransomguard-cow-recovered` copy by:
+
+1. copying the current damaged file to a new temporary output;
+2. verifying every committed original block by SHA-256;
+3. overlaying those blocks at their original offsets;
+4. restoring the original file length;
+5. flushing the new output before publication.
+
+If the damaged file is shorter than the original baseline, range reconstruction refuses to guess. That case
+requires the full-preimage/transaction path.
+
+The range journal also rejects sequence gaps, hash-chain mismatches, duplicate baselines/blocks,
+missing/truncated block objects, path traversal, reparse storage, and unjournaled `.block` objects.
 
 ## Why this is still LAB-only
 
-The prototype deliberately gates only one explicit root negotiated at connection time. The gate client
-requires a `.ransomguard-gate-lab-root` marker and rejects an entire drive, Windows, Program Files,
-ProgramData and reparse roots. The rollback store must live outside the gated root. The gate client's own
-PID is excluded in kernel mode to prevent recursive blocking while it commits snapshots and the journal.
+The prototype gates one explicit root negotiated at connection time. The gate client requires
+`.ransomguard-gate-lab-root` and rejects an entire drive, Windows, Program Files, ProgramData and reparse roots.
+The rollback store must live outside the gated root. The gate client's PID is excluded in kernel mode to avoid
+self-deadlock while it writes rollback data.
 
-Outside the exact root, or when a path cannot be resolved, the driver fails open. When no client is
-connected it does not gate anything. This avoids turning a development fault into an OS-wide I/O outage.
-The driver remains demand-start and automatic volume attachment remains suppressed. The unassigned lab
-altitude `370099.4242` remains a placeholder and must never ship.
+Outside the exact root, or when the path cannot be resolved, the driver fails open. When no client is connected,
+it does not gate anything. The filter remains demand-start, automatic attachment is suppressed, and
+`370099.4242` remains an unassigned LAB altitude.
 
-The ordinary product bundle does not contain/install/enable the driver and continues to report
-`kernelWriteGateActive=false`. Only `build_lab.cmd` publishes the gate client and driver source/tools.
+The normal product bundle does not install or enable this driver. Ordinary product operation remains AuditOnly.
 
-## Current rollback semantics
+## Still required before production
 
-`RansomGuard.Rollback` still stores the first pre-image per path per incident session. Recovery writes a
-new `.ransomguard-recovered` copy and verifies its SHA-256; it never overwrites a damaged source directly.
-The journal remains append-only and hash chained.
-
-This milestone protects the **content pre-image ordering**. It is not yet a complete filesystem transaction
-model. In particular, production work still needs:
-
-- explicit create semantics (new-file rollback currently is not modeled as "delete on rollback");
+- explicit create/new-file transaction semantics;
 - rename destination capture and identity-safe rename rollback;
-- range/block copy-on-write for large files instead of whole-file snapshots;
-- bounded concurrent gate workers instead of one simple engineering client loop;
-- crash/restart reconciliation for I/O that was pending during user-mode failure;
-- durable per-volume identity rather than relying only on path identity;
-- cache-manager / memory-mapped-write coverage and compatibility testing;
-- a production fail-open/fail-closed policy with protected-root health state;
-- signed driver distribution and a Microsoft-assigned minifilter altitude.
+- durable file identity (volume + file ID), not path identity alone;
+- bounded concurrent pending-I/O workers;
+- crash/restart reconciliation for requests pending during user-mode failure;
+- memory-mapped/cache-manager write coverage;
+- storage quotas, retention and pressure policy;
+- transition from protected-root health to containment/block policy;
+- process-state capture and adaptive crypto analysis;
+- verified recovery orchestration across rollback and crypto recovery;
+- signed driver distribution and Microsoft-assigned altitude.
 
-## Test target for this milestone
+## Windows LAB test target
 
-On a disposable Windows VM and disposable LAB directory:
+On a disposable VM and disposable LAB directory:
 
-1. Put a known file in the LAB root and hash it.
+1. Create a multi-megabyte known file and hash it.
 2. Start the LAB gate.
-3. Modify the file from another process.
-4. Verify the write completed only after a rollback object/journal record exists.
-5. Verify the recovered copy hashes to the original pre-write file.
-6. Force the gate client to fail or stop replying and verify in-scope destructive I/O is denied.
-7. Verify files outside the LAB root remain unaffected by the gate.
+3. Modify bytes in one block and verify only that original block is captured.
+4. Modify the same block again and verify no second pre-image is created.
+5. Modify another block and verify one additional block is captured.
+6. Append data past EOF and verify only the original-length baseline is needed for that append.
+7. Reconstruct to a new copy and compare it to the original known file.
+8. Exercise truncate and verify the conservative full-file pre-image path is used.
+9. Stop/fault the gate client and verify in-scope destructive I/O is denied.
+10. Verify files outside the LAB root remain unaffected.
 
-Do not use the blocking prototype on a primary workstation or point it at real user data.
+Do not load the blocking prototype on a primary workstation.

@@ -297,7 +297,7 @@ foreach($required in @(
 }
 
 $processStart=$text.IndexOf('async Task ProcessMessageAsync')
-$processEnd=$text.IndexOf('try',$text.IndexOf('while (!cts.IsCancellationRequested)'))
+$processEnd=$text.IndexOf('repository.VerifyAll()',$processStart)
 if($processStart -lt 0 -or $processEnd -lt 0){throw 'ProcessMessageAsync source block missing.'}
 $processBlock=$text.Substring($processStart,$processEnd-$processStart)
 $requestPersist=$processBlock.IndexOf('containmentStore.RecordRequestAsync(')

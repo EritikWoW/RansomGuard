@@ -1,0 +1,114 @@
+name: Minifilter compile
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minifilter-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  driver:
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Add x64 MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
+
+      - name: Setup NuGet
+        uses: NuGet/setup-nuget@v2
+
+      - name: Cache pinned WDK and SDK packages
+        uses: actions/cache@v4
+        with:
+          path: packages
+          key: wdk-${{ runner.os }}-${{ hashFiles('packages.config') }}
+
+      - name: Restore pinned WDK and SDK packages
+        shell: pwsh
+        run: |
+          nuget restore .\packages.config -PackagesDirectory .\packages -NonInteractive
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Validate minifilter source boundary
+        shell: pwsh
+        run: |
+          Set-ExecutionPolicy -Scope Process Bypass -Force
+          .\minifilter-tools\verify_minifilter_source.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Compile unsigned x64 minifilter
+        shell: pwsh
+        run: |
+          msbuild .\driver\RansomGuard.Minifilter\RansomGuard.Minifilter.vcxproj `
+            /t:Rebuild `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            /p:PreferredToolArchitecture=x64 `
+            /p:WindowsTargetPlatformVersion=10.0.28000.0 `
+            /p:SignMode=Off `
+            /p:EnableTestSign=false `
+            /m `
+            /v:minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Validate x64 APIs and stage unsigned driver artifact
+        shell: pwsh
+        run: |
+          $sysPath = '.\driver\RansomGuard.Minifilter\bin\x64\Release\RansomGuardMinifilter.sys'
+          if (-not (Test-Path -LiteralPath $sysPath)) {
+            throw 'MSBuild did not produce RansomGuardMinifilter.sys; treat this as a compile/link failure.'
+          }
+          $sys = Resolve-Path $sysPath
+
+          $wdkRoot = Resolve-Path '.\packages\Microsoft.Windows.WDK.x64.10.0.28000.2526\c'
+          $api = Join-Path $wdkRoot 'bin\10.0.28000.0\x64\ApiValidator.exe'
+          $ddi = Join-Path $wdkRoot 'build\10.0.28000.0\universalDDIs\x64\UniversalDDIs.xml'
+          $modules = Join-Path $wdkRoot 'build\10.0.28000.0\universalDDIs\x64\ModuleWhiteList.xml'
+          $extractor = Join-Path $wdkRoot 'bin\10.0.28000.0\x64'
+
+          foreach ($required in @($api,$ddi,$modules,(Join-Path $extractor 'Aitstatic.exe'))) {
+            if (-not (Test-Path -LiteralPath $required)) { throw "Required x64 WDK validation component missing: $required" }
+          }
+
+          & $api `
+            "-DriverPackagePath:$sys" `
+            "-SupportedApiXmlFiles:$ddi" `
+            "-ModuleWhiteListXmlFiles:$modules" `
+            "-ApiExtractorExePath:$extractor"
+          if ($LASTEXITCODE -ne 0) { throw "x64 ApiValidator failed with exit code $LASTEXITCODE" }
+
+          $sig = Get-AuthenticodeSignature -LiteralPath $sys
+          if ($sig.Status -eq 'Valid') { throw 'CI compile artifact unexpectedly has a valid embedded signature.' }
+
+          $stage = '.\minifilter-ci'
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          Copy-Item -LiteralPath $sys -Destination $stage
+          Copy-Item -LiteralPath .\driver\RansomGuard.Minifilter\RansomGuardMinifilter.inf -Destination $stage
+          Copy-Item -LiteralPath .\native\shared\rg_minifilter_protocol.h -Destination $stage
+
+          Get-ChildItem -LiteralPath $stage -File |
+            ForEach-Object { '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash, $_.Name } |
+            Set-Content -LiteralPath (Join-Path $stage 'SHA256SUMS.txt') -Encoding ascii
+
+          Write-Host "MINIFILTER COMPILE + x64 API VALIDATION PASSED: $sys"
+          Write-Host "Signature status: $($sig.Status) (expected for compile-only CI)"
+
+      - name: Upload unsigned minifilter compile artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ransomguard-minifilter-unsigned-x64
+          path: minifilter-ci/**
+          if-no-files-found: error

@@ -9,6 +9,7 @@
 - Added explicit gate replies for committed absence baselines and non-destructive opens that require no preservation.
 - Added a pure create-disposition policy and matrix tests, plus repository-wide validation of nested `create-state` journals.
 - Normal product remains AuditOnly; CREATE gating remains engineering LAB-only and still needs identity-safe post-create reconciliation.
+- Added pinned x64 WDK/SDK compile CI for the minifilter with fail-fast MSBuild, explicit x64 Universal DDI ApiValidator validation, unsigned-artifact enforcement and SHA-256 artifact manifest.
 
 # RansomGuard 0.7.2.0
 

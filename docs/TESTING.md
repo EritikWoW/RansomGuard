@@ -1,4 +1,4 @@
-# Testing 0.6.3.0
+# Testing and validation
 
 Build executes existing policy tests plus RansomGuard.Recovery.Tests (offline only).
 New cases cover AES schedule vectors, BE/LE word order, corrupted schedules, a
@@ -60,3 +60,18 @@ an existing target as absent, and verify that repository-wide startup validation
 
 These are userspace policy/store tests plus kernel source gates. They do not prove native IRP_MJ_CREATE
 execution, tunneled-name handling, or file-ID race safety; those still require an isolated Windows VM.
+
+
+## Automated x64 minifilter compile gate
+
+GitHub Actions restores pinned Microsoft WDK/SDK C++ 10.0.28000.2526 packages and builds
+`driver/RansomGuard.Minifilter/RansomGuard.Minifilter.vcxproj` as Release x64 with x64 MSBuild.
+The build is compile-only and signing is disabled.
+
+The workflow then runs the x64 WDK `ApiValidator.exe` against the produced SYS with the x64
+Universal DDI XML/allow-list and refuses the artifact if API validation fails. The compile artifact
+must remain unsigned; only the SYS, INF, shared protocol header and SHA-256 manifest are uploaded.
+
+This proves C/WDK compilation, link resolution and Universal DDI API compatibility. It does not prove
+driver loadability on a target machine, minifilter attachment, Filter Manager message exchange,
+IRP ordering, filesystem semantics, Driver Verifier behavior or production signing.

@@ -6,3 +6,5 @@ build-logs/
 *.partial
 RansomGuard-TestLab/
 *.user
+packages/
+minifilter-ci/

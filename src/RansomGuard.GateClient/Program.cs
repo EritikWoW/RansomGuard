@@ -25,9 +25,10 @@ var store = repository.CreateSession(sessionId);
 var writeStore = new RangeRollbackStore(Path.Combine(store.Root, "write-cow"));
 var createStore = new CreateRollbackStore(Path.Combine(store.Root, "create-state"));
 var identityStore = new FileIdentityStore(Path.Combine(store.Root, "identity-state"));
+var createTransactionStore = new CreateTransactionStore(Path.Combine(store.Root, "create-transaction-state"));
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
-Console.WriteLine("RansomGuard LAB pre-write gate v0.7.3.0");
+Console.WriteLine("RansomGuard LAB pre-write gate v0.7.4.0");
 Console.WriteLine("LAB ONLY: use only inside a disposable test directory on a test machine/VM.");
 Console.WriteLine($"Protected LAB root : {options.Root}");
 Console.WriteLine($"Kernel NT root     : {ntRoot}");
@@ -38,7 +39,7 @@ Console.WriteLine("Press Ctrl+C to disconnect. The driver then stops gating beca
 
 var context = new RgConnectContext
 {
-    ProtocolVersion = 4,
+    ProtocolVersion = 5,
     ClientMode = (uint)RgClientMode.LabGate,
     ClientProcessId = (ulong)Environment.ProcessId,
     GateRootLengthBytes = checked((uint)(ntRoot.Length * 2)),
@@ -53,7 +54,7 @@ var headerSize = Marshal.SizeOf<FilterMessageHeader>();
 var eventSize = Marshal.SizeOf<RgEvent>();
 var replyHeaderSize = Marshal.SizeOf<FilterReplyHeader>();
 var gateReplySize = Marshal.SizeOf<RgGateReply>();
-if (headerSize != 16 || eventSize != 1096 || replyHeaderSize != 16 || gateReplySize != 24)
+if (headerSize != 16 || eventSize != 1144 || replyHeaderSize != 16 || gateReplySize != 24)
     throw new InvalidOperationException($"Unexpected protocol sizes: message={headerSize}, event={eventSize}, replyHeader={replyHeaderSize}, gateReply={gateReplySize}");
 
 var resolver = new DevicePathResolver();
@@ -71,7 +72,8 @@ try
 
         var header = Marshal.PtrToStructure<FilterMessageHeader>(buffer);
         var ev = Marshal.PtrToStructure<RgEvent>(IntPtr.Add(buffer, headerSize));
-        var reply = await GateDecision.EvaluateAsync(ev, resolver, options.Root, store, writeStore, createStore, identityStore, cts.Token);
+        var reply = await GateDecision.EvaluateAsync(ev, resolver, options.Root, store, writeStore, createStore,
+            identityStore, createTransactionStore, cts.Token);
         Native.Reply(port, header.MessageId, reply);
 
         var path = resolver.Resolve(ev.Path) ?? ev.Path ?? "<unresolved>";
@@ -87,13 +89,14 @@ static class GateDecision
 {
     public static async Task<RgGateReply> EvaluateAsync(RgEvent ev, DevicePathResolver resolver, string root,
         RollbackStore store, RangeRollbackStore writeStore, CreateRollbackStore createStore,
-        FileIdentityStore identityStore, CancellationToken cancellationToken)
+        FileIdentityStore identityStore, CreateTransactionStore createTransactionStore,
+        CancellationToken cancellationToken)
     {
         try
         {
             // Never preserve or authorize against a truncated path. The kernel only sends a truncated
             // gate event when its known prefix is already inside the explicit LAB root, so deny it here.
-            if (ev.ProtocolVersion != 4 || ev.PathStatus != (uint)RgPathStatus.Resolved)
+            if (ev.ProtocolVersion != 5 || ev.PathStatus != (uint)RgPathStatus.Resolved)
                 return Deny(ev.Sequence, 1);
 
             var path = resolver.Resolve(ev.Path);
@@ -101,8 +104,12 @@ static class GateDecision
                 return Deny(ev.Sequence, 2);
 
             var eventType = (RgEventType)ev.EventType;
+            if (eventType == RgEventType.CreateResult)
+                return await EvaluateCreateResultAsync(ev, path, identityStore, createTransactionStore, cancellationToken)
+                    .ConfigureAwait(false);
             if (eventType == RgEventType.Create)
-                return await EvaluateCreateAsync(ev, path, store, createStore, identityStore, cancellationToken).ConfigureAwait(false);
+                return await EvaluateCreateAsync(ev, path, store, createStore, identityStore,
+                    createTransactionStore, cancellationToken).ConfigureAwait(false);
 
             var state = PathProbe.Get(path);
             if (state != CreateTargetState.File)
@@ -152,7 +159,7 @@ static class GateDecision
 
     private static async Task<RgGateReply> EvaluateCreateAsync(RgEvent ev, string path,
         RollbackStore store, CreateRollbackStore createStore, FileIdentityStore identityStore,
-        CancellationToken cancellationToken)
+        CreateTransactionStore createTransactionStore, CancellationToken cancellationToken)
     {
         var rawDisposition = (ev.Flags >> 24) & 0xFF;
         if (!CreateGatePolicy.TryParseDisposition(rawDisposition, out var disposition))
@@ -173,10 +180,18 @@ static class GateDecision
                 _ = await store.CapturePreimageAsync(path, RollbackMutationKind.Create,
                         identityBaseline.Identity, cancellationToken)
                     .ConfigureAwait(false);
+                _ = await createTransactionStore.RegisterPendingAsync(
+                        ev.Sequence, path, ev.Flags, (uint)RgGateDecision.SnapshotCommitted,
+                        identityBaseline.Identity, cancellationToken)
+                    .ConfigureAwait(false);
                 return Allow(ev.Sequence, RgGateDecision.SnapshotCommitted);
 
             case CreatePreservationAction.RecordOriginallyAbsent:
                 _ = await createStore.CaptureAbsentAsync(path, cancellationToken).ConfigureAwait(false);
+                _ = await createTransactionStore.RegisterPendingAsync(
+                        ev.Sequence, path, ev.Flags, (uint)RgGateDecision.BaselineCommitted,
+                        null, cancellationToken)
+                    .ConfigureAwait(false);
                 return Allow(ev.Sequence, RgGateDecision.BaselineCommitted);
 
             case CreatePreservationAction.DenyUnsupported:
@@ -191,9 +206,59 @@ static class GateDecision
         }
     }
 
+    private static async Task<RgGateReply> EvaluateCreateResultAsync(
+        RgEvent ev,
+        string path,
+        FileIdentityStore identityStore,
+        CreateTransactionStore createTransactionStore,
+        CancellationToken cancellationToken)
+    {
+        if (ev.RelatedSequence == 0)
+            return Deny(ev.Sequence, 9);
+        if (!createTransactionStore.TryGetPending(ev.RelatedSequence, out var pending) || pending is null)
+            return Deny(ev.Sequence, 10);
+
+        var completionSucceeded = unchecked((int)ev.CompletionStatus) >= 0;
+        var identitySucceeded = unchecked((int)ev.IdentityStatus) >= 0;
+        DurableFileIdentity? postIdentity = null;
+        if (completionSucceeded && identitySucceeded)
+        {
+            postIdentity = new DurableFileIdentity(
+                ev.VolumeSerialNumber.ToString("X16"),
+                ev.FileIdPart0.ToString("X16") + ev.FileIdPart1.ToString("X16"));
+        }
+
+        // FILE_SUPERSEDED (CreateAction=0) replaces the old file object. Commit the explicit
+        // identity transition before Outcome so a crash between the two leaves Pending unresolved.
+        if (completionSucceeded && ev.CreateAction == 0 && pending.PreIdentity is not null &&
+            postIdentity is not null && !pending.PreIdentity.Equals(postIdentity))
+        {
+            _ = await identityStore.TransitionAsync(
+                    path, pending.PreIdentity, postIdentity, ev.Sequence, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        var outcome = await createTransactionStore.CompleteAsync(
+                ev.RelatedSequence,
+                ev.Sequence,
+                path,
+                ev.Flags,
+                ev.CompletionStatus,
+                ev.CreateAction,
+                ev.IdentityStatus,
+                postIdentity,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!outcome.IsReconciled)
+            return Deny(ev.Sequence, 11);
+
+        return Allow(ev.Sequence, RgGateDecision.ReconciliationCommitted);
+    }
+
     private static RgGateReply Allow(ulong sequence, RgGateDecision decision) => new()
     {
-        ProtocolVersion = 4,
+        ProtocolVersion = 5,
         Decision = decision,
         RequestSequence = sequence,
         ErrorCode = 0
@@ -201,7 +266,7 @@ static class GateDecision
 
     private static RgGateReply Deny(ulong sequence, uint errorCode) => new()
     {
-        ProtocolVersion = 4,
+        ProtocolVersion = 5,
         Decision = RgGateDecision.Deny,
         RequestSequence = sequence,
         ErrorCode = errorCode
@@ -346,9 +411,9 @@ sealed class DevicePathResolver
 }
 
 enum RgClientMode : uint { Audit = 1, LabGate = 2 }
-enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5 }
+enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, CreateResult = 6 }
 enum RgPathStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2, Truncated = 3 }
-enum RgGateDecision : uint { Invalid = 0, SnapshotCommitted = 1, Deny = 2, BaselineCommitted = 3, NoPreservationRequired = 4 }
+enum RgGateDecision : uint { Invalid = 0, SnapshotCommitted = 1, Deny = 2, BaselineCommitted = 3, NoPreservationRequired = 4, ReconciliationCommitted = 5 }
 
 [StructLayout(LayoutKind.Sequential)]
 struct FilterMessageHeader { public uint ReplyLength; public ulong MessageId; }
@@ -374,6 +439,8 @@ struct RgEvent
     public ulong ProcessId, ThreadId;
     public long ByteOffset;
     public uint Length, FileInformationClass, DroppedBeforeThis, Reserved;
+    public ulong RelatedSequence, VolumeSerialNumber, FileIdPart0, FileIdPart1;
+    public uint CompletionStatus, CreateAction, IdentityStatus, Reserved2;
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 512)] public string? Path;
 }
 

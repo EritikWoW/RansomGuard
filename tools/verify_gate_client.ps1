@@ -42,7 +42,9 @@ foreach($required in @(
   'CreatePreservationAction.CaptureExistingPreimage',
   'CreatePreservationAction.RecordOriginallyAbsent',
   'CreatePreservationAction.DenyUnsupported',
-  'CreateGatePolicy.Decide(disposition, observedState, createOptions)',
+  'CreateGatePolicy.Decide(disposition, observedState, createOptions, ev.Length)',
+  'CreateGatePolicy.GenericWrite',
+  'CreateGatePolicy.FileWriteData',
   'RgGateDecision.SnapshotCommitted',
   'RgGateDecision.BaselineCommitted',
   'RgGateDecision.NoPreservationRequired',
@@ -85,6 +87,8 @@ if($text -match '\b(File\.Delete|Directory\.Delete|RestoreToNewCopyAsync|Process
   throw 'Gate client source contains a destructive/recovery/process-control primitive.'
 }
 
+$policyCall=$text.IndexOf('CreateGatePolicy.Decide(disposition, observedState, createOptions, ev.Length)')
+if($policyCall -lt 0){throw 'CREATE desired access must participate in preservation policy.'}
 $existingCase=$text.IndexOf('case CreatePreservationAction.CaptureExistingPreimage:')
 if($existingCase -lt 0){throw 'Existing-file CREATE preservation case missing.'}
 $existingCapture=$text.IndexOf('RollbackMutationKind.Create',$existingCase)
@@ -186,4 +190,4 @@ if($restartBlock -notmatch [regex]::Escape('PathPolicy.Under(intent.OriginalPath
   throw 'Restart reconciliation must remain scoped to the explicitly selected LAB root.'
 }
 
-Write-Host 'LAB gate client source check PASSED: explicit disposable root, protocol-v9 CREATE/RENAME semantics, bounded workers, durable FILE_ID_INFO binding, restart evidence, non-blocking paging-write evidence, range COW, durable intents/completions, no destructive/process-control APIs.'
+Write-Host 'LAB gate client source check PASSED: protocol-v9 CREATE/RENAME gating, eager pre-image for write-capable existing-file opens, bounded workers, durable FILE_ID_INFO binding, restart and paging evidence, range COW, no destructive/process-control APIs.'

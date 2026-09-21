@@ -50,7 +50,12 @@ foreach($required in @(
     'BaselineVerified writable-section evidence',
     'paging-write evidence',
     'originalSha256',
-    'runtime-result.json'
+    'runtime-result.json',
+    'containment',
+    '--contain-pid',
+    'containmentDeniedTarget',
+    'containmentPreservedTargetHash',
+    'containmentAllowedPeer'
 )){
     if($runtime -notmatch [regex]::Escape($required)){throw "Runtime integration script missing invariant: $required"}
 }
@@ -91,6 +96,8 @@ foreach($required in @(
     'hold-map',
     'hold-dir-delete',
     'map-write',
+    'containment-probe',
+    'RANSOMGUARD-CONTAINMENT-PROBE-SHOULD-NOT-WRITE',
     'DeleteAccess',
     'FileFlagBackupSemantics',
     'CreateFileMappingW',
@@ -120,6 +127,19 @@ foreach($required in @('DeleteAccess','ShareRead | ShareWrite | ShareDelete','Fi
     if($dirHold -notmatch [regex]::Escape($required)){throw "Directory DELETE-handle runtime helper missing invariant: $required"}
 }
 
+$containStart=$helper.IndexOf('static void ContainmentProbe')
+$containEnd=$helper.IndexOf('static void MapAndWrite',$containStart)
+if($containStart -lt 0 -or $containEnd -lt 0){throw 'ContainmentProbe source block missing.'}
+$containBlock=$helper.Substring($containStart,$containEnd-$containStart)
+foreach($required in @('readyMarker','goMarker','resultMarker','File.AppendAllText','UnauthorizedAccessException','Environment.ExitCode = 9')){
+    if($containBlock -notmatch [regex]::Escape($required)){throw "Containment runtime helper missing invariant: $required"}
+}
+if($runtime -notmatch [regex]::Escape("Wait-LogPattern $containOut 'LAB containment\s+: ACTIVE'") -or
+   $runtime -notmatch [regex]::Escape('if($containOutcome -notmatch ''^(denied|io-denied:)''') -or
+   $runtime -notmatch [regex]::Escape('if([string]::Equals($peerAfterHash,$peerOriginalHash')){
+    throw 'Runtime containment scenario must prove target denial/hash preservation and ordinary-peer mutation.'
+}
+
 $install=Get-Content -LiteralPath $installScript -Raw
 if($install -notmatch [regex]::Escape("ValidateSet('','LAB-MINIFILTER')") -or
    $install -notmatch [regex]::Escape('$Confirmation')){
@@ -135,4 +155,4 @@ foreach($required in @(
     if($buildText -notmatch [regex]::Escape($required)){throw "Engineering LAB build missing runtime harness packaging invariant: $required"}
 }
 
-Write-Host 'Runtime VM harness source gate PASSED: manual self-hosted VM only, exact-commit signed driver provenance, directory-handle plus two real mapping scenarios, no boot/trust/Defender mutation.' -ForegroundColor Green
+Write-Host 'Runtime VM harness source gate PASSED: manual self-hosted VM only, exact-commit signed driver provenance, activation races, real mapping coverage and PID-scoped kernel containment scenario, no boot/trust/Defender mutation.' -ForegroundColor Green

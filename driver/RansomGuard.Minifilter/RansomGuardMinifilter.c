@@ -1317,7 +1317,7 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
 {
     PRG_CONTROL_REQUEST request;
     PRG_CONTROL_REPLY reply;
-    ULONG status = STATUS_SUCCESS;
+    NTSTATUS status = STATUS_SUCCESS;
 
     UNREFERENCED_PARAMETER(ConnectionCookie);
 
@@ -1363,7 +1363,7 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
         status = STATUS_INVALID_PARAMETER;
     }
 
-    reply->Status = status;
+    reply->Status = (ULONG)status;
     reply->GateActivated = (ULONG)InterlockedCompareExchange(&gGateActivated, 0, 0);
     *ReturnOutputBufferLength = sizeof(*reply);
     return STATUS_SUCCESS;

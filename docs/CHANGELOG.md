@@ -1,4 +1,4 @@
-# Unreleased - protocol v4 CREATE semantics
+# RansomGuard 0.7.3.0
 
 - Added explicit `IRP_MJ_CREATE` events to the engineering minifilter protocol.
 - Protocol v4 carries CreateDisposition/CreateOptions and desired access without changing the fixed event size.

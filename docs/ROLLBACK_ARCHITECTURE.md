@@ -316,11 +316,30 @@ Every output is written under a new recovery root outside the rollback repositor
 
 No automatic delete, rename, overwrite-in-place, restore-in-place or originally-absent cleanup path exists. CREATE/RENAME topology remains Review/Blocked until explicit production recovery policy is designed and validated.
 
+## Rollback storage admission and disk-pressure policy
+
+0.7.17 adds a session-level storage admission layer around Engineering LAB preservation.
+
+Before new rollback/evidence bytes are written, `RollbackStorageBudget` measures the actual committed session tree, reads the rollback volume's `AvailableFreeSpace`, and combines that state with every currently held reservation. Defaults are 8192 MiB maximum session size and 2048 MiB minimum free space.
+
+Reservations are held across the corresponding durability operation and released in `finally`/async-dispose. The next admission re-measures the committed session tree, so completed files/journals remain charged after the transient reservation is released.
+
+Estimated growth is operation-aware:
+
+- full pre-image: current source length plus bounded journal/object overhead, or zero when the same path already has a committed full capture;
+- range COW: only uncaptured original blocks intersecting the pending write plus journal overhead; already committed baseline/blocks are not reserved again;
+- originally-absent baseline: metadata allowance only, or zero when already committed;
+- activation/paging/section/completion evidence: bounded metadata reservation.
+
+A blocking destructive operation that cannot satisfy session quota or free-space reserve receives a fail-closed denial before preservation is allowed to proceed. Evidence-only callbacks cannot block the underlying Memory Manager operation, but their journal append is also admitted through the same budget and fails instead of silently consuming the remaining disk reserve.
+
+The storage walk refuses reparse-point files/directories. The LAB client exposes only bounded numeric tuning flags; there is no runtime switch to disable or bypass storage admission.
+
 ## Still required before production
 
 - deeper crash recovery for requests interrupted before authoritative kernel completion delivery;
-- broader live NTFS/ReFS validation beyond the automated mapping harness: directory-handle startup cases, reboot, Driver Verifier, storage pressure and fault injection;
-- storage quotas, retention and pressure policy;
+- broader live NTFS/ReFS validation beyond the automated mapping harness: directory-handle startup cases, reboot, Driver Verifier and fault injection;
+- retention/cleanup policy for completed rollback sessions and long-running incident rotation;
 - transition from protected-root health to containment/block policy;
 - process-state capture and adaptive crypto analysis;
 - production recovery UI/orchestration across rollback and crypto recovery;

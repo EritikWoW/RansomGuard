@@ -1,3 +1,17 @@
+# RansomGuard 0.7.14.0
+
+- Added a manual disposable-VM minifilter runtime workflow on a dedicated self-hosted `ransomguard-lab-vm` runner.
+- Engineering LAB bundle now publishes a dedicated mapping helper used only by runtime validation.
+- Runtime scenario A keeps a PAGE_READWRITE view alive after closing the original file/mapping handles and requires activation preflight to reject it with durable `writableViewPresent=true` evidence.
+- Runtime scenario B activates cleanly, performs a real mapped write/flush, and requires a matching full pre-image SHA-256, `WritableSection = BaselineVerified`, paging-write evidence, and a changed live-file hash.
+- Added exact-commit runtime driver packaging: current SYS is built from checkout, embedded-signed with a preinstalled LAB certificate, cataloged/signed, and bound to commit/SHA-256 provenance.
+- Runtime scripts refuse non-VM/non-admin execution and require an explicit `RANSOMGUARD_LAB_VM=I_UNDERSTAND` marker.
+- Runtime workflow does not enable TESTSIGNING, change Secure Boot, import trust roots, alter Defender, or upload the signed driver package.
+- Added static source gates ensuring the runtime workflow remains manual/self-hosted and the mapping holder closes original handles before advertising the surviving mapped view.
+- LAB installer now accepts an explicit `LAB-MINIFILTER` confirmation argument for noninteractive execution inside the already-validated VM.
+- LAB INF DriverVer is aligned to 0.7.14.0.
+- Normal product remains AuditOnly; runtime driver load remains opt-in Engineering-LAB-only.
+
 # RansomGuard 0.7.13.0
 
 - Bumped the engineering minifilter protocol to v11 with an explicit startup activation barrier.

@@ -26,7 +26,7 @@ var writeStore = new RangeRollbackStore(Path.Combine(store.Root, "write-cow"));
 var createStore = new CreateRollbackStore(Path.Combine(store.Root, "create-state"));
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
-Console.WriteLine("RansomGuard LAB pre-write gate v0.7.2.0");
+Console.WriteLine("RansomGuard LAB pre-write gate v0.7.3.0");
 Console.WriteLine("LAB ONLY: use only inside a disposable test directory on a test machine/VM.");
 Console.WriteLine($"Protected LAB root : {options.Root}");
 Console.WriteLine($"Kernel NT root     : {ntRoot}");

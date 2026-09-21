@@ -1,4 +1,4 @@
-# RansomGuard minifilter engineering lab — v0.7.1.0
+# RansomGuard minifilter engineering lab — v0.7.3.0
 
 The minifilter has two mutually exclusive user-mode connection modes:
 
@@ -33,7 +33,7 @@ Build the engineering package:
 .\build_lab.cmd
 ```
 
-Then, from the generated `RansomGuard-Lab-v0.7.1.0-*` directory, build/install the minifilter only in a
+Then, from the generated `RansomGuard-Lab-v0.7.3.0-*` directory, build/install the minifilter only in a
 Windows test VM using the existing lab scripts.
 
 ## Audit mode

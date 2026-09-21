@@ -2,9 +2,9 @@
 
 The minifilter has two mutually exclusive user-mode connection modes:
 
-- **Audit** — metadata-only, non-blocking WRITE / rename / delete-disposition observation.
+- **Audit** — metadata-only, non-blocking CREATE / WRITE / rename / delete-disposition / truncate observation.
 - **LAB Gate** — one explicit disposable directory is synchronously gated so a destructive mutation is
-  allowed only after the rollback client confirms a durable first pre-image commit.
+  allowed only after the rollback client returns an explicit preservation decision.
 
 The LAB Gate exists to validate preservation ordering. It is **not** a production driver configuration.
 Do not load it on a primary workstation and do not point it at real documents.
@@ -21,7 +21,7 @@ Do not load it on a primary workstation and do not point it at real documents.
 - The gate client PID is excluded from kernel gating.
 - I/O outside the exact gate root remains fail-open.
 - Unresolved paths remain fail-open rather than risking OS-wide denial.
-- In-scope LAB I/O is denied if the user-mode pre-image commit fails or the reply times out.
+- In-scope LAB I/O is denied if required user-mode preservation fails or the reply times out.
 - The driver still contains no kernel file-writing, file-deletion, process-kill or process-suspend code.
 - Altitude `370099.4242` is an unassigned lab placeholder and must never ship.
 
@@ -59,9 +59,12 @@ Or choose another disposable non-system directory:
 ```
 
 The first run creates only the gate marker before connecting. Put **copies** of test files into that folder
-before starting the gate. Once connected, WRITE / rename / delete-disposition requests in that folder wait
-for rollback capture. New-file transaction semantics are not complete in this milestone, so do not use the
-lab gate as a general-purpose protected folder yet.
+before starting the gate. Once connected, CREATE / WRITE / rename / delete-disposition / truncate requests in that folder are gated.
+Protocol v4 distinguishes destructive replacement of an existing file from creation of an originally-absent path.
+The latter is committed as metadata-only recovery state; it does not cause the recovery library to delete files.
+
+CREATE classification is still path-based and native post-create/file-ID reconciliation is not complete, so do
+not use the lab gate as a general-purpose protected folder yet.
 
 Stop the client with Ctrl+C before unloading the filter.
 

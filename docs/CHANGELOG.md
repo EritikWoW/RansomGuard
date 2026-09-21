@@ -1,3 +1,14 @@
+# RansomGuard 0.7.11.0
+
+- Added conservative CREATE-time full pre-preservation for existing regular files opened through FILE_OPEN/FILE_OPEN_IF with FILE_WRITE_DATA, GENERIC_WRITE, GENERIC_ALL, or MAXIMUM_ALLOWED.
+- GateClient now passes the kernel CREATE DesiredAccess mask into the pure preservation policy before returning any allow decision.
+- New write-capable existing-file intents must carry an identity-bound committed full pre-image; attempts to record them as unpreserved are rejected.
+- Legacy 0.7.10 CREATE journals with the older no-preservation policy remain readable during replay, but the compatibility exception is loader-only and cannot be used by new RecordIntentAsync calls.
+- This establishes a recovery baseline before newly opened handles can be used to create PAGE_READWRITE/PAGE_EXECUTE_READWRITE file mappings while keeping the paging-write callback itself non-blocking.
+- Added policy, intent-validation, legacy-replay, source-gate and rollback tests.
+- Protocol remains v9. Normal product remains AuditOnly; the eager write-capable-open preservation path remains engineering LAB-only.
+- Writable mappings created from handles that predate LAB-gate attachment remain outside the recovery claim.
+
 # RansomGuard 0.7.10.0
 
 - Bumped the engineering minifilter protocol to v9 and added a no-reply `PagingWrite` evidence event.

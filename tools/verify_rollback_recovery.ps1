@@ -4,8 +4,10 @@ $planner=Join-Path $root 'src\RansomGuard.Rollback\RollbackRecoveryPlan.cs'
 $executor=Join-Path $root 'src\RansomGuard.Rollback\RollbackRecoveryExecutor.cs'
 $cli=Join-Path $root 'src\RansomGuard.RollbackRecoveryCli\Program.cs'
 $project=Join-Path $root 'src\RansomGuard.RollbackRecoveryCli\RansomGuard.RollbackRecoveryCli.csproj'
+$build=Join-Path $root 'build_windows.ps1'
+$launcher=Join-Path $root 'rollback_recovery.cmd'
 
-foreach($path in @($planner,$executor,$cli,$project)){
+foreach($path in @($planner,$executor,$cli,$project,$build,$launcher)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Verified rollback recovery source missing: $path"}
 }
 
@@ -46,6 +48,7 @@ foreach($required in @(
     'Recovery output root must remain outside the rollback repository',
     'Recovery plan is stale or does not match the currently validated rollback evidence',
     'AutomaticTopologyMutationPerformed: false',
+    'RejectExistingReparseAncestors(outputFull)',
     'Ready recovery action kind'
 )){
     if($executorText -notmatch [regex]::Escape($required)){throw "Recovery executor invariant missing: $required"}
@@ -81,6 +84,7 @@ foreach($required in @(
     'RollbackRecoveryPlanner.Build',
     'RollbackRecoveryExecutor.ExecuteReadyAsync',
     'FileMode.CreateNew',
+    'RejectExistingReparseAncestors(parent)',
     'Live source/evidence files are never overwritten, renamed or deleted'
 )){
     if($cliText -notmatch [regex]::Escape($required)){throw "Recovery CLI invariant missing: $required"}
@@ -92,4 +96,27 @@ if($cliText -match '\b(File\.Delete|Directory\.Delete|File\.Move|Directory\.Move
     throw 'Recovery CLI must not contain destructive filesystem primitives.'
 }
 
-Write-Host 'Verified rollback recovery source gate PASSED: revalidated deterministic plan, copy-out-only Ready actions, stale-plan refusal, no automatic delete/rename/overwrite.' -ForegroundColor Green
+$buildText=Get-Content -LiteralPath $build -Raw
+foreach($required in @(
+    '$rollbackRecovery = ''src\RansomGuard.RollbackRecoveryCli\RansomGuard.RollbackRecoveryCli.csproj''',
+    'if($IncludeLab){$projects+=@($sim,$filterClient,$gateClient,$runtimeHarness,$rollbackRecovery)}',
+    '$rollbackRecoveryDir=Join-Path $labRelease ''RollbackRecovery''',
+    'publish'',$rollbackRecovery',
+    '''rollback_recovery.cmd''',
+    '''ROLLBACK_RECOVERY.md''',
+    '$_.Name -like ''*RollbackRecovery*'''
+)){
+    if($buildText -notmatch [regex]::Escape($required)){throw "Recovery LAB packaging invariant missing: $required"}
+}
+$publishPos=$buildText.IndexOf("publish',$rollbackRecovery")
+$labPos=$buildText.IndexOf('if($IncludeLab){')
+if($publishPos -lt 0 -or $labPos -lt 0 -or $publishPos -lt $labPos){
+    throw 'Rollback recovery CLI must be published only inside the Engineering LAB block.'
+}
+
+$launcherText=Get-Content -LiteralPath $launcher -Raw
+if($launcherText -notmatch [regex]::Escape('RollbackRecovery\RansomGuard.RollbackRecovery.exe')){
+    throw 'Rollback recovery launcher must target the LAB-only executable.'
+}
+
+Write-Host 'Verified rollback recovery source gate PASSED: revalidated deterministic plan, copy-out-only Ready actions, stale-plan refusal, reparse refusal, LAB-only CLI, no automatic delete/rename/overwrite.' -ForegroundColor Green

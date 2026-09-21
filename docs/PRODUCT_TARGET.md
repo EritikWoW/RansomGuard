@@ -43,6 +43,8 @@ On restart, pending CREATE/RENAME intents are conservatively re-observed under t
 
 Protocol v9 adds non-blocking visibility for paging writes associated with streams opened through the explicit LAB root. The driver attaches a nonpaged stream context after successful CREATE reconciliation and paging-write callbacks read only that context; they do not perform name queries or synchronously call the user-mode gate. GateClient records these observations in a separate write-through hash-chained paging evidence journal. This is evidence only and does not yet prove that memory-mapped mutations were pre-preserved.
 
+0.7.11 also pre-preserves an existing file before returning any CREATE that requests content-write capable access (FILE_WRITE_DATA, FILE_APPEND_DATA or GENERIC_WRITE). This deliberately trades storage efficiency for correctness on handles that may later back writable memory mappings: the full pre-image and CREATE intent are durable before the application can create the mapping.
+
 The next core milestones are safe pre-preservation for writable memory mappings/cache-manager paging writes, deeper crash recovery for requests interrupted before authoritative kernel completion delivery,
 containment, process-state capture,
 adaptive crypto analysis, and verified recovery orchestration.

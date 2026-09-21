@@ -61,7 +61,12 @@ foreach($required in @(
   'RenameDestinationState.ExistingFile',
   'RenameDestinationState.SameAsSource',
   'ev.ByteOffset < 0',
-  'Gate capture failed'
+  'Gate capture failed',
+  'SemaphoreSlim(options.GateWorkers, options.GateWorkers)',
+  'Task.Run(() => ProcessMessageAsync(header, ev))',
+  'DefaultGateWorkers = 4',
+  'MaxGateWorkers = 8',
+  '--gate-workers'
 )){
   if($text -notmatch [regex]::Escape($required)){throw "Gate client invariant missing: $required"}
 }
@@ -136,4 +141,13 @@ if($renameBranch -lt 0 -or $renameSourceCapture -lt 0 -or $renameIntent -lt 0 -o
   throw 'RENAME must preserve source/destination state and durably commit rename intent before allow.'
 }
 
-Write-Host 'LAB gate client source check PASSED: explicit disposable root, protocol-v8 CREATE/RENAME semantics with post-rename kernel identity, durable FILE_ID_INFO identity binding, range COW for writes, durable CREATE/RENAME intents and completions, originally-absent baselines, no destructive/process-control APIs.'
+$workerDispatch=$text.IndexOf('Task.Run(() => ProcessMessageAsync(header, ev))')
+$workerEvaluate=$text.IndexOf('GateDecision.EvaluateAsync(',$text.IndexOf('async Task ProcessMessageAsync'))
+if($workerDispatch -lt 0 -or $workerEvaluate -lt 0){
+  throw 'Gate messages must be dispatched through the bounded worker path.'
+}
+if($text -notmatch 'GateWorkerss*<s*1' -or $text -notmatch 'GateWorkerss*>s*MaxGateWorkers'){
+  throw 'Gate worker argument must remain explicitly bounded.'
+}
+
+Write-Host 'LAB gate client source check PASSED: explicit disposable root, protocol-v8 CREATE/RENAME semantics with post-rename kernel identity, bounded concurrent gate workers, durable FILE_ID_INFO identity binding, range COW for writes, durable CREATE/RENAME intents and completions, originally-absent baselines, no destructive/process-control APIs.'

@@ -45,7 +45,7 @@ var storageBudget = new RollbackStorageBudget(
     checked(options.MinFreeMiB * RollbackStorageBudget.MiB));
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
-Console.WriteLine("RansomGuard LAB pre-write gate v0.7.19.0");
+Console.WriteLine("RansomGuard LAB pre-write gate v0.7.20.0");
 Console.WriteLine("LAB ONLY: use only inside a disposable test directory on a test machine/VM.");
 Console.WriteLine($"Protected LAB root : {options.Root}");
 Console.WriteLine($"Kernel NT root     : {ntRoot}");
@@ -59,7 +59,7 @@ Console.WriteLine("Press Ctrl+C to disconnect. The driver then stops gating beca
 
 var context = new RgConnectContext
 {
-    ProtocolVersion = 11,
+    ProtocolVersion = 12,
     ClientMode = (uint)RgClientMode.LabGate,
     ClientProcessId = (ulong)Environment.ProcessId,
     GateRootLengthBytes = checked((uint)(ntRoot.Length * 2)),
@@ -75,13 +75,16 @@ var eventSize = Marshal.SizeOf<RgEvent>();
 var replyHeaderSize = Marshal.SizeOf<FilterReplyHeader>();
 var gateReplySize = Marshal.SizeOf<RgGateReply>();
 if (headerSize != 16 || eventSize != 2168 || replyHeaderSize != 16 || gateReplySize != 24 ||
-    Marshal.SizeOf<RgControlRequest>() != 16 || Marshal.SizeOf<RgControlReply>() != 16)
+    Marshal.SizeOf<RgControlRequest>() != 16 || Marshal.SizeOf<RgControlReply>() != 32)
     throw new InvalidOperationException($"Unexpected protocol sizes: message={headerSize}, event={eventSize}, replyHeader={replyHeaderSize}, gateReply={gateReplySize}");
 
 var resolver = new DevicePathResolver();
 var activationSummary = await ActivationPreflight.RunAsync(
-    port, options.Root, resolver, activationStore, topologyStore, storageBudget, cts.Token).ConfigureAwait(false);
+    port, options.Root, resolver, activationStore, topologyStore, storageBudget, options.ContainPid, cts.Token).ConfigureAwait(false);
 Console.WriteLine($"Activation preflight: directories={activationSummary.DirectoriesHeld}, files={activationSummary.FilesChecked}, writable-views=0, kernel gate ACTIVE.");
+Console.WriteLine(activationSummary.ContainedProcessId is ulong containedPid
+    ? $"LAB containment  : ACTIVE for kernel-bound process pid={containedPid}; disconnect clears the latch."
+    : "LAB containment  : not armed.");
 
 
 using var workerSlots = new SemaphoreSlim(options.GateWorkers, options.GateWorkers);
@@ -96,7 +99,7 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
     {
         if ((RgEventType)ev.EventType == RgEventType.WritableSection)
         {
-            if (ev.ProtocolVersion != 11 ||
+            if (ev.ProtocolVersion != 12 ||
                 ev.PathStatus != (uint)RgPathStatus.Resolved ||
                 ev.RelatedSequence == 0 ||
                 ev.CompletionInformation > uint.MaxValue)
@@ -145,7 +148,7 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
 
         if ((RgEventType)ev.EventType == RgEventType.PagingWrite)
         {
-            if (ev.ProtocolVersion != 11 || ev.PathStatus != (uint)RgPathStatus.Resolved)
+            if (ev.ProtocolVersion != 12 || ev.PathStatus != (uint)RgPathStatus.Resolved)
                 throw new InvalidDataException("Invalid paging-write evidence event.");
 
             var trackedPath = resolver.Resolve(ev.Path);
@@ -300,6 +303,7 @@ static class ActivationPreflight
         ActivationPreflightStore evidenceStore,
         ActivationTopologyStore topologyStore,
         RollbackStorageBudget storageBudget,
+        ulong? containPid,
         CancellationToken cancellationToken)
     {
         var options = new EnumerationOptions
@@ -364,10 +368,10 @@ static class ActivationPreflight
 
                 var arm = Native.Control(port, new RgControlRequest
                 {
-                    ProtocolVersion = 11,
+                    ProtocolVersion = 12,
                     Command = (uint)RgControlCommand.ArmPreflight
                 });
-                if (arm.ProtocolVersion != 11 ||
+                if (arm.ProtocolVersion != 12 ||
                     arm.Command != (uint)RgControlCommand.ArmPreflight ||
                     arm.Status != 0 ||
                     arm.GateActivated != 0)
@@ -410,19 +414,33 @@ static class ActivationPreflight
                 checkedFiles++;
             }
 
+            var activationCommand = containPid.HasValue
+                ? RgControlCommand.ActivateAndContainProcess
+                : RgControlCommand.ActivateGate;
             var activationReply = Native.Control(port, new RgControlRequest
             {
-                ProtocolVersion = 11,
-                Command = (uint)RgControlCommand.ActivateGate
+                ProtocolVersion = 12,
+                Command = (uint)activationCommand,
+                TargetProcessId = containPid ?? 0
             });
-            if (activationReply.ProtocolVersion != 11 ||
-                activationReply.Command != (uint)RgControlCommand.ActivateGate ||
+            if (activationReply.ProtocolVersion != 12 ||
+                activationReply.Command != (uint)activationCommand ||
                 activationReply.Status != 0 ||
                 activationReply.GateActivated != 1)
                 throw new InvalidOperationException(
                     $"Kernel refused LAB activation after preflight. NTSTATUS=0x{activationReply.Status:X8}, active={activationReply.GateActivated}.");
 
-            return new ActivationPreflightSummary(checkedFiles, heldDirectories);
+            if (containPid.HasValue &&
+                (activationReply.ContainmentActive != 1 ||
+                 activationReply.ContainedProcessId != containPid.Value))
+                throw new InvalidOperationException(
+                    $"Kernel activation did not bind requested containment pid={containPid.Value}. active={activationReply.ContainmentActive}, pid={activationReply.ContainedProcessId}.");
+            if (!containPid.HasValue &&
+                (activationReply.ContainmentActive != 0 ||
+                 activationReply.ContainedProcessId != 0))
+                throw new InvalidOperationException("Kernel reported unexpected containment on a normal LAB activation.");
+
+            return new ActivationPreflightSummary(checkedFiles, heldDirectories, containPid);
         }
         finally
         {
@@ -467,7 +485,7 @@ static class ActivationPreflight
                     throw new InvalidOperationException("Activation refused: protected-root memory-mapped activity occurred during preflight.");
                 if (type != RgEventType.ActivationPreflight)
                     throw new InvalidDataException($"Unexpected event {type} during activation preflight.");
-                if (ev.ProtocolVersion != 11 || ev.PathStatus != (uint)RgPathStatus.Resolved)
+                if (ev.ProtocolVersion != 12 || ev.PathStatus != (uint)RgPathStatus.Resolved)
                     throw new InvalidDataException("Invalid activation preflight event.");
 
                 var resolved = resolver.Resolve(ev.Path);
@@ -484,7 +502,7 @@ static class ActivationPreflight
     private static bool NtSuccess(uint status) => (status & 0x80000000u) == 0;
 }
 
-readonly record struct ActivationPreflightSummary(int FilesChecked, int DirectoriesHeld);
+readonly record struct ActivationPreflightSummary(int FilesChecked, int DirectoriesHeld, ulong? ContainedProcessId);
 
 static class CreateReconciliation
 {
@@ -495,7 +513,7 @@ static class CreateReconciliation
         CreateOperationStore operationStore,
         CancellationToken cancellationToken)
     {
-        if (ev.ProtocolVersion != 11 || ev.RelatedSequence == 0)
+        if (ev.ProtocolVersion != 12 || ev.RelatedSequence == 0)
             throw new InvalidDataException("Invalid CREATE completion correlation.");
 
         if (!NtSuccess(ev.CompletionStatus))
@@ -559,7 +577,7 @@ static class RenameReconciliation
         RenameRollbackStore renameStore,
         CancellationToken cancellationToken)
     {
-        if (ev.ProtocolVersion != 11 || ev.RelatedSequence == 0)
+        if (ev.ProtocolVersion != 12 || ev.RelatedSequence == 0)
             throw new InvalidDataException("Invalid rename completion correlation.");
 
         if (!NtSuccess(ev.CompletionStatus))
@@ -626,7 +644,7 @@ static class GateDecision
         {
             // Never preserve or authorize against a truncated path. The kernel only sends a truncated
             // gate event when its known prefix is already inside the explicit LAB root, so deny it here.
-            if (ev.ProtocolVersion != 11 || ev.PathStatus != (uint)RgPathStatus.Resolved)
+            if (ev.ProtocolVersion != 12 || ev.PathStatus != (uint)RgPathStatus.Resolved)
                 return Deny(ev.Sequence, 1);
 
             var path = resolver.Resolve(ev.Path);
@@ -906,7 +924,7 @@ static class GateDecision
 
     private static RgGateReply Allow(ulong sequence, RgGateDecision decision) => new()
     {
-        ProtocolVersion = 11,
+        ProtocolVersion = 12,
         Decision = decision,
         RequestSequence = sequence,
         ErrorCode = 0
@@ -914,7 +932,7 @@ static class GateDecision
 
     private static RgGateReply Deny(ulong sequence, uint errorCode) => new()
     {
-        ProtocolVersion = 11,
+        ProtocolVersion = 12,
         Decision = RgGateDecision.Deny,
         RequestSequence = sequence,
         ErrorCode = errorCode
@@ -1080,7 +1098,8 @@ sealed record Options(
     bool PrepareOnly,
     int GateWorkers,
     long MaxStoreMiB,
-    long MinFreeMiB)
+    long MinFreeMiB,
+    ulong? ContainPid)
 {
     public const int DefaultGateWorkers = 4;
     public const int MaxGateWorkers = 8;
@@ -1097,6 +1116,7 @@ sealed record Options(
         var gateWorkers = DefaultGateWorkers;
         long maxStoreMiB = DefaultMaxStoreMiB;
         long minFreeMiB = DefaultMinFreeMiB;
+        ulong? containPid = null;
         for (var i = 0; i < args.Length; i++)
         {
             switch (args[i].ToLowerInvariant())
@@ -1119,13 +1139,21 @@ sealed record Options(
                         throw new ArgumentOutOfRangeException(nameof(args),
                             $"--min-free-mib must be between 64 and {MaxConfigMiB}.");
                     break;
+                case "--contain-pid" when i + 1 < args.Length:
+                    if (!uint.TryParse(args[++i], out var parsedPid) || parsedPid <= 4 || parsedPid == Environment.ProcessId)
+                        throw new ArgumentOutOfRangeException(nameof(args),
+                            "--contain-pid must identify a non-system process other than GateClient.");
+                    containPid = parsedPid;
+                    break;
                 case "--prepare-root": prepare = true; break;
                 default: throw new ArgumentException($"Unknown/incomplete argument: {args[i]}");
             }
         }
         if (string.IsNullOrWhiteSpace(root)) throw new ArgumentException("Pass --root <disposable-test-directory>.");
+        if (prepare && containPid.HasValue)
+            throw new ArgumentException("--contain-pid cannot be combined with --prepare-root.");
         store ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RansomGuardV072", "GateRollback");
-        return new Options(root, store, session, prepare, gateWorkers, maxStoreMiB, minFreeMiB);
+        return new Options(root, store, session, prepare, gateWorkers, maxStoreMiB, minFreeMiB, containPid);
     }
 }
 
@@ -1276,15 +1304,14 @@ struct RgGateReply
     public uint Reserved;
 }
 
-enum RgControlCommand : uint { Invalid = 0, ActivateGate = 1, QueryActivation = 2, ArmPreflight = 3 }
+enum RgControlCommand : uint { Invalid = 0, ActivateGate = 1, QueryActivation = 2, ArmPreflight = 3, ActivateAndContainProcess = 4, QueryContainment = 5 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 struct RgControlRequest
 {
     public uint ProtocolVersion;
     public uint Command;
-    public uint Reserved0;
-    public uint Reserved1;
+    public ulong TargetProcessId;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -1294,6 +1321,9 @@ struct RgControlReply
     public uint Command;
     public uint Status;
     public uint GateActivated;
+    public uint ContainmentActive;
+    public uint Reserved;
+    public ulong ContainedProcessId;
 }
 
 static class Native

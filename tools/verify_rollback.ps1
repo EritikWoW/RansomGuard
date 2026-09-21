@@ -238,6 +238,8 @@ foreach($required in @(
     'ProcessCreationFileTimeUtc',
     'EvidenceCount',
     'DistinctPathCount',
+    'kernelStatus != 0',
+    'line.KernelStatus != 0',
     'FileOptions.WriteThrough',
     'Flush(true)',
     'Containment evidence journal hash chain mismatch',

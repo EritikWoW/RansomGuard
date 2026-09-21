@@ -1067,6 +1067,54 @@ try
     Check(nestedActivationRejected,
         "repository verification includes nested activation-preflight journal");
 
+    // Activation topology evidence binds the held root/directories through the activation boundary.
+    var topologyRoot = Path.Combine(root, "activation-topology-evidence");
+    var topology = new ActivationTopologyStore(topologyRoot);
+    var protectedRootPath = Path.Combine(sourceDir, "topology-root");
+    var protectedChildPath = Path.Combine(protectedRootPath, "child");
+    var topologyRootEvidence = await topology.RecordAsync(
+        protectedRootPath, createOriginalIdentity, isRoot: true);
+    Check(topologyRootEvidence.Sequence == 1 &&
+          topologyRootEvidence.IsRoot &&
+          topologyRootEvidence.Identity == createOriginalIdentity,
+        "activation topology records identity-bound protected root");
+    var topologyDuplicate = await topology.RecordAsync(
+        protectedRootPath, createOriginalIdentity, isRoot: true);
+    Check(topologyDuplicate.Sequence == topologyRootEvidence.Sequence &&
+          topology.Records.Count == 1,
+        "activation topology evidence is idempotent for the same directory identity");
+    var topologyChild = await topology.RecordAsync(
+        protectedChildPath, sourceIdentity, isRoot: false);
+    Check(topologyChild.Sequence == 2 && !topologyChild.IsRoot,
+        "activation topology records nested held directory");
+    var topologyConflictRejected = false;
+    try
+    {
+        _ = await topology.RecordAsync(
+            protectedChildPath, createOriginalIdentity, isRoot: false);
+    }
+    catch (InvalidDataException) { topologyConflictRejected = true; }
+    Check(topologyConflictRejected,
+        "activation topology rejects directory identity drift");
+    topology.VerifyAll();
+    Check(new ActivationTopologyStore(topologyRoot).Records.Count == 2,
+        "activation topology journal rebuilds after reopen");
+
+    var nestedTopologyRepo = new RollbackRepository(Path.Combine(root, "nested-topology-repo"));
+    var nestedTopologySession = nestedTopologyRepo.CreateSession("nested_topology");
+    var nestedTopology = new ActivationTopologyStore(
+        Path.Combine(nestedTopologySession.Root, "activation-topology-state"));
+    _ = await nestedTopology.RecordAsync(
+        protectedRootPath, createOriginalIdentity, isRoot: true);
+    var topologyJournalBytes = await File.ReadAllBytesAsync(nestedTopology.JournalPath);
+    topologyJournalBytes[^2] ^= 1;
+    await File.WriteAllBytesAsync(nestedTopology.JournalPath, topologyJournalBytes);
+    var nestedTopologyRejected = false;
+    try { nestedTopologyRepo.VerifyAll(); }
+    catch (InvalidDataException) { nestedTopologyRejected = true; }
+    Check(nestedTopologyRejected,
+        "repository verification includes nested activation-topology journal");
+
     Console.WriteLine($"All {passed} rollback tests passed. These are file-store tests, not minifilter integration tests.");
     return 0;
 }

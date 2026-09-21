@@ -54,8 +54,10 @@ public partial class MainWindow : Window
             Dispatcher.BeginInvoke(new Action(UpdateOverviewLayout));
     }
     private void MainContent_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateOverviewLayout();
-    internal void ApplyResponsiveLayoutForTest(double mainContentWidth, double windowWidth)
-        => ApplyOverviewLayout(mainContentWidth, windowWidth);
+    internal static bool IsOverviewStacked(double mainContentWidth, double textScale)
+        => mainContentWidth < 980 || (mainContentWidth < 1120 && textScale > 1.1);
+    internal static int StatusColumnsFor(double mainContentWidth, double textScale)
+        => IsOverviewStacked(mainContentWidth, textScale) ? 2 : 4;
     private void UpdateOverviewLayout()
     {
         // Preserve the reference's four-card and 2x2 composition at desktop sizes.
@@ -66,7 +68,7 @@ public partial class MainWindow : Window
     private void ApplyOverviewLayout(double mainContentWidth, double windowWidth)
     {
         if(OverviewPanels is null || StatusCards is null || RecentTable is null) return;
-        bool stacked=mainContentWidth < 980 || (mainContentWidth < 1120 && _vm.TextScale > 1.1);
+        bool stacked=IsOverviewStacked(mainContentWidth, _vm.TextScale);
         SidebarColumn.Width=new GridLength(windowWidth < 1420 ? 232 : 260);
         HeaderConnection.Visibility=mainContentWidth < 850 ? Visibility.Collapsed : Visibility.Visible;
         StatusCards.Columns=stacked ? 2 : 4;

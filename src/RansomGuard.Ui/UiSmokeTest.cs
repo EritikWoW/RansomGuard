@@ -48,6 +48,10 @@ internal static class UiSmokeTest
             window.Width=1600; window.Height=910;
             _=Administration.PackageIdentity.ServiceSha256(); // Real publication must bind the service image. No file/SCM access here.
             L.ValidateResources();
+            if (MainWindow.StatusColumnsFor(1300, 1.0) != 4 ||
+                MainWindow.StatusColumnsFor(1050, 1.0) != 4 ||
+                MainWindow.StatusColumnsFor(760, 1.2) != 2)
+                throw new InvalidOperationException("Responsive overview policy does not match the desktop/compact contract.");
             window.Model.Filter="Audit"; window.Model.Period="Today";
             window.Model.LanguageChoice="en-US";
             window.Model.LanguageChoice="uk-UA";
@@ -78,10 +82,9 @@ internal static class UiSmokeTest
                     window.Model.SelectedPage=page;
                     await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
                     window.UpdateLayout();
-                    window.ApplyResponsiveLayoutForTest(1300, 1600);
                     window.UpdateLayout();
                     refinements[$"{language}-{theme}-{page}"]=CheckUiRefinement(window,page);
-                    if(page=="overview") layouts[$"{language}-{theme}-reference-1600"]=OverviewLayout(window,true);
+                    if(page=="overview") layouts[$"{language}-{theme}-reference-1600"]=OverviewLayout(window);
                     Save(window,Path.Combine(directory,$"{theme}-{page}.png"));
                     captures.Add($"{language}/{theme}-{page}.png");
                     if(page=="overview" && window.FindName("ActivityCard") is FrameworkElement card)
@@ -123,7 +126,6 @@ internal static class UiSmokeTest
                 window.Model.TextScale=1.2; window.Model.SelectedPage="overview";
                 await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
                 window.UpdateLayout();
-                window.ApplyResponsiveLayoutForTest(760, 1060);
                 window.UpdateLayout();
                 Save(window,Path.Combine(directory,$"{theme}-compact-large-text.png"));
                 captures.Add($"{language}/{theme}-compact-large-text.png");
@@ -131,9 +133,8 @@ internal static class UiSmokeTest
                 window.Model.SelectedPage="overview";
                 await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
                 window.UpdateLayout();
-                window.ApplyResponsiveLayoutForTest(1050, 1335);
                 window.UpdateLayout();
-                layouts[$"{language}-{theme}-user-1335"]=OverviewLayout(window,true);
+                layouts[$"{language}-{theme}-user-1335"]=OverviewLayout(window);
                 Save(window,Path.Combine(directory,$"{theme}-overview-1335.png"));
                 captures.Add($"{language}/{theme}-overview-1335.png");
                 window.Width=1600; window.Height=910;
@@ -229,7 +230,7 @@ internal static class UiSmokeTest
             if(ReferenceEquals(current,ancestor)) return true;
         return false;
     }
-    private static object OverviewLayout(MainWindow window,bool expectWide)
+    private static object OverviewLayout(MainWindow window)
     {
         var bounds=new Dictionary<string,object>();
         foreach(string name in new[]{"StatusCards","ActivityCard","LocationsCard","RecentCard","SafetyCard"})
@@ -240,15 +241,32 @@ internal static class UiSmokeTest
             if(rect.Width<=0 || rect.Height<=0) throw new InvalidOperationException("Empty panel: "+name);
             bounds[name]=new {x=rect.X,y=rect.Y,width=rect.Width,height=rect.Height};
         }
-        if(expectWide)
-        {
-            if(window.FindName("StatusCards") is not System.Windows.Controls.Primitives.UniformGrid cards || cards.Columns!=4)
-                throw new InvalidOperationException(
-                    $"Reference desktop layout must retain four status cards. ActualWidth={window.ActualWidth:F1}; MainContentWidth={window.MainContent.ActualWidth:F1}; Columns={(window.FindName("StatusCards") as System.Windows.Controls.Primitives.UniformGrid)?.Columns.ToString() ?? "missing"}; TextScale={window.Model.TextScale:F2}.");
-            if(window.FindName("LocationsCard") is not FrameworkElement locations || System.Windows.Controls.Grid.GetColumn(locations)!=2)
-                throw new InvalidOperationException("Reference desktop locations panel must be right of activity.");
-        }
-        return new {windowWidth=window.ActualWidth,windowHeight=window.ActualHeight,bounds};
+
+        if(window.FindName("StatusCards") is not System.Windows.Controls.Primitives.UniformGrid cards)
+            throw new InvalidOperationException("Reference desktop status-card grid is missing.");
+
+        double contentWidth=window.MainContent.ActualWidth;
+        int expectedColumns=MainWindow.StatusColumnsFor(contentWidth,window.Model.TextScale);
+        if(cards.Columns!=expectedColumns)
+            throw new InvalidOperationException(
+                $"Responsive status-card layout mismatch. ActualWidth={window.ActualWidth:F1}; MainContentWidth={contentWidth:F1}; Columns={cards.Columns}; ExpectedColumns={expectedColumns}; TextScale={window.Model.TextScale:F2}.");
+
+        bool stacked=expectedColumns==2;
+        if(window.FindName("LocationsCard") is not FrameworkElement locations)
+            throw new InvalidOperationException("Reference locations panel is missing.");
+        int expectedLocationColumn=stacked ? 0 : 2;
+        if(System.Windows.Controls.Grid.GetColumn(locations)!=expectedLocationColumn)
+            throw new InvalidOperationException(
+                $"Responsive locations-panel layout mismatch. Column={System.Windows.Controls.Grid.GetColumn(locations)}; ExpectedColumn={expectedLocationColumn}; MainContentWidth={contentWidth:F1}; TextScale={window.Model.TextScale:F2}.");
+
+        return new {
+            windowWidth=window.ActualWidth,
+            windowHeight=window.ActualHeight,
+            mainContentWidth=contentWidth,
+            statusColumns=cards.Columns,
+            stacked,
+            bounds
+        };
     }
     private static void SaveElement(FrameworkElement element,string path)
     {

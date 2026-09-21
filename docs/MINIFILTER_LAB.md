@@ -98,13 +98,13 @@ Read-only opens remain non-eager. Paths recorded as originally absent remain abs
 
 On a disposable VM, open a test file through the LAB root, create a writable memory mapping, modify a page and flush/unmap it. A protocol-v9 `PagingWrite` record should appear in the session's `paging-state` journal with the tracked path, offset/length and kernel identity when available.
 
-This test proves visibility only. It does not prove pre-preservation of mapped writes.
+The PagingWrite record proves visibility. For the mapped file to count as pre-preserved, the same session must also contain the full pre-image/CREATE intent committed when its content-write capable handle was opened. Handles that existed before the LAB gate connected are not covered by this milestone.
 
 ## What a successful gate test proves
 
 It proves that, for the tested path and operation, the minifilter can hold the destructive I/O while user
 mode durably captures the pre-image and can deny the I/O when that commit is unavailable. It does **not**
-prove production compatibility, crash safety, memory-mapped-write coverage, large-file performance,
+prove production compatibility, crash safety, coverage for pre-existing writable handles, large-file performance,
 containment efficacy, or universal rollback.
 
 

@@ -146,16 +146,18 @@ New-Item -ItemType Directory -Path $ResultsDirectory -Force | Out-Null
 $dirRoot=Join-Path $RootBase "predirectory-$stamp"
 $preRoot=Join-Path $RootBase "preexisting-$stamp"
 $postRoot=Join-Path $RootBase "postactivation-$stamp"
+$containRoot=Join-Path $RootBase "containment-$stamp"
 $dirStore=Join-Path $ResultsDirectory 'predirectory-store'
 $preStore=Join-Path $ResultsDirectory 'preexisting-store'
 $postStore=Join-Path $ResultsDirectory 'postactivation-store'
+$containStore=Join-Path $ResultsDirectory 'containment-store'
 $volume=[IO.Path]::GetPathRoot($RootBase).TrimEnd('\')
 $installScript=Join-Path $PSScriptRoot 'install_minifilter_lab.ps1'
 $unloadScript=Join-Path $PSScriptRoot 'unload_minifilter_lab.ps1'
 
 $summary=[ordered]@{
     schema=1
-    version='0.7.19.0'
+    version='0.7.20.0'
     startedUtc=(Get-Date).ToUniversalTime().ToString('o')
     vm=$vm
     rootBase=$RootBase
@@ -165,6 +167,9 @@ $summary=[ordered]@{
     postActivationBaselineVerified=$false
     postActivationPagingObserved=$false
     preimageHashMatched=$false
+    containmentDeniedTarget=$false
+    containmentPreservedTargetHash=$false
+    containmentAllowedPeer=$false
     passed=$false
 }
 
@@ -174,8 +179,11 @@ $holder=$null
 $gateDir=$null
 $gatePre=$null
 $gatePost=$null
+$gateContain=$null
+$containProbe=$null
 $dirRelease=$null
 $release=$null
+$containGo=$null
 try{
     $existing=(& fltmc filters 2>$null | Out-String)
     if($existing -match 'RansomGuardMinifilter'){
@@ -318,6 +326,67 @@ try{
     }
     $summary.preimageHashMatched=$true
 
+    # Scenario 3: activation-bound containment is scoped to one kernel process identity.
+    Prepare-GateRoot $gateExe $containRoot
+    $containedFile=Join-Path $containRoot 'contained-target.bin'
+    $peerFile=Join-Path $containRoot 'ordinary-peer.bin'
+    New-TestFile $containedFile
+    New-TestFile $peerFile
+    $containedOriginalHash=(Get-FileHash -LiteralPath $containedFile -Algorithm SHA256).Hash
+    $peerOriginalHash=(Get-FileHash -LiteralPath $peerFile -Algorithm SHA256).Hash
+
+    $containReady=Join-Path $ResultsDirectory 'containment.ready'
+    $containGo=Join-Path $ResultsDirectory 'containment.go'
+    $containResult=Join-Path $ResultsDirectory 'containment.result'
+    $containProbeOut=Join-Path $ResultsDirectory 'containment-probe.out.log'
+    $containProbeErr=Join-Path $ResultsDirectory 'containment-probe.err.log'
+    $containProbe=Start-LoggedProcess $helperExe @(
+        'containment-probe','--file',(Quote-Arg $containedFile),
+        '--ready',(Quote-Arg $containReady),
+        '--go',(Quote-Arg $containGo),
+        '--result',(Quote-Arg $containResult)
+    ) $containProbeOut $containProbeErr
+    Wait-Path $containReady 15 'containment probe readiness'
+
+    $containOut=Join-Path $ResultsDirectory 'containment-gate.out.log'
+    $containErr=$containOut + '.err'
+    $gateContain=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $containRoot),
+        '--store',(Quote-Arg $containStore),
+        '--session','containment',
+        '--contain-pid',([string]$containProbe.Id)
+    ) $containOut $containErr
+    Wait-LogPattern $containOut 'LAB containment\s+: ACTIVE' $gateContain 45
+
+    New-Item -ItemType File -Path $containGo -Force | Out-Null
+    Wait-Path $containResult 15 'containment probe result'
+    if(-not $containProbe.WaitForExit(15000)){
+        Stop-Process -Id $containProbe.Id -Force -ErrorAction SilentlyContinue
+        throw 'Contained runtime probe did not exit.'
+    }
+    $containOutcome=(Get-Content -LiteralPath $containResult -Raw).Trim()
+    if($containOutcome -notmatch '^(denied|io-denied:)'){
+        throw "Contained process mutation was not denied. outcome=$containOutcome exit=$($containProbe.ExitCode)"
+    }
+    if($containProbe.ExitCode -ne 0){
+        throw "Contained runtime probe returned unexpected exit=$($containProbe.ExitCode), outcome=$containOutcome"
+    }
+    $summary.containmentDeniedTarget=$true
+    $containedAfterHash=(Get-FileHash -LiteralPath $containedFile -Algorithm SHA256).Hash
+    if(-not [string]::Equals($containedAfterHash,$containedOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'Contained process changed the protected target despite kernel containment.'
+    }
+    $summary.containmentPreservedTargetHash=$true
+    $containProbe=$null
+
+    & $helperExe map-write --file $peerFile
+    if($LASTEXITCODE -ne 0){throw "Ordinary peer mapped-write failed under PID-scoped containment, exit=$LASTEXITCODE"}
+    $peerAfterHash=(Get-FileHash -LiteralPath $peerFile -Algorithm SHA256).Hash
+    if([string]::Equals($peerAfterHash,$peerOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'Ordinary peer was unexpectedly prevented from mutating under single-process containment.'
+    }
+    $summary.containmentAllowedPeer=$true
+
     $summary.passed=$true
     $summary.completedUtc=(Get-Date).ToUniversalTime().ToString('o')
     $summary | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'runtime-result.json') -Encoding utf8
@@ -332,7 +401,11 @@ finally{
         if($release){New-Item -ItemType File -Path $release -Force -ErrorAction SilentlyContinue | Out-Null}
         Stop-Process -Id $holder.Id -Force -ErrorAction SilentlyContinue
     }
-    foreach($p in @($gateDir,$gatePre,$gatePost)){
+    if($containProbe -and -not $containProbe.HasExited){
+        if($containGo){New-Item -ItemType File -Path $containGo -Force -ErrorAction SilentlyContinue | Out-Null}
+        Stop-Process -Id $containProbe.Id -Force -ErrorAction SilentlyContinue
+    }
+    foreach($p in @($gateDir,$gatePre,$gatePost,$gateContain)){
         if($p -and -not $p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}
     }
     if($installed){

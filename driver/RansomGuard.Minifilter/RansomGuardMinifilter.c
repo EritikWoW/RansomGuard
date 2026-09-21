@@ -495,7 +495,7 @@ static VOID RgPopulatePostCreateIdentity(PRG_EVENT Event,
         FileIdInformation,
         &returned);
 
-    if (!NT_SUCCESS(status) || returned < sizeof(identity)) {
+    if (!NT_SUCCESS(status) || returned < (ULONG)sizeof(identity)) {
         Event->IdentityStatus = RgIdentityQueryFailed;
         return;
     }

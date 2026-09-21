@@ -100,7 +100,6 @@ try
             var reason = Require(options, "--reason");
 
             using var maintenanceLease = RollbackMaintenanceLease.Acquire(repositoryRoot);
-            using var maintenanceLease = RollbackMaintenanceLease.Acquire(repositoryRoot);
             var repository = new RollbackRepository(repositoryRoot);
             repository.VerifyAll();
             var store = repository.OpenSession(sessionId);
@@ -119,6 +118,7 @@ try
             var sessionId = Require(options, "--session");
             var reason = Require(options, "--reason");
 
+            using var maintenanceLease = RollbackMaintenanceLease.Acquire(repositoryRoot);
             var repository = new RollbackRepository(repositoryRoot);
             repository.VerifyAll();
             var store = repository.OpenSession(sessionId);

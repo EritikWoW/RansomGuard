@@ -1,11 +1,11 @@
 #pragma once
 
-// Wire protocol between the RansomGuard lab minifilter and user-mode clients.
-// v4 adds explicit IRP_MJ_CREATE semantics: create disposition/options are carried in RG_EVENT.Flags,
-// and user mode can distinguish destructive replacement from an originally-absent new file.
-// The production bundle still does not install or enable the driver.
+// Wire protocol between the RansomGuard engineering minifilter and user-mode clients.
+// v5 adds a post-CREATE reconciliation message. A successful create is correlated back to
+// its pre-create sequence and carries the final tunneled normalized path plus FILE_ID_INFORMATION
+// (volume serial + 128-bit file ID). Normal product operation remains AuditOnly.
 
-#define RG_PROTOCOL_VERSION 4u
+#define RG_PROTOCOL_VERSION 5u
 #define RG_PATH_CHARS 512u
 #define RG_GATE_ROOT_CHARS 260u
 #define RG_PORT_NAME L"\\RansomGuardMinifilterPort"
@@ -20,7 +20,8 @@ typedef enum _RG_EVENT_TYPE {
     RgEventRename = 2,
     RgEventDeleteDisposition = 3,
     RgEventTruncate = 4,
-    RgEventCreate = 5
+    RgEventCreate = 5,
+    RgEventCreateReconcile = 6
 } RG_EVENT_TYPE;
 
 typedef enum _RG_PATH_STATUS {
@@ -29,6 +30,13 @@ typedef enum _RG_PATH_STATUS {
     RgPathQueryFailed = 2,
     RgPathTruncated = 3
 } RG_PATH_STATUS;
+
+typedef enum _RG_IDENTITY_STATUS {
+    RgIdentityUnknown = 0,
+    RgIdentityResolved = 1,
+    RgIdentityQueryFailed = 2,
+    RgIdentityNotApplicable = 3
+} RG_IDENTITY_STATUS;
 
 typedef enum _RG_CLIENT_MODE {
     RgClientAudit = 1,
@@ -40,7 +48,8 @@ typedef enum _RG_GATE_DECISION {
     RgGateSnapshotCommitted = 1,
     RgGateDeny = 2,
     RgGateBaselineCommitted = 3,
-    RgGateNoPreservationRequired = 4
+    RgGateNoPreservationRequired = 4,
+    RgGateReconciled = 5
 } RG_GATE_DECISION;
 
 #pragma pack(push, 1)
@@ -67,6 +76,14 @@ typedef struct _RG_EVENT {
     unsigned long FileInformationClass;
     unsigned long DroppedBeforeThis;
     unsigned long Reserved;
+
+    // v5 post-CREATE reconciliation fields. For pre-operation events these are zeroed.
+    unsigned long long RelatedSequence;
+    unsigned long OperationStatus;
+    unsigned long IdentityStatus;
+    unsigned long long VolumeSerialNumber;
+    unsigned char FileId128[16];
+
     wchar_t Path[RG_PATH_CHARS];
 } RG_EVENT, *PRG_EVENT;
 

@@ -75,3 +75,19 @@ must remain unsigned; only the SYS, INF, shared protocol header and SHA-256 mani
 This proves C/WDK compilation, link resolution and Universal DDI API compatibility. It does not prove
 driver loadability on a target machine, minifilter attachment, Filter Manager message exchange,
 IRP ordering, filesystem semantics, Driver Verifier behavior or production signing.
+
+
+## Protocol v6 RENAME completion reconciliation coverage
+
+The rollback tests now treat a rename as two durable records: a pre-operation preservation intent and a correlated
+post-operation completion. They verify successful final-name recording, failed filesystem operations, successful
+operations whose tunneled final name cannot be resolved, reopen/rebuild correlation, pending-intent semantics,
+conflicting duplicate rejection, and completion-journal corruption detection.
+
+The minifilter source gate requires the safe post-operation path, `FltDoCompletionProcessingWhenSafe`,
+`FltGetTunneledName`, the correlated `RenameResult` event, and protocol-v6 completion fields. The GateClient
+source gate additionally requires result persistence without `FilterReplyMessage`.
+
+These tests and compile gates do not prove real filesystem tunneling behavior, completion-message delivery under
+fault injection, or post-operation file-ID identity. Those require an isolated Windows VM and remain separate
+from the normal product bundle.

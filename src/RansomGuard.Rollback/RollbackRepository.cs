@@ -83,6 +83,10 @@ public sealed class RollbackRepository
             var topologyRoot = Path.Combine(store.Root, "activation-topology-state");
             if (Directory.Exists(topologyRoot))
                 new ActivationTopologyStore(topologyRoot).VerifyAll();
+
+            var lifecycleJournal = Path.Combine(store.Root, "session-lifecycle.jsonl");
+            if (File.Exists(lifecycleJournal))
+                new RollbackSessionLifecycleStore(store.Root).VerifyAll();
         }
     }
 

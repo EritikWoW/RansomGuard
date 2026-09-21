@@ -6,6 +6,40 @@ using System.Text;
 
 const string PortName = @"\RansomGuardMinifilterPort";
 var options = Options.Parse(args);
+
+if (options.InspectPending)
+{
+    var sessionsRoot = Path.Combine(options.StoreRoot, "Sessions");
+    if (!Directory.Exists(options.StoreRoot) || !Directory.Exists(sessionsRoot))
+    {
+        Console.WriteLine("No rollback sessions found. Inspection made no changes.");
+        return;
+    }
+
+    var inspectRepository = new RollbackRepository(options.StoreRoot);
+    inspectRepository.VerifyAll();
+    var inspectPending = inspectRepository.PendingSessions();
+    if (inspectPending.Length == 0)
+    {
+        Console.WriteLine("No unresolved CREATE/RENAME intents. Inspection made no changes.");
+        return;
+    }
+
+    Console.WriteLine("UNRESOLVED ROLLBACK INTENTS — LAB gate startup is quarantined:");
+    foreach (var pending in inspectPending)
+    {
+        Console.WriteLine($"Session: {pending.SessionId}");
+        Console.WriteLine("  CREATE: " + (pending.CreateRequestSequences.Length == 0
+            ? "-"
+            : string.Join(", ", pending.CreateRequestSequences)));
+        Console.WriteLine("  RENAME: " + (pending.RenameRequestSequences.Length == 0
+            ? "-"
+            : string.Join(", ", pending.RenameRequestSequences)));
+    }
+    Console.WriteLine("No status was inferred from the current filesystem. Inspection made no changes.");
+    return;
+}
+
 if (options.PrepareOnly)
 {
     LabRootPolicy.Prepare(options.Root);
@@ -19,7 +53,16 @@ if (PathPolicy.Under(options.StoreRoot, options.Root))
     throw new InvalidOperationException("Rollback store must be outside the protected LAB root.");
 Directory.CreateDirectory(options.StoreRoot);
 var repository = new RollbackRepository(options.StoreRoot);
-repository.VerifyAll(); // Refuse to start a new gate session on top of ambiguous/crash-damaged rollback state.
+repository.VerifyAll();
+var unresolvedSessions = repository.PendingSessions();
+if (unresolvedSessions.Length != 0)
+{
+    var detail = string.Join("; ", unresolvedSessions.Select(x =>
+        $"{x.SessionId}: CREATE=[{string.Join(",", x.CreateRequestSequences)}], RENAME=[{string.Join(",", x.RenameRequestSequences)}]"));
+    throw new InvalidOperationException(
+        "LAB gate startup quarantined: unresolved CREATE/RENAME intents exist from an earlier session. " +
+        "Do not infer their outcome from current files. Run --inspect-pending for read-only details. " + detail);
+}
 var sessionId = options.SessionId ?? $"gate-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}";
 var store = repository.CreateSession(sessionId);
 var writeStore = new RangeRollbackStore(Path.Combine(store.Root, "write-cow"));
@@ -542,7 +585,13 @@ static class PathProbe
     }
 }
 
-sealed record Options(string Root, string StoreRoot, string? SessionId, bool PrepareOnly, int GateWorkers)
+sealed record Options(
+    string Root,
+    string StoreRoot,
+    string? SessionId,
+    bool PrepareOnly,
+    bool InspectPending,
+    int GateWorkers)
 {
     public const int DefaultGateWorkers = 4;
     public const int MaxGateWorkers = 8;
@@ -553,6 +602,7 @@ sealed record Options(string Root, string StoreRoot, string? SessionId, bool Pre
         string? store = null;
         string? session = null;
         var prepare = false;
+        var inspectPending = false;
         var gateWorkers = DefaultGateWorkers;
         for (var i = 0; i < args.Length; i++)
         {
@@ -567,12 +617,18 @@ sealed record Options(string Root, string StoreRoot, string? SessionId, bool Pre
                             $"--gate-workers must be between 1 and {MaxGateWorkers}.");
                     break;
                 case "--prepare-root": prepare = true; break;
+                case "--inspect-pending": inspectPending = true; break;
                 default: throw new ArgumentException($"Unknown/incomplete argument: {args[i]}");
             }
         }
-        if (string.IsNullOrWhiteSpace(root)) throw new ArgumentException("Pass --root <disposable-test-directory>.");
+
+        if (prepare && inspectPending)
+            throw new ArgumentException("--prepare-root and --inspect-pending cannot be combined.");
+        if (!inspectPending && string.IsNullOrWhiteSpace(root))
+            throw new ArgumentException("Pass --root <disposable-test-directory>.");
+
         store ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RansomGuardV072", "GateRollback");
-        return new Options(root, store, session, prepare, gateWorkers);
+        return new Options(root ?? string.Empty, store, session, prepare, inspectPending, gateWorkers);
     }
 }
 

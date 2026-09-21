@@ -158,7 +158,8 @@ static void ContainmentProbe(string filePath, string readyMarker, string goMarke
     }
     catch (IOException ex)
     {
-        File.WriteAllText(resultMarker, "io-denied:" + ex.HResult.ToString("X8"));
+        File.WriteAllText(resultMarker, "io-error:" + ex.HResult.ToString("X8"));
+        Environment.ExitCode = 10;
     }
 }
 

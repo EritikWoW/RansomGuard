@@ -1,0 +1,124 @@
+$ErrorActionPreference='Stop'
+$root=Split-Path -Parent $PSScriptRoot
+
+$workflowPath=Join-Path $root '.github\workflows\minifilter-runtime-vm.yml'
+$runtimeScript=Join-Path $root 'minifilter-tools\run_runtime_integration_lab.ps1'
+$packageScript=Join-Path $root 'minifilter-tools\prepare_runtime_driver_package.ps1'
+$installScript=Join-Path $root 'minifilter-tools\install_minifilter_lab.ps1'
+$helperSource=Join-Path $root 'tests\RansomGuard.Minifilter.RuntimeHarness\Program.cs'
+$helperProject=Join-Path $root 'tests\RansomGuard.Minifilter.RuntimeHarness\RansomGuard.Minifilter.RuntimeHarness.csproj'
+$build=Join-Path $root 'build_windows.ps1'
+
+foreach($path in @($workflowPath,$runtimeScript,$packageScript,$installScript,$helperSource,$helperProject,$build)){
+    if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Runtime VM harness required file missing: $path"}
+}
+
+$workflow=Get-Content -LiteralPath $workflowPath -Raw
+foreach($required in @(
+    'workflow_dispatch:',
+    'runs-on: [self-hosted, Windows, X64, ransomguard-lab-vm]',
+    'environment: ransomguard-lab-vm',
+    'RANSOMGUARD_LAB_VM: I_UNDERSTAND',
+    'RANSOMGUARD_LAB_CERT_THUMBPRINT',
+    'prepare_runtime_driver_package.ps1',
+    'run_runtime_integration_lab.ps1',
+    'runtime-package.json',
+    'github.sha'
+)){
+    if($workflow -notmatch [regex]::Escape($required)){throw "Runtime VM workflow missing invariant: $required"}
+}
+if($workflow -match '(?m)^\s+(push|pull_request|schedule):'){
+    throw 'Runtime VM workflow must remain manual workflow_dispatch only.'
+}
+if($workflow -match 'ransomguard-runtime-driver/\*\*'){
+    throw 'Signed runtime driver package must not be uploaded as a workflow artifact.'
+}
+
+$runtime=Get-Content -LiteralPath $runtimeScript -Raw
+foreach($required in @(
+    'RANSOMGUARD_LAB_VM',
+    'I_UNDERSTAND',
+    'Win32_ComputerSystem',
+    'install_minifilter_lab.ps1',
+    'unload_minifilter_lab.ps1',
+    'preexisting-map.bin',
+    'writableViewPresent',
+    'postactivation-map.bin',
+    'BaselineVerified writable-section evidence',
+    'paging-write evidence',
+    'originalSha256',
+    'runtime-result.json'
+)){
+    if($runtime -notmatch [regex]::Escape($required)){throw "Runtime integration script missing invariant: $required"}
+}
+
+$package=Get-Content -LiteralPath $packageScript -Raw
+foreach($required in @(
+    'build_minifilter.ps1',
+    'signtool.exe',
+    'Inf2Cat.exe',
+    'RANSOMGUARD_LAB_VM',
+    'runtime-package.json',
+    'git -C $root rev-parse HEAD',
+    'Get-AuthenticodeSignature',
+    'RansomGuardMinifilter.cat'
+)){
+    if($package -notmatch [regex]::Escape($required)){throw "Runtime package script missing invariant: $required"}
+}
+
+$forbidden=@(
+    'bcdedit',
+    'Set-MpPreference',
+    'Add-MpPreference',
+    'Remove-MpPreference',
+    'certutil -addstore',
+    'Import-Certificate',
+    'Set-SecureBootUEFI',
+    'Disable-WindowsOptionalFeature'
+)
+foreach($path in @($runtimeScript,$packageScript,$workflowPath)){
+    $text=Get-Content -LiteralPath $path -Raw
+    foreach($token in $forbidden){
+        if($text -match [regex]::Escape($token)){throw "Runtime VM harness must not modify boot/security/trust policy: $token in $path"}
+    }
+}
+
+$helper=Get-Content -LiteralPath $helperSource -Raw
+foreach($required in @(
+    'hold-map',
+    'map-write',
+    'CreateFileMappingW',
+    'MapViewOfFile',
+    'FlushViewOfFile',
+    'FlushFileBuffers',
+    'UnmapViewOfFile'
+)){
+    if($helper -notmatch [regex]::Escape($required)){throw "Runtime mapping helper missing invariant: $required"}
+}
+$holdStart=$helper.IndexOf('static void HoldMappedView')
+$holdEnd=$helper.IndexOf('static void MapAndWrite',$holdStart)
+if($holdStart -lt 0 -or $holdEnd -lt 0){throw 'HoldMappedView source block missing.'}
+$hold=$helper.Substring($holdStart,$holdEnd-$holdStart)
+$closeMap=$hold.IndexOf('Native.CloseHandle(mapping)')
+$closeFile=$hold.IndexOf('file.Dispose()')
+$ready=$hold.IndexOf('File.WriteAllText(readyMarker')
+if($closeMap -lt 0 -or $closeFile -lt 0 -or $ready -lt 0 -or $closeMap -gt $ready -or $closeFile -gt $ready){
+    throw 'Pre-existing mapping scenario must close file/mapping handles before advertising the held mapped view.'
+}
+
+$install=Get-Content -LiteralPath $installScript -Raw
+if($install -notmatch [regex]::Escape("ValidateSet('','LAB-MINIFILTER')") -or
+   $install -notmatch [regex]::Escape('$Confirmation')){
+    throw 'Install script must support explicit VM-only noninteractive confirmation for the runtime workflow.'
+}
+
+$buildText=Get-Content -LiteralPath $build -Raw
+foreach($required in @(
+    'RansomGuard.Minifilter.RuntimeHarness.csproj',
+    'MinifilterLab\RuntimeHarness',
+    'verify_runtime_vm_harness.ps1'
+)){
+    if($buildText -notmatch [regex]::Escape($required)){throw "Engineering LAB build missing runtime harness packaging invariant: $required"}
+}
+
+Write-Host 'Runtime VM harness source gate PASSED: manual self-hosted VM only, exact-commit signed driver provenance, two real mapping scenarios, no boot/trust/Defender mutation.' -ForegroundColor Green

@@ -35,7 +35,7 @@ var sectionStore = new WritableSectionEvidenceStore(Path.Combine(store.Root, "se
 var activationStore = new ActivationPreflightStore(Path.Combine(store.Root, "activation-state"));
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
-Console.WriteLine("RansomGuard LAB pre-write gate v0.7.13.0");
+Console.WriteLine("RansomGuard LAB pre-write gate v0.7.14.0");
 Console.WriteLine("LAB ONLY: use only inside a disposable test directory on a test machine/VM.");
 Console.WriteLine($"Protected LAB root : {options.Root}");
 Console.WriteLine($"Kernel NT root     : {ntRoot}");

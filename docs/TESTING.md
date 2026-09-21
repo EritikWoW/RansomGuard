@@ -109,3 +109,24 @@ without `FilterReplyMessage`.
 
 These tests and compile gates do not prove real filesystem tunneling behavior, completion-message delivery under
 fault injection, or all NTFS/ReFS create edge cases. Those remain isolated Windows-VM validation work.
+
+
+## Manual disposable-VM minifilter runtime gate
+
+0.7.14 adds `.github/workflows/minifilter-runtime-vm.yml`, a manual workflow that is intentionally excluded from push/pull-request CI. It requires a self-hosted Windows VM runner labeled `ransomguard-lab-vm`, Administrator execution, installed WDK/VS tooling, preconfigured lab signing, and an already trusted certificate/private key referenced by the environment secret `RANSOMGUARD_LAB_CERT_THUMBPRINT`.
+
+The workflow rebuilds both userspace and the minifilter from the exact checkout. The runtime driver preparation step signs the exact current SYS, generates/signs the catalog, and writes a commit/SHA-256 provenance record. It does not change BCD/test-signing policy, Secure Boot, trust roots, or Defender.
+
+The runtime harness performs two required scenarios:
+
+1. **Pre-existing writable mapping**: keep a PAGE_READWRITE user view alive after closing the original file and mapping handles. GateClient startup must refuse activation, and the durable activation journal must report `writableViewPresent=true` for that file.
+2. **Post-activation mapped mutation**: activate on a clean root, then open a file with content-write access, create PAGE_READWRITE mapping, change bytes and flush. The run must prove that:
+   - a full pre-image exists and hashes to the pre-mutation SHA-256;
+   - the writable-section journal reports state `BaselineVerified`;
+   - paging-write evidence is present;
+   - the live file hash changed.
+
+Only logs/journals and `runtime-result.json` are retained as workflow artifacts. The signed test driver package is deleted.
+
+A successful run proves the expected ordering on that VM image. It still does not prove reboot behavior, Driver Verifier stability, storage-pressure handling, all NTFS/ReFS edge cases, production signing, or Microsoft altitude suitability.
+

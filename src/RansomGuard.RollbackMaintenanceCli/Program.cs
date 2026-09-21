@@ -76,6 +76,7 @@ try
                 File.ReadAllText(planPath, Encoding.UTF8), json)
                 ?? throw new InvalidDataException("Retention plan JSON is invalid.");
 
+            using var reportStream = OpenNewOutput(reportPath);
             using var cts = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) =>
             {
@@ -85,7 +86,7 @@ try
 
             var report = await RollbackRetentionExecutor.ExecuteAsync(
                 repositoryRoot, plan, cts.Token).ConfigureAwait(false);
-            WriteNewJson(reportPath, report, json);
+            WriteJson(reportStream, report, json);
 
             Console.WriteLine($"RETENTION {(report.Succeeded ? "PASSED" : "FAILED")}: reclaimed={report.ReclaimedBytes}");
             Console.WriteLine($"PlanId={report.PlanId}; succeeded={report.SucceededActions}/{report.RequestedActions}; failed={report.FailedActions}");
@@ -209,6 +210,12 @@ static double ParseDouble(
 
 static void WriteNewJson<T>(string path, T value, JsonSerializerOptions options)
 {
+    using var stream = OpenNewOutput(path);
+    WriteJson(stream, value, options);
+}
+
+static FileStream OpenNewOutput(string path)
+{
     var full = Path.GetFullPath(path);
     var parent = Path.GetDirectoryName(full)
         ?? throw new ArgumentException("Output path must have a parent directory.", nameof(path));
@@ -218,10 +225,14 @@ static void WriteNewJson<T>(string path, T value, JsonSerializerOptions options)
     if ((File.GetAttributes(parent) & FileAttributes.ReparsePoint) != 0)
         throw new IOException("Output parent must not be a reparse point: " + parent);
 
-    var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(value, options));
-    using var stream = new FileStream(
+    return new FileStream(
         full, FileMode.CreateNew, FileAccess.Write, FileShare.Read,
         64 * 1024, FileOptions.WriteThrough);
+}
+
+static void WriteJson<T>(FileStream stream, T value, JsonSerializerOptions options)
+{
+    var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(value, options));
     stream.Write(bytes);
     stream.Flush(true);
 }

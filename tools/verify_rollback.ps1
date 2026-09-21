@@ -8,12 +8,14 @@ $createOperationStore=Join-Path $root 'src\RansomGuard.Rollback\CreateOperationS
 $createPolicy=Join-Path $root 'src\RansomGuard.Rollback\CreateGatePolicy.cs'
 $identityStore=Join-Path $root 'src\RansomGuard.Rollback\FileIdentityStore.cs'
 $renameStore=Join-Path $root 'src\RansomGuard.Rollback\RenameRollbackStore.cs'
+$restartStore=Join-Path $root 'src\RansomGuard.Rollback\RestartReconciliationStore.cs'
 if(-not(Test-Path -LiteralPath $rangeStore)){throw 'RangeRollbackStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $createStore)){throw 'CreateRollbackStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $createOperationStore)){throw 'CreateOperationStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $createPolicy)){throw 'CreateGatePolicy.cs missing.'}
 if(-not(Test-Path -LiteralPath $identityStore)){throw 'FileIdentityStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $renameStore)){throw 'RenameRollbackStore.cs missing.'}
+if(-not(Test-Path -LiteralPath $restartStore)){throw 'RestartReconciliationStore.cs missing.'}
 $rangeText=Get-Content -LiteralPath $rangeStore -Raw
 foreach($required in @(
     'CaptureWritePreimageAsync',
@@ -134,6 +136,23 @@ foreach($required in @(
     if($renameText -notmatch [regex]::Escape($required)){throw "Rename rollback source gate missing invariant: $required"}
 }
 
+$restartText=Get-Content -LiteralPath $restartStore -Raw
+foreach($required in @(
+    'restart-reconciliation-journal.jsonl',
+    'RecordObservationAsync',
+    'RestartReconciliationClassifier',
+    'RestartEvidenceState.SupportsCompleted',
+    'RestartEvidenceState.SupportsNotCompleted',
+    'RestartEvidenceState.Indeterminate',
+    'RestartEvidenceState.Ambiguous',
+    'IntentRecordSha256',
+    'FileOptions.WriteThrough',
+    'Flush(true)',
+    'Restart reconciliation journal hash chain mismatch'
+)){
+    if($restartText -notmatch [regex]::Escape($required)){throw "Restart reconciliation source gate missing invariant: $required"}
+}
+
 if(-not(Test-Path -LiteralPath $store)){throw 'RollbackStore.cs missing.'}
 $text=Get-Content -LiteralPath $store -Raw
 foreach($required in @(
@@ -168,5 +187,6 @@ if($repository -notmatch 'new CreateRollbackStore\(createRoot\)\.VerifyAll\(\)')
 if($repository -notmatch 'new CreateOperationStore\(createRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include CREATE intent/completion journals.'}
 if($repository -notmatch 'new FileIdentityStore\(identityRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested identity-state stores.'}
 if($repository -notmatch 'new RenameRollbackStore\(renameRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested rename-state stores.'}
-Write-Host 'Rollback source gate PASSED: full-file, range-COW, create-baseline, CREATE intent/completion, durable file-identity, rename-intent/completion journals, hashes, crash-artifact rejection, write-through commits, first-state semantics, copy-only restore.'
-Write-Host 'Normal service capture remains disabled; v0.7.8 keeps blocking preservation inside the explicit LAB gate only.'
+if($repository -notmatch 'new RestartReconciliationStore\(restartRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested restart-state stores.'}
+Write-Host 'Rollback source gate PASSED: full-file, range-COW, create-baseline, CREATE/RENAME intent-completion, durable identity and restart-reconciliation journals, hashes, crash-artifact rejection, write-through commits, first-state semantics, copy-only restore.'
+Write-Host 'Normal service capture remains disabled; v0.7.9 keeps blocking preservation inside the explicit LAB gate only.'

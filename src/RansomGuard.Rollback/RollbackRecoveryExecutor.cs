@@ -38,6 +38,7 @@ public static class RollbackRecoveryExecutor
         if (IsSameOrUnder(outputFull, repositoryFull))
             throw new IOException("Recovery output root must remain outside the rollback repository.");
 
+        RejectExistingReparseAncestors(outputFull);
         Directory.CreateDirectory(outputFull);
         RejectReparse(outputFull);
 
@@ -125,7 +126,7 @@ public static class RollbackRecoveryExecutor
                     sha,
                     string.Empty));
             }
-            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
             {
                 success = false;
                 results.Add(new RollbackRecoveryExecutionItem(
@@ -216,6 +217,18 @@ public static class RollbackRecoveryExecutor
         var p = Path.GetFullPath(parent).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         return c.Equals(p, StringComparison.OrdinalIgnoreCase) ||
                c.StartsWith(p + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void RejectExistingReparseAncestors(string path)
+    {
+        var current = new DirectoryInfo(Path.GetFullPath(path));
+        if (!current.Exists) current = current.Parent;
+        while (current is not null)
+        {
+            if (current.Exists && (current.Attributes & FileAttributes.ReparsePoint) != 0)
+                throw new IOException("Recovery output path must not traverse a reparse point: " + current.FullName);
+            current = current.Parent;
+        }
     }
 
     private static void RejectReparse(string path)

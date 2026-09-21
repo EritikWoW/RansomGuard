@@ -48,6 +48,10 @@ public sealed class RollbackRepository
             var rangeRoot = Path.Combine(store.Root, "write-cow");
             if (Directory.Exists(rangeRoot))
                 new RangeRollbackStore(rangeRoot).VerifyAll();
+
+            var createRoot = Path.Combine(store.Root, "create-state");
+            if (Directory.Exists(createRoot))
+                new CreateRollbackStore(createRoot).VerifyAll();
         }
     }
 

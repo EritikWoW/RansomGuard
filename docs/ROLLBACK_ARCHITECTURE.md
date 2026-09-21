@@ -1,9 +1,8 @@
-# RansomGuard 0.7.11.0 - CREATE completion and identity reconciliation milestone
+# RansomGuard 0.7.11.0 - write-capable handle pre-preservation milestone
 
 RansomGuard is moving from detection-only telemetry to `preserve -> contain -> recover`.
 0.7.11.0 retains the deliberately constrained engineering minifilter gate, range-aware WRITE COW,
-CREATE/RENAME preservation and rename outcome reconciliation, and adds durable post-CREATE outcome,
-tunneled-name and kernel file-identity reconciliation.
+CREATE/RENAME transactions, restart reconciliation and protocol-v9 paging visibility, and adds conservative full-file pre-preservation for newly opened existing files that request write-capable access.
 
 ## WRITE ordering
 
@@ -50,7 +49,8 @@ the create completes.
   hash-chained `originally absent` baseline.
 - `FILE_DELETE_ON_CLOSE` on an existing file requires the same conservative full pre-image even with `FILE_OPEN`.
 - Existing-directory delete-on-close is denied because directory-topology rollback is not modeled yet.
-- `FILE_OPEN` / existing `FILE_OPEN_IF` without destructive create options need no preservation at CREATE time; later WRITE is still gated.
+- Existing `FILE_OPEN` / `FILE_OPEN_IF` requests that can produce a write-capable handle (`FILE_WRITE_DATA`, `GENERIC_WRITE`, `GENERIC_ALL`, or `MAXIMUM_ALLOWED`) commit an identity-bound full-file pre-image before allow. This is intentionally conservative groundwork for writable mappings.
+- Read-only existing-file `FILE_OPEN` / `FILE_OPEN_IF` requests still need no CREATE-time snapshot; later ordinary WRITE remains gated.
 - Once a path is marked originally absent, later WRITE/rename/delete/truncate events do not capture incident-created
   bytes as if they were pre-incident data.
 
@@ -131,7 +131,7 @@ After an allowed rename returns from the filesystem, the minifilter executes a p
 4. on success, `FltGetTunneledName` reconciles the retained pre-operation destination against Windows file-name tunneling;
 5. because `FltQueryInformationFile` requires PASSIVE_LEVEL with special kernel APCs enabled, the driver queries
    `FileIdInformation` only when that stricter execution contract is satisfied; otherwise identity is explicitly unresolved;
-6. the driver emits a no-reply protocol-v8 `RenameResult` correlated by the original kernel request sequence;
+6. the driver emits a no-reply protocol-v9 `RenameResult` correlated by the original kernel request sequence;
 7. `RenameRollbackStore` appends a separate write-through SHA-256 hash-chained completion record containing the
    final name and volume/file identity when available, linked to the exact intent hash.
 
@@ -216,7 +216,23 @@ After a successful in-scope CREATE, the minifilter attaches a nonpaged `FLT_STRE
 
 GateClient persists those observations in a separate write-through SHA-256 hash-chained `paging-write-journal.jsonl`. Repository-wide validation includes that journal.
 
-This closes the observability gap for memory-mapped/cache-manager writes associated with already tracked streams. It does **not** claim that those writes are recoverable: no pre-image is captured from the paging callback itself, and the paging path remains deliberately non-blocking.
+This closes the observability gap for memory-mapped/cache-manager writes associated with already tracked streams. The paging callback itself still captures no pre-image and remains deliberately non-blocking.
+
+## Write-capable handle pre-preservation
+
+0.7.11 moves the preservation boundary earlier for existing files opened after the LAB gate is active. `IO_SECURITY_CONTEXT.DesiredAccess` is already carried in the CREATE event. When an existing regular file is opened via `FILE_OPEN` or `FILE_OPEN_IF` and the request can yield write-capable access, GateClient:
+
+1. binds the path to its incident `FILE_ID_INFO` identity;
+2. captures the same conservative full-file pre-image used by destructive CREATE operations;
+3. flushes the object and hash-chained journal;
+4. records a CREATE intent containing the requested access and preservation proof;
+5. only then returns `SnapshotCommitted`.
+
+This intentionally increases storage use, but it establishes a pre-mutation baseline before a newly opened handle can be used with a writable file mapping. Microsoft requires compatible write access on the file handle for PAGE_READWRITE/PAGE_EXECUTE_READWRITE mappings.
+
+The current guarantee is scoped: it covers writable mappings created from handles opened while the LAB gate is active. A handle opened before gate attachment can still create a writable mapping without this eager baseline, so that case remains outside the recovery claim.
+
+0.7.10 journals are accepted during repository replay when they contain the older no-preservation policy for an otherwise non-destructive write-capable open. New `RecordIntentAsync` calls use the 0.7.11 policy and cannot create that legacy state.
 
 ## Bounded concurrent gate execution
 
@@ -233,7 +249,8 @@ Bounded concurrency and conservative restart evidence are implemented. A worker/
 ## Still required before production
 
 - deeper crash recovery for requests interrupted before authoritative kernel completion delivery;
-- safe pre-preservation for writable memory mappings/cache-manager paging writes;
+- coverage for writable mappings created from handles that predate LAB-gate attachment, plus live mmap/cache-manager fault-injection validation;
+- storage quotas/pressure policy and optimization of eager full-file baselines;
 - storage quotas, retention and pressure policy;
 - transition from protected-root health to containment/block policy;
 - process-state capture and adaptive crypto analysis;

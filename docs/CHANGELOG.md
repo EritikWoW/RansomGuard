@@ -1,5 +1,5 @@
 # RansomGuard 0.7.7.0
-- Protocol v8 binds successful post-RENAME reconciliation to `FileIdInformation` queried from the actual completed kernel file object.
+- Protocol v8 binds successful post-RENAME reconciliation to `FileIdInformation` from the actual completed kernel file object only at PASSIVE_LEVEL with special kernel APCs enabled; otherwise identity remains explicitly unresolved.
 - Rename completion journals now persist final volume serial + 128-bit file ID alongside the reconciled destination name.
 - Successful rename completion distinguishes authoritative, name-unresolved, identity-unresolved and fully unresolved states.
 - Any reported post-op identity that differs from the source identity committed in the rename intent is rejected.

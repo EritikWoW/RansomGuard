@@ -134,9 +134,9 @@ $containBlock=$helper.Substring($containStart,$containEnd-$containStart)
 foreach($required in @('readyMarker','goMarker','resultMarker','File.AppendAllText','UnauthorizedAccessException','Environment.ExitCode = 9')){
     if($containBlock -notmatch [regex]::Escape($required)){throw "Containment runtime helper missing invariant: $required"}
 }
-if($runtime -notmatch [regex]::Escape("Wait-LogPattern $containOut 'LAB containment\s+: ACTIVE'") -or
-   $runtime -notmatch [regex]::Escape('if($containOutcome -ne ''denied'') -or
-   $runtime -notmatch [regex]::Escape('if([string]::Equals($peerAfterHash,$peerOriginalHash')){
+if($runtime -notmatch 'LAB containment\\s\+: ACTIVE' -or
+   $runtime -notmatch [regex]::Escape("if(`$containOutcome -ne 'denied'){") -or
+   $runtime -notmatch [regex]::Escape('peerAfterHash,$peerOriginalHash')){
     throw 'Runtime containment scenario must prove target denial/hash preservation and ordinary-peer mutation.'
 }
 

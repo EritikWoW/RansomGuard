@@ -267,7 +267,7 @@ sealed class AuditStats
     };
 }
 
-enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, RenameResult = 6, CreateResult = 7, PagingWrite = 8, WritableSection = 9, ActivationPreflight = 10 }
+enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, RenameResult = 6, CreateResult = 7, PagingWrite = 8, WritableSection = 9, ActivationPreflight = 10, ContainmentActivated = 11 }
 enum RgPathStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2, Truncated = 3 }
 enum RgIdentityStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2 }
 

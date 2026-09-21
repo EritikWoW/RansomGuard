@@ -148,6 +148,40 @@ The gate also rejects source changes that introduce an unlimited/disable/bypass 
 
 These tests validate userspace accounting/policy. Native low-disk behavior under real Filter Manager load still requires the disposable-VM/fault-injection campaign.
 
+## 0.7.18 safe rollback retention coverage
+
+Rollback tests now cover explicit session lifecycle, retention release, deterministic retention planning and quarantine-first purge.
+
+Coverage includes:
+
+- lifecycle `Opened -> ClosedCleanly` idempotence and journal corruption rejection;
+- opened-only/crashed lifecycle remaining non-clean;
+- legacy sessions without lifecycle remaining non-purgeable;
+- clean sessions without release remaining `NotReleased`;
+- pending CREATE keeping retention blocked even after clean close;
+- explicit release binding to the exact current recovery `PlanId`;
+- identical release idempotence;
+- new session evidence making an older release `ReleaseStale`;
+- an independent minimum-age barrier producing `TooYoung`;
+- stable retention `PlanId` while evidence/eligibility is unchanged;
+- explicit quarantine-first purge with durable `Intent -> Quarantined -> Completed`;
+- stale retention-plan refusal before the candidate session is moved;
+- purge-journal corruption rejection.
+
+The retention source gate requires:
+
+- lifecycle open before activation preflight and clean close only after all gate workers finish;
+- no purge eligibility without clean lifecycle, zero pending CREATE/RENAME, zero blocked recovery actions and a matching release;
+- executor revalidation of the current retention `PlanId` rather than caller-supplied session entries;
+- exact purge ordering: durable intent, atomic quarantine move, durable quarantined state, delete, durable completed state;
+- reparse-point refusal;
+- LAB CLI minimum purge age of 24 hours;
+- exact `RELEASE:<session>` / `PURGE:<session>` confirmations;
+- no force/all/wildcard/age-bypass purge switches;
+- LAB-only packaging with RollbackRetention artifacts rejected from the normal Audit bundle.
+
+The purge tests use a zero-age library plan only inside the isolated userspace test fixture so the actual delete path can be exercised immediately. The packaged CLI enforces the 24-hour minimum.
+
 ## Manual disposable-VM minifilter runtime gate
 
 0.7.15 uses `.github/workflows/minifilter-runtime-vm.yml`, a manual workflow that is intentionally excluded from push/pull-request CI. It requires a self-hosted Windows VM runner labeled `ransomguard-lab-vm`, Administrator execution, installed WDK/VS tooling, preconfigured lab signing, and an already trusted certificate/private key referenced by the environment secret `RANSOMGUARD_LAB_CERT_THUMBPRINT`.

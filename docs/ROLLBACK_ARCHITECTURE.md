@@ -234,8 +234,8 @@ The section callback never calls `RgGateEvent`, never performs a file-name query
 3. GateClient enumerates existing non-reparse files and opens each only for attributes.
 4. The minifilter recognizes those gate-client opens only while activation is pending. In post-CREATE, at PASSIVE_LEVEL, it binds the final path/FILE_ID_INFO and calls `MmDoesFileHaveUserWritableReferences(FileObject->SectionObjectPointer)`.
 5. Each result is queued as a no-reply `ActivationPreflight` event and persisted in a write-through SHA-256 hash-chained `activation-preflight-journal.jsonl`.
-6. A pre-existing writable mapped view, failed/unresolved probe, or paging/writable-section activity during the scan latches `gActivationHazard`.
-7. Only after every file is clean does GateClient call `FilterSendMessage` with `ActivateGate`. The kernel refuses activation while the hazard latch is set.
+6. GateClient retains every successful probe handle with `FILE_SHARE_READ` only until activation. This forces pre-existing write/delete handles to surface as sharing failures and prevents new write/delete handles from racing the remaining scan; a mapped view whose handles were already closed is still detected by `MmDoesFileHaveUserWritableReferences`.
+7. Failed/unresolved probes or a detected writable mapped view latch `gActivationHazard`. Only after every file is clean does GateClient call `FilterSendMessage` with `ActivateGate`; the kernel refuses activation while the hazard latch is set.
 
 The activation callback does not perform rollback I/O. `MmDoesFileHaveUserWritableReferences` is used only from post-CREATE, where Filter Manager guarantees PASSIVE_LEVEL. The normal paging and section callbacks remain no-reply/non-blocking.
 

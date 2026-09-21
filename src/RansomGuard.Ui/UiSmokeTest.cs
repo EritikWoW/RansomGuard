@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Windows;
@@ -60,8 +61,15 @@ internal static class UiSmokeTest
                 window.Model.LanguageChoice=language;
                 window.Model.RestorePreview();
                 window.Width=1600; window.Height=910;
-                if (L.Language != language || window.Model.UiLanguage.IetfLanguageTag != language)
-                    throw new InvalidOperationException("Selected UI culture was not applied.");
+                var xmlLanguage = window.Model.UiLanguage.IetfLanguageTag;
+                var currentUiCulture = CultureInfo.CurrentUICulture.Name;
+                var currentCulture = CultureInfo.CurrentCulture.Name;
+                if (!string.Equals(L.Language, language, StringComparison.Ordinal) ||
+                    !string.Equals(xmlLanguage, language, StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(currentUiCulture, language, StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(currentCulture, language, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException(
+                        $"Selected UI culture was not applied. requested={language}; L={L.Language}; XmlLanguage={xmlLanguage}; CurrentUICulture={currentUiCulture}; CurrentCulture={currentCulture}");
             foreach(string theme in new[]{"Dark","Light"})
             {
                 window.Model.ThemeChoice=theme;

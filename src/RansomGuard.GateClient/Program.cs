@@ -129,7 +129,7 @@ try
         var header = Marshal.PtrToStructure<FilterMessageHeader>(buffer);
         var ev = Marshal.PtrToStructure<RgEvent>(IntPtr.Add(buffer, headerSize));
 
-        await workerSlots.WaitAsync(cts.Token).ConfigureAwait(false);
+        await workerSlots.WaitAsync().ConfigureAwait(false);
         activeWorkers.RemoveAll(static task => task.IsCompleted);
         activeWorkers.Add(Task.Run(() => ProcessMessageAsync(header, ev)));
     }

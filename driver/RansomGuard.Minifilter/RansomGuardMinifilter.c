@@ -233,6 +233,10 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
         return RgCompleteDenied(Data);
     }
 
+    if (RgIsContainedRequestor(Data) && RgCreateMayMutate(&event)) {
+        return RgCompleteDenied(Data);
+    }
+
     status = RgCreateCreatePostContext(Data, event.Sequence, &postContext);
     if (!NT_SUCCESS(status)) {
         return RgCompleteDenied(Data);
@@ -317,6 +321,10 @@ FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJE
         return RgCompleteDenied(Data);
     }
 
+    if (RgIsContainedRequestor(Data)) {
+        return RgCompleteDenied(Data);
+    }
+
     if (!RgGateEvent(&event, &gateError, NULL)) {
         UNREFERENCED_PARAMETER(gateError);
         return RgCompleteDenied(Data);
@@ -361,6 +369,10 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
     }
 
     if (InterlockedCompareExchange(&gGateActivated, 0, 0) == 0) {
+        return RgCompleteDenied(Data);
+    }
+
+    if (RgIsContainedRequestor(Data)) {
         return RgCompleteDenied(Data);
     }
 

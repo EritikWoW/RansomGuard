@@ -168,6 +168,58 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
     return FLT_PREOP_SUCCESS_WITH_CALLBACK;
 }
 
+FLT_POSTOP_CALLBACK_STATUS RgPostCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjects,
+                                        PVOID CompletionContext, FLT_POST_OPERATION_FLAGS Flags)
+{
+    PRG_CREATE_CONTEXT createContext = (PRG_CREATE_CONTEXT)CompletionContext;
+    RG_EVENT event;
+    NTSTATUS status;
+    ULONG gateError = 0;
+    BOOLEAN opened;
+
+    if (createContext == NULL) {
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    }
+
+    if (FlagOn(Flags, FLTFL_POST_OPERATION_DRAINING)) {
+        RgReleaseCreateContext(createContext);
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    }
+
+    opened = NT_SUCCESS(Data->IoStatus.Status) && Data->IoStatus.Status != STATUS_REPARSE;
+    status = RgBuildCreateReconcileEvent(&event, Data, FltObjects, createContext);
+
+    if (!NT_SUCCESS(status)) {
+        if (opened) {
+            RgMarkGateAmbiguous();
+            if (!FlagOn(FltObjects->FileObject->Flags, FO_HANDLE_CREATED)) {
+                FltCancelFileOpen(FltObjects->Instance, FltObjects->FileObject);
+                Data->IoStatus.Status = STATUS_ACCESS_DENIED;
+                Data->IoStatus.Information = 0;
+            }
+        }
+        RgReleaseCreateContext(createContext);
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    }
+
+    if (!RgGateEvent(&event, &gateError)) {
+        UNREFERENCED_PARAMETER(gateError);
+        if (opened) {
+            // Post-CREATE failure cannot undo bytes already created/truncated/overwritten.
+            // Mark this LAB gate ambiguous so every subsequent in-root mutation fails closed.
+            RgMarkGateAmbiguous();
+            if (!FlagOn(FltObjects->FileObject->Flags, FO_HANDLE_CREATED)) {
+                FltCancelFileOpen(FltObjects->Instance, FltObjects->FileObject);
+                Data->IoStatus.Status = STATUS_ACCESS_DENIED;
+                Data->IoStatus.Information = 0;
+            }
+        }
+    }
+
+    RgReleaseCreateContext(createContext);
+    return FLT_POSTOP_FINISHED_PROCESSING;
+}
+
 FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjects, PVOID *CompletionContext)
 {
     RG_EVENT event;

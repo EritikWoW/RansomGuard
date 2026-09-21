@@ -55,11 +55,23 @@ static BOOLEAN RgAcquireClientPort(_In_ LONG ExpectedMode);
 static VOID RgReleaseClientPort(VOID);
 static VOID RgWaitForPortUsers(VOID);
 static LONG RgCurrentClientMode(VOID);
+static BOOLEAN RgIsPagingWrite(_In_ PFLT_CALLBACK_DATA Data);
+static VOID RgObservePagingWrite(_Inout_ PFLT_CALLBACK_DATA Data,
+                                 _In_ PCFLT_RELATED_OBJECTS FltObjects);
+static VOID RgAttachPagingStreamContext(_In_ PCFLT_RELATED_OBJECTS FltObjects,
+                                        _In_ const RG_EVENT *CreateResult);
+static VOID RgStreamContextCleanup(_In_ PFLT_CONTEXT Context,
+                                   _In_ FLT_CONTEXT_TYPE ContextType);
 static FLT_PREOP_CALLBACK_STATUS RgCompleteDenied(_Inout_ PFLT_CALLBACK_DATA Data);
+
+static const FLT_CONTEXT_REGISTRATION gContexts[] = {
+    { FLT_STREAM_CONTEXT, 0, RgStreamContextCleanup, sizeof(RG_STREAM_CONTEXT), RG_POOL_TAG },
+    { FLT_CONTEXT_END }
+};
 
 static const FLT_OPERATION_REGISTRATION gCallbacks[] = {
     { IRP_MJ_CREATE, 0, RgPreCreate, RgPostCreate, NULL },
-    { IRP_MJ_WRITE, FLTFL_OPERATION_REGISTRATION_SKIP_PAGING_IO, RgPreWrite, NULL, NULL },
+    { IRP_MJ_WRITE, 0, RgPreWrite, NULL, NULL },
     { IRP_MJ_SET_INFORMATION, 0, RgPreSetInformation, RgPostSetInformation, NULL },
     { IRP_MJ_OPERATION_END }
 };
@@ -68,7 +80,7 @@ static const FLT_REGISTRATION gRegistration = {
     sizeof(FLT_REGISTRATION),
     FLT_REGISTRATION_VERSION,
     0,
-    NULL,
+    gContexts,
     gCallbacks,
     RgUnload,
     RgInstanceSetup,
@@ -127,6 +139,16 @@ static BOOLEAN RgShouldObserve(_In_ PFLT_CALLBACK_DATA Data)
 static LONG RgCurrentClientMode(VOID)
 {
     return InterlockedCompareExchange(&gClientMode, 0, 0);
+}
+
+static BOOLEAN RgIsPagingWrite(PFLT_CALLBACK_DATA Data)
+{
+    if (!FLT_IS_IRP_OPERATION(Data)) {
+        return FALSE;
+    }
+
+    return FlagOn(Data->Iopb->IrpFlags, IRP_PAGING_IO) ||
+           FlagOn(Data->Iopb->IrpFlags, IRP_SYNCHRONOUS_PAGING_IO);
 }
 
 static FLT_PREOP_CALLBACK_STATUS RgCompleteDenied(PFLT_CALLBACK_DATA Data)
@@ -188,6 +210,12 @@ FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJE
     ULONG gateError = 0;
 
     UNREFERENCED_PARAMETER(CompletionContext);
+
+    if (RgIsPagingWrite(Data)) {
+        RgObservePagingWrite(Data, FltObjects);
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
     if (!RgShouldObserve(Data)) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
@@ -589,6 +617,7 @@ FLT_POSTOP_CALLBACK_STATUS RgPostCreate(PFLT_CALLBACK_DATA Data,
         }
 
         RgPopulatePostOperationIdentity(&event, FltObjects);
+        RgAttachPagingStreamContext(FltObjects, &event);
     }
 
     RgQueueRawEvent(&event, RgClientLabGate);
@@ -598,6 +627,104 @@ FLT_POSTOP_CALLBACK_STATUS RgPostCreate(PFLT_CALLBACK_DATA Data,
     }
     RgFreePostContext(context);
     return FLT_POSTOP_FINISHED_PROCESSING;
+}
+
+static VOID RgStreamContextCleanup(PFLT_CONTEXT Context, FLT_CONTEXT_TYPE ContextType)
+{
+    if (Context != NULL && ContextType == FLT_STREAM_CONTEXT) {
+        RtlSecureZeroMemory(Context, sizeof(RG_STREAM_CONTEXT));
+    }
+}
+
+static VOID RgAttachPagingStreamContext(PCFLT_RELATED_OBJECTS FltObjects,
+                                        const RG_EVENT *CreateResult)
+{
+    PRG_STREAM_CONTEXT context = NULL;
+    NTSTATUS status;
+
+    if (FltObjects == NULL || FltObjects->FileObject == NULL || CreateResult == NULL ||
+        CreateResult->PathStatus != RgPathResolved) {
+        return;
+    }
+
+    status = FltAllocateContext(
+        gFilter,
+        FLT_STREAM_CONTEXT,
+        sizeof(RG_STREAM_CONTEXT),
+        NonPagedPoolNx,
+        (PFLT_CONTEXT *)&context);
+    if (!NT_SUCCESS(status) || context == NULL) {
+        InterlockedIncrement(&gDropped);
+        return;
+    }
+
+    RtlZeroMemory(context, sizeof(*context));
+    context->PathStatus = CreateResult->PathStatus;
+    context->IdentityStatus = CreateResult->IdentityStatus;
+    context->VolumeSerialNumber = CreateResult->VolumeSerialNumber;
+    context->FileIdLow = CreateResult->FileIdLow;
+    context->FileIdHigh = CreateResult->FileIdHigh;
+    RtlCopyMemory(context->Path, CreateResult->Path, sizeof(context->Path));
+
+    status = FltSetStreamContext(
+        FltObjects->Instance,
+        FltObjects->FileObject,
+        FLT_SET_CONTEXT_KEEP_IF_EXISTS,
+        context,
+        NULL);
+
+    if (!NT_SUCCESS(status) && status != STATUS_FLT_CONTEXT_ALREADY_DEFINED &&
+        status != STATUS_NOT_SUPPORTED) {
+        InterlockedIncrement(&gDropped);
+    }
+
+    FltReleaseContext(context);
+}
+
+static VOID RgObservePagingWrite(PFLT_CALLBACK_DATA Data,
+                                 PCFLT_RELATED_OBJECTS FltObjects)
+{
+    PRG_STREAM_CONTEXT context = NULL;
+    RG_EVENT event;
+    LARGE_INTEGER systemTime;
+    NTSTATUS status;
+
+    if (InterlockedCompareExchange(&gUnloading, 0, 0) != 0 ||
+        InterlockedCompareExchange(&gClientConnected, 0, 0) == 0 ||
+        RgCurrentClientMode() != RgClientLabGate ||
+        FltObjects == NULL || FltObjects->FileObject == NULL) {
+        return;
+    }
+
+    status = FltGetStreamContext(FltObjects->Instance, FltObjects->FileObject,
+        (PFLT_CONTEXT *)&context);
+    if (!NT_SUCCESS(status) || context == NULL) {
+        return;
+    }
+
+    RtlZeroMemory(&event, sizeof(event));
+    event.ProtocolVersion = RG_PROTOCOL_VERSION;
+    event.EventType = RgEventPagingWrite;
+    event.PathStatus = context->PathStatus;
+    event.IdentityStatus = context->IdentityStatus;
+    event.Flags = RG_EVENT_FLAG_PAGING_IO;
+    event.Sequence = (ULONGLONG)InterlockedIncrement64(&gSequence);
+    KeQuerySystemTimePrecise(&systemTime);
+    event.SystemTime100ns = systemTime.QuadPart;
+    event.ProcessId = (ULONGLONG)(ULONG_PTR)FltGetRequestorProcessId(Data);
+    event.ThreadId = (ULONGLONG)(ULONG_PTR)PsGetCurrentThreadId();
+    event.ByteOffset = Data->Iopb->Parameters.Write.ByteOffset.QuadPart;
+    event.Length = Data->Iopb->Parameters.Write.Length;
+    event.VolumeSerialNumber = context->VolumeSerialNumber;
+    event.FileIdLow = context->FileIdLow;
+    event.FileIdHigh = context->FileIdHigh;
+    RtlCopyMemory(event.Path, context->Path, sizeof(event.Path));
+
+    // Paging I/O can run in memory-manager/cache-manager contexts where filesystem name
+    // queries or synchronous user-mode preservation can deadlock. Emit bounded no-reply
+    // evidence only; do not call RgGateEvent from the paging path.
+    RgQueueRawEvent(&event, RgClientLabGate);
+    FltReleaseContext(context);
 }
 
 FLT_POSTOP_CALLBACK_STATUS RgPostSetInformation(PFLT_CALLBACK_DATA Data,

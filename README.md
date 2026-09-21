@@ -1,4 +1,4 @@
-# RansomGuard 0.7.13.0
+# RansomGuard 0.7.14.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
@@ -6,7 +6,7 @@ and recover data through rollback plus adaptive crypto analysis.
 
 ## Core preservation milestone
 
-0.7.13.0 retains the 0.7.2 range-aware COW gate and adds explicit CREATE preservation semantics.
+0.7.14.0 retains the 0.7.2 range-aware COW gate and adds explicit CREATE preservation semantics.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 
@@ -63,6 +63,8 @@ Protocol v11 also removes the previous blind skip of paging-write callbacks. Aft
 
 0.7.13 adds a fail-closed activation preflight for mappings/handles that existed before GateClient connected. A LAB connection begins in kernel `NotActivated` state. GateClient opens each existing file only for attributes; the minifilter checks the real stream with `MmDoesFileHaveUserWritableReferences`, binds `FILE_ID_INFO`, and emits a no-reply `ActivationPreflight` event. External in-root CREATE/WRITE/metadata mutations are denied until the scan completes. GateClient keeps every successfully probed file open with read-only sharing until activation, so pre-existing write/delete handles cause sharing violations and new write/delete handles cannot race the scan. A pre-existing mapped view with no live handle is detected by `MmDoesFileHaveUserWritableReferences`. GateClient sends `ActivateGate` only after every file is clean; the kernel also refuses activation when an authoritative preflight probe latched a hazard. Results are persisted in a write-through SHA-256 hash-chained `activation-preflight-journal.jsonl`.
 
+0.7.14 adds a manual disposable-VM runtime harness for the protocol-v11 mapping path. It builds the exact checked-out driver and GateClient, test-signs the fresh SYS inside a dedicated self-hosted VM, and exercises both activation refusal for a writable mapping that predates GateClient and successful post-activation PAGE_READWRITE mapping with BaselineVerified section evidence, paging-write evidence and SHA-256-verified pre-image. The workflow is workflow_dispatch-only and cannot run on GitHub-hosted Windows.
+
 ## Recovery safety
 
 Range recovery:
@@ -109,11 +111,13 @@ Compile-only minifilter CI additionally builds Release x64 against the pinned Mi
 runs x64 Universal DDI API validation, and publishes an intentionally unsigned driver artifact.
 It does not install, load or attach the driver.
 
+Runtime driver loading is isolated in `.github/workflows/minifilter-runtime-vm.yml`, a manual-only self-hosted disposable-VM workflow. See `docs/RUNTIME_VM.md`.
+
 Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.7.13.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.7.14.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 LAB gate documentation:
 

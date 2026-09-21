@@ -1,4 +1,9 @@
 # RansomGuard 0.7.3.0
+- Added incident-scoped durable existing-file identity tracking using Windows `FILE_ID_INFO` (volume serial + 128-bit file ID).
+- The LAB gate captures/verifies identity before destructive existing-file preservation and rejects a path that changes to a different file identity during the same incident.
+- Added a write-through SHA-256 hash-chained `identity-state` journal with alias lookup, repository-wide validation, replacement-path tests and source-gate invariants.
+- This is identity hardening only; post-create/kernel file-object reconciliation and rename-destination transactions remain required.
+
 
 - Added explicit `IRP_MJ_CREATE` events to the engineering minifilter protocol.
 - Protocol v4 carries CreateDisposition/CreateOptions and desired access without changing the fixed event size.

@@ -57,6 +57,10 @@ public sealed class RollbackRepository
             if (Directory.Exists(identityRoot))
                 new FileIdentityStore(identityRoot).VerifyAll();
 
+            var createTransactionRoot = Path.Combine(store.Root, "create-operation-state");
+            if (Directory.Exists(createTransactionRoot))
+                new CreateTransactionStore(createTransactionRoot).VerifyAll();
+
             var renameRoot = Path.Combine(store.Root, "rename-state");
             if (Directory.Exists(renameRoot))
                 new RenameRollbackStore(renameRoot).VerifyAll();

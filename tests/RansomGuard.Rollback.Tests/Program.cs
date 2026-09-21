@@ -291,6 +291,28 @@ try
     catch (InvalidDataException) { identityReplacementRejected = true; }
     Check(identityReplacementRejected,
         "same path changing to a different file identity is rejected");
+
+    var handleBoundFull = new RollbackStore(Path.Combine(root, "identity-full-preimage"));
+    var fullHandleMismatchRejected = false;
+    try
+    {
+        _ = await handleBoundFull.CapturePreimageAsync(identityPath, RollbackMutationKind.Write,
+            identityFirst.Identity);
+    }
+    catch (InvalidDataException) { fullHandleMismatchRejected = true; }
+    Check(fullHandleMismatchRejected,
+        "full pre-image verifies expected identity on the exact source handle");
+
+    var handleBoundRange = new RangeRollbackStore(Path.Combine(root, "identity-range-preimage"));
+    var rangeHandleMismatchRejected = false;
+    try
+    {
+        await handleBoundRange.CaptureWritePreimageAsync(identityPath, 0, 1, identityFirst.Identity);
+    }
+    catch (InvalidDataException) { rangeHandleMismatchRejected = true; }
+    Check(rangeHandleMismatchRejected,
+        "range COW verifies expected identity on the exact source handle");
+
     identityStore.VerifyAll();
     Check(true, "file identity hash-chain journal verifies");
 

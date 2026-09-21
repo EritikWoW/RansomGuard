@@ -257,7 +257,8 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
 
         var path = resolver.Resolve(ev.Path) ?? ev.Path ?? "<unresolved>";
         ContainmentTriggerEvidence? containmentRequest = null;
-        if (containmentTrigger?.TryRequest(ev, reply, path, out var triggerEvidence) == true)
+        if (containmentTrigger is not null &&
+            containmentTrigger.TryRequest(ev, reply, path, out var triggerEvidence))
         {
             containmentRequest = triggerEvidence;
             await using (var reservation = await storageBudget.ReserveAsync(

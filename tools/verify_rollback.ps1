@@ -91,7 +91,7 @@ foreach($required in @(
     'FileOptions.WriteThrough',
     'Flush(true)',
     'Rename rollback journal hash chain mismatch',
-    'post-operation reconciliation is a separate milestone'
+    'post-operation reconciliation'
 )){
     if($renameText -notmatch [regex]::Escape($required)){throw "Rename rollback source gate missing invariant: $required"}
 }

@@ -190,7 +190,7 @@ These checks do not yet reconcile an interrupted in-flight kernel request. They 
 
 ## Bounded concurrent gate execution
 
-0.7.9.0 removes the previous global serialization around blocking gate sends. The minifilter now:
+0.7.8.0 removes the previous global serialization around blocking gate sends. The minifilter now:
 - admits at most 8 simultaneous blocking gate requests;
 - fails closed with STATUS_DEVICE_BUSY when that bound is exceeded;
 - holds gPortMutex only long enough to acquire/release a client-port lease;

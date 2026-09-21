@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using RansomGuard.Rollback;
 
 var passed = 0;
@@ -206,6 +207,18 @@ try
         CreatePreservationAction.NoPreservationRequired, "FILE_OPEN existing file is non-destructive at CREATE time");
     Check(CreateGatePolicy.Decide(CreateDisposition.OpenIf, CreateTargetState.File) ==
         CreatePreservationAction.NoPreservationRequired, "FILE_OPEN_IF existing file is non-destructive at CREATE time");
+    Check(CreateGatePolicy.Decide(CreateDisposition.Open, CreateTargetState.File, 0,
+            CreateGatePolicy.FileWriteData) == CreatePreservationAction.CaptureExistingPreimage,
+        "FILE_OPEN existing file with FILE_WRITE_DATA is pre-preserved for possible writable mapping");
+    Check(CreateGatePolicy.Decide(CreateDisposition.OpenIf, CreateTargetState.File, 0,
+            CreateGatePolicy.GenericWrite) == CreatePreservationAction.CaptureExistingPreimage,
+        "FILE_OPEN_IF existing file with GENERIC_WRITE is pre-preserved");
+    Check(CreateGatePolicy.Decide(CreateDisposition.Open, CreateTargetState.File, 0,
+            CreateGatePolicy.MaximumAllowed) == CreatePreservationAction.CaptureExistingPreimage,
+        "MAXIMUM_ALLOWED existing-file open is conservatively pre-preserved");
+    Check(CreateGatePolicy.Decide(CreateDisposition.Open, CreateTargetState.File, 0,
+            0x80000000) == CreatePreservationAction.NoPreservationRequired,
+        "read-only existing-file open does not force eager full pre-image");
     Check(CreateGatePolicy.Decide(CreateDisposition.Create, CreateTargetState.File) ==
         CreatePreservationAction.NoPreservationRequired, "FILE_CREATE existing file needs no snapshot because create fails");
     Check(CreateGatePolicy.Decide(CreateDisposition.Open, CreateTargetState.File,
@@ -259,6 +272,27 @@ try
         "CREATE intent remains pending until post-operation reconciliation");
     Check(createIntent.OriginalIdentity == createOriginalIdentity,
         "CREATE intent records original identity for preserved existing file");
+
+    var writeOpenIntent = await createOps.RecordIntentAsync(
+        308,
+        Path.Combine(sourceDir, "create-write-open.bin"),
+        CreateDisposition.Open,
+        0,
+        CreateGatePolicy.GenericWrite,
+        CreateTargetState.File,
+        CreatePreservationAction.CaptureExistingPreimage,
+        new string('D', 64),
+        createOriginalIdentity);
+    Check(writeOpenIntent.PreservationAction == CreatePreservationAction.CaptureExistingPreimage &&
+          writeOpenIntent.DesiredAccess == CreateGatePolicy.GenericWrite,
+        "new CREATE intents require eager pre-image for write-capable existing-file handles");
+    _ = await createOps.RecordCompletionAsync(
+        308,
+        CreateCompletionState.Failed,
+        0xC0000001u,
+        0,
+        null,
+        null);
 
     var createSucceeded = await createOps.RecordCompletionAsync(
         301,
@@ -355,6 +389,24 @@ try
     Check(inconsistentCreateIntentRejected,
         "CREATE intent rejects preservation action inconsistent with disposition/target policy");
 
+    var writeCapableNoPreservationRejected = false;
+    try
+    {
+        _ = await createOps.RecordIntentAsync(
+            309,
+            Path.Combine(sourceDir, "create-write-open-invalid.bin"),
+            CreateDisposition.Open,
+            0,
+            CreateGatePolicy.GenericWrite,
+            CreateTargetState.File,
+            CreatePreservationAction.NoPreservationRequired,
+            string.Empty,
+            null);
+    }
+    catch (InvalidDataException) { writeCapableNoPreservationRejected = true; }
+    Check(writeCapableNoPreservationRejected,
+        "new write-capable existing-file CREATE intent cannot bypass eager pre-preservation");
+
     var createFailedPath = Path.Combine(sourceDir, "create-failed.bin");
     _ = await createOps.RecordIntentAsync(
         305,
@@ -391,9 +443,60 @@ try
         "missing CREATE result leaves intent pending rather than inferring success");
 
     var reopenedCreateOps = new CreateOperationStore(createOpsRoot);
-    Check(reopenedCreateOps.Completions.Count == 5 &&
+    Check(reopenedCreateOps.Completions.Count == 6 &&
           reopenedCreateOps.PendingIntents.Single().RequestSequence == 306,
         "CREATE intent/completion correlation rebuilds after reopen");
+
+    // 0.7.10 journals can contain an existing FILE_OPEN + write access that had no eager pre-image.
+    // Loading remains backward compatible, but the current RecordIntentAsync path above rejects new records like it.
+    var legacyCreateRoot = Path.Combine(root, "legacy-create-operation-state");
+    Directory.CreateDirectory(legacyCreateRoot);
+    var legacyCapturedUtc = DateTime.UtcNow;
+    var legacyPrevious = new string('0', 64);
+    var legacyPath = Path.GetFullPath(Path.Combine(sourceDir, "legacy-write-open.bin"));
+    var legacyJson = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+    var legacyPayload = new
+    {
+        Sequence = 1L,
+        CapturedUtc = legacyCapturedUtc,
+        RequestSequence = 901UL,
+        OriginalPath = legacyPath,
+        Disposition = CreateDisposition.Open,
+        CreateOptions = 0u,
+        DesiredAccess = CreateGatePolicy.GenericWrite,
+        ObservedTargetState = CreateTargetState.File,
+        PreservationAction = CreatePreservationAction.NoPreservationRequired,
+        PreservationRecordSha256 = string.Empty,
+        OriginalVolumeSerialHex = string.Empty,
+        OriginalFileIdHex = string.Empty,
+        PreviousRecordSha256 = legacyPrevious
+    };
+    var legacyRecordHash = Convert.ToHexString(
+        SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(legacyPayload, legacyJson)));
+    var legacyLine = new
+    {
+        legacyPayload.Sequence,
+        legacyPayload.CapturedUtc,
+        legacyPayload.RequestSequence,
+        legacyPayload.OriginalPath,
+        legacyPayload.Disposition,
+        legacyPayload.CreateOptions,
+        legacyPayload.DesiredAccess,
+        legacyPayload.ObservedTargetState,
+        legacyPayload.PreservationAction,
+        legacyPayload.PreservationRecordSha256,
+        legacyPayload.OriginalVolumeSerialHex,
+        legacyPayload.OriginalFileIdHex,
+        legacyPayload.PreviousRecordSha256,
+        RecordSha256 = legacyRecordHash
+    };
+    await File.WriteAllTextAsync(
+        Path.Combine(legacyCreateRoot, "create-intent-journal.jsonl"),
+        JsonSerializer.Serialize(legacyLine, legacyJson) + "\n");
+    var legacyCreateOps = new CreateOperationStore(legacyCreateRoot);
+    Check(legacyCreateOps.Intents.Single().PreservationAction ==
+          CreatePreservationAction.NoPreservationRequired,
+        "legacy pre-0.7.11 write-capable CREATE intent remains readable without weakening new writes");
 
     var exactCreateCompletion = await createOps.RecordCompletionAsync(
         301,

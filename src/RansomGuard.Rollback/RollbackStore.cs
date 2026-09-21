@@ -193,8 +193,16 @@ public sealed class RollbackStore
         foreach (var raw in File.ReadLines(_journal, Encoding.UTF8))
         {
             if (string.IsNullOrWhiteSpace(raw)) throw new InvalidDataException("Blank rollback journal record.");
-            var line = JsonSerializer.Deserialize<JournalLine>(raw, _json)
+            JournalLine line;
+            try
+            {
+                line = JsonSerializer.Deserialize<JournalLine>(raw, _json)
                        ?? throw new InvalidDataException("Invalid rollback journal record.");
+            }
+            catch (JsonException ex)
+            {
+                throw new InvalidDataException("Invalid rollback journal JSON.", ex);
+            }
             if (line.Sequence != expectedSequence) throw new InvalidDataException("Rollback journal sequence gap.");
             if (!line.PreviousRecordSha256.Equals(expectedPrevious, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Rollback journal hash chain mismatch.");

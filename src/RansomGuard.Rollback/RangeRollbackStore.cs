@@ -283,8 +283,16 @@ public sealed class RangeRollbackStore
         foreach (var raw in File.ReadLines(_journal, Encoding.UTF8))
         {
             if (string.IsNullOrWhiteSpace(raw)) throw new InvalidDataException("Blank range rollback journal record.");
-            var line = JsonSerializer.Deserialize<RangeJournalLine>(raw, _json)
+            RangeJournalLine line;
+            try
+            {
+                line = JsonSerializer.Deserialize<RangeJournalLine>(raw, _json)
                        ?? throw new InvalidDataException("Invalid range rollback journal record.");
+            }
+            catch (JsonException ex)
+            {
+                throw new InvalidDataException("Invalid range rollback journal JSON.", ex);
+            }
             if (line.Sequence != expectedSequence) throw new InvalidDataException("Range rollback journal sequence gap.");
             if (!line.PreviousRecordSha256.Equals(expectedPrevious, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Range rollback journal hash chain mismatch.");

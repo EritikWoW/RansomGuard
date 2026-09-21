@@ -6,8 +6,9 @@ and recover data through rollback plus adaptive crypto analysis.
 
 ## Core preservation milestone
 
-0.7.3.0 retains the 0.7.2 range-aware COW gate and adds explicit CREATE preservation semantics on top of the existing range-aware write path
-for ordinary WRITE operations with **range-aware copy-on-write**:
+0.7.3.0 retains the 0.7.2 range-aware COW gate and adds explicit CREATE preservation semantics.
+
+Ordinary WRITE operations still use **range-aware copy-on-write**:
 
     WRITE arrives
         -> minifilter holds it

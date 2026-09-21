@@ -10,7 +10,13 @@
 typedef struct _RG_WORK_ITEM {
     WORK_QUEUE_ITEM WorkItem;
     RG_EVENT Event;
+    LONG ClientMode;
 } RG_WORK_ITEM, *PRG_WORK_ITEM;
+
+typedef struct _RG_POST_CONTEXT {
+    ULONGLONG RequestSequence;
+    PFLT_FILE_NAME_INFORMATION PreDestinationNameInfo;
+} RG_POST_CONTEXT, *PRG_POST_CONTEXT;
 
 DRIVER_INITIALIZE DriverEntry;
 NTSTATUS RgUnload(_In_ FLT_FILTER_UNLOAD_FLAGS Flags);
@@ -22,3 +28,6 @@ FLT_PREOP_CALLBACK_STATUS RgPreWrite(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT
                                      _Flt_CompletionContext_Outptr_ PVOID *CompletionContext);
 FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects,
                                               _Flt_CompletionContext_Outptr_ PVOID *CompletionContext);
+FLT_POSTOP_CALLBACK_STATUS RgPostSetInformation(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects,
+                                                _In_opt_ PVOID CompletionContext,
+                                                _In_ FLT_POST_OPERATION_FLAGS Flags);

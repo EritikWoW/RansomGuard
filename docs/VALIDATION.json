@@ -1,24 +1,26 @@
 {
-  "version": "0.7.5.0",
+  "version": "0.7.7.0",
   "scope": "automated Windows userspace validation plus compile-only x64 minifilter validation",
+  "validated_source_sha": "db955531ce0cd055a42a680342b69f089575bca1",
   "evidence": {
-    "pull_request": 7,
-    "windows_build_run": 35592763317,
-    "minifilter_compile_run": 35592763402
+    "pull_request": 12,
+    "windows_build_run": 35602646599,
+    "minifilter_compile_run": 35602646451
   },
   "performed": [
-    "validated Directory.Build.props and all Windows manifests at version 0.7.5.0",
-    "ran protocol v6 minifilter, rollback, administration, localization, recovery and read-only UI/API source gates",
+    "validated Directory.Build.props and all Windows manifests at version 0.7.7.0",
+    "ran protocol v8 minifilter, rollback, administration, localization, recovery and read-only UI/API source gates",
     "ran 121 core policy tests",
     "ran 32 offline recovery/framing tests",
     "ran 102 scoped trust policy tests",
     "ran 125 administration contract tests",
     "ran 2194 localization resource/contract checks",
-    "ran 87 rollback/store tests including rename intent/completion correlation, pending semantics, duplicate-conflict rejection and completion-journal corruption",
+    "ran 106 rollback/store tests including rename final-identity persistence, partial reconciliation states, source-identity mismatch rejection, pending semantics and completion-journal verification",
     "ran WPF synthetic smoke rendering for 130 frames with no recorded binding errors",
-    "published normal and Engineering LAB 0.7.5.0 userspace ZIPs",
+    "published normal and Engineering LAB 0.7.7.0 userspace ZIPs",
     "restored pinned Microsoft Windows WDK x64 and SDK C++ 10.0.28000.2526 packages",
-    "compiled and linked RansomGuardMinifilter.sys as Release x64 with protocol v6 and signing disabled",
+    "validated protocol v8 source invariants including PASSIVE_LEVEL and special-kernel-APC guards around post-rename FltQueryInformationFile",
+    "compiled and linked RansomGuardMinifilter.sys as Release x64 with protocol v8 and signing disabled",
     "ran x64 ApiValidator against the compiled SYS and received Universal DDI validation success",
     "verified the compile-only minifilter artifact is not Authenticode-signed",
     "uploaded the unsigned SYS, INF, protocol header and SHA256SUMS as a CI artifact"
@@ -26,10 +28,9 @@
   "not_performed": [
     "driver installation, loading or volume attachment",
     "live FilterGetMessage/FilterReplyMessage kernel-to-user round trip with the compiled driver",
-    "native protocol-v6 IRP_MJ_CREATE, IRP_MJ_WRITE or IRP_MJ_SET_INFORMATION blocking/reconciliation test on NTFS/ReFS",
-    "live FltGetTunneledName rename-result delivery and Windows file-name tunneling fault cases",
-    "post-operation kernel file-ID confirmation for completed rename/create operations",
-    "post-create completion reconciliation",
+    "native protocol-v8 IRP_MJ_CREATE, IRP_MJ_WRITE or IRP_MJ_SET_INFORMATION blocking/reconciliation test on NTFS/ReFS",
+    "live FltGetTunneledName and post-rename FileIdInformation result delivery on NTFS/ReFS",
+    "fault injection for APC_LEVEL rename completions and explicit identity-unresolved delivery",
     "Driver Verifier, HLK or WHCP validation",
     "power-loss or kernel/user-mode crash recovery including missing post-operation result delivery",
     "memory-mapped and cache-manager write coverage",
@@ -37,5 +38,5 @@
     "production driver signing or Microsoft-assigned production altitude"
   ],
   "safety_boundary": "The blocking minifilter remains Engineering-LAB-only. CI compiles and validates an unsigned artifact but never installs, loads or attaches it. The normal bundle remains AuditOnly.",
-  "next_required_checkpoint": "Run the validated unsigned driver only in a disposable Windows VM and disposable gate directory, prove live protocol-v6 rename completion/tunneled-name behavior, then bind completed CREATE/RENAME operations to durable kernel file identity before expanding the gate."
+  "next_required_checkpoint": "Run the validated unsigned protocol-v8 driver only in a disposable Windows VM and disposable gate directory; prove live rename tunneled-name plus FILE_ID_INFORMATION reconciliation, including the APC_LEVEL identity-unresolved path and missing-result fault cases, before expanding the gate."
 }

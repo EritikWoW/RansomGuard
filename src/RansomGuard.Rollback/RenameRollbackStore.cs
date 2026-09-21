@@ -48,6 +48,7 @@ public sealed class RenameRollbackStore
         string sourcePath,
         string destinationPath,
         DurableFileIdentity sourceIdentity,
+        bool sourceOriginallyAbsent,
         RenameDestinationState destinationState,
         DurableFileIdentity? destinationIdentity,
         uint renameFlags,
@@ -71,6 +72,7 @@ public sealed class RenameRollbackStore
                 destination,
                 sourceIdentity.VolumeSerialHex,
                 sourceIdentity.FileIdHex,
+                sourceOriginallyAbsent,
                 destinationState,
                 destinationIdentity?.VolumeSerialHex ?? string.Empty,
                 destinationIdentity?.FileIdHex ?? string.Empty,
@@ -82,7 +84,7 @@ public sealed class RenameRollbackStore
                 payload.Sequence, payload.CapturedUtc, payload.RequestSequence,
                 payload.SourcePath, payload.DestinationPath,
                 payload.SourceVolumeSerialHex, payload.SourceFileIdHex,
-                payload.DestinationState, payload.DestinationVolumeSerialHex, payload.DestinationFileIdHex,
+                payload.SourceOriginallyAbsent, payload.DestinationState, payload.DestinationVolumeSerialHex, payload.DestinationFileIdHex,
                 payload.RenameFlags, payload.FileInformationClass,
                 payload.PreviousRecordSha256, recordHash);
 
@@ -255,6 +257,7 @@ public sealed record RenameRollbackIntent(
     string DestinationPath,
     string SourceVolumeSerialHex,
     string SourceFileIdHex,
+    bool SourceOriginallyAbsent,
     RenameDestinationState DestinationState,
     string DestinationVolumeSerialHex,
     string DestinationFileIdHex,
@@ -281,6 +284,7 @@ internal sealed record RenameJournalPayload(
     string DestinationPath,
     string SourceVolumeSerialHex,
     string SourceFileIdHex,
+    bool SourceOriginallyAbsent,
     RenameDestinationState DestinationState,
     string DestinationVolumeSerialHex,
     string DestinationFileIdHex,
@@ -296,6 +300,7 @@ internal sealed record RenameJournalLine(
     string DestinationPath,
     string SourceVolumeSerialHex,
     string SourceFileIdHex,
+    bool SourceOriginallyAbsent,
     RenameDestinationState DestinationState,
     string DestinationVolumeSerialHex,
     string DestinationFileIdHex,
@@ -307,13 +312,13 @@ internal sealed record RenameJournalLine(
     [JsonIgnore]
     public RenameJournalPayload Payload => new(
         Sequence, CapturedUtc, RequestSequence, SourcePath, DestinationPath,
-        SourceVolumeSerialHex, SourceFileIdHex, DestinationState,
+        SourceVolumeSerialHex, SourceFileIdHex, SourceOriginallyAbsent, DestinationState,
         DestinationVolumeSerialHex, DestinationFileIdHex,
         RenameFlags, FileInformationClass, PreviousRecordSha256);
 
     public RenameRollbackIntent ToIntent() => new(
         Sequence, CapturedUtc, RequestSequence, SourcePath, DestinationPath,
-        SourceVolumeSerialHex, SourceFileIdHex, DestinationState,
+        SourceVolumeSerialHex, SourceFileIdHex, SourceOriginallyAbsent, DestinationState,
         DestinationVolumeSerialHex, DestinationFileIdHex,
         RenameFlags, FileInformationClass, PreviousRecordSha256, RecordSha256);
 }

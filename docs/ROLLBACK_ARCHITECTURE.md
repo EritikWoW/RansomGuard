@@ -239,6 +239,21 @@ The section callback never calls `RgGateEvent`, never performs a file-name query
 
 The activation callback does not perform rollback I/O. `MmDoesFileHaveUserWritableReferences` is used only from post-CREATE, where Filter Manager guarantees PASSIVE_LEVEL. The normal paging and section callbacks remain no-reply/non-blocking.
 
+## Disposable-VM runtime proof
+
+0.7.14.0 adds a manual integration harness for a preconfigured disposable Windows VM. It is deliberately separate from ordinary GitHub-hosted CI.
+
+The runtime workflow requires a self-hosted runner labeled `ransomguard-lab-vm`, an elevated runner account, Visual Studio/WDK, lab signing already configured in the VM image, and a trusted test certificate with a private key. The workflow itself does not enable TESTSIGNING, modify Secure Boot, import trust roots, or change Defender.
+
+The workflow builds the Engineering LAB bundle and driver from the exact checked-out commit, embeds/signs the current SYS, generates and signs the catalog, records commit/SHA-256 provenance, and executes two scenarios:
+
+1. **Pre-existing mapped view** — a PAGE_READWRITE view remains alive after the original file and mapping handles are closed. GateClient startup preflight must detect the view through `MmDoesFileHaveUserWritableReferences`, refuse activation, and persist `writableViewPresent=true`.
+2. **Post-activation mapped write** — after a clean activation, a new content-write handle creates a PAGE_READWRITE mapping, changes bytes and flushes them. The same session must contain a full pre-image whose SHA-256 matches the original file, a `BaselineVerified` writable-section record, and paging-write evidence.
+
+The signed runtime driver package is deleted after the run and is not uploaded. Only logs, journals and a compact `runtime-result.json` evidence summary are retained.
+
+This validates runtime ordering on one disposable VM image. It is not production compatibility certification and does not replace broader NTFS/ReFS, reboot, Driver Verifier, storage-pressure or fault-injection testing.
+
 ## Paging-write visibility
 
 0.7.13.0 removes the registration-level `SKIP_PAGING_IO` blind spot without turning paging I/O into a synchronous user-mode gate.
@@ -269,7 +284,7 @@ Bounded concurrency and conservative restart evidence are implemented. A worker/
 ## Still required before production
 
 - deeper crash recovery for requests interrupted before authoritative kernel completion delivery;
-- live VM validation of activation-preflight, section and paging ordering, including fault injection and pre-existing mapping cases;
+- broader live NTFS/ReFS validation beyond the automated mapping harness: reboot, Driver Verifier, storage pressure and fault injection;
 - storage quotas, retention and pressure policy;
 - transition from protected-root health to containment/block policy;
 - process-state capture and adaptive crypto analysis;

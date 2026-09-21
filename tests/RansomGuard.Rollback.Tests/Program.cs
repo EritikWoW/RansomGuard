@@ -1420,9 +1420,9 @@ try
     _ = await pendingCreateOps.RecordIntentAsync(
         12001,
         Path.Combine(retentionSource, "pending.bin"),
-        CreateDisposition.Create,
+        CreateDisposition.Open,
         0,
-        CreateGatePolicy.GenericWrite,
+        0,
         CreateTargetState.Missing,
         CreatePreservationAction.NoPreservationRequired,
         string.Empty,

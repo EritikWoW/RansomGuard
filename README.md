@@ -53,6 +53,8 @@ durably records the final tunneled name and 128-bit file identity when available
 identity-only or fully unresolved success states. A post-op identity that differs from the pre-op source identity is
 rejected. If reconciliation cannot be delivered, the intent remains pending instead of being treated as completed.
 
+On LAB gate restart, every older pending CREATE/RENAME intent under the same explicit root is now re-observed before a new session starts. RansomGuard records current path/file-identity evidence in a separate write-through SHA-256 hash-chained restart journal. Evidence can support completed, support not-completed, be indeterminate, or ambiguous. It never manufactures a filesystem completion record: authoritative completion still requires the original kernel post-operation result.
+
 ## Recovery safety
 
 Range recovery:
@@ -117,7 +119,9 @@ It is not yet production ransomware blocking.
 
 Bounded concurrent gate admission/workers are now implemented with a kernel cap of 8 and a configurable user-mode worker pool (default 4). The port mutex is no longer held across blocking FltSendMessage waits.
 
-Remaining core work includes crash reconciliation for pending/missing CREATE/RENAME completion events,
+Restart evidence for pending/missing CREATE/RENAME completion events is now durable and conservative; authoritative completion is never inferred from a restart probe.
+
+Remaining core work includes deeper crash recovery for in-flight kernel requests,
 memory-mapped/cache-manager write coverage,
 containment policy, process-state capture, adaptive crypto reconstruction, verified recovery orchestration,
 driver signing and Microsoft-assigned production altitude.

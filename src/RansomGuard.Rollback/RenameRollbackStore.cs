@@ -160,6 +160,9 @@ public sealed class RenameRollbackStore
                 intent = _intents.SingleOrDefault(x => x.RequestSequence == requestSequence)
                     ?? throw new InvalidDataException("Rename completion does not reference a committed intent.");
 
+                if (finalIdentity is not null && !finalIdentity.Equals(intent.SourceIdentity))
+                    throw new InvalidDataException("Completed rename identity does not match the source identity from the committed intent.");
+
                 if (_completions.TryGetValue(requestSequence, out var existing))
                 {
                     if (existing.State == state &&
@@ -348,11 +351,14 @@ public sealed class RenameRollbackStore
             if (!HashCompletionPayload(line.Payload).Equals(line.RecordSha256, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Rename completion journal record hash mismatch.");
 
+            var finalIdentity = ReadIdentity(line.FinalVolumeSerialHex, line.FinalFileIdHex);
             ValidateCompletion(
                 line.State,
                 line.CompletionStatus,
                 line.FinalDestinationPath,
-                ReadIdentity(line.FinalVolumeSerialHex, line.FinalFileIdHex));
+                finalIdentity);
+            if (finalIdentity is not null && !finalIdentity.Equals(intent.SourceIdentity))
+                throw new InvalidDataException("Rename completion identity does not match the committed source identity.");
             if (!rebuilt.TryAdd(line.RequestSequence, line.ToCompletion()))
                 throw new InvalidDataException("Duplicate rename completion for request sequence.");
 

@@ -162,8 +162,9 @@ public sealed class RestartReconciliationStore
                 string.Empty);
 
         var first = matches[0].Evidence;
-        var decisive =
-            first is RestartEvidenceState.SupportsCompleted or RestartEvidenceState.SupportsNotCompleted &&
+        var firstIsDecisive =
+            first is RestartEvidenceState.SupportsCompleted or RestartEvidenceState.SupportsNotCompleted;
+        var decisive = firstIsDecisive &&
             matches.All(x => x.Evidence == first);
 
         var state = decisive

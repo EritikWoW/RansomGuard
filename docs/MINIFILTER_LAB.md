@@ -1,4 +1,4 @@
-# RansomGuard minifilter engineering lab — v0.7.17.0
+# RansomGuard minifilter engineering lab — v0.7.18.0
 
 The minifilter has two mutually exclusive user-mode connection modes:
 
@@ -9,13 +9,13 @@ The minifilter has two mutually exclusive user-mode connection modes:
 The LAB Gate exists to validate preservation ordering. It is **not** a production driver configuration.
 Do not load it on a primary workstation and do not point it at real documents.
 
-On startup, v0.7.17.0 also scans older pending CREATE/RENAME intents under the same LAB root and appends conservative restart evidence (path state + FILE_ID_INFO when available). This evidence is diagnostic/recovery input only and never substitutes for the original kernel completion event.
+On startup, v0.7.18.0 also scans older pending CREATE/RENAME intents under the same LAB root and appends conservative restart evidence (path state + FILE_ID_INFO when available). This evidence is diagnostic/recovery input only and never substitutes for the original kernel completion event.
 
 Protocol v11 also observes paging writes on streams that were successfully opened inside the LAB root. The driver uses a pre-established nonpaged stream context and emits no-reply evidence only; it does not run a filesystem name query or synchronous preservation gate in the paging path. Treat these events as visibility, not as proof that memory-mapped writes are recoverable.
 
 ## Activation preflight
 
-A v0.7.17.0 LAB connection is not active immediately after `FilterConnectCommunicationPort`. GateClient first scans all existing non-reparse files under the disposable root. For every file, the kernel post-CREATE probe records final path/FILE_ID_INFO and tests `MmDoesFileHaveUserWritableReferences`.
+A v0.7.18.0 LAB connection is not active immediately after `FilterConnectCommunicationPort`. GateClient first scans all existing non-reparse files under the disposable root. For every file, the kernel post-CREATE probe records final path/FILE_ID_INFO and tests `MmDoesFileHaveUserWritableReferences`.
 
 If any file already has a user-writable mapped view, if a probe cannot be completed authoritatively, or if a pre-existing write/delete handle prevents the read-shared probe from opening the file, activation is refused. GateClient keeps every successful read-shared probe handle open until the explicit `ActivateGate` message succeeds, preventing a new write/delete handle from racing the rest of the scan.
 
@@ -83,6 +83,32 @@ Activation, paging, writable-section and completion evidence journals use the sa
 
 There is no `--disable-budget`, unlimited mode, or automatic free-space override.
 
+## Safe rollback retention
+
+0.7.18 adds a LAB-only `RollbackRetention\RansomGuard.RollbackRetention.exe` plus `rollback_retention.cmd`.
+
+New gate sessions record a durable `session-lifecycle.jsonl`:
+
+- `Opened` before activation preflight;
+- `ClosedCleanly` only after normal shutdown and all gate workers finish.
+
+A session without `ClosedCleanly` cannot be released or purged.
+
+Retention workflow:
+
+1. create/review the verified recovery plan for one session;
+2. explicitly release that exact `RecoveryPlanId` with `RELEASE:<session>`;
+3. build a fresh retention plan (default age 168 hours, CLI minimum 24 hours);
+4. purge exactly one eligible session with `PURGE:<session>`.
+
+The retention planner also requires zero pending CREATE/RENAME intents and zero Blocked recovery actions. New evidence after release changes the recovery PlanId and makes the release stale.
+
+Purge is quarantine-first. The executor records `Intent`, atomically moves the exact session into `Retention\PurgeQuarantine`, records `Quarantined`, deletes only that verified quarantine tree, then records `Completed`. An interruption after the move leaves the evidence in quarantine.
+
+There is no scheduled purge, wildcard purge, `--all`, `--force`, or age-bypass switch.
+
+See `docs/ROLLBACK_RETENTION.md`.
+
 ## Safety boundaries
 
 - Demand-start driver only.
@@ -108,7 +134,7 @@ Build the engineering package:
 .\build_lab.cmd
 ```
 
-Then, from the generated `RansomGuard-Lab-v0.7.17.0-*` directory, build/install the minifilter only in a
+Then, from the generated `RansomGuard-Lab-v0.7.18.0-*` directory, build/install the minifilter only in a
 Windows test VM using the existing lab scripts.
 
 ## Audit mode

@@ -393,6 +393,37 @@ static VOID RgPopulateRenameDestination(PRG_EVENT Event, PFLT_CALLBACK_DATA Data
     FltReleaseFileNameInformation(destinationInfo);
 }
 
+static NTSTATUS RgCreateCreatePostContext(PFLT_CALLBACK_DATA Data,
+                                          ULONGLONG RequestSequence,
+                                          PRG_POST_CONTEXT *PostContext)
+{
+    PFLT_FILE_NAME_INFORMATION nameInfo = NULL;
+    PRG_POST_CONTEXT context = NULL;
+    NTSTATUS status;
+
+    *PostContext = NULL;
+    status = FltGetFileNameInformation(
+        Data,
+        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
+        &nameInfo);
+    if (!NT_SUCCESS(status) || nameInfo == NULL) {
+        return NT_SUCCESS(status) ? STATUS_UNSUCCESSFUL : status;
+    }
+
+    context = (PRG_POST_CONTEXT)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(RG_POST_CONTEXT), RG_POOL_TAG);
+    if (context == NULL) {
+        FltReleaseFileNameInformation(nameInfo);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    RtlZeroMemory(context, sizeof(*context));
+    context->RequestSequence = RequestSequence;
+    context->ResultEventType = RgEventCreateResult;
+    context->PreNameInfo = nameInfo;
+    *PostContext = context;
+    return STATUS_SUCCESS;
+}
+
 static NTSTATUS RgCreateRenamePostContext(PFLT_CALLBACK_DATA Data,
                                           PCFLT_RELATED_OBJECTS FltObjects,
                                           ULONGLONG RequestSequence,
@@ -437,7 +468,8 @@ static NTSTATUS RgCreateRenamePostContext(PFLT_CALLBACK_DATA Data,
 
     RtlZeroMemory(context, sizeof(*context));
     context->RequestSequence = RequestSequence;
-    context->PreDestinationNameInfo = destinationInfo;
+    context->ResultEventType = RgEventRenameResult;
+    context->PreNameInfo = destinationInfo;
     *PostContext = context;
     return STATUS_SUCCESS;
 }
@@ -448,9 +480,9 @@ static VOID RgFreePostContext(PRG_POST_CONTEXT PostContext)
         return;
     }
 
-    if (PostContext->PreDestinationNameInfo != NULL) {
-        FltReleaseFileNameInformation(PostContext->PreDestinationNameInfo);
-        PostContext->PreDestinationNameInfo = NULL;
+    if (PostContext->PreNameInfo != NULL) {
+        FltReleaseFileNameInformation(PostContext->PreNameInfo);
+        PostContext->PreNameInfo = NULL;
     }
 
     RtlSecureZeroMemory(PostContext, sizeof(*PostContext));

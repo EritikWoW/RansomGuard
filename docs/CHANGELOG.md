@@ -1,3 +1,14 @@
+# RansomGuard 0.7.9.0
+
+- Added conservative crash/restart reconciliation evidence for pending CREATE and RENAME intents without changing protocol v8.
+- GateClient validates the existing rollback repository and records restart evidence before creating a new LAB session.
+- Added a write-through SHA-256 hash-chained `restart-reconciliation-journal.jsonl` cryptographically linked to the exact pending intent hash.
+- Restart probes record current path state and Windows `FILE_ID_INFO` where available, then classify evidence as supporting completion, supporting non-completion, indeterminate, or ambiguous.
+- Restart evidence never manufactures an authoritative CREATE/RENAME completion; only correlated kernel post-operation results populate completion journals.
+- Repeated identical restart observations are idempotent, and repository-wide verification includes nested restart-state journals.
+- Added pure classifier/store tests and source gates for the restart reconciliation boundary.
+- Normal product remains AuditOnly; the blocking/reconciliation path remains engineering LAB-only.
+
 # RansomGuard 0.7.8.0
 
 - Added bounded concurrent LAB gate execution without changing protocol v8.

@@ -66,7 +66,12 @@ foreach($required in @(
   'Task.Run(() => ProcessMessageAsync(header, ev))',
   'DefaultGateWorkers = 4',
   'MaxGateWorkers = 8',
-  '--gate-workers'
+  '--gate-workers',
+  'RestartReconciliation.ObservePendingAsync',
+  'RestartReconciliationStore',
+  'RestartReconciliationClassifier.ClassifyCreate',
+  'RestartReconciliationClassifier.ClassifyRename',
+  'PathProbe.ObserveForRestart'
 )){
   if($text -notmatch [regex]::Escape($required)){throw "Gate client invariant missing: $required"}
 }
@@ -149,5 +154,23 @@ if($workerDispatch -lt 0 -or $workerEvaluate -lt 0){
 if($text -notmatch 'GateWorkers\s*<\s*1' -or $text -notmatch 'GateWorkers\s*>\s*MaxGateWorkers'){
   throw 'Gate worker argument must remain explicitly bounded.'
 }
+$verifyBeforeRestart=$text.IndexOf('repository.VerifyAll()')
+$restartObserve=$text.IndexOf('RestartReconciliation.ObservePendingAsync(',$verifyBeforeRestart)
+$createSession=$text.IndexOf('repository.CreateSession(',$restartObserve)
+if($verifyBeforeRestart -lt 0 -or $restartObserve -lt 0 -or $createSession -lt 0 -or
+   $verifyBeforeRestart -gt $restartObserve -or $restartObserve -gt $createSession){
+  throw 'Pending restart evidence must be observed only after repository validation and before a new session starts.'
+}
+$restartClassStart=$text.IndexOf('static class RestartReconciliation')
+$restartClassEnd=$text.IndexOf('readonly record struct RestartReconciliationSummary',$restartClassStart)
+if($restartClassStart -lt 0 -or $restartClassEnd -lt 0){throw 'Restart reconciliation implementation missing.'}
+$restartBlock=$text.Substring($restartClassStart,$restartClassEnd-$restartClassStart)
+if($restartBlock -match 'RecordCompletionAsync'){
+  throw 'Restart reconciliation evidence must never manufacture authoritative CREATE/RENAME completion.'
+}
+if($restartBlock -notmatch [regex]::Escape('PathPolicy.Under(intent.OriginalPath, currentRoot)') -or
+   $restartBlock -notmatch [regex]::Escape('PathPolicy.Under(intent.DestinationPath, currentRoot)')){
+  throw 'Restart reconciliation must remain scoped to the explicitly selected LAB root.'
+}
 
-Write-Host 'LAB gate client source check PASSED: explicit disposable root, protocol-v8 CREATE/RENAME semantics with post-rename kernel identity, bounded concurrent gate workers, durable FILE_ID_INFO identity binding, range COW for writes, durable CREATE/RENAME intents and completions, originally-absent baselines, no destructive/process-control APIs.'
+Write-Host 'LAB gate client source check PASSED: explicit disposable root, protocol-v8 CREATE/RENAME semantics, bounded concurrent workers, durable FILE_ID_INFO binding, restart evidence for pending intents, range COW, durable CREATE/RENAME intents/completions, originally-absent baselines, no destructive/process-control APIs.'

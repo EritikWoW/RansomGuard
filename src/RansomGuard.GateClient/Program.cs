@@ -20,6 +20,8 @@ if (PathPolicy.Under(options.StoreRoot, options.Root))
 Directory.CreateDirectory(options.StoreRoot);
 var repository = new RollbackRepository(options.StoreRoot);
 repository.VerifyAll(); // Refuse to start a new gate session on top of ambiguous/crash-damaged rollback state.
+var restartSummary = await RestartReconciliation.ObservePendingAsync(
+    repository, options.Root, CancellationToken.None).ConfigureAwait(false);
 var sessionId = options.SessionId ?? $"gate-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}";
 var store = repository.CreateSession(sessionId);
 var writeStore = new RangeRollbackStore(Path.Combine(store.Root, "write-cow"));
@@ -29,12 +31,13 @@ var identityStore = new FileIdentityStore(Path.Combine(store.Root, "identity-sta
 var renameStore = new RenameRollbackStore(Path.Combine(store.Root, "rename-state"));
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
-Console.WriteLine("RansomGuard LAB pre-write gate v0.7.8.0");
+Console.WriteLine("RansomGuard LAB pre-write gate v0.7.9.0");
 Console.WriteLine("LAB ONLY: use only inside a disposable test directory on a test machine/VM.");
 Console.WriteLine($"Protected LAB root : {options.Root}");
 Console.WriteLine($"Kernel NT root     : {ntRoot}");
 Console.WriteLine($"Rollback session   : {sessionId}");
 Console.WriteLine($"Rollback store     : {store.Root}");
+Console.WriteLine($"Restart evidence   : observed={restartSummary.Observed}, completed-evidence={restartSummary.SupportsCompleted}, not-completed-evidence={restartSummary.SupportsNotCompleted}, ambiguous={restartSummary.Ambiguous}");
 Console.WriteLine("CREATE/write/rename/delete/truncate in this root are gated by durable preservation semantics.");
 Console.WriteLine($"Bounded gate workers : {options.GateWorkers}");
 Console.WriteLine("Press Ctrl+C to disconnect. The driver then stops gating because no client is connected.");
@@ -528,6 +531,103 @@ static class GateDecision
     };
 }
 
+static class RestartReconciliation
+{
+    public static async Task<RestartReconciliationSummary> ObservePendingAsync(
+        RollbackRepository repository,
+        string currentRoot,
+        CancellationToken cancellationToken)
+    {
+        var observed = 0;
+        var supportsCompleted = 0;
+        var supportsNotCompleted = 0;
+        var ambiguous = 0;
+
+        foreach (var sessionId in repository.SessionIds())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var session = repository.OpenSession(sessionId);
+            var restartStore = new RestartReconciliationStore(Path.Combine(session.Root, "restart-state"));
+
+            var createRoot = Path.Combine(session.Root, "create-state");
+            if (Directory.Exists(createRoot))
+            {
+                var createOperations = new CreateOperationStore(createRoot);
+                foreach (var intent in createOperations.PendingIntents)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!PathPolicy.Under(intent.OriginalPath, currentRoot))
+                        continue;
+
+                    var current = PathProbe.ObserveForRestart(intent.OriginalPath);
+                    var evidence = RestartReconciliationClassifier.ClassifyCreate(intent, current);
+                    _ = await restartStore.RecordObservationAsync(
+                            RestartOperationKind.Create,
+                            intent.RequestSequence,
+                            intent.RecordSha256,
+                            evidence,
+                            intent.OriginalPath,
+                            current,
+                            cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+                    Count(evidence, ref observed, ref supportsCompleted, ref supportsNotCompleted, ref ambiguous);
+                }
+            }
+
+            var renameRoot = Path.Combine(session.Root, "rename-state");
+            if (Directory.Exists(renameRoot))
+            {
+                var renames = new RenameRollbackStore(renameRoot);
+                foreach (var intent in renames.PendingIntents)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!PathPolicy.Under(intent.SourcePath, currentRoot) ||
+                        !PathPolicy.Under(intent.DestinationPath, currentRoot))
+                        continue;
+
+                    var source = PathProbe.ObserveForRestart(intent.SourcePath);
+                    var destination = PathProbe.ObserveForRestart(intent.DestinationPath);
+                    var evidence = RestartReconciliationClassifier.ClassifyRename(intent, source, destination);
+                    _ = await restartStore.RecordObservationAsync(
+                            RestartOperationKind.Rename,
+                            intent.RequestSequence,
+                            intent.RecordSha256,
+                            evidence,
+                            intent.SourcePath,
+                            source,
+                            intent.DestinationPath,
+                            destination,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    Count(evidence, ref observed, ref supportsCompleted, ref supportsNotCompleted, ref ambiguous);
+                }
+            }
+        }
+
+        return new RestartReconciliationSummary(
+            observed, supportsCompleted, supportsNotCompleted, ambiguous);
+    }
+
+    private static void Count(
+        RestartEvidenceState evidence,
+        ref int observed,
+        ref int supportsCompleted,
+        ref int supportsNotCompleted,
+        ref int ambiguous)
+    {
+        observed++;
+        if (evidence == RestartEvidenceState.SupportsCompleted) supportsCompleted++;
+        else if (evidence == RestartEvidenceState.SupportsNotCompleted) supportsNotCompleted++;
+        else ambiguous++;
+    }
+}
+
+readonly record struct RestartReconciliationSummary(
+    int Observed,
+    int SupportsCompleted,
+    int SupportsNotCompleted,
+    int Ambiguous);
+
 static class PathProbe
 {
     public static CreateTargetState Get(string path)
@@ -539,6 +639,35 @@ static class PathProbe
         }
         catch (FileNotFoundException) { return CreateTargetState.Missing; }
         catch (DirectoryNotFoundException) { return CreateTargetState.Missing; }
+    }
+
+    public static RestartPathObservation ObserveForRestart(string path)
+    {
+        try
+        {
+            var attributes = File.GetAttributes(path);
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+                return new RestartPathObservation(RestartPathState.ReparsePoint, null);
+            if ((attributes & FileAttributes.Directory) != 0)
+                return new RestartPathObservation(RestartPathState.Directory, null);
+
+            using var input = new FileStream(path, FileMode.Open, FileAccess.Read,
+                FileShare.Read | FileShare.Write | FileShare.Delete, 4096, FileOptions.None);
+            var identity = FileIdentityStore.QueryHandleIdentity(input.SafeFileHandle);
+            return new RestartPathObservation(RestartPathState.File, identity);
+        }
+        catch (FileNotFoundException)
+        {
+            return new RestartPathObservation(RestartPathState.Missing, null);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return new RestartPathObservation(RestartPathState.Missing, null);
+        }
+        catch
+        {
+            return new RestartPathObservation(RestartPathState.QueryFailed, null);
+        }
     }
 }
 

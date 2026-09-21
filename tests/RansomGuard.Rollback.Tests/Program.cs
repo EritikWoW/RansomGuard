@@ -721,6 +721,115 @@ try
     catch (InvalidDataException) { nestedRenameRejected = true; }
     Check(nestedRenameRejected, "repository verification includes nested rename-state journal");
 
+    // Restart reconciliation records evidence for pending intents without converting evidence into completion.
+    var restartCreateRoot = Path.Combine(root, "restart-create-state");
+    var restartCreateOperations = new CreateOperationStore(restartCreateRoot);
+    var restartCreatePath = Path.Combine(sourceDir, "restart-create.bin");
+    var restartCreateIntent = await restartCreateOperations.RecordIntentAsync(
+        301,
+        restartCreatePath,
+        CreateDisposition.Create,
+        0,
+        0,
+        CreateTargetState.Missing,
+        CreatePreservationAction.RecordOriginallyAbsent,
+        new string('A', 64),
+        null);
+    var createMissingEvidence = RestartReconciliationClassifier.ClassifyCreate(
+        restartCreateIntent,
+        new RestartPathObservation(RestartPathState.Missing, null));
+    Check(createMissingEvidence == RestartEvidenceState.SupportsNotCompleted,
+        "restart CREATE evidence recognizes an originally-missing path that is still missing");
+    var createPresentEvidence = RestartReconciliationClassifier.ClassifyCreate(
+        restartCreateIntent,
+        new RestartPathObservation(RestartPathState.File, sourceIdentity));
+    Check(createPresentEvidence == RestartEvidenceState.SupportsCompleted,
+        "restart CREATE evidence recognizes a newly-present file without promoting completion");
+
+    var restartRenameStore = new RenameRollbackStore(Path.Combine(root, "restart-rename-state"));
+    var restartRenameIntent = await restartRenameStore.CaptureIntentAsync(
+        302,
+        renameSource,
+        renameDestination,
+        sourceIdentity,
+        false,
+        RenameDestinationState.OriginallyAbsent,
+        null,
+        0,
+        10);
+    var renameCompletedEvidence = RestartReconciliationClassifier.ClassifyRename(
+        restartRenameIntent,
+        new RestartPathObservation(RestartPathState.Missing, null),
+        new RestartPathObservation(RestartPathState.File, sourceIdentity));
+    Check(renameCompletedEvidence == RestartEvidenceState.SupportsCompleted,
+        "restart RENAME evidence recognizes source identity at destination");
+    var renameNotCompletedEvidence = RestartReconciliationClassifier.ClassifyRename(
+        restartRenameIntent,
+        new RestartPathObservation(RestartPathState.File, sourceIdentity),
+        new RestartPathObservation(RestartPathState.Missing, null));
+    Check(renameNotCompletedEvidence == RestartEvidenceState.SupportsNotCompleted,
+        "restart RENAME evidence recognizes unchanged source and absent destination");
+
+    var restartStateRoot = Path.Combine(root, "restart-evidence");
+    var restartState = new RestartReconciliationStore(restartStateRoot);
+    var createObservation = await restartState.RecordObservationAsync(
+        RestartOperationKind.Create,
+        restartCreateIntent.RequestSequence,
+        restartCreateIntent.RecordSha256,
+        createPresentEvidence,
+        restartCreateIntent.OriginalPath,
+        new RestartPathObservation(RestartPathState.File, sourceIdentity));
+    Check(createObservation.Sequence == 1,
+        "restart reconciliation commits first evidence record");
+    var duplicateObservation = await restartState.RecordObservationAsync(
+        RestartOperationKind.Create,
+        restartCreateIntent.RequestSequence,
+        restartCreateIntent.RecordSha256,
+        createPresentEvidence,
+        restartCreateIntent.OriginalPath,
+        new RestartPathObservation(RestartPathState.File, sourceIdentity));
+    Check(duplicateObservation.Sequence == createObservation.Sequence &&
+          restartState.Observations.Count == 1,
+        "identical restart evidence is idempotent across repeated startup scans");
+
+    var renameObservation = await restartState.RecordObservationAsync(
+        RestartOperationKind.Rename,
+        restartRenameIntent.RequestSequence,
+        restartRenameIntent.RecordSha256,
+        renameCompletedEvidence,
+        restartRenameIntent.SourcePath,
+        new RestartPathObservation(RestartPathState.Missing, null),
+        restartRenameIntent.DestinationPath,
+        new RestartPathObservation(RestartPathState.File, sourceIdentity));
+    Check(renameObservation.Sequence == 2 &&
+          restartState.Observations.Count == 2,
+        "restart reconciliation durably links RENAME evidence to its exact intent hash");
+    restartState.VerifyAll();
+    Check(new RestartReconciliationStore(restartStateRoot).Observations.Count == 2,
+        "restart reconciliation journal rebuilds after reopen");
+    Check(restartCreateOperations.PendingIntents.Single().RequestSequence == 301 &&
+          restartRenameStore.PendingIntents.Single().RequestSequence == 302,
+        "restart evidence never manufactures authoritative CREATE/RENAME completion");
+
+    var nestedRestartRepo = new RollbackRepository(Path.Combine(root, "nested-restart-repo"));
+    var nestedRestartSession = nestedRestartRepo.CreateSession("nested_restart");
+    var nestedRestartState = new RestartReconciliationStore(Path.Combine(nestedRestartSession.Root, "restart-state"));
+    _ = await nestedRestartState.RecordObservationAsync(
+        RestartOperationKind.Create,
+        restartCreateIntent.RequestSequence,
+        restartCreateIntent.RecordSha256,
+        RestartEvidenceState.SupportsNotCompleted,
+        restartCreateIntent.OriginalPath,
+        new RestartPathObservation(RestartPathState.Missing, null));
+    var restartJournalBytes = await File.ReadAllBytesAsync(nestedRestartState.JournalPath);
+    restartJournalBytes[^2] ^= 1;
+    await File.WriteAllBytesAsync(nestedRestartState.JournalPath, restartJournalBytes);
+    var nestedRestartRejected = false;
+    try { nestedRestartRepo.VerifyAll(); }
+    catch (InvalidDataException) { nestedRestartRejected = true; }
+    Check(nestedRestartRejected,
+        "repository verification includes nested restart reconciliation journal");
+
     Console.WriteLine($"All {passed} rollback tests passed. These are file-store tests, not minifilter integration tests.");
     return 0;
 }

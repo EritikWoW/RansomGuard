@@ -47,7 +47,9 @@ the create completes.
 - If the target is missing and the disposition can create it (`FILE_SUPERSEDE`, `FILE_CREATE`,
   `FILE_OPEN_IF`, `FILE_OVERWRITE_IF`), `CreateRollbackStore` commits an append-only SHA-256
   hash-chained `originally absent` baseline.
-- `FILE_OPEN` / existing `FILE_OPEN_IF` need no preservation at CREATE time; later WRITE is still gated.
+- `FILE_DELETE_ON_CLOSE` on an existing file requires the same conservative full pre-image even with `FILE_OPEN`.
+- Existing-directory delete-on-close is denied because directory-topology rollback is not modeled yet.
+- `FILE_OPEN` / existing `FILE_OPEN_IF` without destructive create options need no preservation at CREATE time; later WRITE is still gated.
 - Once a path is marked originally absent, later WRITE/rename/delete/truncate events do not capture incident-created
   bytes as if they were pre-incident data.
 

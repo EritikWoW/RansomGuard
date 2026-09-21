@@ -1541,6 +1541,97 @@ try
     Check(corruptReleaseRejected,
         "retention planner rejects corrupted repository-level release journal");
 
+    // Explicit purge revalidates the plan, quarantines first, then deletes and journals completion.
+    var purgeRepoRoot = Path.Combine(root, "retention-purge-repo");
+    var purgeRepo = new RollbackRepository(purgeRepoRoot);
+    var purgeSession = purgeRepo.CreateSession("purge_me");
+    var purgeLifecycle = new RollbackSessionLifecycleStore(purgeSession.Root);
+    _ = await purgeLifecycle.RecordOpenedAsync();
+
+    var purgeSource = Path.Combine(root, "retention-purge-source.bin");
+    var purgeOriginal = Enumerable.Range(0, 16384).Select(x => (byte)(x % 251)).ToArray();
+    await File.WriteAllBytesAsync(purgeSource, purgeOriginal);
+    _ = await purgeSession.CapturePreimageAsync(
+        purgeSource, RollbackMutationKind.Delete);
+    _ = await purgeLifecycle.RecordClosedCleanlyAsync();
+
+    var purgeRecovery = RollbackRecoveryPlanner.Build(purgeRepoRoot, "purge_me");
+    _ = await RollbackRetentionPlanner.ReleaseAsync(
+        purgeRepoRoot, "purge_me", purgeRecovery.PlanId);
+    var purgePlan = RollbackRetentionPlanner.Build(
+        purgeRepoRoot,
+        minimumAgeHours: 0,
+        nowUtc: purgeLifecycle.ClosedUtc!.Value.AddHours(1));
+    Check(purgePlan.Sessions.Single().Decision == RollbackRetentionDecision.Eligible,
+        "released clean session is purge-eligible in zero-age test policy");
+
+    var purgeReport = await RollbackRetentionPurgeExecutor.PurgeSessionAsync(
+        purgeRepoRoot, purgePlan, "purge_me");
+    Check(!Directory.Exists(purgeSession.Root) &&
+          purgeReport.PurgedBytes > 0 &&
+          purgeReport.CompletedRecordSha256.Length == 64,
+        "retention purge removes only the revalidated released session");
+
+    var purgeAudit = new RollbackRetentionPurgeStore(purgeRepoRoot);
+    purgeAudit.VerifyAll();
+    var purgeStates = purgeAudit.Records
+        .Where(x => x.OperationId == purgeReport.OperationId)
+        .OrderBy(x => x.Sequence)
+        .Select(x => x.State)
+        .ToArray();
+    Check(purgeStates.SequenceEqual(new[]
+        {
+            RollbackRetentionPurgeState.Intent,
+            RollbackRetentionPurgeState.Quarantined,
+            RollbackRetentionPurgeState.Completed
+        }),
+        "retention purge durably records Intent -> Quarantined -> Completed");
+    var quarantinePath = Path.Combine(
+        purgeRepoRoot,
+        purgeReport.QuarantineRelativePath.Replace('/', Path.DirectorySeparatorChar));
+    Check(!Directory.Exists(quarantinePath),
+        "successful retention purge leaves no quarantine directory");
+
+    var stalePurgeRepoRoot = Path.Combine(root, "retention-stale-purge-repo");
+    var stalePurgeRepo = new RollbackRepository(stalePurgeRepoRoot);
+    var stalePurgeSession = stalePurgeRepo.CreateSession("candidate");
+    var stalePurgeLifecycle = new RollbackSessionLifecycleStore(stalePurgeSession.Root);
+    _ = await stalePurgeLifecycle.RecordOpenedAsync();
+    _ = await stalePurgeLifecycle.RecordClosedCleanlyAsync();
+    var stalePurgeRecovery = RollbackRecoveryPlanner.Build(
+        stalePurgeRepoRoot, "candidate");
+    _ = await RollbackRetentionPlanner.ReleaseAsync(
+        stalePurgeRepoRoot, "candidate", stalePurgeRecovery.PlanId);
+    var stalePurgePlan = RollbackRetentionPlanner.Build(
+        stalePurgeRepoRoot,
+        minimumAgeHours: 0,
+        nowUtc: stalePurgeLifecycle.ClosedUtc!.Value.AddHours(1));
+
+    _ = stalePurgeRepo.CreateSession("new_session_changes_plan");
+    var stalePurgeRejected = false;
+    try
+    {
+        _ = await RollbackRetentionPurgeExecutor.PurgeSessionAsync(
+            stalePurgeRepoRoot, stalePurgePlan, "candidate");
+    }
+    catch (InvalidDataException) { stalePurgeRejected = true; }
+    Check(stalePurgeRejected && Directory.Exists(stalePurgeSession.Root),
+        "stale retention plan is rejected before candidate session is moved");
+
+    var stalePurgeJournal = Path.Combine(
+        stalePurgeRepoRoot, "Retention", "retention-purge-journal.jsonl");
+    Check(!File.Exists(stalePurgeJournal),
+        "stale retention plan refusal creates no purge intent");
+
+    var purgeJournalBytes = await File.ReadAllBytesAsync(purgeAudit.JournalPath);
+    purgeJournalBytes[^2] ^= 1;
+    await File.WriteAllBytesAsync(purgeAudit.JournalPath, purgeJournalBytes);
+    var corruptPurgeAuditRejected = false;
+    try { new RollbackRetentionPurgeStore(purgeRepoRoot).VerifyAll(); }
+    catch (InvalidDataException) { corruptPurgeAuditRejected = true; }
+    Check(corruptPurgeAuditRejected,
+        "retention purge audit journal corruption is rejected");
+
     Console.WriteLine($"All {passed} rollback tests passed. These are file-store tests, not minifilter integration tests.");
     return 0;
 }

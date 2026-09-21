@@ -30,7 +30,7 @@ var renameStore = new RenameRollbackStore(Path.Combine(store.Root, "rename-state
 var renameIdentityStore = new RenameIdentityStore(Path.Combine(store.Root, "rename-identity-state"), renameStore);
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
-Console.WriteLine("RansomGuard LAB pre-write gate v0.7.6.0");
+Console.WriteLine("RansomGuard LAB pre-write gate v0.7.7.0");
 Console.WriteLine("LAB ONLY: use only inside a disposable test directory on a test machine/VM.");
 Console.WriteLine($"Protected LAB root : {options.Root}");
 Console.WriteLine($"Kernel NT root     : {ntRoot}");

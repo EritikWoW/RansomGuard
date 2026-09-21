@@ -1,6 +1,7 @@
 # RansomGuard 0.7.3.0
 - Added incident-scoped durable existing-file identity tracking using Windows `FILE_ID_INFO` (volume serial + 128-bit file ID).
 - The LAB gate captures/verifies identity before destructive existing-file preservation and rejects a path that changes to a different file identity during the same incident.
+- Full-preimage and range-COW capture additionally verify the expected identity on the exact source handle used to read snapshot bytes, closing the userspace identity-probe/snapshot-open TOCTOU.
 - Added a write-through SHA-256 hash-chained `identity-state` journal with alias lookup, repository-wide validation, replacement-path tests and source-gate invariants.
 - This is identity hardening only; post-create/kernel file-object reconciliation and rename-destination transactions remain required.
 

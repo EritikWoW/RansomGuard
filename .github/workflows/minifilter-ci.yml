@@ -30,6 +30,12 @@ jobs:
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
 
+      - name: Cache pinned WDK and SDK packages
+        uses: actions/cache@v4
+        with:
+          path: packages
+          key: wdk-${{ runner.os }}-${{ hashFiles('packages.config') }}
+
       - name: Restore pinned WDK and SDK packages
         shell: pwsh
         run: |

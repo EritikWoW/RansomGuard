@@ -333,6 +333,45 @@ try
           createNameUnresolved.FinalIdentity == createOriginalIdentity,
         "CREATE success can retain kernel identity while marking tunneled name unresolved");
 
+    var writableOpenPath = Path.Combine(sourceDir, "create-writable-open.bin");
+    _ = await createOps.RecordIntentAsync(
+        308,
+        writableOpenPath,
+        CreateDisposition.Open,
+        0,
+        CreateGatePolicy.GenericWrite,
+        CreateTargetState.File,
+        CreatePreservationAction.CaptureExistingPreimage,
+        new string('F', 64),
+        createOriginalIdentity);
+    var writableOpenCompletion = await createOps.RecordCompletionAsync(
+        308,
+        CreateCompletionState.Succeeded,
+        0,
+        1,
+        writableOpenPath,
+        createOriginalIdentity);
+    Check(writableOpenCompletion.FinalIdentity == createOriginalIdentity,
+        "write-capable FILE_OPEN keeps the committed pre-image contract through completion");
+
+    var writableOpenWithoutSnapshotRejected = false;
+    try
+    {
+        _ = await createOps.RecordIntentAsync(
+            309,
+            Path.Combine(sourceDir, "create-writable-open-invalid.bin"),
+            CreateDisposition.Open,
+            0,
+            CreateGatePolicy.FileWriteData,
+            CreateTargetState.File,
+            CreatePreservationAction.NoPreservationRequired,
+            string.Empty,
+            null);
+    }
+    catch (InvalidDataException) { writableOpenWithoutSnapshotRejected = true; }
+    Check(writableOpenWithoutSnapshotRejected,
+        "CREATE journal rejects write-capable existing-file open without committed pre-image");
+
     var createFullyUnresolvedPath = Path.Combine(sourceDir, "create-fully-unresolved.bin");
     _ = await createOps.RecordIntentAsync(
         304,
@@ -408,7 +447,7 @@ try
         "missing CREATE result leaves intent pending rather than inferring success");
 
     var reopenedCreateOps = new CreateOperationStore(createOpsRoot);
-    Check(reopenedCreateOps.Completions.Count == 5 &&
+    Check(reopenedCreateOps.Completions.Count == 6 &&
           reopenedCreateOps.PendingIntents.Single().RequestSequence == 306,
         "CREATE intent/completion correlation rebuilds after reopen");
 

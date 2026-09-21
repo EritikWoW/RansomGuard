@@ -186,7 +186,22 @@ Rollback startup validation now treats ambiguous durable state as a hard failure
 - CREATE and RENAME completion records are hash-chained separately and cryptographically linked to their exact pre-operation intents;
 - the LAB gate validates all existing sessions before opening a new one.
 
-These checks do not yet reconcile an interrupted in-flight kernel request. They prevent a restart from proceeding on top of rollback state whose commit boundary is ambiguous.
+These checks prevent a restart from proceeding on top of corrupt rollback state.
+
+## Restart reconciliation evidence
+
+0.7.9.0 adds a separate append-only, SHA-256 hash-chained `restart-reconciliation-journal.jsonl` for older CREATE/RENAME intents that have no authoritative completion record.
+
+Before creating a new LAB session, GateClient validates the repository and then scans pending intents whose paths are still under the same explicit LAB root. It records current path state and, for ordinary files, `FILE_ID_INFO` from the exact opened handle. A pure classifier records one of four evidence outcomes:
+
+- `SupportsCompleted`;
+- `SupportsNotCompleted`;
+- `Indeterminate`;
+- `Ambiguous`.
+
+For RENAME, source identity found at the destination while the source name is absent supports completion; the original source identity still at source with the original destination state supports non-completion. Other/conflicting topologies remain ambiguous. For CREATE, an originally absent target that remains absent supports non-completion, while a newly present file supports completion. Existing-file destructive CREATE remains indeterminate because overwrite may retain the same file identity.
+
+Restart evidence is deliberately **not** a CREATE/RENAME completion. The original completion journals remain authoritative only when populated by the correlated kernel post-operation event. Repeated identical restart observations are idempotent.
 
 ## Bounded concurrent gate execution
 
@@ -198,11 +213,11 @@ These checks do not yet reconcile an interrupted in-flight kernel request. They 
 
 The LAB GateClient receives messages continuously and dispatches preservation/reconciliation through a bounded worker pool. The default is 4 workers and the supported range is 1..8, matching the kernel admission ceiling. Store-level durability locks still serialize journal commit points where required.
 
-This is bounded concurrency, not yet full crash reconciliation. A worker/process crash can still leave CREATE/RENAME completion intent pending and must not be inferred as success.
+Bounded concurrency and conservative restart evidence are implemented. A worker/process crash can still leave an intent without authoritative kernel completion; restart evidence preserves what can be observed without guessing.
 
 ## Still required before production
 
-- crash/restart reconciliation for requests pending during user-mode failure or missing CREATE/RENAME result delivery;
+- deeper crash recovery for requests interrupted before authoritative kernel completion delivery;
 - memory-mapped/cache-manager write coverage;
 - storage quotas, retention and pressure policy;
 - transition from protected-root health to containment/block policy;

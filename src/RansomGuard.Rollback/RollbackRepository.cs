@@ -18,14 +18,14 @@ public sealed class RollbackRepository
         RejectReparse(_sessions);
     }
 
-    public RollbackStore CreateSession(string sessionId)
+    public RollbackStore CreateSession(string sessionId, DateTime? createdUtc = null)
     {
         ValidateSessionId(sessionId);
         var path = Path.Combine(_sessions, sessionId);
         if (Directory.Exists(path) || File.Exists(path)) throw new IOException("Rollback session already exists: " + sessionId);
         Directory.CreateDirectory(path);
         var store = new RollbackStore(path);
-        new RollbackSessionLifecycleStore(path).InitializeCreated();
+        new RollbackSessionLifecycleStore(path).InitializeCreated(createdUtc);
         return store;
     }
 

@@ -29,6 +29,7 @@ var restartSummary = await RestartReconciliation.ObservePendingAsync(
     CancellationToken.None).ConfigureAwait(false);
 var sessionId = options.SessionId ?? $"gate-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}";
 var store = repository.CreateSession(sessionId);
+var lifecycleStore = new RollbackSessionLifecycleStore(store.Root);
 var writeStore = new RangeRollbackStore(Path.Combine(store.Root, "write-cow"));
 var createStore = new CreateRollbackStore(Path.Combine(store.Root, "create-state"));
 var createOperationStore = new CreateOperationStore(Path.Combine(store.Root, "create-state"));
@@ -44,7 +45,7 @@ var storageBudget = new RollbackStorageBudget(
     checked(options.MinFreeMiB * RollbackStorageBudget.MiB));
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
-Console.WriteLine("RansomGuard LAB pre-write gate v0.7.17.0");
+Console.WriteLine("RansomGuard LAB pre-write gate v0.7.18.0");
 Console.WriteLine("LAB ONLY: use only inside a disposable test directory on a test machine/VM.");
 Console.WriteLine($"Protected LAB root : {options.Root}");
 Console.WriteLine($"Kernel NT root     : {ntRoot}");
@@ -86,6 +87,7 @@ Console.WriteLine($"Activation preflight: directories={activationSummary.Directo
 using var workerSlots = new SemaphoreSlim(options.GateWorkers, options.GateWorkers);
 var activeWorkers = new List<Task>();
 var replySync = new object();
+var gateWorkerFailures = 0;
 var buffer = Marshal.AllocHGlobal(checked(headerSize + eventSize));
 
 async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
@@ -222,6 +224,7 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
     }
     catch (Exception ex)
     {
+        Interlocked.Increment(ref gateWorkerFailures);
         Console.Error.WriteLine($"Gate worker failed: {ex.GetType().Name}: {ex.Message}");
     }
     finally
@@ -257,6 +260,33 @@ finally
     Marshal.FreeHGlobal(buffer);
     if (activeWorkers.Count != 0)
         await Task.WhenAll(activeWorkers).ConfigureAwait(false);
+}
+
+repository.VerifyAll();
+var pendingCreateCount = createOperationStore.PendingIntents.Count;
+var pendingRenameCount = renameStore.PendingIntents.Count;
+var workerFailureCount = Volatile.Read(ref gateWorkerFailures);
+var lifecycleReason = workerFailureCount == 0 && pendingCreateCount == 0 && pendingRenameCount == 0
+    ? "clean-gate-shutdown"
+    : $"gate-shutdown-faulted:workers={workerFailureCount};pending-create={pendingCreateCount};pending-rename={pendingRenameCount}";
+
+await using (var lifecycleReservation = await storageBudget.ReserveAsync(
+                 RollbackStorageBudget.MetadataReservationBytes,
+                 "session-lifecycle-terminal",
+                 CancellationToken.None).ConfigureAwait(false))
+{
+    if (workerFailureCount == 0 && pendingCreateCount == 0 && pendingRenameCount == 0)
+    {
+        _ = await lifecycleStore.MarkCompletedAsync(lifecycleReason, CancellationToken.None)
+            .ConfigureAwait(false);
+        Console.WriteLine("Rollback session lifecycle: Completed.");
+    }
+    else
+    {
+        _ = await lifecycleStore.MarkFaultedAsync(lifecycleReason, CancellationToken.None)
+            .ConfigureAwait(false);
+        Console.Error.WriteLine($"Rollback session lifecycle: Faulted ({lifecycleReason}).");
+    }
 }
 
 static class ActivationPreflight

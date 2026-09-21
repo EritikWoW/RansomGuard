@@ -99,7 +99,6 @@ if($cliText -match '\b(File\.Delete|Directory\.Delete|File\.Move|Directory\.Move
 $buildText=Get-Content -LiteralPath $build -Raw
 foreach($required in @(
     '$rollbackRecovery = ''src\RansomGuard.RollbackRecoveryCli\RansomGuard.RollbackRecoveryCli.csproj''',
-    'if($IncludeLab){$projects+=@($sim,$filterClient,$gateClient,$runtimeHarness,$rollbackRecovery)}',
     '$rollbackRecoveryDir=Join-Path $labRelease ''RollbackRecovery''',
     'publish'',$rollbackRecovery',
     '''rollback_recovery.cmd''',
@@ -107,6 +106,9 @@ foreach($required in @(
     '$_.Name -like ''*RollbackRecovery*'''
 )){
     if($buildText -notmatch [regex]::Escape($required)){throw "Recovery LAB packaging invariant missing: $required"}
+}
+if($buildText -notmatch 'if\(\$IncludeLab\)\{\$projects\+=@\([^\)]*\$rollbackRecovery[^\)]*\)\}'){
+    throw 'Rollback recovery CLI must remain in the Engineering LAB project restore set.'
 }
 $publishPos=$buildText.IndexOf("publish',`$rollbackRecovery")
 $labPublishPos=$buildText.IndexOf("`$rollbackRecoveryDir=Join-Path `$labRelease 'RollbackRecovery'")

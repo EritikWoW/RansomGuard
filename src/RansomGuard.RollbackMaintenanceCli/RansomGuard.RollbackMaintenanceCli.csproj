@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RollForward>LatestMajor</RollForward>
+    <AssemblyName>RansomGuard.RollbackMaintenance</AssemblyName>
+    <RootNamespace>RansomGuard.RollbackMaintenanceCli</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../RansomGuard.Rollback/RansomGuard.Rollback.csproj" />
+  </ItemGroup>
+</Project>

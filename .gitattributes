@@ -1,0 +1,4 @@
+# Preserve byte-identical reviewed activity artwork on Windows checkouts.
+# Their SHA-256 values are part of the UI integrity contract.
+src/RansomGuard.Ui/Assets/Activity/*.svg -text
+src/RansomGuard.Ui/Themes/ActivityIcons.xaml -text

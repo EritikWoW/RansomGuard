@@ -1,5 +1,6 @@
 using Microsoft.Win32.SafeHandles;
 using RansomGuard.Rollback;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -31,9 +32,10 @@ var identityStore = new FileIdentityStore(Path.Combine(store.Root, "identity-sta
 var renameStore = new RenameRollbackStore(Path.Combine(store.Root, "rename-state"));
 var pagingStore = new PagingWriteEvidenceStore(Path.Combine(store.Root, "paging-state"));
 var sectionStore = new WritableSectionEvidenceStore(Path.Combine(store.Root, "section-state"));
+var activationStore = new ActivationPreflightStore(Path.Combine(store.Root, "activation-state"));
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
-Console.WriteLine("RansomGuard LAB pre-write gate v0.7.12.0");
+Console.WriteLine("RansomGuard LAB pre-write gate v0.7.13.0");
 Console.WriteLine("LAB ONLY: use only inside a disposable test directory on a test machine/VM.");
 Console.WriteLine($"Protected LAB root : {options.Root}");
 Console.WriteLine($"Kernel NT root     : {ntRoot}");
@@ -46,7 +48,7 @@ Console.WriteLine("Press Ctrl+C to disconnect. The driver then stops gating beca
 
 var context = new RgConnectContext
 {
-    ProtocolVersion = 10,
+    ProtocolVersion = 11,
     ClientMode = (uint)RgClientMode.LabGate,
     ClientProcessId = (ulong)Environment.ProcessId,
     GateRootLengthBytes = checked((uint)(ntRoot.Length * 2)),
@@ -61,10 +63,27 @@ var headerSize = Marshal.SizeOf<FilterMessageHeader>();
 var eventSize = Marshal.SizeOf<RgEvent>();
 var replyHeaderSize = Marshal.SizeOf<FilterReplyHeader>();
 var gateReplySize = Marshal.SizeOf<RgGateReply>();
-if (headerSize != 16 || eventSize != 2168 || replyHeaderSize != 16 || gateReplySize != 24)
+if (headerSize != 16 || eventSize != 2168 || replyHeaderSize != 16 || gateReplySize != 24 ||
+    Marshal.SizeOf<RgControlRequest>() != 16 || Marshal.SizeOf<RgControlReply>() != 16)
     throw new InvalidOperationException($"Unexpected protocol sizes: message={headerSize}, event={eventSize}, replyHeader={replyHeaderSize}, gateReply={gateReplySize}");
 
 var resolver = new DevicePathResolver();
+var activationSummary = await ActivationPreflight.RunAsync(
+    port, options.Root, resolver, activationStore, cts.Token).ConfigureAwait(false);
+var activationReply = Native.Control(port, new RgControlRequest
+{
+    ProtocolVersion = 11,
+    Command = (uint)RgControlCommand.ActivateGate
+});
+if (activationReply.ProtocolVersion != 11 ||
+    activationReply.Command != (uint)RgControlCommand.ActivateGate ||
+    activationReply.Status != 0 ||
+    activationReply.GateActivated != 1)
+    throw new InvalidOperationException(
+        $"Kernel refused LAB activation after preflight. NTSTATUS=0x{activationReply.Status:X8}, active={activationReply.GateActivated}.");
+Console.WriteLine($"Activation preflight: files={activationSummary.FilesChecked}, writable-views=0, kernel gate ACTIVE.");
+
+
 using var workerSlots = new SemaphoreSlim(options.GateWorkers, options.GateWorkers);
 var activeWorkers = new List<Task>();
 var replySync = new object();
@@ -76,7 +95,7 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
     {
         if ((RgEventType)ev.EventType == RgEventType.WritableSection)
         {
-            if (ev.ProtocolVersion != 10 ||
+            if (ev.ProtocolVersion != 11 ||
                 ev.PathStatus != (uint)RgPathStatus.Resolved ||
                 ev.RelatedSequence == 0 ||
                 ev.CompletionInformation > uint.MaxValue)
@@ -121,7 +140,7 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
 
         if ((RgEventType)ev.EventType == RgEventType.PagingWrite)
         {
-            if (ev.ProtocolVersion != 10 || ev.PathStatus != (uint)RgPathStatus.Resolved)
+            if (ev.ProtocolVersion != 11 || ev.PathStatus != (uint)RgPathStatus.Resolved)
                 throw new InvalidDataException("Invalid paging-write evidence event.");
 
             var trackedPath = resolver.Resolve(ev.Path);
@@ -225,6 +244,119 @@ finally
         await Task.WhenAll(activeWorkers).ConfigureAwait(false);
 }
 
+static class ActivationPreflight
+{
+    private const uint WritableViewFlag = 0x00000002;
+
+    public static async Task<ActivationPreflightSummary> RunAsync(
+        SafeFileHandle port,
+        string root,
+        DevicePathResolver resolver,
+        ActivationPreflightStore evidenceStore,
+        CancellationToken cancellationToken)
+    {
+        var options = new EnumerationOptions
+        {
+            RecurseSubdirectories = true,
+            IgnoreInaccessible = false,
+            ReturnSpecialDirectories = false,
+            AttributesToSkip = FileAttributes.ReparsePoint
+        };
+
+        var checkedFiles = 0;
+        foreach (var rawPath in Directory.EnumerateFiles(root, "*", options))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var path = Path.GetFullPath(rawPath);
+            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException($"Activation preflight refuses reparse file: {path}");
+
+            using var file = Native.OpenPreflight(path);
+            var ev = await ReceivePreflightEventAsync(port, path, resolver, cancellationToken).ConfigureAwait(false);
+
+            DurableFileIdentity? identity = null;
+            if (ev.IdentityStatus == (uint)RgIdentityStatus.Resolved &&
+                (ev.VolumeSerialNumber != 0 || ev.FileIdLow != 0 || ev.FileIdHigh != 0))
+            {
+                identity = new DurableFileIdentity(
+                    ev.VolumeSerialNumber.ToString("X16"),
+                    ev.FileIdLow.ToString("X16") + ev.FileIdHigh.ToString("X16"));
+            }
+
+            var writableView = (ev.Flags & WritableViewFlag) != 0;
+            _ = await evidenceStore.RecordAsync(
+                ev.Sequence, path, ev.CompletionStatus, writableView, identity, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (!NtSuccess(ev.CompletionStatus))
+                throw new InvalidOperationException(
+                    $"Activation preflight kernel open failed for '{path}', NTSTATUS=0x{ev.CompletionStatus:X8}.");
+            if (identity is null)
+                throw new InvalidOperationException($"Activation preflight could not bind FILE_ID_INFO for '{path}'.");
+            if (writableView)
+                throw new InvalidOperationException(
+                    $"Activation refused: '{path}' already has a user-writable mapped view.");
+
+            checkedFiles++;
+        }
+
+        return new ActivationPreflightSummary(checkedFiles);
+    }
+
+    private static async Task<RgEvent> ReceivePreflightEventAsync(
+        SafeFileHandle port,
+        string expectedPath,
+        DevicePathResolver resolver,
+        CancellationToken cancellationToken)
+    {
+        var headerSize = Marshal.SizeOf<FilterMessageHeader>();
+        var eventSize = Marshal.SizeOf<RgEvent>();
+        var buffer = Marshal.AllocHGlobal(checked(headerSize + eventSize));
+        try
+        {
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var receive = Task.Run(() =>
+                    Native.FilterGetMessage(port, buffer, (uint)(headerSize + eventSize), IntPtr.Zero),
+                    CancellationToken.None);
+                var winner = await Task.WhenAny(receive, Task.Delay(TimeSpan.FromSeconds(5), cancellationToken))
+                    .ConfigureAwait(false);
+                if (winner != receive)
+                {
+                    Native.Cancel(port);
+                    throw new TimeoutException($"Timed out waiting for activation preflight evidence for '{expectedPath}'.");
+                }
+
+                var hr = await receive.ConfigureAwait(false);
+                if (hr != 0)
+                    throw new InvalidOperationException($"FilterGetMessage during activation preflight failed HRESULT=0x{hr:X8}.");
+
+                var ev = Marshal.PtrToStructure<RgEvent>(IntPtr.Add(buffer, headerSize));
+                var type = (RgEventType)ev.EventType;
+                if (type is RgEventType.PagingWrite or RgEventType.WritableSection)
+                    throw new InvalidOperationException("Activation refused: protected-root memory-mapped activity occurred during preflight.");
+                if (type != RgEventType.ActivationPreflight)
+                    throw new InvalidDataException($"Unexpected event {type} during activation preflight.");
+                if (ev.ProtocolVersion != 11 || ev.PathStatus != (uint)RgPathStatus.Resolved)
+                    throw new InvalidDataException("Invalid activation preflight event.");
+
+                var resolved = resolver.Resolve(ev.Path);
+                if (string.IsNullOrWhiteSpace(resolved) ||
+                    !Path.GetFullPath(resolved).Equals(Path.GetFullPath(expectedPath), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException(
+                        $"Activation preflight path mismatch. expected='{expectedPath}', actual='{resolved ?? "<unresolved>"}'.");
+                return ev;
+            }
+        }
+        finally { Marshal.FreeHGlobal(buffer); }
+    }
+
+    private static bool NtSuccess(uint status) => (status & 0x80000000u) == 0;
+}
+
+readonly record struct ActivationPreflightSummary(int FilesChecked);
+
 static class CreateReconciliation
 {
     public static async Task<CreateOperationCompletion> HandleAsync(
@@ -234,7 +366,7 @@ static class CreateReconciliation
         CreateOperationStore operationStore,
         CancellationToken cancellationToken)
     {
-        if (ev.ProtocolVersion != 10 || ev.RelatedSequence == 0)
+        if (ev.ProtocolVersion != 11 || ev.RelatedSequence == 0)
             throw new InvalidDataException("Invalid CREATE completion correlation.");
 
         if (!NtSuccess(ev.CompletionStatus))
@@ -298,7 +430,7 @@ static class RenameReconciliation
         RenameRollbackStore renameStore,
         CancellationToken cancellationToken)
     {
-        if (ev.ProtocolVersion != 10 || ev.RelatedSequence == 0)
+        if (ev.ProtocolVersion != 11 || ev.RelatedSequence == 0)
             throw new InvalidDataException("Invalid rename completion correlation.");
 
         if (!NtSuccess(ev.CompletionStatus))
@@ -364,7 +496,7 @@ static class GateDecision
         {
             // Never preserve or authorize against a truncated path. The kernel only sends a truncated
             // gate event when its known prefix is already inside the explicit LAB root, so deny it here.
-            if (ev.ProtocolVersion != 10 || ev.PathStatus != (uint)RgPathStatus.Resolved)
+            if (ev.ProtocolVersion != 11 || ev.PathStatus != (uint)RgPathStatus.Resolved)
                 return Deny(ev.Sequence, 1);
 
             var path = resolver.Resolve(ev.Path);
@@ -594,7 +726,7 @@ static class GateDecision
 
     private static RgGateReply Allow(ulong sequence, RgGateDecision decision) => new()
     {
-        ProtocolVersion = 10,
+        ProtocolVersion = 11,
         Decision = decision,
         RequestSequence = sequence,
         ErrorCode = 0
@@ -602,7 +734,7 @@ static class GateDecision
 
     private static RgGateReply Deny(ulong sequence, uint errorCode) => new()
     {
-        ProtocolVersion = 10,
+        ProtocolVersion = 11,
         Decision = RgGateDecision.Deny,
         RequestSequence = sequence,
         ErrorCode = errorCode
@@ -882,7 +1014,7 @@ sealed class DevicePathResolver
 }
 
 enum RgClientMode : uint { Audit = 1, LabGate = 2 }
-enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, RenameResult = 6, CreateResult = 7, PagingWrite = 8, WritableSection = 9 }
+enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, RenameResult = 6, CreateResult = 7, PagingWrite = 8, WritableSection = 9, ActivationPreflight = 10 }
 enum RgPathStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2, Truncated = 3 }
 enum RgIdentityStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2 }
 enum RgGateDecision : uint { Invalid = 0, SnapshotCommitted = 1, Deny = 2, BaselineCommitted = 3, NoPreservationRequired = 4 }
@@ -930,6 +1062,26 @@ struct RgGateReply
     public uint Reserved;
 }
 
+enum RgControlCommand : uint { Invalid = 0, ActivateGate = 1, QueryActivation = 2 }
+
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+struct RgControlRequest
+{
+    public uint ProtocolVersion;
+    public uint Command;
+    public uint Reserved0;
+    public uint Reserved1;
+}
+
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+struct RgControlReply
+{
+    public uint ProtocolVersion;
+    public uint Command;
+    public uint Status;
+    public uint GateActivated;
+}
+
 static class Native
 {
     [DllImport("fltlib.dll", CharSet = CharSet.Unicode)]
@@ -939,6 +1091,12 @@ static class Native
     public static extern int FilterGetMessage(SafeFileHandle hPort, IntPtr lpMessageBuffer, uint dwMessageBufferSize, IntPtr lpOverlapped);
     [DllImport("fltlib.dll")]
     private static extern int FilterReplyMessage(SafeFileHandle hPort, IntPtr lpReplyBuffer, uint dwReplyBufferSize);
+    [DllImport("fltlib.dll")]
+    private static extern int FilterSendMessage(SafeFileHandle hPort, IntPtr lpInBuffer, uint dwInBufferSize,
+        IntPtr lpOutBuffer, uint dwOutBufferSize, out uint lpBytesReturned);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFileW(string lpFileName, uint dwDesiredAccess, uint dwShareMode,
+        IntPtr lpSecurityAttributes, uint dwCreationDisposition, uint dwFlagsAndAttributes, IntPtr hTemplateFile);
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CancelIoEx(SafeFileHandle hFile, IntPtr lpOverlapped);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -974,6 +1132,47 @@ static class Native
             if (hr != 0) throw new InvalidOperationException($"FilterReplyMessage failed HRESULT=0x{hr:X8}");
         }
         finally { Marshal.FreeHGlobal(ptr); }
+    }
+
+    public static RgControlReply Control(SafeFileHandle port, RgControlRequest request)
+    {
+        var inSize = Marshal.SizeOf<RgControlRequest>();
+        var outSize = Marshal.SizeOf<RgControlReply>();
+        var input = Marshal.AllocHGlobal(inSize);
+        var output = Marshal.AllocHGlobal(outSize);
+        try
+        {
+            Marshal.StructureToPtr(request, input, false);
+            var hr = FilterSendMessage(port, input, (uint)inSize, output, (uint)outSize, out var returned);
+            if (hr != 0) throw new InvalidOperationException($"FilterSendMessage failed HRESULT=0x{hr:X8}.");
+            if (returned != outSize) throw new InvalidDataException($"Unexpected control reply size: {returned}.");
+            return Marshal.PtrToStructure<RgControlReply>(output);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(input);
+            Marshal.FreeHGlobal(output);
+        }
+    }
+
+    public static SafeFileHandle OpenPreflight(string path)
+    {
+        const uint FileReadAttributes = 0x00000080;
+        const uint ShareRead = 0x00000001;
+        const uint ShareWrite = 0x00000002;
+        const uint ShareDelete = 0x00000004;
+        const uint OpenExisting = 3;
+        const uint FileAttributeNormal = 0x00000080;
+
+        var handle = CreateFileW(path, FileReadAttributes, ShareRead | ShareWrite | ShareDelete,
+            IntPtr.Zero, OpenExisting, FileAttributeNormal, IntPtr.Zero);
+        if (handle.IsInvalid)
+        {
+            var error = Marshal.GetLastWin32Error();
+            handle.Dispose();
+            throw new Win32Exception(error, $"Activation preflight could not open '{path}'.");
+        }
+        return handle;
     }
 
     public static void Cancel(SafeFileHandle handle) { if (!handle.IsInvalid) _ = CancelIoEx(handle, IntPtr.Zero); }

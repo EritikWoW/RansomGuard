@@ -1,7 +1,7 @@
-# RansomGuard 0.7.7.0 - CREATE completion and identity reconciliation milestone
+# RansomGuard 0.7.8.0 - CREATE completion and identity reconciliation milestone
 
 RansomGuard is moving from detection-only telemetry to `preserve -> contain -> recover`.
-0.7.7.0 retains the deliberately constrained engineering minifilter gate, range-aware WRITE COW,
+0.7.8.0 retains the deliberately constrained engineering minifilter gate, range-aware WRITE COW,
 CREATE/RENAME preservation and rename outcome reconciliation, and adds durable post-CREATE outcome,
 tunneled-name and kernel file-identity reconciliation.
 
@@ -188,9 +188,20 @@ Rollback startup validation now treats ambiguous durable state as a hard failure
 
 These checks do not yet reconcile an interrupted in-flight kernel request. They prevent a restart from proceeding on top of rollback state whose commit boundary is ambiguous.
 
+## Bounded concurrent gate execution
+
+0.7.8.0 removes the previous global serialization around blocking gate sends. The minifilter now:
+- admits at most 8 simultaneous blocking gate requests;
+- fails closed with STATUS_DEVICE_BUSY when that bound is exceeded;
+- holds gPortMutex only long enough to acquire/release a client-port lease;
+- waits for outstanding port users before disconnect/unload closes the client port.
+
+The LAB GateClient receives messages continuously and dispatches preservation/reconciliation through a bounded worker pool. The default is 4 workers and the supported range is 1..8, matching the kernel admission ceiling. Store-level durability locks still serialize journal commit points where required.
+
+This is bounded concurrency, not yet full crash reconciliation. A worker/process crash can still leave CREATE/RENAME completion intent pending and must not be inferred as success.
+
 ## Still required before production
 
-- bounded concurrent pending-I/O workers;
 - crash/restart reconciliation for requests pending during user-mode failure or missing CREATE/RENAME result delivery;
 - memory-mapped/cache-manager write coverage;
 - storage quotas, retention and pressure policy;

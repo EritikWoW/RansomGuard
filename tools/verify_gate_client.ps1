@@ -25,6 +25,7 @@ foreach($required in @(
   'LAB gate root cannot be an entire drive',
   'LAB gate root must not be inside Windows, Program Files, or ProgramData',
   'PathProbe.Get(path)',
+  'ev.PathStatus != (uint)RgPathStatus.Resolved',
   'createStore.WasOriginallyAbsent(path)',
   'RgEventType.Truncate',
   'RgEventType.Create',

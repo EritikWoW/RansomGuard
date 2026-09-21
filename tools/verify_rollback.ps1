@@ -266,5 +266,5 @@ if($repository -notmatch 'new WritableSectionEvidenceStore\(sectionRoot\)\.Verif
 if($repository -notmatch 'new ActivationPreflightStore\(activationRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested activation-state stores.'}
 if($repository -notmatch 'new ActivationTopologyStore\(topologyRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested activation-topology-state stores.'}
 Write-Host 'Rollback source gate PASSED: full-file/range COW, CREATE/RENAME transactions, identity, restart, paging, section, activation and topology journals, hashes, write-through commits and copy-only restore.'
-Write-Host 'Normal service capture remains disabled; v0.7.13 keeps blocking preservation inside the explicit LAB gate only. Paging/section callbacks remain evidence-only.'
+Write-Host 'Normal service capture remains disabled; v0.7.15 keeps blocking preservation inside the explicit LAB gate only. Paging/section callbacks remain evidence-only.'
 

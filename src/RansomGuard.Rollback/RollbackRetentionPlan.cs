@@ -183,7 +183,7 @@ public static class RollbackRetentionPlanner
                 ?? throw new InvalidDataException("Completed lifecycle is missing CompletedUtc.");
 
             managedCompleted.Add(new RetentionCompletedCandidate(
-                sessionId, store.Root, completedUtc.Value, sessionBytes,
+                sessionId, store.Root, completedUtc, sessionBytes,
                 digest, snapshot.LastRecordSha256));
             inventory.Add(new RetentionInventoryItem(
                 sessionId, snapshot.State, false, completedUtc,

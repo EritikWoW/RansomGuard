@@ -86,4 +86,4 @@ $repository=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Rollback\
 if($repository -notmatch 'new RangeRollbackStore\(rangeRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested write-cow stores.'}
 if($repository -notmatch 'new CreateRollbackStore\(createRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested create-state stores.'}
 Write-Host 'Rollback source gate PASSED: full-file, range-COW and originally-absent create journals, hashes, crash-artifact rejection, write-through commits, first-state semantics, copy-only restore.'
-Write-Host 'Normal service capture remains disabled; v0.7.2 keeps blocking COW inside the explicit LAB gate only.'
+Write-Host 'Normal service capture remains disabled; v0.7.3 keeps blocking preservation inside the explicit LAB gate only.'

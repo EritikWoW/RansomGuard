@@ -147,17 +147,19 @@ $dirRoot=Join-Path $RootBase "predirectory-$stamp"
 $preRoot=Join-Path $RootBase "preexisting-$stamp"
 $postRoot=Join-Path $RootBase "postactivation-$stamp"
 $containRoot=Join-Path $RootBase "containment-$stamp"
+$transitionRoot=Join-Path $RootBase "containment-transition-$stamp"
 $dirStore=Join-Path $ResultsDirectory 'predirectory-store'
 $preStore=Join-Path $ResultsDirectory 'preexisting-store'
 $postStore=Join-Path $ResultsDirectory 'postactivation-store'
 $containStore=Join-Path $ResultsDirectory 'containment-store'
+$transitionStore=Join-Path $ResultsDirectory 'containment-transition-store'
 $volume=[IO.Path]::GetPathRoot($RootBase).TrimEnd('\')
 $installScript=Join-Path $PSScriptRoot 'install_minifilter_lab.ps1'
 $unloadScript=Join-Path $PSScriptRoot 'unload_minifilter_lab.ps1'
 
 $summary=[ordered]@{
     schema=1
-    version='0.7.20.0'
+    version='0.7.21.0'
     startedUtc=(Get-Date).ToUniversalTime().ToString('o')
     vm=$vm
     rootBase=$RootBase
@@ -170,6 +172,9 @@ $summary=[ordered]@{
     containmentDeniedTarget=$false
     containmentPreservedTargetHash=$false
     containmentAllowedPeer=$false
+    transitionRequested=$false
+    transitionKernelActive=$false
+    transitionDeniedNextWrite=$false
     passed=$false
 }
 
@@ -180,10 +185,13 @@ $gateDir=$null
 $gatePre=$null
 $gatePost=$null
 $gateContain=$null
+$gateTransition=$null
 $containProbe=$null
+$transitionProbe=$null
 $dirRelease=$null
 $release=$null
 $containGo=$null
+$transitionGo=$null
 try{
     $existing=(& fltmc filters 2>$null | Out-String)
     if($existing -match 'RansomGuardMinifilter'){
@@ -387,6 +395,79 @@ try{
     }
     $summary.containmentAllowedPeer=$true
 
+    # Scenario 4: a preserved gate reply can atomically transition the exact requestor into containment.
+    Prepare-GateRoot $gateExe $transitionRoot
+    $transitionFileA=Join-Path $transitionRoot 'transition-a.bin'
+    $transitionFileB=Join-Path $transitionRoot 'transition-b.bin'
+    New-TestFile $transitionFileA
+    New-TestFile $transitionFileB
+
+    $transitionReady=Join-Path $ResultsDirectory 'containment-transition.ready'
+    $transitionGo=Join-Path $ResultsDirectory 'containment-transition.go'
+    $transitionResult=Join-Path $ResultsDirectory 'containment-transition.result'
+    $transitionProbeOut=Join-Path $ResultsDirectory 'containment-transition-probe.out.log'
+    $transitionProbeErr=Join-Path $ResultsDirectory 'containment-transition-probe.err.log'
+    $transitionProbe=Start-LoggedProcess $helperExe @(
+        'containment-transition',
+        '--file-a',(Quote-Arg $transitionFileA),
+        '--file-b',(Quote-Arg $transitionFileB),
+        '--ready',(Quote-Arg $transitionReady),
+        '--go',(Quote-Arg $transitionGo),
+        '--result',(Quote-Arg $transitionResult)
+    ) $transitionProbeOut $transitionProbeErr
+    Wait-Path $transitionReady 15 'event-bound containment probe readiness'
+
+    $transitionOut=Join-Path $ResultsDirectory 'containment-transition-gate.out.log'
+    $transitionErr=$transitionOut + '.err'
+    $gateTransition=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $transitionRoot),
+        '--store',(Quote-Arg $transitionStore),
+        '--session','containment-transition',
+        '--contain-after-pid',([string]$transitionProbe.Id),
+        '--contain-after-events','4',
+        '--contain-after-paths','2'
+    ) $transitionOut $transitionErr
+    Wait-LogPattern $transitionOut 'LAB transition\s+: pid=' $gateTransition 45
+    Wait-LogPattern $transitionOut 'kernel gate ACTIVE' $gateTransition 45
+
+    New-Item -ItemType File -Path $transitionGo -Force | Out-Null
+    Wait-Path $transitionResult 30 'event-bound containment probe result'
+    if(-not $transitionProbe.WaitForExit(15000)){
+        Stop-Process -Id $transitionProbe.Id -Force -ErrorAction SilentlyContinue
+        throw 'Event-bound containment runtime probe did not exit.'
+    }
+    $transitionOutcome=(Get-Content -LiteralPath $transitionResult -Raw).Trim()
+    if($transitionOutcome -ne 'denied-after-threshold'){
+        throw "Event-bound containment did not deny the next mutation. outcome=$transitionOutcome exit=$($transitionProbe.ExitCode)"
+    }
+    if($transitionProbe.ExitCode -ne 0){
+        throw "Event-bound containment runtime probe returned unexpected exit=$($transitionProbe.ExitCode), outcome=$transitionOutcome"
+    }
+    $summary.transitionDeniedNextWrite=$true
+
+    $transitionJournal=Join-Path $transitionStore 'Sessions\containment-transition\containment-state\containment-journal.jsonl'
+    $transitionRequest=Wait-JournalMatch $transitionJournal {
+        param($x)
+        [int]$x.phase -eq 1 -and
+        [uint64]$x.processId -eq [uint64]$transitionProbe.Id -and
+        [int]$x.evidenceCount -eq 4 -and
+        [int]$x.distinctPathCount -eq 2 -and
+        $x.containmentActive -eq $false
+    } 30 'durable event-bound containment request'
+    $summary.transitionRequested=$true
+
+    $transitionActive=Wait-JournalMatch $transitionJournal {
+        param($x)
+        [int]$x.phase -eq 2 -and
+        [uint64]$x.kernelSequence -eq [uint64]$transitionRequest.kernelSequence -and
+        [uint64]$x.processId -eq [uint64]$transitionRequest.processId -and
+        $x.containmentActive -eq $true -and
+        [uint64]$x.containedProcessId -eq [uint64]$transitionRequest.processId
+    } 30 'kernel-active event-bound containment receipt'
+    $summary.transitionKernelActive=$true
+    Wait-LogPattern $transitionOut 'LAB CONTAINMENT ACTIVE' $gateTransition 30
+    $transitionProbe=$null
+
     $summary.passed=$true
     $summary.completedUtc=(Get-Date).ToUniversalTime().ToString('o')
     $summary | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'runtime-result.json') -Encoding utf8
@@ -405,7 +486,11 @@ finally{
         if($containGo){New-Item -ItemType File -Path $containGo -Force -ErrorAction SilentlyContinue | Out-Null}
         Stop-Process -Id $containProbe.Id -Force -ErrorAction SilentlyContinue
     }
-    foreach($p in @($gateDir,$gatePre,$gatePost,$gateContain)){
+    if($transitionProbe -and -not $transitionProbe.HasExited){
+        if($transitionGo){New-Item -ItemType File -Path $transitionGo -Force -ErrorAction SilentlyContinue | Out-Null}
+        Stop-Process -Id $transitionProbe.Id -Force -ErrorAction SilentlyContinue
+    }
+    foreach($p in @($gateDir,$gatePre,$gatePost,$gateContain,$gateTransition)){
         if($p -and -not $p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}
     }
     if($installed){

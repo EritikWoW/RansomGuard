@@ -1,10 +1,11 @@
 #pragma once
 
 // Wire protocol between the RansomGuard lab minifilter and user-mode clients.
-// v6 retains CREATE/RENAME preservation semantics and adds post-rename completion reconciliation.
+// v7 retains CREATE/RENAME preservation semantics and adds post-CREATE completion reconciliation.
+// Rename and CREATE result events reuse the correlated completion fields in RG_EVENT.
 // The production bundle still does not install or enable the driver.
 
-#define RG_PROTOCOL_VERSION 6u
+#define RG_PROTOCOL_VERSION 7u
 #define RG_PATH_CHARS 512u
 #define RG_GATE_ROOT_CHARS 260u
 #define RG_PORT_NAME L"\\RansomGuardMinifilterPort"
@@ -20,7 +21,8 @@ typedef enum _RG_EVENT_TYPE {
     RgEventDeleteDisposition = 3,
     RgEventTruncate = 4,
     RgEventCreate = 5,
-    RgEventRenameResult = 6
+    RgEventRenameResult = 6,
+    RgEventCreateResult = 7
 } RG_EVENT_TYPE;
 
 typedef enum _RG_PATH_STATUS {

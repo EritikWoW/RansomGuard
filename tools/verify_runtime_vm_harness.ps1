@@ -135,7 +135,7 @@ foreach($required in @('readyMarker','goMarker','resultMarker','File.AppendAllTe
     if($containBlock -notmatch [regex]::Escape($required)){throw "Containment runtime helper missing invariant: $required"}
 }
 if($runtime -notmatch [regex]::Escape("Wait-LogPattern $containOut 'LAB containment\s+: ACTIVE'") -or
-   $runtime -notmatch [regex]::Escape('if($containOutcome -notmatch ''^(denied|io-denied:)''') -or
+   $runtime -notmatch [regex]::Escape('if($containOutcome -ne ''denied'') -or
    $runtime -notmatch [regex]::Escape('if([string]::Equals($peerAfterHash,$peerOriginalHash')){
     throw 'Runtime containment scenario must prove target denial/hash preservation and ordinary-peer mutation.'
 }

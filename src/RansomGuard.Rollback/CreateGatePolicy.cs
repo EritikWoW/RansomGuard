@@ -42,7 +42,7 @@ public static class CreateGatePolicy
             var destructiveDisposition =
                 disposition is CreateDisposition.Supersede or CreateDisposition.Overwrite or CreateDisposition.OverwriteIf;
             var successfulOpenMayWrite =
-                disposition is CreateDisposition.Open or CreateDisposition.OpenIf &&
+                (disposition is CreateDisposition.Open or CreateDisposition.OpenIf) &&
                 RequestsWriteCapableHandle(desiredAccess);
 
             return deleteOnClose || destructiveDisposition || successfulOpenMayWrite

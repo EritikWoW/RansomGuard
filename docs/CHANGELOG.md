@@ -1,3 +1,18 @@
+# RansomGuard 0.7.18.0
+
+- Added tamper-evident rollback session lifecycle journals with Created, Completed, Faulted, HoldSet and HoldReleased events.
+- GateClient marks Completed only after worker drain, repository verification, zero worker failures and no pending CREATE/RENAME intents; otherwise graceful shutdown is Faulted, while crashes remain Active.
+- Legacy sessions without lifecycle metadata are protected from automatic retention.
+- Added default retention policy: 30-day max completed age, 32 GiB managed completed storage cap, and 24-hour minimum age for pressure-driven purge.
+- Held and pending-transaction completed sessions count toward retained completed bytes but are never purge candidates; unresolved excess is reported instead.
+- Added deterministic retention PlanId/inventory/session SHA-256 binding and stale-plan refusal.
+- Added crash-resumable purge journal: PurgeStarted -> atomic Sessions-to-Retired move -> Quarantined -> reparse-safe delete -> PurgeCompleted.
+- Added resume support for interrupted purge from Sessions, Retired, or missing quarantine after delete-before-final-receipt.
+- Added LAB-only RollbackMaintenance CLI: status, retention-plan, retention-execute, hold and release-hold.
+- Cleanup never runs automatically in GateClient or the normal Audit bundle.
+- Added tests for hold protection, Active/Faulted/pending exclusion, age expiry, capacity pressure, stale-plan refusal, full purge chain and crash resume.
+- Added mandatory retention source gate enforcing quarantine-before-delete, no direct Sessions deletion, no force/ignore-hold verbs and LAB-only packaging.
+
 # RansomGuard 0.7.17.0
 
 - Added fail-closed rollback storage admission for Engineering LAB gate sessions.

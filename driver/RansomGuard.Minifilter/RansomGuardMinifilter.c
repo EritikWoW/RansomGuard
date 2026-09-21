@@ -123,11 +123,12 @@ static FLT_PREOP_CALLBACK_STATUS RgCompleteDenied(PFLT_CALLBACK_DATA Data)
 FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjects, PVOID *CompletionContext)
 {
     RG_EVENT event;
+    PRG_CREATE_CONTEXT createContext = NULL;
     NTSTATUS status;
     LONG mode;
     ULONG gateError = 0;
 
-    UNREFERENCED_PARAMETER(CompletionContext);
+    *CompletionContext = NULL;
     if (!RgShouldObserve(Data)) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
@@ -148,12 +149,23 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    if (!RgGateEvent(&event, &gateError)) {
-        UNREFERENCED_PARAMETER(gateError);
+    if (InterlockedCompareExchange(&gGateAmbiguous, 0, 0) != 0) {
         return RgCompleteDenied(Data);
     }
 
-    return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    status = RgAllocateCreateContext(Data, event.Sequence, &createContext);
+    if (!NT_SUCCESS(status) || createContext == NULL) {
+        return RgCompleteDenied(Data);
+    }
+
+    if (!RgGateEvent(&event, &gateError)) {
+        UNREFERENCED_PARAMETER(gateError);
+        RgReleaseCreateContext(createContext);
+        return RgCompleteDenied(Data);
+    }
+
+    *CompletionContext = createContext;
+    return FLT_PREOP_SUCCESS_WITH_CALLBACK;
 }
 
 FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjects, PVOID *CompletionContext)
@@ -182,6 +194,10 @@ FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJE
     if (!NT_SUCCESS(status) || !RgEventIsInsideGateRoot(&event)) {
         // LAB gate is intentionally scoped. Unresolved/out-of-root paths fail open rather than risking OS-wide I/O loss.
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    if (InterlockedCompareExchange(&gGateAmbiguous, 0, 0) != 0) {
+        return RgCompleteDenied(Data);
     }
 
     if (!RgGateEvent(&event, &gateError)) {
@@ -224,6 +240,10 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
     status = RgPopulateEvent(&event, Data, eventType, infoClass);
     if (!NT_SUCCESS(status) || !RgEventIsInsideGateRoot(&event)) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    if (InterlockedCompareExchange(&gGateAmbiguous, 0, 0) != 0) {
+        return RgCompleteDenied(Data);
     }
 
     if (!RgGateEvent(&event, &gateError)) {

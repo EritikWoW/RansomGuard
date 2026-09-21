@@ -67,6 +67,20 @@ it does not gate anything. The filter remains demand-start, automatic attachment
 
 The normal product bundle does not install or enable this driver. Ordinary product operation remains AuditOnly.
 
+## Crash-state validation
+
+Rollback startup validation now treats ambiguous durable state as a hard failure rather than silently trusting it:
+
+- every committed full pre-image is checked by length and SHA-256;
+- unjournaled `.preimage` objects are rejected;
+- unjournaled range `.block` objects are rejected;
+- leftover `.tmp` artifacts are rejected as incomplete capture evidence;
+- range block geometry must exactly match the recorded original file length and configured block size;
+- repository-wide verification also descends into each session's nested `write-cow` store;
+- the LAB gate validates all existing sessions before opening a new one.
+
+These checks do not yet reconcile an interrupted in-flight kernel request. They prevent a restart from proceeding on top of rollback state whose commit boundary is ambiguous.
+
 ## Still required before production
 
 - explicit create/new-file transaction semantics;

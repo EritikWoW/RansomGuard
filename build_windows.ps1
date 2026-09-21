@@ -21,6 +21,7 @@ try {
     $sim = 'src\RansomGuard.Simulator\RansomGuard.Simulator.csproj'
     $filterClient = 'src\RansomGuard.FilterClient\RansomGuard.FilterClient.csproj'
     $gateClient = 'src\RansomGuard.GateClient\RansomGuard.GateClient.csproj'
+    $runtimeHarness = 'tests\RansomGuard.Minifilter.RuntimeHarness\RansomGuard.Minifilter.RuntimeHarness.csproj'
     $ui = 'src\RansomGuard.Ui\RansomGuard.Ui.csproj'
     $recovery = 'src\RansomGuard.RecoveryCli\RansomGuard.RecoveryCli.csproj'
     $recoveryTests = 'tests\RansomGuard.Recovery.Tests\RansomGuard.Recovery.Tests.csproj'
@@ -97,6 +98,7 @@ try {
     & (Join-Path $PSScriptRoot 'tools\verify_localization.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_rollback.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_gate_client.ps1')
+    & (Join-Path $PSScriptRoot 'tools\verify_runtime_vm_harness.ps1')
     Write-Host '[1/6] Restore and execute policy/recovery/rollback tests (no process suspension in these tests).'
     Run-Dotnet -Arguments @('restore',$tests,$auditErrors)
     Run-Dotnet -Arguments @('run','--project',$tests,'-c','Release','--no-restore')
@@ -114,7 +116,7 @@ try {
     & (Join-Path $PSScriptRoot 'tools\verify_recovery_boundary.ps1')
     Write-Host '[2/6] Restore Windows projects. Known package vulnerabilities/audit failures block this build.'
     $projects=@($svc,$ui,$recovery)
-    if($IncludeLab){$projects+=@($sim,$filterClient,$gateClient)}
+    if($IncludeLab){$projects+=@($sim,$filterClient,$gateClient,$runtimeHarness)}
     foreach ($project in $projects) {
         Run-Dotnet -Arguments @('restore',$project,'-r','win-x64','-p:SelfContained=true',$auditErrors)
     }
@@ -173,10 +175,12 @@ try {
         $simDir=Join-Path $labRelease 'Simulator'
         $clientDir=Join-Path $labRelease 'MinifilterLab\Client'
         $gateClientDir=Join-Path $labRelease 'MinifilterLab\GateClient'
-        New-Item -ItemType Directory -Path $simDir,$clientDir,$gateClientDir -Force | Out-Null
+        $runtimeHarnessDir=Join-Path $labRelease 'MinifilterLab\RuntimeHarness'
+        New-Item -ItemType Directory -Path $simDir,$clientDir,$gateClientDir,$runtimeHarnessDir -Force | Out-Null
         Run-Dotnet -Arguments (@('publish',$sim)+$publishFlags+@('-o',$simDir))
         Run-Dotnet -Arguments (@('publish',$filterClient)+$publishFlags+@('-o',$clientDir))
         Run-Dotnet -Arguments (@('publish',$gateClient)+$publishFlags+@('-o',$gateClientDir))
+        Run-Dotnet -Arguments (@('publish',$runtimeHarness)+$publishFlags+@('-o',$runtimeHarnessDir))
         $simHash=(Get-FileHash -LiteralPath (Join-Path $simDir 'RansomGuard.Simulator.exe') -Algorithm SHA256).Hash
         [IO.File]::WriteAllText((Join-Path $simDir 'simulator.sha256'),$simHash,[Text.Encoding]::ASCII)
         foreach($file in @('test_lab.cmd','test_lab_full_dump.cmd','native_selftest.cmd','install_service.cmd','uninstall_service.cmd','summarize_last_lab.cmd','inspect_state_acl.cmd','repair_state_store.cmd','build_minifilter.cmd','verify_minifilter_source.cmd','install_minifilter_lab.cmd','unload_minifilter_lab.cmd','minifilter_status.cmd','run_minifilter_audit.cmd','run_minifilter_gate_lab.cmd','preview_ui.cmd','ui_smoketest.cmd')) {

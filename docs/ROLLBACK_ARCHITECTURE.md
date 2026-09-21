@@ -1,8 +1,8 @@
-# RansomGuard 0.7.2.0 - range-aware pre-write COW milestone
+# RansomGuard 0.7.3.0 - CREATE-aware preservation milestone
 
 RansomGuard is moving from detection-only telemetry to `preserve -> contain -> recover`.
-0.7.2.0 keeps the deliberately constrained engineering minifilter gate and changes ordinary WRITE
-preservation from whole-file snapshots to incident-scoped range/block copy-on-write.
+0.7.3.0 retains the deliberately constrained engineering minifilter gate, range-aware WRITE COW,
+and adds explicit CREATE preservation semantics.
 
 ## WRITE ordering
 

@@ -1396,6 +1396,8 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
 {
     PRG_CONTROL_REQUEST request;
     PRG_CONTROL_REPLY reply;
+    PEPROCESS targetProcess = NULL;
+    ULONGLONG containedProcessId;
     NTSTATUS status = STATUS_SUCCESS;
 
     UNREFERENCED_PARAMETER(ConnectionCookie);
@@ -1420,30 +1422,71 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
         InterlockedCompareExchange(&gClientConnected, 0, 0) == 0 ||
         RgCurrentClientMode() != RgClientLabGate) {
         status = STATUS_REVISION_MISMATCH;
-    } else if (request->Command == RgControlQueryActivation) {
-        status = STATUS_SUCCESS;
+    } else if (request->Command == RgControlQueryActivation ||
+               request->Command == RgControlQueryContainment) {
+        if (request->TargetProcessId != 0) {
+            status = STATUS_INVALID_PARAMETER;
+        }
     } else if (request->Command == RgControlArmPreflight) {
-        if (InterlockedCompareExchange(&gGateActivated, 0, 0) != 0 ||
-            InterlockedCompareExchange(&gActivationHazard, 0, 0) != 0) {
+        if (request->TargetProcessId != 0) {
+            status = STATUS_INVALID_PARAMETER;
+        } else if (InterlockedCompareExchange(&gGateActivated, 0, 0) != 0 ||
+                   InterlockedCompareExchange(&gActivationHazard, 0, 0) != 0) {
             status = STATUS_DEVICE_BUSY;
         } else {
             InterlockedExchange(&gPreflightProbeArmed, 1);
             status = STATUS_SUCCESS;
         }
     } else if (request->Command == RgControlActivateGate) {
-        if (InterlockedCompareExchange(&gActivationHazard, 0, 0) != 0 ||
-            InterlockedCompareExchange(&gPreflightProbeArmed, 0, 0) != 0) {
+        if (request->TargetProcessId != 0) {
+            status = STATUS_INVALID_PARAMETER;
+        } else if (InterlockedCompareExchange(&gActivationHazard, 0, 0) != 0 ||
+                   InterlockedCompareExchange(&gPreflightProbeArmed, 0, 0) != 0) {
             status = STATUS_DEVICE_BUSY;
         } else {
             InterlockedExchange(&gGateActivated, 1);
             status = STATUS_SUCCESS;
         }
+    } else if (request->Command == RgControlActivateAndContainProcess) {
+        if (InterlockedCompareExchange(&gGateActivated, 0, 0) != 0 ||
+            InterlockedCompareExchange(&gActivationHazard, 0, 0) != 0 ||
+            InterlockedCompareExchange(&gPreflightProbeArmed, 0, 0) != 0) {
+            status = STATUS_DEVICE_BUSY;
+        } else if (request->TargetProcessId <= 4 ||
+                   request->TargetProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId, 0, 0) ||
+                   (ULONGLONG)(ULONG_PTR)request->TargetProcessId != request->TargetProcessId) {
+            status = STATUS_INVALID_PARAMETER;
+        } else {
+            status = PsLookupProcessByProcessId(
+                (HANDLE)(ULONG_PTR)request->TargetProcessId,
+                &targetProcess);
+            if (NT_SUCCESS(status)) {
+                ExAcquireFastMutex(&gPortMutex);
+                if (gContainedProcess != NULL || gClientPort == NULL) {
+                    status = STATUS_DEVICE_BUSY;
+                } else {
+                    gContainedProcess = targetProcess;
+                    targetProcess = NULL;
+                    InterlockedExchange64(&gContainedProcessId, (LONG64)request->TargetProcessId);
+                    InterlockedExchange(&gGateActivated, 1);
+                    status = STATUS_SUCCESS;
+                }
+                ExReleaseFastMutex(&gPortMutex);
+            }
+        }
     } else {
         status = STATUS_INVALID_PARAMETER;
     }
 
+    if (targetProcess != NULL) {
+        ObDereferenceObject(targetProcess);
+    }
+
+    containedProcessId = (ULONGLONG)InterlockedCompareExchange64(&gContainedProcessId, 0, 0);
     reply->Status = (ULONG)status;
     reply->GateActivated = (ULONG)InterlockedCompareExchange(&gGateActivated, 0, 0);
+    reply->ContainmentActive = containedProcessId != 0 ? 1u : 0u;
+    reply->ContainedProcessId = containedProcessId;
     *ReturnOutputBufferLength = sizeof(*reply);
     return STATUS_SUCCESS;
 }

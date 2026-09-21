@@ -1051,6 +1051,68 @@ static BOOLEAN RgEventIsInsideGateRoot(const RG_EVENT *Event)
     return RgEventPathMatchesGateRoot(Event);
 }
 
+static BOOLEAN RgIsContainedRequestor(PFLT_CALLBACK_DATA Data)
+{
+    PEPROCESS requestor;
+    BOOLEAN contained = FALSE;
+
+    requestor = FltGetRequestorProcess(Data);
+    if (requestor == NULL) {
+        return FALSE;
+    }
+
+    ExAcquireFastMutex(&gPortMutex);
+    contained = (gContainedProcess != NULL && gContainedProcess == requestor);
+    ExReleaseFastMutex(&gPortMutex);
+    return contained;
+}
+
+static BOOLEAN RgCreateMayMutate(const RG_EVENT *Event)
+{
+    ULONG disposition;
+    ULONG options;
+    ACCESS_MASK desiredAccess;
+    const ACCESS_MASK mutatingAccess =
+        FILE_WRITE_DATA |
+        FILE_APPEND_DATA |
+        FILE_WRITE_EA |
+        FILE_WRITE_ATTRIBUTES |
+        DELETE |
+        WRITE_DAC |
+        WRITE_OWNER |
+        GENERIC_WRITE |
+        GENERIC_ALL;
+
+    disposition = (Event->Flags & RG_CREATE_DISPOSITION_MASK) >> RG_CREATE_DISPOSITION_SHIFT;
+    options = Event->Flags & RG_CREATE_OPTIONS_MASK;
+    desiredAccess = (ACCESS_MASK)Event->Length;
+
+    if (FlagOn(options, FILE_DELETE_ON_CLOSE) || FlagOn(desiredAccess, mutatingAccess)) {
+        return TRUE;
+    }
+
+    return disposition == FILE_SUPERSEDE ||
+           disposition == FILE_CREATE ||
+           disposition == FILE_OPEN_IF ||
+           disposition == FILE_OVERWRITE ||
+           disposition == FILE_OVERWRITE_IF;
+}
+
+static VOID RgClearContainedProcess(VOID)
+{
+    PEPROCESS previous = NULL;
+
+    ExAcquireFastMutex(&gPortMutex);
+    previous = gContainedProcess;
+    gContainedProcess = NULL;
+    InterlockedExchange64(&gContainedProcessId, 0);
+    ExReleaseFastMutex(&gPortMutex);
+
+    if (previous != NULL) {
+        ObDereferenceObject(previous);
+    }
+}
+
 static BOOLEAN RgGateEvent(const RG_EVENT *Event, PULONG ErrorCode, PULONG Decision)
 {
     LARGE_INTEGER timeout;

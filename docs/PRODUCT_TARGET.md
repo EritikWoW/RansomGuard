@@ -57,6 +57,8 @@ Protocol v11 adds non-blocking visibility for paging writes associated with stre
 
 0.7.17 adds bounded rollback storage admission to the LAB gate. Every session measures its already committed bytes and combines them with concurrent in-flight reservations plus current filesystem free space. The default limit is 8192 MiB per session with 2048 MiB left free on the rollback-store volume. Preservation/evidence writers reserve estimated growth before commit; quota/free-space refusal is fail-closed for blocking destructive I/O. Repeated full/range/absence evidence is recognized so already committed preservation is not charged again.
 
-The next core milestones are broader NTFS/ReFS runtime/fault-injection coverage, retention/cleanup policy for completed rollback sessions, directory-topology rollback semantics beyond startup handle exclusion, deeper crash recovery for requests interrupted before authoritative kernel completion delivery,
+0.7.18 adds explicit lifecycle and retention for rollback evidence. New sessions are managed as Created/Completed/Faulted with optional Hold, and retention can only select verified Completed, unheld sessions with no pending CREATE/RENAME transactions. The default policy is 30 days / 32 GiB with a 24-hour floor for pressure cleanup. Purge is manual, stale-plan resistant and crash-resumable through a repository-level Started/Quarantined/Completed audit journal and a Sessions-to-Retired quarantine step before deletion.
+
+The next core milestones are broader NTFS/ReFS runtime/fault-injection coverage, production retention UI/policy integration, directory-topology rollback semantics beyond startup handle exclusion, deeper crash recovery for requests interrupted before authoritative kernel completion delivery,
 containment, process-state capture,
 adaptive crypto analysis, and production recovery UI/orchestration across rollback plus crypto evidence.

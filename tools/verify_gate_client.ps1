@@ -11,6 +11,7 @@ foreach($required in @(
   'CapturePreimageAsync',
   'CaptureWritePreimageAsync',
   'CreateRollbackStore',
+  'CreateTransactionStore',
   'FileIdentityStore',
   'RenameRollbackStore',
   'CaptureOrVerifyAsync',
@@ -19,14 +20,22 @@ foreach($required in @(
   'RenameCompletionState.Succeeded',
   'RenameCompletionState.SucceededNameUnresolved',
   'RenameCompletionState.Failed',
+  'CreateCompletionState.Succeeded',
+  'CreateCompletionState.SucceededNameUnresolved',
+  'CreateCompletionState.Failed',
+  'RgEventType.CreateResult',
   'RgEventType.RenameResult',
   'ev.RelatedSequence',
   'ev.CompletionStatus',
   'CaptureAbsentAsync',
   'CreateGatePolicy.TryParseDisposition',
+  'CreateGatePolicy.RequiresCompletionTracking',
+  'createStore.TryGetBaseline(path',
+  'transactionStore.CaptureIntentAsync',
+  'CreateReconciliation.HandleAsync',
   '(ev.Flags >> 24) & 0xFF',
   'ev.Flags & 0x00FFFFFF',
-  'ProtocolVersion = 6',
+  'ProtocolVersion = 7',
   'CreatePreservationAction.CaptureExistingPreimage',
   'CreatePreservationAction.RecordOriginallyAbsent',
   'CreatePreservationAction.DenyUnsupported',
@@ -86,6 +95,15 @@ if($createIdentity -lt 0 -or $createIdentity -gt $existingCapture){
   throw 'Destructive CREATE must capture/verify file identity before full pre-image capture.'
 }
 
+$createResultBranch=$text.IndexOf('if ((RgEventType)ev.EventType == RgEventType.CreateResult)')
+$createResultPersist=$text.IndexOf('CreateReconciliation.HandleAsync(',$createResultBranch)
+$createResultContinue=$text.IndexOf('continue;',$createResultPersist)
+$createResultReply=$text.IndexOf('Native.Reply(',$createResultBranch)
+if($createResultBranch -lt 0 -or $createResultPersist -lt 0 -or $createResultContinue -lt 0 -or
+   ($createResultReply -ge 0 -and $createResultReply -lt $createResultContinue)){
+  throw 'CreateResult must be persisted/ignored by correlation and must not receive FilterReplyMessage.'
+}
+
 $resultBranch=$text.IndexOf('if ((RgEventType)ev.EventType == RgEventType.RenameResult)')
 $resultPersist=$text.IndexOf('RenameReconciliation.HandleAsync(',$resultBranch)
 $resultContinue=$text.IndexOf('continue;',$resultPersist)
@@ -93,6 +111,17 @@ $resultReply=$text.IndexOf('Native.Reply(',$resultBranch)
 if($resultBranch -lt 0 -or $resultPersist -lt 0 -or $resultContinue -lt 0 -or
    ($resultReply -ge 0 -and $resultReply -lt $resultContinue)){
   throw 'RenameResult must be persisted as completion metadata and must not receive FilterReplyMessage.'
+}
+
+$createFunction=$text.IndexOf('private static async Task<RgGateReply> EvaluateCreateAsync(')
+$createDecision=$text.IndexOf('CreateGatePolicy.Decide(disposition, state, createOptions)',$createFunction)
+$createCapture=$text.IndexOf('CapturePreimageAsync(',$createDecision)
+$createIntent=$text.IndexOf('transactionStore.CaptureIntentAsync(',$createDecision)
+$createReturn=$text.IndexOf('return Allow(ev.Sequence, decision)',$createIntent)
+if($createFunction -lt 0 -or $createDecision -lt 0 -or $createCapture -lt 0 -or
+   $createIntent -lt 0 -or $createReturn -lt 0 -or
+   $createCapture -gt $createIntent -or $createIntent -gt $createReturn){
+  throw 'Tracked CREATE must commit required preservation then durable transaction intent before allow.'
 }
 
 $renameBranch=$text.IndexOf('if (eventType == RgEventType.Rename)')
@@ -104,4 +133,4 @@ if($renameBranch -lt 0 -or $renameSourceCapture -lt 0 -or $renameIntent -lt 0 -o
   throw 'RENAME must preserve source/destination state and durably commit rename intent before allow.'
 }
 
-Write-Host 'LAB gate client source check PASSED: explicit disposable root, protocol-v6 CREATE/RENAME semantics, durable FILE_ID_INFO identity binding, range COW for writes, source/destination pre-image preservation, durable rename intents/completions and originally-absent baselines, no destructive/process-control APIs.'
+Write-Host 'LAB gate client source check PASSED: explicit disposable root, protocol-v7 CREATE/RENAME semantics, durable FILE_ID_INFO identity binding, range COW for writes, durable CREATE/RENAME intents and completions, originally-absent baselines, no destructive/process-control APIs.'

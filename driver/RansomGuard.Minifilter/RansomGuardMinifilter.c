@@ -31,7 +31,7 @@ static NTSTATUS RgCreateCreatePostContext(_Inout_ PFLT_CALLBACK_DATA Data,
                                           _In_ ULONGLONG RequestSequence,
                                           _Outptr_ PRG_POST_CONTEXT *PostContext);
 static VOID RgFreePostContext(_In_opt_ PRG_POST_CONTEXT PostContext);
-static VOID RgPopulatePostCreateIdentity(_Inout_ PRG_EVENT Event,
+static VOID RgPopulatePostOperationIdentity(_Inout_ PRG_EVENT Event,
                                          _In_ PCFLT_RELATED_OBJECTS FltObjects);
 static FLT_POSTOP_CALLBACK_STATUS RgPostSetInformationSafe(_Inout_ PFLT_CALLBACK_DATA Data,
                                                            _In_ PCFLT_RELATED_OBJECTS FltObjects,
@@ -473,7 +473,7 @@ static NTSTATUS RgCreateCreatePostContext(PFLT_CALLBACK_DATA Data,
     return STATUS_SUCCESS;
 }
 
-static VOID RgPopulatePostCreateIdentity(PRG_EVENT Event,
+static VOID RgPopulatePostOperationIdentity(PRG_EVENT Event,
                                          PCFLT_RELATED_OBJECTS FltObjects)
 {
     FILE_ID_INFORMATION identity;
@@ -582,7 +582,7 @@ FLT_POSTOP_CALLBACK_STATUS RgPostCreate(PFLT_CALLBACK_DATA Data,
             event.PathStatus = RgPathQueryFailed;
         }
 
-        RgPopulatePostCreateIdentity(&event, FltObjects);
+        RgPopulatePostOperationIdentity(&event, FltObjects);
     }
 
     RgQueueRawEvent(&event, RgClientLabGate);
@@ -681,6 +681,8 @@ static FLT_POSTOP_CALLBACK_STATUS RgPostSetInformationSafe(PFLT_CALLBACK_DATA Da
         } else {
             event.DestinationPathStatus = RgPathQueryFailed;
         }
+
+        RgPopulatePostOperationIdentity(&event, FltObjects);
     }
 
     RgQueueRawEvent(&event, RgClientLabGate);

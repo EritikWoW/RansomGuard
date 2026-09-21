@@ -489,10 +489,26 @@ static VOID RgFreePostContext(PRG_POST_CONTEXT PostContext)
     ExFreePoolWithTag(PostContext, RG_POOL_TAG);
 }
 
+FLT_POSTOP_CALLBACK_STATUS RgPostCreate(PFLT_CALLBACK_DATA Data,
+                                        PCFLT_RELATED_OBJECTS FltObjects,
+                                        PVOID CompletionContext,
+                                        FLT_POST_OPERATION_FLAGS Flags)
+{
+    return RgPostNameOperation(Data, FltObjects, CompletionContext, Flags);
+}
+
 FLT_POSTOP_CALLBACK_STATUS RgPostSetInformation(PFLT_CALLBACK_DATA Data,
                                                 PCFLT_RELATED_OBJECTS FltObjects,
                                                 PVOID CompletionContext,
                                                 FLT_POST_OPERATION_FLAGS Flags)
+{
+    return RgPostNameOperation(Data, FltObjects, CompletionContext, Flags);
+}
+
+static FLT_POSTOP_CALLBACK_STATUS RgPostNameOperation(PFLT_CALLBACK_DATA Data,
+                                                      PCFLT_RELATED_OBJECTS FltObjects,
+                                                      PVOID CompletionContext,
+                                                      FLT_POST_OPERATION_FLAGS Flags)
 {
     FLT_POSTOP_CALLBACK_STATUS result = FLT_POSTOP_FINISHED_PROCESSING;
 
@@ -516,7 +532,7 @@ FLT_POSTOP_CALLBACK_STATUS RgPostSetInformation(PFLT_CALLBACK_DATA Data,
             FltObjects,
             CompletionContext,
             Flags,
-            RgPostSetInformationSafe,
+            RgPostNameOperationSafe,
             &result)) {
         return result;
     }
@@ -526,10 +542,10 @@ FLT_POSTOP_CALLBACK_STATUS RgPostSetInformation(PFLT_CALLBACK_DATA Data,
     return FLT_POSTOP_FINISHED_PROCESSING;
 }
 
-static FLT_POSTOP_CALLBACK_STATUS RgPostSetInformationSafe(PFLT_CALLBACK_DATA Data,
-                                                           PCFLT_RELATED_OBJECTS FltObjects,
-                                                           PVOID CompletionContext,
-                                                           FLT_POST_OPERATION_FLAGS Flags)
+static FLT_POSTOP_CALLBACK_STATUS RgPostNameOperationSafe(PFLT_CALLBACK_DATA Data,
+                                                          PCFLT_RELATED_OBJECTS FltObjects,
+                                                          PVOID CompletionContext,
+                                                          FLT_POST_OPERATION_FLAGS Flags)
 {
     PRG_POST_CONTEXT context = (PRG_POST_CONTEXT)CompletionContext;
     PFLT_FILE_NAME_INFORMATION tunneledInfo = NULL;
@@ -546,9 +562,16 @@ static FLT_POSTOP_CALLBACK_STATUS RgPostSetInformationSafe(PFLT_CALLBACK_DATA Da
         return FLT_POSTOP_FINISHED_PROCESSING;
     }
 
+    if (context->ResultEventType != RgEventRenameResult &&
+        context->ResultEventType != RgEventCreateResult) {
+        RgFreePostContext(context);
+        InterlockedIncrement(&gDropped);
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    }
+
     RtlZeroMemory(&event, sizeof(event));
     event.ProtocolVersion = RG_PROTOCOL_VERSION;
-    event.EventType = RgEventRenameResult;
+    event.EventType = context->ResultEventType;
     event.Sequence = (ULONGLONG)InterlockedIncrement64(&gSequence);
     event.RelatedSequence = context->RequestSequence;
     event.CompletionStatus = (ULONG)Data->IoStatus.Status;
@@ -558,9 +581,9 @@ static FLT_POSTOP_CALLBACK_STATUS RgPostSetInformationSafe(PFLT_CALLBACK_DATA Da
     event.SystemTime100ns = systemTime.QuadPart;
 
     if (NT_SUCCESS(Data->IoStatus.Status)) {
-        status = FltGetTunneledName(Data, context->PreDestinationNameInfo, &tunneledInfo);
+        status = FltGetTunneledName(Data, context->PreNameInfo, &tunneledInfo);
         if (NT_SUCCESS(status)) {
-            finalInfo = (tunneledInfo != NULL) ? tunneledInfo : context->PreDestinationNameInfo;
+            finalInfo = (tunneledInfo != NULL) ? tunneledInfo : context->PreNameInfo;
             chars = finalInfo->Name.Length / sizeof(WCHAR);
             if (chars >= RG_PATH_CHARS) {
                 chars = RG_PATH_CHARS - 1;

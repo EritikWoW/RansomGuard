@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework><OutputType>Exe</OutputType></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/RansomGuard.Core/RansomGuard.Core.csproj" />
+    <EmbeddedResource Include="../../src/RansomGuard.Ui/Localization/uk-UA.json" LogicalName="Resources.uk-UA.json"><WithCulture>false</WithCulture></EmbeddedResource>
+    <EmbeddedResource Include="../../src/RansomGuard.Ui/Localization/en-US.json" LogicalName="Resources.en-US.json"><WithCulture>false</WithCulture></EmbeddedResource>
+  </ItemGroup>
+</Project>

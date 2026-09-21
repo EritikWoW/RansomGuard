@@ -1,48 +1,71 @@
 # RansomGuard 0.7.1.0
 
-RansomGuard is being developed as a Windows **anti-encryption and recovery layer**, not as a general antivirus.
+RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 The target is: preserve original data before destructive mutation, contain continued encryption, and recover
-verified data by rollback and adaptive crypto analysis.
+verified data through rollback plus adaptive crypto analysis when sufficient runtime state exists.
 
-## What 0.7.1.0 adds
+## Core milestone in 0.7.1.0
 
-This release adds the first durable rollback core:
+0.7.0.0 introduced the durable incident-scoped rollback repository. 0.7.1.0 adds the first deliberately
+constrained **pre-write preservation gate** for Windows engineering tests:
 
-- a separate rollback repository under the protected ProgramData state store;
-- one independent rollback session per incident;
-- first-preimage semantics inside an incident;
-- SHA-256 calculated while a pre-image is copied;
-- append-only, hash-chained journal records;
-- write-through / `Flush(true)` commits for payload and journal;
-- startup validation of existing rollback sessions before monitoring starts;
-- recovery only to a **new verified copy**; the damaged source is never overwritten by this layer;
-- corruption, sequence gaps, missing objects, unsafe session ids and ambiguous state are rejected.
+    destructive I/O arrives
+            -> minifilter holds it
+            -> user mode captures first pre-image
+            -> snapshot + journal are durably flushed
+            -> SnapshotCommitted reply
+            -> original I/O may continue
 
-The normal bundle does **not** yet capture pre-images automatically because the production minifilter pre-write
-gate is not enabled in this milestone. Ordinary processes remain AuditOnly. ETW is telemetry/forensics, not the
-future prevention path.
+For the explicit LAB root, a failed/missing/timed-out capture reply denies WRITE / rename / delete-disposition.
+The gate client itself is excluded from gating so its rollback writes do not recursively block.
 
-See [rollback architecture](docs/ROLLBACK_ARCHITECTURE.md) and [product target](docs/PRODUCT_TARGET.md).
+This is not enabled in the normal product bundle. `build_windows.cmd` remains the ordinary AuditOnly build.
+`build_lab.cmd` publishes the engineering gate client, audit client and minifilter source/tools.
+
+## LAB safety boundaries
+
+The gate is intentionally limited while we validate the kernel/user-mode ordering:
+
+- one explicit disposable directory only;
+- requires `.ransomguard-gate-lab-root` marker;
+- refuses an entire drive, Windows, Program Files, ProgramData and reparse roots;
+- rollback store must be outside the gated root;
+- unresolved/out-of-root I/O fails open rather than risking an OS-wide outage;
+- in-scope capture failures fail closed;
+- demand-start filter, automatic volume attachment suppressed;
+- unassigned altitude `370099.4242` remains LAB-only and must never ship;
+- no kernel file-writing, deletion, process-kill or process-suspend APIs were added.
+
+Do **not** load this blocking prototype on a primary workstation or point it at real user data.
 
 ## Build
 
-Extract into a NEW source folder, then run:
+Normal product build:
 
     .\build_windows.cmd
 
-Use only a release that ends with `BUILD PASSED`. Open:
+Engineering LAB build:
+
+    .\build_lab.cmd
+
+Use only output from a run that ends with `BUILD PASSED`.
+
+Normal UI:
 
     release\RansomGuard-v0.7.1.0-<timestamp>\UI\RansomGuard.Ui.exe
 
-The build now executes the rollback-store test project in addition to the existing policy, recovery, trust,
-localization and WPF smoke checks.
+LAB gate instructions:
 
-## Safety
+    docs\MINIFILTER_LAB.md
+    docs\ROLLBACK_ARCHITECTURE.md
 
-Do not load the experimental minifilter on a primary machine. Public driver signing, assigned altitude,
-production pre-write pending/timeout behavior, copy-on-write integration and verified automatic replacement of
-user files remain unfinished.
+## Current boundary
 
-The authoring environment used for this source package does not provide the Windows/.NET toolchain, therefore
-C# compilation, WPF, SCM and minifilter integration were not executed here. Run the included Windows build and
-use only a package that reports `BUILD PASSED`.
+This milestone proves the **ordering primitive**, not production protection. Remaining work includes create
+semantics, rename destination tracking, range/block copy-on-write, crash reconciliation, memory-mapped writes,
+production containment policy, process-state capture, adaptive crypto reconstruction, verified recovery
+orchestration, signing and production driver distribution.
+
+The authoring environment does not provide the Windows/.NET/WDK toolchain. C#, WPF, driver compilation and
+live minifilter integration were therefore not executed here. Run the included Windows build and do not use a
+partially built release.

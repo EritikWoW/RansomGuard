@@ -1,0 +1,33 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+ <SolidColorBrush x:Key="PageBrush" Color="#F4F7FC"/>
+ <SolidColorBrush x:Key="SidebarBrush" Color="#F1F6FD"/>
+ <SolidColorBrush x:Key="SurfaceBrush" Color="#FFFFFF"/>
+ <SolidColorBrush x:Key="RaisedBrush" Color="#EDF2F9"/>
+ <SolidColorBrush x:Key="HoverBrush" Color="#E7F0FD"/>
+ <SolidColorBrush x:Key="SelectedBrush" Color="#DAE9FF"/>
+ <SolidColorBrush x:Key="BorderBrush" Color="#D1DEED"/>
+ <SolidColorBrush x:Key="InputBorderBrush" Color="#71869D"/>
+ <SolidColorBrush x:Key="TextBrush" Color="#142443"/>
+ <SolidColorBrush x:Key="SecondaryBrush" Color="#415A79"/>
+ <SolidColorBrush x:Key="MutedBrush" Color="#4F6784"/>
+ <SolidColorBrush x:Key="AccentBrush" Color="#0065C8"/>
+ <SolidColorBrush x:Key="AccentFillBrush" Color="#0768D7"/>
+ <SolidColorBrush x:Key="OnAccentBrush" Color="#FFFFFF"/>
+ <SolidColorBrush x:Key="AccentSoftBrush" Color="#E4EEFF"/>
+ <SolidColorBrush x:Key="InfoBrush" Color="#0D5EB3"/>
+ <SolidColorBrush x:Key="InfoSoftBrush" Color="#EBF3FF"/>
+ <SolidColorBrush x:Key="InfoBorderBrush" Color="#ADC7F0"/>
+ <SolidColorBrush x:Key="WarningBrush" Color="#805000"/>
+ <SolidColorBrush x:Key="WarningSoftBrush" Color="#FFF2D9"/>
+ <SolidColorBrush x:Key="DangerBrush" Color="#AB273E"/>
+ <SolidColorBrush x:Key="DangerSoftBrush" Color="#FCEBED"/>
+ <SolidColorBrush x:Key="SuccessBrush" Color="#096239"/>
+ <SolidColorBrush x:Key="SuccessSoftBrush" Color="#DFF5E9"/>
+ <SolidColorBrush x:Key="PurpleBrush" Color="#633AA8"/>
+ <SolidColorBrush x:Key="PurpleSoftBrush" Color="#EFE7FB"/>
+ <SolidColorBrush x:Key="DisabledBrush" Color="#566A82"/>
+ <SolidColorBrush x:Key="DisabledSurfaceBrush" Color="#E5EBF2"/>
+ <SolidColorBrush x:Key="ChromeBrush" Color="#F8FBFF"/>
+ <SolidColorBrush x:Key="FocusBrush" Color="#005CAD"/>
+ <LinearGradientBrush x:Key="CardBrush" StartPoint="0,0" EndPoint="1,1"><GradientStop Offset="0" Color="#FFFFFF"/><GradientStop Offset="1" Color="#FEFFFF"/></LinearGradientBrush>
+</ResourceDictionary>

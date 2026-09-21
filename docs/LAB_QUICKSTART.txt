@@ -1,0 +1,10 @@
+RansomGuard 0.6.3.0 - ENGINEERING LAB
+Read RECOVERY_AND_LIVE.md in this folder.
+For live UI: run_audit.cmd + launch_ui.cmd from this exact release.
+For independent key recovery: stop audit, then test_lab_full_dump.cmd and type LAB.
+Do not launch the simulator separately: ordinary applications remain AUDIT ONLY.
+Only the explicitly owned lab child may be suspended/dumped, then resumed.
+After child completion the immutable dump is analyzed without recovery-key.bin.
+Inspect crypto-recovery.json; complete proof requires 10 recovered copies and
+10 original SHA-256 matches. Dump and key must remain local/confidential.
+Do not install/load the kernel driver on your main machine.

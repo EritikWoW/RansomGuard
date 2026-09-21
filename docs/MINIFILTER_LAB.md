@@ -1,0 +1,73 @@
+# RansomGuard minifilter engineering lab — v0.7.1.0
+
+The minifilter has two mutually exclusive user-mode connection modes:
+
+- **Audit** — metadata-only, non-blocking WRITE / rename / delete-disposition observation.
+- **LAB Gate** — one explicit disposable directory is synchronously gated so a destructive mutation is
+  allowed only after the rollback client confirms a durable first pre-image commit.
+
+The LAB Gate exists to validate preservation ordering. It is **not** a production driver configuration.
+Do not load it on a primary workstation and do not point it at real documents.
+
+## Safety boundaries
+
+- Demand-start driver only.
+- Automatic volume attachment remains suppressed in the INF.
+- Local NTFS/ReFS only.
+- One communication client at a time.
+- Gate root is negotiated at connection time and is bounded to one NT path.
+- Gate client requires an explicit marker in the directory.
+- Entire-drive, Windows, Program Files, ProgramData and reparse roots are refused by the gate client.
+- The gate client PID is excluded from kernel gating.
+- I/O outside the exact gate root remains fail-open.
+- Unresolved paths remain fail-open rather than risking OS-wide denial.
+- In-scope LAB I/O is denied if the user-mode pre-image commit fails or the reply times out.
+- The driver still contains no kernel file-writing, file-deletion, process-kill or process-suspend code.
+- Altitude `370099.4242` is an unassigned lab placeholder and must never ship.
+
+## Build
+
+Build the engineering package:
+
+```powershell
+.\build_lab.cmd
+```
+
+Then, from the generated `RansomGuard-Lab-v0.7.1.0-*` directory, build/install the minifilter only in a
+Windows test VM using the existing lab scripts.
+
+## Audit mode
+
+```powershell
+.\run_minifilter_audit.cmd
+```
+
+Audit mode remains non-blocking.
+
+## Gate mode
+
+The convenience command defaults to a disposable directory named `RansomGuard-Gate-Lab` on the Desktop:
+
+```powershell
+.\run_minifilter_gate_lab.cmd
+```
+
+Or choose another disposable non-system directory:
+
+```powershell
+.\minifilter-tools\run_minifilter_gate_lab.ps1 -Root 'C:\RG-Gate-Test'
+```
+
+The first run creates only the gate marker before connecting. Put **copies** of test files into that folder
+before starting the gate. Once connected, WRITE / rename / delete-disposition requests in that folder wait
+for rollback capture. New-file transaction semantics are not complete in this milestone, so do not use the
+lab gate as a general-purpose protected folder yet.
+
+Stop the client with Ctrl+C before unloading the filter.
+
+## What a successful gate test proves
+
+It proves that, for the tested path and operation, the minifilter can hold the destructive I/O while user
+mode durably captures the pre-image and can deny the I/O when that commit is unavailable. It does **not**
+prove production compatibility, crash safety, memory-mapped-write coverage, large-file performance,
+containment efficacy, or universal rollback.

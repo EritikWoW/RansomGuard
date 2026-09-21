@@ -1,0 +1,22 @@
+#pragma once
+#include <fltKernel.h>
+#include "..\\..\\native\\shared\\rg_minifilter_protocol.h"
+
+#define RG_POOL_TAG 'GmGR'
+#define RG_MAX_PENDING 1024L
+#define RG_SEND_TIMEOUT_MS 20LL
+#define RG_GATE_TIMEOUT_MS 30000LL
+
+typedef struct _RG_WORK_ITEM {
+    WORK_QUEUE_ITEM WorkItem;
+    RG_EVENT Event;
+} RG_WORK_ITEM, *PRG_WORK_ITEM;
+
+DRIVER_INITIALIZE DriverEntry;
+NTSTATUS RgUnload(_In_ FLT_FILTER_UNLOAD_FLAGS Flags);
+NTSTATUS RgInstanceSetup(_In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ FLT_INSTANCE_SETUP_FLAGS Flags,
+                         _In_ DEVICE_TYPE VolumeDeviceType, _In_ FLT_FILESYSTEM_TYPE VolumeFilesystemType);
+FLT_PREOP_CALLBACK_STATUS RgPreWrite(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects,
+                                     _Flt_CompletionContext_Outptr_ PVOID *CompletionContext);
+FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects,
+                                              _Flt_CompletionContext_Outptr_ PVOID *CompletionContext);

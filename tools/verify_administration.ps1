@@ -1,0 +1,38 @@
+﻿[CmdletBinding()]
+param()
+$ErrorActionPreference='Stop'
+$root=Split-Path -Parent $PSScriptRoot
+$launch=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Ui\Administration\AdminLauncher.cs') -Raw
+$window=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Ui\Administration\AdminWindow.cs') -Raw
+$rules=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\RuleAdministration.cs') -Raw
+$service=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\ServiceAdministration.cs') -Raw
+$core=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Core\AdminContract.cs') -Raw
+foreach($required in @('Environment.ProcessPath','Verb = "runas"','AdminContract.ValidateIntent','child.WaitForExitAsync','1223')) {
+ if(-not$launch.Contains($required)){throw "Missing elevation boundary: $required"}
+}
+foreach($required in @('DemandAdministrator','AdminContract.CheckConfirmation','Inspect(rule.ImagePath, true)','prepared.Digest','ScopedRuleVerifier.CheckScopes','Commit(')) {
+ if(-not$rules.Contains($required)){throw "Missing administrative trust validation: $required"}
+}
+foreach($required in @('DemandAdministrator','AdminContract.CheckConfirmation','AdminContract.ServiceName','VerifyRegistration','FileMode.CreateNew','FileShare.Read','MatchesInstalledPeer','expectedServiceHash','WaitFor(service, 1)','TimeSpan.FromSeconds(30)')) {
+ if(-not$service.Contains($required)){throw "Missing own-service control invariant: $required"}
+}
+$wizard=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Ui\Administration\SetupWizardPane.cs') -Raw
+$text=($launch,$window,$wizard,$rules,$service) -join "`n"
+foreach($pattern in @('Process\.Kill\s*\(','TerminateProcess\s*\(','NtSuspendProcess','NtResumeProcess','WriteProcessMemory','CreateRemoteThread','Set-MpPreference','bcdedit','fltmc(?:\.exe)?\s+(load|attach|unload)','ProcessStartInfo\s*\(\s*"(?:cmd|powershell)')) {
+ if($text -match $pattern){throw "Forbidden admin action: $pattern"}
+}
+if($core -notmatch 'ServiceName = "RansomGuardV03"'){throw 'Management must be restricted to the own fixed service.'}
+if($window -notmatch 'if \(!preview\) RuleAdministration.DemandAdministrator\(\)' -or $window -notmatch 'if \(_preview\)') {throw 'Admin rendering preview must not query or mutate Windows.'}
+Write-Host 'UI administration source gate PASSED: same-EXE UAC, fixed verbs/own service, reviewed fresh SHA256, no mutating pipe protocol.'
+Write-Host 'This is a source check. Actual UAC, SCM install/start/stop and ACL integration still require Windows tests.'
+
+$project=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Ui\RansomGuard.Ui.csproj') -Raw
+$identity=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Ui\Administration\PackageIdentity.cs') -Raw
+if(-not $project.Contains('RansomGuardServiceHash') -or -not $identity.Contains('RansomGuard.ServiceSha256')){throw 'Missing embedded UI/service hash pairing.'}
+Write-Host 'Published UI is cryptographically paired to its service bytes; registration/path alone does not authorize installation.'
+
+if($window -match 'new AdminWindow\("state-repair"' -or $window -match 'TextBox _confirm') {throw 'Do not nest administrative recovery windows or require command tokens in the GUI.'}
+foreach($required in @('SetupReviewPolicy.CanInstall','SetupReviewPolicy.CanReset','SetupReviewPolicy.CanControl','if (_preview) return','StateStoreAdministration.Recover','ServiceAdministration.ReviewInstallInput','IsExpanded = false','_acknowledged = false')) {
+ if(-not $wizard.Contains($required)) {throw "Missing guided setup invariant: $required"}
+}
+Write-Host 'Guided setup source gate: single window, explicit action clicks, separate reset consent, preview cannot mutate, details collapsed.'

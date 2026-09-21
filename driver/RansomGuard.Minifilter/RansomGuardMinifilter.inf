@@ -1,0 +1,59 @@
+; RansomGuard read-only minifilter LAB prototype.
+; IMPORTANT: 370099.4242 is an UNASSIGNED LAB PLACEHOLDER altitude.
+; Do not distribute/deploy this driver outside an isolated test VM.
+; Request a Microsoft-assigned altitude before any real deployment.
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = "ActivityMonitor"
+ClassGuid   = {b86dff51-a31e-4bac-b3cf-e8cfe75c9fc2}
+Provider    = %ProviderString%
+DriverVer   = 09/20/2026,0.7.1.0
+CatalogFile = RansomGuardMinifilter.cat
+PnpLockdown = 1
+
+[SourceDisksFiles]
+RansomGuardMinifilter.sys = 1,,
+
+[SourceDisksNames]
+1 = %DiskId1%,,,
+
+[DestinationDirs]
+RansomGuardMinifilter.Files = 13
+
+[DefaultInstall.NTamd64]
+OptionDesc = %ServiceDescription%
+CopyFiles  = RansomGuardMinifilter.Files
+
+[DefaultInstall.NTamd64.Services]
+AddService = %ServiceName%,,RansomGuardMinifilter.Service
+
+[RansomGuardMinifilter.Service]
+DisplayName    = %ServiceName%
+Description    = %ServiceDescription%
+ServiceBinary  = %13%\RansomGuardMinifilter.sys
+Dependencies   = "FltMgr"
+ServiceType    = 2
+StartType      = 3
+ErrorControl   = 1
+LoadOrderGroup = "FSFilter Activity Monitor"
+AddReg         = RansomGuardMinifilter.AddRegistry
+
+[RansomGuardMinifilter.AddRegistry]
+HKR,"Parameters","SupportedFeatures",0x00010001,0x3
+HKR,"Parameters\Instances","DefaultInstance",0x00000000,%DefaultInstance%
+HKR,"Parameters\Instances\"%Instance1.Name%,"Altitude",0x00000000,%Instance1.Altitude%
+HKR,"Parameters\Instances\"%Instance1.Name%,"Flags",0x00010001,%Instance1.Flags%
+
+[RansomGuardMinifilter.Files]
+RansomGuardMinifilter.sys
+
+[Strings]
+ProviderString      = "RansomGuard Lab"
+ServiceDescription = "RansomGuard read-only file activity minifilter LAB prototype"
+ServiceName        = "RansomGuardMinifilter"
+DiskId1            = "RansomGuard Minifilter LAB Installation Disk"
+DefaultInstance    = "RansomGuard ReadOnly LAB Instance"
+Instance1.Name     = "RansomGuard ReadOnly LAB Instance"
+Instance1.Altitude = "370099.4242"
+Instance1.Flags    = 0x1

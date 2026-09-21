@@ -1,0 +1,41 @@
+{
+  "architecture": 9,
+  "memoryRanges": 363,
+  "uniqueArrayCandidates": 10,
+  "uniqueEnvelopes": 4,
+  "authenticatedDecryptionChecks": [
+    {
+      "envelopeNumber": 0,
+      "plaintextLength": 15488,
+      "gcmTagVerified": true,
+      "entireSyntheticContentReconstructedAndMatched": true,
+      "plaintextSha256MatchesReconstructedFixture": true
+    },
+    {
+      "envelopeNumber": 1,
+      "plaintextLength": 15488,
+      "gcmTagVerified": true,
+      "entireSyntheticContentReconstructedAndMatched": true,
+      "plaintextSha256MatchesReconstructedFixture": true
+    },
+    {
+      "envelopeNumber": 2,
+      "plaintextLength": 15488,
+      "gcmTagVerified": true,
+      "entireSyntheticContentReconstructedAndMatched": true,
+      "plaintextSha256MatchesReconstructedFixture": true
+    },
+    {
+      "envelopeNumber": 3,
+      "plaintextLength": 15488,
+      "gcmTagVerified": true,
+      "entireSyntheticContentReconstructedAndMatched": true,
+      "plaintextSha256MatchesReconstructedFixture": true
+    }
+  ],
+  "referenceKeyFileUsed": false,
+  "implementation": "independent Python reference experiment, not the new C# executable",
+  "keyMaterialOrOffsetsExported": false,
+  "productionAlgorithmClaim": false,
+  "discoveryHeuristic": "CoreCLR AMD64 byte[] layout and method table flags; candidate validated using AES-GCM tags"
+}

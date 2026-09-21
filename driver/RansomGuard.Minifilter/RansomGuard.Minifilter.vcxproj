@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{63A90E63-4C83-4CD7-A749-9B2E6C4B8E72}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>RansomGuardMinifilter</RootNamespace>
+    <WindowsTargetPlatformVersion Condition="'$(WindowsTargetPlatformVersion)'==''">10.0</WindowsTargetPlatformVersion>
+    <ProjectName>RansomGuard.Minifilter</ProjectName>
+    <!-- Build produces an intentionally UNSIGNED artifact. Signing/catalog packaging is a separate controlled step. -->
+    <SignMode>Off</SignMode>
+    <EnableTestSign>false</EnableTestSign>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <!-- Force x64 native build tools for the x64 driver and WDK validation utilities. -->
+  <PropertyGroup>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Driver</ConfigurationType>
+    <DriverType>WDM</DriverType>
+    <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <TargetVersion>Windows10</TargetVersion>
+    <DriverTargetPlatform>Universal</DriverTargetPlatform>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Driver</ConfigurationType>
+    <DriverType>WDM</DriverType>
+    <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <TargetVersion>Windows10</TargetVersion>
+    <DriverTargetPlatform>Universal</DriverTargetPlatform>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <OutDir>$(ProjectDir)bin\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(ProjectDir)obj\$(Platform)\$(Configuration)\</IntDir>
+    <TargetName>RansomGuardMinifilter</TargetName>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel><TreatWarningAsError>true</TreatWarningAsError>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\..\native\shared;$(RGKitsRoot)\Include\$(RGWdkVersion)\km;$(RGKitsRoot)\Include\$(RGWdkVersion)\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>_AMD64_;AMD64;DBG=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <SpectreMitigation>Spectre</SpectreMitigation>
+    </ClCompile>
+    <Link><AdditionalLibraryDirectories>$(RGKitsRoot)\Lib\$(RGWdkVersion)\km\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories><AdditionalDependencies>FltMgr.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <DriverSign><FileDigestAlgorithm>sha256</FileDigestAlgorithm></DriverSign>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel><TreatWarningAsError>true</TreatWarningAsError>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\..\native\shared;$(RGKitsRoot)\Include\$(RGWdkVersion)\km;$(RGKitsRoot)\Include\$(RGWdkVersion)\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>_AMD64_;AMD64;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <SpectreMitigation>Spectre</SpectreMitigation>
+      <WholeProgramOptimization>true</WholeProgramOptimization>
+    </ClCompile>
+    <Link><AdditionalLibraryDirectories>$(RGKitsRoot)\Lib\$(RGWdkVersion)\km\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories><AdditionalDependencies>FltMgr.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <DriverSign><FileDigestAlgorithm>sha256</FileDigestAlgorithm></DriverSign>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="RansomGuardMinifilter.c" />
+    <ClInclude Include="RansomGuardMinifilter.h" />
+    <ClInclude Include="..\..\native\shared\rg_minifilter_protocol.h" />
+    <!-- INF is packaged and validated explicitly by build_minifilter.ps1. Keeping it out of the WDK Inf item avoids the installed-WDK x86 InfVerif task loader path; validation is not skipped. -->
+    <None Include="RansomGuardMinifilter.inf" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

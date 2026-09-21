@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+  <PropertyGroup><TargetFramework>net10.0-windows</TargetFramework><OutputType>Exe</OutputType>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <PublishSingleFile>true</PublishSingleFile><IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+  <ItemGroup><ProjectReference Include="../RansomGuard.Core/RansomGuard.Core.csproj" />
+    <ProjectReference Include="../RansomGuard.Recovery/RansomGuard.Recovery.csproj" />
+    <ProjectReference Include="../RansomGuard.Rollback/RansomGuard.Rollback.csproj" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="3.2.5" />
+  </ItemGroup>
+  <ItemGroup><None Update="appsettings.json"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory><CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory></None></ItemGroup>
+</Project>

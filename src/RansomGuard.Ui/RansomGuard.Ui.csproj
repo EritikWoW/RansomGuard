@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>true</UseWPF>
+    <ApplicationIcon>Assets/ransomguard.ico</ApplicationIcon>
+    <RootNamespace>RansomGuard.Ui</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Assets/Icons/*.svg">
+      <LogicalName>RansomGuard.Ui.Assets.Icons.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Localization/*.json"><LogicalName>RansomGuard.Ui.Localization.%(Filename)%(Extension)</LogicalName><WithCulture>false</WithCulture></EmbeddedResource>
+    <Resource Include="Assets/ransomguard.ico" />
+    <None Update="Assets/Brand/brand-shield.svg" />
+    <None Update="Assets/Activity/*.svg" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
+    <None Update="Assets/Activity/manifest.json" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
+  </ItemGroup>
+  <ItemGroup>
+    <AssemblyMetadata Include="RansomGuard.ServiceSha256" Value="$(RansomGuardServiceHash)" Condition="'$(RansomGuardServiceHash)' != ''" />
+    <ProjectReference Include="../RansomGuard.Core/RansomGuard.Core.csproj" />
+    <ProjectReference Include="../RansomGuard.Management/RansomGuard.Management.csproj" />
+  </ItemGroup>
+</Project>

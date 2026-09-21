@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "sizing": "DrawingImage painted bounds, uniform fit in 28x28 DIP; no bitmap assets.",
+  "drawingFile": "Themes/ActivityIcons.xaml",
+  "drawingSha256": "bf5cb9626aa4b0102525db3e03b9337248c4a147d9d626ca853f335ba1ff5703",
+  "icons": [
+    {
+      "name": "document",
+      "source": "Assets/Activity/document.svg",
+      "sha256": "3c8998ccfaae206d7135d9fe83a65d85292c49bdd5851ff25b29814e7f799d88",
+      "resourceKey": "ActivityDocumentImage",
+      "elementName": "ActivityPathsIcon",
+      "parts": 4,
+      "boxDip": 28,
+      "sourceViewBox": "0 0 512 512"
+    },
+    {
+      "name": "shield-x",
+      "source": "Assets/Activity/shield-x.svg",
+      "sha256": "c3dd4924c3da680164ee473a0d779e200380f323d396fb5dc35b3073871f81ca",
+      "resourceKey": "ActivityShieldImage",
+      "elementName": "ActivityTriggersIcon",
+      "parts": 3,
+      "boxDip": 28,
+      "sourceViewBox": "0 0 24 24"
+    },
+    {
+      "name": "warning-triangle",
+      "source": "Assets/Activity/warning-triangle.svg",
+      "sha256": "73d1c60e3e4a0b42cb14e9e6374ac9feb223e512ef5b82f8be502ea54eb53b2d",
+      "resourceKey": "ActivityWarningImage",
+      "elementName": "ActivityAuditIcon",
+      "parts": 3,
+      "boxDip": 28,
+      "sourceViewBox": "0 0 24 24"
+    },
+    {
+      "name": "success-check",
+      "source": "Assets/Activity/success-check.svg",
+      "sha256": "1704655bef4c99406d9a383ea15ee1d91acfcb93ba05ca639b081e2eddac901d",
+      "resourceKey": "ActivitySuccessImage",
+      "elementName": "ActivityLabIcon",
+      "parts": 2,
+      "boxDip": 28,
+      "sourceViewBox": "0 0 24 24"
+    }
+  ]
+}

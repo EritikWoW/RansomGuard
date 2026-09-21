@@ -1,0 +1,85 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <!-- Compiled from the four local SVG sources. Geometry and colors are unchanged. DrawingImage uses painted bounds, not SVG canvas padding. -->
+  <DrawingImage x:Key="ActivityDocumentImage">
+    <DrawingImage.Drawing>
+      <DrawingGroup>
+        <GeometryDrawing Brush="#D6E6F9" Geometry="F1 M84 44 C84 21.9086 101.909 4 124 4 H344 L456 128 V468 C456 490.091 438.091 508 416 508 H124 C101.909 508 84 490.091 84 468 V44Z"/>
+        <GeometryDrawing Brush="#00E5BC" Geometry="F1 M344 4 V100 C344 126.51 365.49 148 392 148 H456 L344 4Z"/>
+        <GeometryDrawing Geometry="F1 M124 16 H344 V100 C344 126.51 365.49 148 392 148 H456 V468 C456 483.464 443.464 496 428 496 H124 C107.984 496 95 483.016 95 467 V44 C95 28.536 107.536 16 123 16 H124">
+          <GeometryDrawing.Pen>
+            <Pen Brush="#1D70B8" Thickness="24" StartLineCap="Round" EndLineCap="Round" LineJoin="Round"/>
+          </GeometryDrawing.Pen>
+        </GeometryDrawing>
+        <GeometryDrawing Geometry="F1 M344 16L456 140">
+          <GeometryDrawing.Pen>
+            <Pen Brush="#1D70B8" Thickness="24" StartLineCap="Round" EndLineCap="Round" LineJoin="Round"/>
+          </GeometryDrawing.Pen>
+        </GeometryDrawing>
+      </DrawingGroup>
+    </DrawingImage.Drawing>
+  </DrawingImage>
+  <DrawingImage x:Key="ActivityShieldImage">
+    <DrawingImage.Drawing>
+      <DrawingGroup>
+        <GeometryDrawing Brush="#EF4444" Geometry="F1 M14.57,16.46,12,18,9.43,16.46A5,5,0,0,1,7,12.17V7l5-1,5,1v5.17A5,5,0,0,1,14.57,16.46Z">
+          <GeometryDrawing.Pen>
+            <Pen Brush="#EF4444" Thickness="1" StartLineCap="Round" EndLineCap="Round" LineJoin="Round"/>
+          </GeometryDrawing.Pen>
+        </GeometryDrawing>
+        <GeometryDrawing>
+          <GeometryDrawing.Geometry>
+            <LineGeometry StartPoint="10.5,10" EndPoint="13.5,13"/>
+          </GeometryDrawing.Geometry>
+          <GeometryDrawing.Pen>
+            <Pen Brush="#FFFFFF" Thickness="1" StartLineCap="Round" EndLineCap="Round" LineJoin="Round"/>
+          </GeometryDrawing.Pen>
+        </GeometryDrawing>
+        <GeometryDrawing>
+          <GeometryDrawing.Geometry>
+            <LineGeometry StartPoint="13.5,10" EndPoint="10.5,13"/>
+          </GeometryDrawing.Geometry>
+          <GeometryDrawing.Pen>
+            <Pen Brush="#FFFFFF" Thickness="1" StartLineCap="Round" EndLineCap="Round" LineJoin="Round"/>
+          </GeometryDrawing.Pen>
+        </GeometryDrawing>
+      </DrawingGroup>
+    </DrawingImage.Drawing>
+  </DrawingImage>
+  <DrawingImage x:Key="ActivityWarningImage">
+    <DrawingImage.Drawing>
+      <DrawingGroup>
+        <GeometryDrawing Geometry="F1 M12 3.25L21 19.25C21.44 20.03 20.88 21 19.98 21H4.02C3.12 21 2.56 20.03 3 19.25L12 3.25Z">
+          <GeometryDrawing.Pen>
+            <Pen Brush="#F5A623" Thickness="2.4" StartLineCap="Round" EndLineCap="Round" LineJoin="Round"/>
+          </GeometryDrawing.Pen>
+        </GeometryDrawing>
+        <GeometryDrawing Geometry="F1 M12 9.1V14.35">
+          <GeometryDrawing.Pen>
+            <Pen Brush="#F5A623" Thickness="2.4" StartLineCap="Round" EndLineCap="Round" LineJoin="Miter"/>
+          </GeometryDrawing.Pen>
+        </GeometryDrawing>
+        <GeometryDrawing Brush="#F5A623">
+          <GeometryDrawing.Geometry>
+            <EllipseGeometry Center="12,18.1" RadiusX="1.2" RadiusY="1.2"/>
+          </GeometryDrawing.Geometry>
+        </GeometryDrawing>
+      </DrawingGroup>
+    </DrawingImage.Drawing>
+  </DrawingImage>
+  <DrawingImage x:Key="ActivitySuccessImage">
+    <DrawingImage.Drawing>
+      <DrawingGroup>
+        <GeometryDrawing Brush="#79E58E">
+          <GeometryDrawing.Geometry>
+            <EllipseGeometry Center="12,12" RadiusX="10" RadiusY="10"/>
+          </GeometryDrawing.Geometry>
+        </GeometryDrawing>
+        <GeometryDrawing Geometry="F1 M7.75 12.2L10.55 15L16.45 9.1">
+          <GeometryDrawing.Pen>
+            <Pen Brush="#145C32" Thickness="2.2" StartLineCap="Round" EndLineCap="Round" LineJoin="Round"/>
+          </GeometryDrawing.Pen>
+        </GeometryDrawing>
+      </DrawingGroup>
+    </DrawingImage.Drawing>
+  </DrawingImage>
+</ResourceDictionary>

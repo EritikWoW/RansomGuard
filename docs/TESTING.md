@@ -1,0 +1,45 @@
+# Testing 0.6.3.0
+
+Build executes existing policy tests plus RansomGuard.Recovery.Tests (offline only).
+New cases cover AES schedule vectors, BE/LE word order, corrupted schedules, a
+synthetic minidump with decoy keys, poison reference-key file, authenticated recovery,
+unchanged evidence, original SHA-256 verification, existing output rejection, bad
+GCM tag, missing key, unsupported format, partial recovery, malformed dump ranges,
+cancellation, fragmented/coalesced framing, oversized frame rejection, subscriber
+limits and wake-up coalescing. These tests do not suspend any live process.
+
+WPF test uses synthetic data only, both themes and existing icon/layout checks.
+It is not an IPC integration test. Test the live pipe separately using two consoles,
+close/reopen UI, stop/restart audit, and verify unknown/offline statuses and new boot ID.
+Try up to four local UIs; a fifth must retry without impacting file processing.
+No five-second UI query timer should exist. Incidents/state should publish on change;
+metrics publish every 500 ms; log heartbeat remains 30 seconds. No hard-real-time
+latency guarantee is made. ETW latency remains separately measured.
+
+Before full lab: stop audit (do not run both); start test_lab_full_dump.cmd from
+Lab release and type LAB. Run UI from that SAME release. Read response.json and
+crypto-recovery.json. Require GCM authentication and all ten original hash matches,
+not just a key-presence test. Unsupported/no-capture cases must fail honestly.
+
+Reference experiment from prior submitted dump: docs/INDEPENDENT_PROOF.json.
+New C# binary/WPF/Windows integration not run in the build-authoring environment.
+Do not post keys, full dumps or recovered personal content to support.
+
+## 0.6.3.0 additional coverage
+
+The build runs RansomGuard.Localization.Tests against the actual two embedded JSON
+catalogs: key parity, nonempty values, format parsing/slots, English script, known
+translations, and unchanged privileged confirmation tokens under both cultures.
+These tests do not touch a service or the filesystem outside their bundled resources.
+
+UiSmokeTest renders all pages and administration previews for uk-UA/en-US x Dark/Light,
+including state-repair, failed ETW, disconnected UI and large text. It checks that the
+language selector stays in Settings and changing language does not reset the semantic
+filter codes. The test has a bounded 300-second deadline; only the child test UI is
+terminated on timeout. Production UI/service processes are not terminated by this test.
+
+These native scenarios are NOT performed by source checks: UAC under another account,
+ACL read denial, wrong owner, reparse point, existing extra-user FullControl entry,
+no-op for correct ACL, content retention after recovery, existing handles, concurrent
+start/save attempts, rename failure, fresh-root failure, audit failure, service restart.
+Use an isolated test environment and snapshots for fault injection.

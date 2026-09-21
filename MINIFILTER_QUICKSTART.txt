@@ -1,0 +1,20 @@
+RansomGuard v0.7.1.0 MINIFILTER LAB
+
+LAB ONLY. Do not load the prototype on a primary workstation.
+The normal RansomGuard build does not install or enable this driver.
+
+1. Build engineering package:
+   build_lab.cmd
+
+2. On a disposable Windows VM, build/install the minifilter with the existing lab scripts.
+
+3. Non-blocking metadata audit:
+   run_minifilter_audit.cmd
+
+4. Explicit single-directory pre-write gate:
+   run_minifilter_gate_lab.cmd
+
+Gate mode allows an in-scope WRITE / rename / delete only after a durable rollback pre-image commit.
+Outside the negotiated lab root the driver remains fail-open.
+
+See docs\MINIFILTER_LAB.md and docs\ROLLBACK_ARCHITECTURE.md.

@@ -1,0 +1,8 @@
+**/bin/
+**/obj/
+release/
+build-logs/
+*.dmp
+*.partial
+RansomGuard-TestLab/
+*.user

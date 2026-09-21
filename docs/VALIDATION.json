@@ -1,0 +1,32 @@
+{
+  "version": "0.7.1.0",
+  "scope": "source-authoring validation for engineering pre-write gate milestone",
+  "performed": [
+    "parsed Directory.Build.props and Windows manifests",
+    "parsed all csproj and vcxproj XML files",
+    "verified protocol v2 source contract and bounded gate-root structures",
+    "verified minifilter source contains explicit single-root gate, gate-client PID bypass, bounded reply timeout, and deny-on-failed-in-scope-capture path",
+    "verified minifilter source does not contain kernel file-writing/deletion or process kill/suspend APIs",
+    "verified gate client requires explicit lab marker, rejects broad/system roots, keeps rollback store outside protected root, and reaches SnapshotCommitted only after CapturePreimageAsync source path",
+    "verified normal build keeps kernelWriteGateActive=false and publishes GateClient only in IncludeLab engineering package",
+    "verified key C# source delimiter balance",
+    "verified required rollback/minifilter/product documentation exists"
+  ],
+  "static_checks_passed": 44,
+  "not_performed": [
+    ".NET/C# compilation",
+    "WPF smoke rendering",
+    "PowerShell source gates",
+    "WDK/MSBuild minifilter compilation",
+    "Driver Verifier",
+    "driver installation/loading/attachment",
+    "live FilterGetMessage/FilterReplyMessage round trip",
+    "NTFS/ReFS pre-write blocking test",
+    "power-loss/crash recovery",
+    "memory-mapped or cache-manager write coverage",
+    "performance/latency benchmarking",
+    "production signing or Microsoft altitude allocation"
+  ],
+  "safety_boundary": "The blocking minifilter gate is engineering-LAB-only. The normal bundle does not install or activate it. Do not load the prototype on a primary workstation or point it at real user data.",
+  "next_required_checkpoint": "Run build_lab.cmd on the Windows/WDK build machine and stop at the first compile/source-gate failure. If BUILD PASSED, validate only in a disposable Windows VM and disposable gate directory before further kernel milestones."
+}

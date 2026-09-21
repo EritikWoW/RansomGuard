@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0-windows</TargetFramework></PropertyGroup>
+  <ItemGroup><ProjectReference Include="../RansomGuard.Core/RansomGuard.Core.csproj" /></ItemGroup>
+  <ItemGroup>
+    <!-- Share the SAME validation and store implementation, not a weaker UI copy. -->
+    <Compile Include="../RansomGuard.Service/SecureStore.cs" Link="Shared/SecureStore.cs" />
+    <Compile Include="../RansomGuard.Service/ScopedRuleStore.cs" Link="Shared/ScopedRuleStore.cs" />
+    <Compile Include="../RansomGuard.Service/ScopedRuleVerifier.cs" Link="Shared/ScopedRuleVerifier.cs" />
+    <Compile Include="../RansomGuard.Service/ImageInspector.cs" Link="Shared/ImageInspector.cs" />
+    <Compile Include="../RansomGuard.Service/Authenticode.cs" Link="Shared/Authenticode.cs" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,10 @@
+RansomGuard 0.6.3.0 - experimental audit build
+
+Open UI\RansomGuard.Ui.exe normally.
+Settings -> Windows service -> Install -> approve UAC -> select folders -> INSTALL.
+Then Start -> UAC -> START. Check real ETW state in Overview, not only SCM Running.
+Rules -> Add/Edit/Disable/Remove are graphical reviewed UAC operations.
+Stop previous run_audit consoles first; never kill processes by name.
+The service installer does not install/load a kernel driver. Ordinary applications
+are audit-only; no claim of complete prevention. Read UI_ADMINISTRATION.md.
+The UI remains in this published folder; keep the complete package for hash pairing.

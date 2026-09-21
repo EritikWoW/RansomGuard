@@ -74,8 +74,8 @@ if($src -notmatch 'InterlockedIncrement\(&gGateInFlight\)' -or
    $src -notmatch 'STATUS_DEVICE_BUSY'){
     throw 'Kernel gate must fail closed when the bounded in-flight admission limit is exceeded.'
 }
-$gateStart=$src.IndexOf('static BOOLEAN RgGateEvent(')
-$gateEnd=$src.IndexOf('static VOID RgQueueEvent',$gateStart)
+$gateStart=$src.IndexOf('static BOOLEAN RgGateEvent(const RG_EVENT *Event, PULONG ErrorCode)')
+$gateEnd=$src.IndexOf('static VOID RgQueueEvent(PFLT_CALLBACK_DATA Data',$gateStart)
 if($gateStart -lt 0 -or $gateEnd -lt 0){throw 'RgGateEvent source block missing.'}
 $gateBlock=$src.Substring($gateStart,$gateEnd-$gateStart)
 if($gateBlock -match 'ExAcquireFastMutex\(&gPortMutex\)'){

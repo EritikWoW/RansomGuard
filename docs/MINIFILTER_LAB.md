@@ -92,7 +92,7 @@ prove production compatibility, crash safety, memory-mapped-write coverage, larg
 containment efficacy, or universal rollback.
 
 
-## Bounded gate concurrency (0.7.9.0)
+## Bounded gate concurrency (0.7.8.0)
 
 The LAB gate no longer serializes the full blocking FltSendMessage duration under the global port mutex. Up to 8 kernel gate requests may be in flight. Additional in-scope destructive I/O fails closed rather than creating an unbounded queue.
 

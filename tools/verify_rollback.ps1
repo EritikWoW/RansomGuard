@@ -11,6 +11,7 @@ $renameStore=Join-Path $root 'src\RansomGuard.Rollback\RenameRollbackStore.cs'
 $restartStore=Join-Path $root 'src\RansomGuard.Rollback\RestartReconciliationStore.cs'
 $pagingStore=Join-Path $root 'src\RansomGuard.Rollback\PagingWriteEvidenceStore.cs'
 $sectionStore=Join-Path $root 'src\RansomGuard.Rollback\WritableSectionEvidenceStore.cs'
+$activationStore=Join-Path $root 'src\RansomGuard.Rollback\ActivationPreflightStore.cs'
 if(-not(Test-Path -LiteralPath $rangeStore)){throw 'RangeRollbackStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $createStore)){throw 'CreateRollbackStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $createOperationStore)){throw 'CreateOperationStore.cs missing.'}
@@ -20,6 +21,7 @@ if(-not(Test-Path -LiteralPath $renameStore)){throw 'RenameRollbackStore.cs miss
 if(-not(Test-Path -LiteralPath $restartStore)){throw 'RestartReconciliationStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $pagingStore)){throw 'PagingWriteEvidenceStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $sectionStore)){throw 'WritableSectionEvidenceStore.cs missing.'}
+if(-not(Test-Path -LiteralPath $activationStore)){throw 'ActivationPreflightStore.cs missing.'}
 $rangeText=Get-Content -LiteralPath $rangeStore -Raw
 foreach($required in @(
     'CaptureWritePreimageAsync',
@@ -193,6 +195,20 @@ foreach($required in @(
     if($sectionText -notmatch [regex]::Escape($required)){throw "Writable-section evidence source gate missing invariant: $required"}
 }
 
+$activationText=Get-Content -LiteralPath $activationStore -Raw
+foreach($required in @(
+    'activation-preflight-journal.jsonl',
+    'RecordAsync',
+    'WritableViewPresent',
+    'KernelSequence',
+    'FileOptions.WriteThrough',
+    'Flush(true)',
+    'Activation-preflight journal hash chain mismatch',
+    'Conflicting duplicate activation-preflight kernel sequence'
+)){
+    if($activationText -notmatch [regex]::Escape($required)){throw "Activation preflight source gate missing invariant: $required"}
+}
+
 if(-not(Test-Path -LiteralPath $store)){throw 'RollbackStore.cs missing.'}
 $text=Get-Content -LiteralPath $store -Raw
 foreach($required in @(
@@ -230,6 +246,7 @@ if($repository -notmatch 'new RenameRollbackStore\(renameRoot\)\.VerifyAll\(\)')
 if($repository -notmatch 'new RestartReconciliationStore\(restartRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested restart-state stores.'}
 if($repository -notmatch 'new PagingWriteEvidenceStore\(pagingRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested paging-state stores.'}
 if($repository -notmatch 'new WritableSectionEvidenceStore\(sectionRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested section-state stores.'}
-Write-Host 'Rollback source gate PASSED: full-file/range COW, CREATE/RENAME transactions, identity, restart, paging and writable-section attestation journals, hashes, write-through commits and copy-only restore.'
-Write-Host 'Normal service capture remains disabled; v0.7.12 keeps blocking preservation inside the explicit LAB gate only. Paging/section callbacks remain evidence-only.'
+if($repository -notmatch 'new ActivationPreflightStore\(activationRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested activation-state stores.'}
+Write-Host 'Rollback source gate PASSED: full-file/range COW, CREATE/RENAME transactions, identity, restart, paging, section and activation-preflight journals, hashes, write-through commits and copy-only restore.'
+Write-Host 'Normal service capture remains disabled; v0.7.13 keeps blocking preservation inside the explicit LAB gate only. Paging/section callbacks remain evidence-only.'
 

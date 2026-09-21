@@ -24,7 +24,13 @@ undone by truncating the recovered copy to that length.
 Rename, delete-disposition and explicit truncate/allocation-length operations remain on the conservative
 **full-file pre-image** path for now.
 
-The minifilter protocol is v3 and reports WRITE, RENAME, DELETE and TRUNCATE-class metadata operations.
+The engineering minifilter protocol is now v4 and reports CREATE, WRITE, RENAME, DELETE and TRUNCATE-class metadata operations.
+
+For CREATE, the gate distinguishes Windows create dispositions instead of treating every open as destructive:
+existing `FILE_SUPERSEDE`, `FILE_OVERWRITE` and `FILE_OVERWRITE_IF` require a durable full pre-image;
+create-capable dispositions on a missing path durably record that the path was originally absent; ordinary
+non-destructive opens require no snapshot. Paths marked originally absent do not later manufacture rollback
+pre-images from data created during the same incident.
 
 ## Recovery safety
 
@@ -83,7 +89,7 @@ LAB gate documentation:
 This milestone validates the preservation model and reduces write-path storage amplification.
 It is not yet production ransomware blocking.
 
-Remaining core work includes exact create semantics, rename-destination identity tracking,
-bounded concurrent gate workers, crash reconciliation, per-volume/file identity, memory-mapped write coverage,
+Remaining core work includes post-create identity reconciliation, rename-destination identity tracking,
+bounded concurrent gate workers, crash reconciliation, durable per-volume/file identity, memory-mapped write coverage,
 containment policy, process-state capture, adaptive crypto reconstruction, verified recovery orchestration,
 driver signing and Microsoft-assigned production altitude.

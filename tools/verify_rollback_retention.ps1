@@ -5,6 +5,7 @@ $lifecycle=Join-Path $root 'src\RansomGuard.Rollback\RollbackSessionLifecycleSto
 $retentionStore=Join-Path $root 'src\RansomGuard.Rollback\RollbackRetentionStore.cs'
 $retentionPlan=Join-Path $root 'src\RansomGuard.Rollback\RollbackRetentionPlan.cs'
 $retentionExecutor=Join-Path $root 'src\RansomGuard.Rollback\RollbackRetentionExecutor.cs'
+$maintenanceLease=Join-Path $root 'src\RansomGuard.Rollback\RollbackMaintenanceLease.cs'
 $repository=Join-Path $root 'src\RansomGuard.Rollback\RollbackRepository.cs'
 $gateClient=Join-Path $root 'src\RansomGuard.GateClient\Program.cs'
 $cli=Join-Path $root 'src\RansomGuard.RollbackMaintenanceCli\Program.cs'
@@ -13,8 +14,19 @@ $build=Join-Path $root 'build_windows.ps1'
 $launcher=Join-Path $root 'rollback_maintenance.cmd'
 $tests=Join-Path $root 'tests\RansomGuard.Rollback.Tests\Program.cs'
 
-foreach($path in @($lifecycle,$retentionStore,$retentionPlan,$retentionExecutor,$repository,$gateClient,$cli,$project,$build,$launcher,$tests)){
+foreach($path in @($lifecycle,$retentionStore,$retentionPlan,$retentionExecutor,$maintenanceLease,$repository,$gateClient,$cli,$project,$build,$launcher,$tests)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Rollback retention source missing: $path"}
+}
+
+$leaseText=Get-Content -LiteralPath $maintenanceLease -Raw
+foreach($required in @(
+    'FileShare.None',
+    'maintenance.lock',
+    'Another rollback maintenance operation currently owns the repository lease',
+    'FileOptions.WriteThrough',
+    'Flush(true)'
+)){
+    if($leaseText -notmatch [regex]::Escape($required)){throw "Maintenance lease invariant missing: $required"}
 }
 
 $lifecycleText=Get-Content -LiteralPath $lifecycle -Raw
@@ -101,6 +113,7 @@ if($planText -match '\b(Directory\.Delete|File\.Delete|Directory\.Move|File\.Mov
 
 $executorText=Get-Content -LiteralPath $retentionExecutor -Raw
 foreach($required in @(
+    'RollbackMaintenanceLease.Acquire(repositoryFull)',
     'RollbackRetentionPlanner.Build(',
     'ValidateRequestedPlan(requestedPlan, current, repositoryFull)',
     'VerifyCompletedAndUnheld(source)',
@@ -137,6 +150,7 @@ foreach($required in @(
     'case "release-hold":',
     'RollbackRetentionPlanner.Build',
     'RollbackRetentionExecutor.ExecuteAsync',
+    'RollbackMaintenanceLease.Acquire(repositoryRoot)',
     'using var reportStream = OpenNewOutput(reportPath);',
     'FileMode.CreateNew',
     'Active, Faulted, Held, legacy and pending-transaction sessions are never selected'
@@ -171,6 +185,7 @@ if($launcherText -notmatch [regex]::Escape('RollbackMaintenance\RansomGuard.Roll
 
 $testText=Get-Content -LiteralPath $tests -Raw
 foreach($required in @(
+    'rollback maintenance lease serializes retention and hold changes',
     'retention planner selects only eligible completed unheld sessions',
     'retention executor rejects stale plan after lifecycle hold change',
     'retention executor quarantines and purges eligible completed session',

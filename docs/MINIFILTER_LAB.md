@@ -73,7 +73,7 @@ Default policy:
 Optional LAB-only tuning:
 
     --max-store-mib <64..1048576>
-    --min-free-mib <0..1048576>
+    --min-free-mib <64..1048576>
 
 The client re-measures committed session bytes and combines them with all concurrent reservations before each preservation/evidence append. Existing full pre-images, existing COW blocks/baselines and existing absence baselines are recognized so they are not charged as new full captures.
 

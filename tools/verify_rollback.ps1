@@ -8,12 +8,14 @@ $createOperationStore=Join-Path $root 'src\RansomGuard.Rollback\CreateOperationS
 $createPolicy=Join-Path $root 'src\RansomGuard.Rollback\CreateGatePolicy.cs'
 $identityStore=Join-Path $root 'src\RansomGuard.Rollback\FileIdentityStore.cs'
 $renameStore=Join-Path $root 'src\RansomGuard.Rollback\RenameRollbackStore.cs'
+$renameIdentityStore=Join-Path $root 'src\RansomGuard.Rollback\RenameIdentityStore.cs'
 if(-not(Test-Path -LiteralPath $rangeStore)){throw 'RangeRollbackStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $createStore)){throw 'CreateRollbackStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $createOperationStore)){throw 'CreateOperationStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $createPolicy)){throw 'CreateGatePolicy.cs missing.'}
 if(-not(Test-Path -LiteralPath $identityStore)){throw 'FileIdentityStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $renameStore)){throw 'RenameRollbackStore.cs missing.'}
+if(-not(Test-Path -LiteralPath $renameIdentityStore)){throw 'RenameIdentityStore.cs missing.'}
 $rangeText=Get-Content -LiteralPath $rangeStore -Raw
 foreach($required in @(
     'CaptureWritePreimageAsync',
@@ -129,6 +131,22 @@ foreach($required in @(
     if($renameText -notmatch [regex]::Escape($required)){throw "Rename rollback source gate missing invariant: $required"}
 }
 
+$renameIdentityText=Get-Content -LiteralPath $renameIdentityStore -Raw
+foreach($required in @(
+    'rename-identity-journal.jsonl',
+    'RenameIdentityState.Resolved',
+    'RenameIdentityState.QueryFailed',
+    'RenameIdentityState.Mismatch',
+    'PendingSuccessfulCompletions',
+    'CompletionRecordSha256',
+    'Resolved rename identity does not match source intent identity',
+    'Conflicting duplicate rename identity reconciliation',
+    'FileOptions.WriteThrough',
+    'Flush(true)'
+)){
+    if($renameIdentityText -notmatch [regex]::Escape($required)){throw "Rename identity source gate missing invariant: $required"}
+}
+
 if(-not(Test-Path -LiteralPath $store)){throw 'RollbackStore.cs missing.'}
 $text=Get-Content -LiteralPath $store -Raw
 foreach($required in @(
@@ -162,6 +180,8 @@ if($repository -notmatch 'new RangeRollbackStore\(rangeRoot\)\.VerifyAll\(\)'){t
 if($repository -notmatch 'new CreateRollbackStore\(createRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested create-state stores.'}
 if($repository -notmatch 'new CreateOperationStore\(createRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include CREATE intent/completion journals.'}
 if($repository -notmatch 'new FileIdentityStore\(identityRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested identity-state stores.'}
-if($repository -notmatch 'new RenameRollbackStore\(renameRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested rename-state stores.'}
-Write-Host 'Rollback source gate PASSED: full-file, range-COW, create-baseline, CREATE intent/completion, durable file-identity, rename-intent/completion journals, hashes, crash-artifact rejection, write-through commits, first-state semantics, copy-only restore.'
-Write-Host 'Normal service capture remains disabled; v0.7.6 keeps blocking preservation inside the explicit LAB gate only.'
+if($repository -notmatch 'renameStore = new RenameRollbackStore\(renameRoot\)'){throw 'Repository verification must construct nested rename-state stores.'}
+if($repository -notmatch 'renameStore\.VerifyAll\(\)'){throw 'Repository verification must validate nested rename-state stores.'}
+if($repository -notmatch 'new RenameIdentityStore\(renameIdentityRoot, renameStore\)\.VerifyAll\(\)'){throw 'Repository verification must include nested post-rename identity stores.'}
+Write-Host 'Rollback source gate PASSED: full-file, range-COW, create-baseline, CREATE intent/completion, durable file-identity, rename-intent/completion and post-rename identity journals, hashes, crash-artifact rejection, write-through commits, first-state semantics, copy-only restore.'
+Write-Host 'Normal service capture remains disabled; blocking preservation remains inside the explicit LAB gate only.'

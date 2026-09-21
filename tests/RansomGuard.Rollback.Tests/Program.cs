@@ -867,6 +867,47 @@ try
           restartRenameStore.PendingIntents.Single().RequestSequence == 302,
         "restart evidence never manufactures authoritative CREATE/RENAME completion");
 
+    var restartAssessmentRoot = Path.Combine(root, "restart-assessment");
+    var restartAssessmentStore = new RestartReconciliationStore(restartAssessmentRoot);
+    var assessmentCompleted = await restartAssessmentStore.RecordObservationAsync(
+        RestartOperationKind.Create,
+        restartCreateIntent.RequestSequence,
+        restartCreateIntent.RecordSha256,
+        RestartEvidenceState.SupportsCompleted,
+        restartCreateIntent.OriginalPath,
+        new RestartPathObservation(RestartPathState.File, sourceIdentity));
+    var decisiveAssessment = restartAssessmentStore.Assess(
+        RestartOperationKind.Create,
+        restartCreateIntent.RequestSequence,
+        restartCreateIntent.RecordSha256);
+    Check(decisiveAssessment.State == RestartEvidenceAssessmentState.ConsistentSupportsCompleted &&
+          decisiveAssessment.ObservationCount == 1 &&
+          decisiveAssessment.LatestRecordSha256 == assessmentCompleted.RecordSha256,
+        "restart assessment accepts only exact consistent decisive evidence");
+
+    _ = await restartAssessmentStore.RecordObservationAsync(
+        RestartOperationKind.Create,
+        restartCreateIntent.RequestSequence,
+        restartCreateIntent.RecordSha256,
+        RestartEvidenceState.SupportsNotCompleted,
+        restartCreateIntent.OriginalPath,
+        new RestartPathObservation(RestartPathState.Missing, null));
+    var conflictingAssessment = restartAssessmentStore.Assess(
+        RestartOperationKind.Create,
+        restartCreateIntent.RequestSequence,
+        restartCreateIntent.RecordSha256);
+    Check(conflictingAssessment.State == RestartEvidenceAssessmentState.Unresolved &&
+          conflictingAssessment.ObservationCount == 2,
+        "restart assessment keeps conflicting observations unresolved");
+
+    var absentAssessment = restartAssessmentStore.Assess(
+        RestartOperationKind.Create,
+        9999,
+        new string('B', 64));
+    Check(absentAssessment.State == RestartEvidenceAssessmentState.NoEvidence &&
+          absentAssessment.ObservationCount == 0,
+        "restart assessment does not borrow evidence from another request or intent");
+
     var nestedRestartRepo = new RollbackRepository(Path.Combine(root, "nested-restart-repo"));
     var nestedRestartSession = nestedRestartRepo.CreateSession("nested_restart");
     var nestedRestartState = new RestartReconciliationStore(Path.Combine(nestedRestartSession.Root, "restart-state"));
@@ -1164,7 +1205,7 @@ try
         9001, CreateCompletionState.Succeeded, 0, 0, originallyAbsent, planIdentity);
 
     var pendingCreatePath = Path.Combine(planSource, "pending-open.bin");
-    _ = await planCreateOps.RecordIntentAsync(
+    var pendingCreateIntent = await planCreateOps.RecordIntentAsync(
         9002, pendingCreatePath, CreateDisposition.Open, 0, 0,
         CreateTargetState.Missing, CreatePreservationAction.NoPreservationRequired,
         string.Empty, null);
@@ -1181,14 +1222,48 @@ try
 
     var renameSourceB = Path.Combine(planSource, "rename-source-b.bin");
     var renameDestinationB = Path.Combine(planSource, "rename-destination-b.bin");
-    _ = await planRenames.CaptureIntentAsync(
+    var pendingRenameIntent = await planRenames.CaptureIntentAsync(
         9102, renameSourceB, renameDestinationB, planIdentity, false,
         RenameDestinationState.OriginallyAbsent, null, 0, 10);
 
+    var renameSourceC = Path.Combine(planSource, "rename-source-c.bin");
+    var renameDestinationC = Path.Combine(planSource, "rename-destination-c.bin");
+    var ambiguousRenameIntent = await planRenames.CaptureIntentAsync(
+        9103, renameSourceC, renameDestinationC, planIdentity, false,
+        RenameDestinationState.OriginallyAbsent, null, 0, 10);
+
+    var planRestart = new RestartReconciliationStore(
+        Path.Combine(planSession.Root, "restart-state"));
+    var createCrashEvidence = await planRestart.RecordObservationAsync(
+        RestartOperationKind.Create,
+        pendingCreateIntent.RequestSequence,
+        pendingCreateIntent.RecordSha256,
+        RestartEvidenceState.SupportsNotCompleted,
+        pendingCreateIntent.OriginalPath,
+        new RestartPathObservation(RestartPathState.Missing, null));
+    var renameCrashEvidence = await planRestart.RecordObservationAsync(
+        RestartOperationKind.Rename,
+        pendingRenameIntent.RequestSequence,
+        pendingRenameIntent.RecordSha256,
+        RestartEvidenceState.SupportsNotCompleted,
+        pendingRenameIntent.SourcePath,
+        new RestartPathObservation(RestartPathState.File, planIdentity),
+        pendingRenameIntent.DestinationPath,
+        new RestartPathObservation(RestartPathState.Missing, null));
+    _ = await planRestart.RecordObservationAsync(
+        RestartOperationKind.Rename,
+        ambiguousRenameIntent.RequestSequence,
+        ambiguousRenameIntent.RecordSha256,
+        RestartEvidenceState.Ambiguous,
+        ambiguousRenameIntent.SourcePath,
+        new RestartPathObservation(RestartPathState.QueryFailed, null),
+        ambiguousRenameIntent.DestinationPath,
+        new RestartPathObservation(RestartPathState.Missing, null));
+
     var recoveryPlan = RollbackRecoveryPlanner.Build(planRepoRoot, "plan_case");
     Check(recoveryPlan.ReadyCount == 2 &&
-          recoveryPlan.ReviewCount == 3 &&
-          recoveryPlan.BlockedCount == 2 &&
+          recoveryPlan.ReviewCount == 5 &&
+          recoveryPlan.BlockedCount == 1 &&
           !recoveryPlan.AutomaticTopologyMutationAllowed,
         "recovery planner separates copy-out readiness from review/blocked topology");
     Check(recoveryPlan.Actions.Any(x =>
@@ -1215,9 +1290,10 @@ try
         "originally-absent path is review-only and never an automatic delete");
     Check(recoveryPlan.Actions.Any(x =>
             x.Kind == RecoveryActionKind.ReviewCreateTransaction &&
-            x.State == RecoveryActionState.Blocked &&
-            x.EvidenceSequence == 9002),
-        "pending CREATE is blocked without authoritative completion");
+            x.State == RecoveryActionState.Review &&
+            x.EvidenceSequence == 9002 &&
+            x.EvidenceRecordSha256 == createCrashEvidence.RecordSha256),
+        "consistent restart CREATE evidence becomes review-only crash recovery");
     Check(recoveryPlan.Actions.Any(x =>
             x.Kind == RecoveryActionKind.ReviewRenameTopology &&
             x.State == RecoveryActionState.Review &&
@@ -1225,9 +1301,15 @@ try
         "authoritative successful RENAME is topology review, not automatic rename");
     Check(recoveryPlan.Actions.Any(x =>
             x.Kind == RecoveryActionKind.ReviewRenameTopology &&
+            x.State == RecoveryActionState.Review &&
+            x.EvidenceSequence == 9102 &&
+            x.EvidenceRecordSha256 == renameCrashEvidence.RecordSha256),
+        "consistent restart RENAME evidence becomes review-only crash recovery");
+    Check(recoveryPlan.Actions.Any(x =>
+            x.Kind == RecoveryActionKind.ReviewRenameTopology &&
             x.State == RecoveryActionState.Blocked &&
-            x.EvidenceSequence == 9102),
-        "pending RENAME is blocked without authoritative completion");
+            x.EvidenceSequence == 9103),
+        "ambiguous restart RENAME evidence remains blocked");
     Check(recoveryPlan.PlanId.Length == 64 &&
           recoveryPlan.JournalEvidenceSha256.Length == 64,
         "recovery plan binds deterministic SHA-256 plan/evidence digests");
@@ -1244,8 +1326,8 @@ try
           execution.RequestedReadyActions == 2 &&
           execution.SucceededActions == 2 &&
           execution.FailedActions == 0 &&
-          execution.ReviewActionsNotExecuted == 3 &&
-          execution.BlockedActionsNotExecuted == 2 &&
+          execution.ReviewActionsNotExecuted == 5 &&
+          execution.BlockedActionsNotExecuted == 1 &&
           !execution.AutomaticTopologyMutationPerformed,
         "recovery executor performs only ready copy-out actions");
 

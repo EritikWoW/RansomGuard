@@ -30,9 +30,10 @@ var createOperationStore = new CreateOperationStore(Path.Combine(store.Root, "cr
 var identityStore = new FileIdentityStore(Path.Combine(store.Root, "identity-state"));
 var renameStore = new RenameRollbackStore(Path.Combine(store.Root, "rename-state"));
 var pagingStore = new PagingWriteEvidenceStore(Path.Combine(store.Root, "paging-state"));
+var sectionStore = new WritableSectionEvidenceStore(Path.Combine(store.Root, "section-state"));
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
-Console.WriteLine("RansomGuard LAB pre-write gate v0.7.11.0");
+Console.WriteLine("RansomGuard LAB pre-write gate v0.7.12.0");
 Console.WriteLine("LAB ONLY: use only inside a disposable test directory on a test machine/VM.");
 Console.WriteLine($"Protected LAB root : {options.Root}");
 Console.WriteLine($"Kernel NT root     : {ntRoot}");
@@ -45,7 +46,7 @@ Console.WriteLine("Press Ctrl+C to disconnect. The driver then stops gating beca
 
 var context = new RgConnectContext
 {
-    ProtocolVersion = 9,
+    ProtocolVersion = 10,
     ClientMode = (uint)RgClientMode.LabGate,
     ClientProcessId = (ulong)Environment.ProcessId,
     GateRootLengthBytes = checked((uint)(ntRoot.Length * 2)),
@@ -73,9 +74,54 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
 {
     try
     {
+        if ((RgEventType)ev.EventType == RgEventType.WritableSection)
+        {
+            if (ev.ProtocolVersion != 10 ||
+                ev.PathStatus != (uint)RgPathStatus.Resolved ||
+                ev.RelatedSequence == 0 ||
+                ev.CompletionInformation > uint.MaxValue)
+                throw new InvalidDataException("Invalid writable-section attestation event.");
+
+            var trackedPath = resolver.Resolve(ev.Path);
+            if (string.IsNullOrWhiteSpace(trackedPath) || !PathPolicy.Under(trackedPath, options.Root))
+                throw new InvalidDataException("Writable-section attestation escaped the explicit LAB root.");
+
+            var intent = createOperationStore.Intents.SingleOrDefault(x => x.RequestSequence == ev.RelatedSequence);
+            createOperationStore.TryGetCompletion(ev.RelatedSequence, out var completion);
+            var preservationDecision = checked((uint)ev.CompletionInformation);
+            var state = WritableSectionAttestation.Evaluate(
+                intent, completion, trackedPath, preservationDecision);
+
+            DurableFileIdentity? identity = null;
+            if (ev.IdentityStatus == (uint)RgIdentityStatus.Resolved &&
+                (ev.VolumeSerialNumber != 0 || ev.FileIdLow != 0 || ev.FileIdHigh != 0))
+            {
+                identity = new DurableFileIdentity(
+                    ev.VolumeSerialNumber.ToString("X16"),
+                    ev.FileIdLow.ToString("X16") + ev.FileIdHigh.ToString("X16"));
+            }
+
+            var evidence = await sectionStore.RecordAsync(
+                ev.Sequence,
+                ev.RelatedSequence,
+                trackedPath,
+                ev.Flags,
+                preservationDecision,
+                state,
+                identity,
+                cts.Token).ConfigureAwait(false);
+
+            var line = $"{DateTime.Now:HH:mm:ss.fff} {RgEventType.WritableSection,-20} {evidence.State,-20} request={evidence.CreateRequestSequence} protection=0x{evidence.PageProtection:X8} {evidence.TrackedPath}";
+            if (state == WritableSectionAttestationState.BaselineVerified)
+                Console.WriteLine(line);
+            else
+                Console.Error.WriteLine(line);
+            return;
+        }
+
         if ((RgEventType)ev.EventType == RgEventType.PagingWrite)
         {
-            if (ev.ProtocolVersion != 9 || ev.PathStatus != (uint)RgPathStatus.Resolved)
+            if (ev.ProtocolVersion != 10 || ev.PathStatus != (uint)RgPathStatus.Resolved)
                 throw new InvalidDataException("Invalid paging-write evidence event.");
 
             var trackedPath = resolver.Resolve(ev.Path);
@@ -188,7 +234,7 @@ static class CreateReconciliation
         CreateOperationStore operationStore,
         CancellationToken cancellationToken)
     {
-        if (ev.ProtocolVersion != 9 || ev.RelatedSequence == 0)
+        if (ev.ProtocolVersion != 10 || ev.RelatedSequence == 0)
             throw new InvalidDataException("Invalid CREATE completion correlation.");
 
         if (!NtSuccess(ev.CompletionStatus))
@@ -252,7 +298,7 @@ static class RenameReconciliation
         RenameRollbackStore renameStore,
         CancellationToken cancellationToken)
     {
-        if (ev.ProtocolVersion != 9 || ev.RelatedSequence == 0)
+        if (ev.ProtocolVersion != 10 || ev.RelatedSequence == 0)
             throw new InvalidDataException("Invalid rename completion correlation.");
 
         if (!NtSuccess(ev.CompletionStatus))
@@ -318,7 +364,7 @@ static class GateDecision
         {
             // Never preserve or authorize against a truncated path. The kernel only sends a truncated
             // gate event when its known prefix is already inside the explicit LAB root, so deny it here.
-            if (ev.ProtocolVersion != 9 || ev.PathStatus != (uint)RgPathStatus.Resolved)
+            if (ev.ProtocolVersion != 10 || ev.PathStatus != (uint)RgPathStatus.Resolved)
                 return Deny(ev.Sequence, 1);
 
             var path = resolver.Resolve(ev.Path);
@@ -548,7 +594,7 @@ static class GateDecision
 
     private static RgGateReply Allow(ulong sequence, RgGateDecision decision) => new()
     {
-        ProtocolVersion = 9,
+        ProtocolVersion = 10,
         Decision = decision,
         RequestSequence = sequence,
         ErrorCode = 0
@@ -556,7 +602,7 @@ static class GateDecision
 
     private static RgGateReply Deny(ulong sequence, uint errorCode) => new()
     {
-        ProtocolVersion = 9,
+        ProtocolVersion = 10,
         Decision = RgGateDecision.Deny,
         RequestSequence = sequence,
         ErrorCode = errorCode
@@ -836,7 +882,7 @@ sealed class DevicePathResolver
 }
 
 enum RgClientMode : uint { Audit = 1, LabGate = 2 }
-enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, RenameResult = 6, CreateResult = 7, PagingWrite = 8 }
+enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, RenameResult = 6, CreateResult = 7, PagingWrite = 8, WritableSection = 9 }
 enum RgPathStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2, Truncated = 3 }
 enum RgIdentityStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2 }
 enum RgGateDecision : uint { Invalid = 0, SnapshotCommitted = 1, Deny = 2, BaselineCommitted = 3, NoPreservationRequired = 4 }

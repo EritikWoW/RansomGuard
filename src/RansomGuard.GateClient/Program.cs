@@ -149,14 +149,13 @@ static class GateDecision
         RollbackStore store, CreateRollbackStore createStore, CancellationToken cancellationToken)
     {
         var rawDisposition = (ev.Flags >> 24) & 0xFF;
-        if (rawDisposition > (uint)RgCreateDisposition.OverwriteIf)
+        if (!CreateGatePolicy.TryParseDisposition(rawDisposition, out var disposition))
             return Deny(ev.Sequence, 7);
 
-        var disposition = (RgCreateDisposition)rawDisposition;
         var createOptions = ev.Flags & 0x00FFFFFF;
 
-        // Directory creates/opens do not destroy file contents. Directory topology recovery is not
-        // part of this milestone; file mutations beneath the directory remain gated independently.
+        // Directory topology recovery is not part of this milestone; file mutations beneath a
+        // directory remain gated independently.
         if ((createOptions & FileDirectoryFile) != 0)
             return Allow(ev.Sequence, RgGateDecision.NoPreservationRequired);
 
@@ -164,40 +163,24 @@ static class GateDecision
             return Allow(ev.Sequence, RgGateDecision.BaselineCommitted);
 
         var state = PathProbe.Get(path);
-        if (state == PathState.Directory)
-            return Allow(ev.Sequence, RgGateDecision.NoPreservationRequired);
-
-        if (state == PathState.File)
+        var action = CreateGatePolicy.Decide(disposition, state);
+        switch (action)
         {
-            if (IsDestructiveWhenExisting(disposition))
-            {
+            case CreatePreservationAction.CaptureExistingPreimage:
                 _ = await store.CapturePreimageAsync(path, RollbackMutationKind.Create, cancellationToken)
                     .ConfigureAwait(false);
                 return Allow(ev.Sequence, RgGateDecision.SnapshotCommitted);
-            }
 
-            // FILE_OPEN / FILE_OPEN_IF only open an existing file, while FILE_CREATE fails if it exists.
-            // A later destructive WRITE is still protected by range COW.
-            return Allow(ev.Sequence, RgGateDecision.NoPreservationRequired);
+            case CreatePreservationAction.RecordOriginallyAbsent:
+                _ = await createStore.CaptureAbsentAsync(path, cancellationToken).ConfigureAwait(false);
+                return Allow(ev.Sequence, RgGateDecision.BaselineCommitted);
+
+            default:
+                // FILE_OPEN/OPEN_IF on an existing file are non-destructive at CREATE time.
+                // FILE_CREATE on an existing file and FILE_OPEN/OVERWRITE on a missing file fail naturally.
+                return Allow(ev.Sequence, RgGateDecision.NoPreservationRequired);
         }
-
-        if (MayCreateWhenMissing(disposition))
-        {
-            _ = await createStore.CaptureAbsentAsync(path, cancellationToken).ConfigureAwait(false);
-            return Allow(ev.Sequence, RgGateDecision.BaselineCommitted);
-        }
-
-        // FILE_OPEN and FILE_OVERWRITE fail naturally when the target is absent.
-        return Allow(ev.Sequence, RgGateDecision.NoPreservationRequired);
     }
-
-    private static bool IsDestructiveWhenExisting(RgCreateDisposition disposition) =>
-        disposition is RgCreateDisposition.Supersede or
-            RgCreateDisposition.Overwrite or RgCreateDisposition.OverwriteIf;
-
-    private static bool MayCreateWhenMissing(RgCreateDisposition disposition) =>
-        disposition is RgCreateDisposition.Supersede or RgCreateDisposition.Create or
-            RgCreateDisposition.OpenIf or RgCreateDisposition.OverwriteIf;
 
     private static RgGateReply Allow(ulong sequence, RgGateDecision decision) => new()
     {
@@ -216,19 +199,17 @@ static class GateDecision
     };
 }
 
-enum PathState { Missing, File, Directory }
-
 static class PathProbe
 {
-    public static PathState Get(string path)
+    public static CreateTargetState Get(string path)
     {
         try
         {
             var attributes = File.GetAttributes(path);
-            return (attributes & FileAttributes.Directory) != 0 ? PathState.Directory : PathState.File;
+            return (attributes & FileAttributes.Directory) != 0 ? CreateTargetState.Directory : CreateTargetState.File;
         }
-        catch (FileNotFoundException) { return PathState.Missing; }
-        catch (DirectoryNotFoundException) { return PathState.Missing; }
+        catch (FileNotFoundException) { return CreateTargetState.Missing; }
+        catch (DirectoryNotFoundException) { return CreateTargetState.Missing; }
     }
 }
 
@@ -357,7 +338,6 @@ sealed class DevicePathResolver
 
 enum RgClientMode : uint { Audit = 1, LabGate = 2 }
 enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5 }
-enum RgCreateDisposition : uint { Supersede = 0, Open = 1, Create = 2, OpenIf = 3, Overwrite = 4, OverwriteIf = 5 }
 enum RgPathStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2, Truncated = 3 }
 enum RgGateDecision : uint { Invalid = 0, SnapshotCommitted = 1, Deny = 2, BaselineCommitted = 3, NoPreservationRequired = 4 }
 

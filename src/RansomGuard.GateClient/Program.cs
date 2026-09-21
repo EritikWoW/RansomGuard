@@ -36,6 +36,7 @@ Console.WriteLine($"Kernel NT root     : {ntRoot}");
 Console.WriteLine($"Rollback session   : {sessionId}");
 Console.WriteLine($"Rollback store     : {store.Root}");
 Console.WriteLine("CREATE/write/rename/delete/truncate in this root are gated by durable preservation semantics.");
+Console.WriteLine($"Bounded gate workers : {options.GateWorkers}");
 Console.WriteLine("Press Ctrl+C to disconnect. The driver then stops gating because no client is connected.");
 
 var context = new RgConnectContext
@@ -59,7 +60,61 @@ if (headerSize != 16 || eventSize != 2168 || replyHeaderSize != 16 || gateReplyS
     throw new InvalidOperationException($"Unexpected protocol sizes: message={headerSize}, event={eventSize}, replyHeader={replyHeaderSize}, gateReply={gateReplySize}");
 
 var resolver = new DevicePathResolver();
+using var workerSlots = new SemaphoreSlim(options.GateWorkers, options.GateWorkers);
+var activeWorkers = new List<Task>();
+var replySync = new object();
 var buffer = Marshal.AllocHGlobal(checked(headerSize + eventSize));
+
+async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
+{
+    try
+    {
+        if ((RgEventType)ev.EventType == RgEventType.CreateResult)
+        {
+            var completion = await CreateReconciliation.HandleAsync(
+                ev, resolver, options.Root, createOperationStore, cts.Token).ConfigureAwait(false);
+            Console.WriteLine(
+                $"{DateTime.Now:HH:mm:ss.fff} {RgEventType.CreateResult,-20} request={ev.RelatedSequence,-7} {completion.State,-34} status=0x{completion.CompletionStatus:X8} {completion.FinalPath}");
+            return;
+        }
+
+        if ((RgEventType)ev.EventType == RgEventType.RenameResult)
+        {
+            var completion = await RenameReconciliation.HandleAsync(
+                ev, resolver, options.Root, renameStore, cts.Token).ConfigureAwait(false);
+            Console.WriteLine(
+                $"{DateTime.Now:HH:mm:ss.fff} {RgEventType.RenameResult,-20} request={ev.RelatedSequence,-7} {completion.State,-24} status=0x{completion.CompletionStatus:X8} {completion.FinalDestinationPath}");
+            return;
+        }
+
+        var reply = await GateDecision.EvaluateAsync(
+            ev, resolver, options.Root, store, writeStore, createStore, createOperationStore,
+            identityStore, renameStore, cts.Token).ConfigureAwait(false);
+
+        lock (replySync)
+        {
+            Native.Reply(port, header.MessageId, reply);
+        }
+
+        var path = resolver.Resolve(ev.Path) ?? ev.Path ?? "<unresolved>";
+        Console.WriteLine(
+            $"{DateTime.Now:HH:mm:ss.fff} {((RgEventType)ev.EventType),-20} pid={ev.ProcessId,-7} {reply.Decision,-18} {path}");
+    }
+    catch (OperationCanceledException) when (cts.IsCancellationRequested)
+    {
+        // Shutdown cancels outstanding preservation work. GateDecision itself returns Deny for
+        // ordinary blocking requests; reconciliation events are simply left pending for restart.
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"Gate worker failed: {ex.GetType().Name}: {ex.Message}");
+    }
+    finally
+    {
+        workerSlots.Release();
+    }
+}
+
 try
 {
     while (!cts.IsCancellationRequested)
@@ -74,34 +129,19 @@ try
         var header = Marshal.PtrToStructure<FilterMessageHeader>(buffer);
         var ev = Marshal.PtrToStructure<RgEvent>(IntPtr.Add(buffer, headerSize));
 
-        if ((RgEventType)ev.EventType == RgEventType.CreateResult)
-        {
-            var completion = await CreateReconciliation.HandleAsync(
-                ev, resolver, options.Root, createOperationStore, cts.Token).ConfigureAwait(false);
-            Console.WriteLine(
-                $"{DateTime.Now:HH:mm:ss.fff} {RgEventType.CreateResult,-20} request={ev.RelatedSequence,-7} {completion.State,-34} status=0x{completion.CompletionStatus:X8} {completion.FinalPath}");
-            continue;
-        }
-
-        if ((RgEventType)ev.EventType == RgEventType.RenameResult)
-        {
-            var completion = await RenameReconciliation.HandleAsync(
-                ev, resolver, options.Root, renameStore, cts.Token).ConfigureAwait(false);
-            Console.WriteLine(
-                $"{DateTime.Now:HH:mm:ss.fff} {RgEventType.RenameResult,-20} request={ev.RelatedSequence,-7} {completion.State,-24} status=0x{completion.CompletionStatus:X8} {completion.FinalDestinationPath}");
-            continue;
-        }
-
-        var reply = await GateDecision.EvaluateAsync(ev, resolver, options.Root, store, writeStore, createStore, createOperationStore, identityStore, renameStore, cts.Token);
-        Native.Reply(port, header.MessageId, reply);
-
-        var path = resolver.Resolve(ev.Path) ?? ev.Path ?? "<unresolved>";
-        Console.WriteLine($"{DateTime.Now:HH:mm:ss.fff} {((RgEventType)ev.EventType),-20} pid={ev.ProcessId,-7} {reply.Decision,-18} {path}");
+        await workerSlots.WaitAsync(cts.Token).ConfigureAwait(false);
+        activeWorkers.RemoveAll(static task => task.IsCompleted);
+        activeWorkers.Add(Task.Run(() => ProcessMessageAsync(header, ev)));
     }
+}
+catch (OperationCanceledException) when (cts.IsCancellationRequested)
+{
 }
 finally
 {
     Marshal.FreeHGlobal(buffer);
+    if (activeWorkers.Count != 0)
+        await Task.WhenAll(activeWorkers).ConfigureAwait(false);
 }
 
 static class CreateReconciliation

@@ -20,7 +20,8 @@ Do not load it on a primary workstation and do not point it at real documents.
 - Entire-drive, Windows, Program Files, ProgramData and reparse roots are refused by the gate client.
 - The gate client PID is excluded from kernel gating.
 - I/O outside the exact gate root remains fail-open.
-- Unresolved paths remain fail-open rather than risking OS-wide denial.
+- Name-query failures remain fail-open rather than risking OS-wide denial.
+- A truncated name whose known prefix is already inside the gate root is sent to user mode and denied; no snapshot or absence baseline is committed against an ambiguous path.
 - In-scope LAB I/O is denied if required user-mode preservation fails or the reply times out.
 - The driver still contains no kernel file-writing, file-deletion, process-kill or process-suspend code.
 - Altitude `370099.4242` is an unassigned lab placeholder and must never ship.

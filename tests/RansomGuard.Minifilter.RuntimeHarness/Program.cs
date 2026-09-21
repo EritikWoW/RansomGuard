@@ -5,7 +5,7 @@ if (!OperatingSystem.IsWindows())
     throw new PlatformNotSupportedException("RansomGuard minifilter runtime harness is Windows-only.");
 
 if (args.Length == 0)
-    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | map-write --file <path> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker>");
+    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | map-write --file <path> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker> | containment-transition --file-a <path> --file-b <path> --ready <marker> --go <marker> --result <marker>");
 
 var command = args[0].ToLowerInvariant();
 var options = Parse(args.Skip(1).ToArray());
@@ -30,6 +30,14 @@ switch (command)
     case "containment-probe":
         ContainmentProbe(
             Require(options, "--file"),
+            Require(options, "--ready"),
+            Require(options, "--go"),
+            Require(options, "--result"));
+        break;
+    case "containment-transition":
+        ContainmentTransitionProbe(
+            Require(options, "--file-a"),
+            Require(options, "--file-b"),
             Require(options, "--ready"),
             Require(options, "--go"),
             Require(options, "--result"));
@@ -160,6 +168,72 @@ static void ContainmentProbe(string filePath, string readyMarker, string goMarke
     {
         File.WriteAllText(resultMarker, "io-error:" + ex.HResult.ToString("X8"));
         Environment.ExitCode = 10;
+    }
+}
+
+static void ContainmentTransitionProbe(
+    string fileA,
+    string fileB,
+    string readyMarker,
+    string goMarker,
+    string resultMarker)
+{
+    EnsureFile(fileA);
+    EnsureFile(fileB);
+    foreach (var marker in new[] { readyMarker, goMarker, resultMarker })
+    {
+        var parent = Path.GetDirectoryName(marker);
+        if (!string.IsNullOrWhiteSpace(parent)) Directory.CreateDirectory(parent);
+        if (File.Exists(marker)) File.Delete(marker);
+    }
+
+    File.WriteAllText(readyMarker, $"pid={Environment.ProcessId};fileA={fileA};fileB={fileB};utc={DateTime.UtcNow:O}");
+    var deadline = DateTime.UtcNow.AddMinutes(5);
+    while (!File.Exists(goMarker))
+    {
+        if (DateTime.UtcNow >= deadline)
+            throw new TimeoutException("Timed out waiting for event-bound containment transition trigger.");
+        Thread.Sleep(100);
+    }
+
+    try
+    {
+        using var a = new FileStream(
+            fileA, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete,
+            4096, FileOptions.WriteThrough);
+        using var b = new FileStream(
+            fileB, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete,
+            4096, FileOptions.WriteThrough);
+
+        a.Position = 0;
+        a.Write(new byte[] { 0xA1 });
+        a.Flush(true);
+
+        b.Position = 0;
+        b.Write(new byte[] { 0xB2 });
+        b.Flush(true);
+
+        try
+        {
+            a.Position = 1;
+            a.Write(new byte[] { 0xC3 });
+            a.Flush(true);
+            File.WriteAllText(resultMarker, "allowed-after-threshold");
+            Environment.ExitCode = 11;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            File.WriteAllText(resultMarker, "denied-after-threshold");
+        }
+        catch (IOException ex) when ((ex.HResult & 0xFFFF) == 5)
+        {
+            File.WriteAllText(resultMarker, "denied-after-threshold");
+        }
+    }
+    catch (Exception ex)
+    {
+        File.WriteAllText(resultMarker, "unexpected:" + ex.GetType().Name + ":" + ex.HResult.ToString("X8"));
+        Environment.ExitCode = 12;
     }
 }
 

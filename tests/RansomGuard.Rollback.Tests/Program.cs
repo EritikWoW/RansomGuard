@@ -1180,6 +1180,102 @@ try
     Check(nestedTopologyRejected,
         "repository verification includes nested activation-topology journal");
 
+    // Containment transition evidence must be durable before the kernel latch and linked to the exact gate event.
+    var containmentRoot = Path.Combine(root, "containment-evidence");
+    var containment = new ContainmentEvidenceStore(containmentRoot);
+    var containmentPath = Path.Combine(sourceDir, "containment-target.bin");
+    var containmentRequested = await containment.RecordRequestAsync(
+        7001,
+        4321,
+        DateTime.UtcNow.AddMinutes(-1).ToFileTimeUtc(),
+        1,
+        containmentPath,
+        1,
+        4,
+        2);
+    Check(containmentRequested.Phase == ContainmentEvidencePhase.Requested &&
+          containmentRequested.KernelSequence == 7001 &&
+          !containmentRequested.ContainmentActive &&
+          containmentRequested.ContainedProcessId == 0,
+        "containment journal records durable request before claiming kernel activation");
+
+    var containmentActive = await containment.RecordKernelActiveAsync(
+        7001,
+        4321,
+        containmentRequested.ProcessCreationFileTimeUtc,
+        1,
+        containmentPath,
+        1,
+        4,
+        2,
+        0,
+        4321);
+    Check(containmentActive.Phase == ContainmentEvidencePhase.KernelActive &&
+          containmentActive.ContainmentActive &&
+          containmentActive.ContainedProcessId == 4321 &&
+          containmentActive.PreviousRecordSha256 == containmentRequested.RecordSha256,
+        "containment kernel-active receipt chains to the exact durable request");
+
+    var containmentDuplicate = await containment.RecordKernelActiveAsync(
+        7001,
+        4321,
+        containmentRequested.ProcessCreationFileTimeUtc,
+        1,
+        containmentPath,
+        1,
+        4,
+        2,
+        0,
+        4321);
+    Check(containmentDuplicate.Sequence == containmentActive.Sequence &&
+          containment.Records.Count == 2,
+        "containment kernel-active receipt is idempotent for the same gate sequence");
+
+    var orphanActiveRejected = false;
+    try
+    {
+        _ = await containment.RecordKernelActiveAsync(
+            7002,
+            4321,
+            containmentRequested.ProcessCreationFileTimeUtc,
+            1,
+            containmentPath,
+            1,
+            4,
+            2,
+            0,
+            4321);
+    }
+    catch (InvalidDataException) { orphanActiveRejected = true; }
+    Check(orphanActiveRejected,
+        "containment journal rejects kernel-active evidence without a durable request");
+
+    containment.VerifyAll();
+    Check(new ContainmentEvidenceStore(containmentRoot).Records.Count == 2,
+        "containment journal rebuilds request and kernel-active phases after reopen");
+
+    var nestedContainmentRepo = new RollbackRepository(Path.Combine(root, "nested-containment-repo"));
+    var nestedContainmentSession = nestedContainmentRepo.CreateSession("nested_containment");
+    var nestedContainment = new ContainmentEvidenceStore(
+        Path.Combine(nestedContainmentSession.Root, "containment-state"));
+    _ = await nestedContainment.RecordRequestAsync(
+        7101,
+        5432,
+        DateTime.UtcNow.AddMinutes(-1).ToFileTimeUtc(),
+        1,
+        containmentPath,
+        1,
+        4,
+        2);
+    var containmentJournalBytes = await File.ReadAllBytesAsync(nestedContainment.JournalPath);
+    containmentJournalBytes[^2] ^= 1;
+    await File.WriteAllBytesAsync(nestedContainment.JournalPath, containmentJournalBytes);
+    var nestedContainmentRejected = false;
+    try { nestedContainmentRepo.VerifyAll(); }
+    catch (InvalidDataException) { nestedContainmentRejected = true; }
+    Check(nestedContainmentRejected,
+        "repository verification includes nested containment transition journal");
+
     // Verified recovery planning must expose safe copy-out actions while never guessing topology repair.
     var planRepoRoot = Path.Combine(root, "recovery-plan-repo");
     var planRepo = new RollbackRepository(planRepoRoot);

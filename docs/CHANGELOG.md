@@ -3,6 +3,7 @@
 - Added explicit `IRP_MJ_CREATE` events to the engineering minifilter protocol.
 - Protocol v4 carries CreateDisposition/CreateOptions and desired access without changing the fixed event size.
 - Existing `FILE_SUPERSEDE`, `FILE_OVERWRITE` and `FILE_OVERWRITE_IF` targets require a durable full-file pre-image before allow.
+- Existing files opened with `FILE_DELETE_ON_CLOSE` also require a pre-image; existing-directory delete-on-close is denied until topology rollback is modeled.
 - Missing targets for create-capable dispositions receive a durable hash-chained `originally absent` baseline.
 - Incident-created paths do not later manufacture range/full pre-images from data that did not exist before the incident.
 - Added explicit gate replies for committed absence baselines and non-destructive opens that require no preservation.

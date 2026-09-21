@@ -6,6 +6,7 @@
 - Added default retention policy: 30-day max completed age, 32 GiB managed completed storage cap, and 24-hour minimum age for pressure-driven purge.
 - Held and pending-transaction completed sessions count toward retained completed bytes but are never purge candidates; unresolved excess is reported instead.
 - Added deterministic retention PlanId/inventory/session SHA-256 binding and stale-plan refusal.
+- Added repository-wide cross-process maintenance lease (`FileShare.None`) shared by retention execution and Hold changes, closing the revalidation-to-purge Hold race.
 - Added crash-resumable purge journal: PurgeStarted -> atomic Sessions-to-Retired move -> Quarantined -> reparse-safe delete -> PurgeCompleted.
 - Added resume support for interrupted purge from Sessions, Retired, or missing quarantine after delete-before-final-receipt.
 - Added LAB-only RollbackMaintenance CLI: status, retention-plan, retention-execute, hold and release-hold.

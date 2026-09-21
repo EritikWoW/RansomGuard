@@ -27,6 +27,7 @@ var createStore = new CreateRollbackStore(Path.Combine(store.Root, "create-state
 var createOperationStore = new CreateOperationStore(Path.Combine(store.Root, "create-state"));
 var identityStore = new FileIdentityStore(Path.Combine(store.Root, "identity-state"));
 var renameStore = new RenameRollbackStore(Path.Combine(store.Root, "rename-state"));
+var renameIdentityStore = new RenameIdentityStore(Path.Combine(store.Root, "rename-identity-state"), renameStore);
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
 Console.WriteLine("RansomGuard LAB pre-write gate v0.7.6.0");
@@ -86,7 +87,7 @@ try
         if ((RgEventType)ev.EventType == RgEventType.RenameResult)
         {
             var completion = await RenameReconciliation.HandleAsync(
-                ev, resolver, options.Root, renameStore, cts.Token).ConfigureAwait(false);
+                ev, resolver, options.Root, renameStore, renameIdentityStore, cts.Token).ConfigureAwait(false);
             Console.WriteLine(
                 $"{DateTime.Now:HH:mm:ss.fff} {RgEventType.RenameResult,-20} request={ev.RelatedSequence,-7} {completion.State,-24} status=0x{completion.CompletionStatus:X8} {completion.FinalDestinationPath}");
             continue;
@@ -175,6 +176,7 @@ static class RenameReconciliation
         DevicePathResolver resolver,
         string root,
         RenameRollbackStore renameStore,
+        RenameIdentityStore renameIdentityStore,
         CancellationToken cancellationToken)
     {
         if (ev.ProtocolVersion != 7 || ev.RelatedSequence == 0)
@@ -192,30 +194,49 @@ static class RenameReconciliation
                 .ConfigureAwait(false);
         }
 
+        string? finalPath = null;
         if (ev.DestinationPathStatus == (uint)RgPathStatus.Resolved)
         {
-            var finalPath = resolver.Resolve(ev.DestinationPath);
-            if (!string.IsNullOrWhiteSpace(finalPath) && PathPolicy.Under(finalPath, root))
-            {
-                return await renameStore.RecordCompletionAsync(
-                        ev.RelatedSequence,
-                        RenameCompletionState.Succeeded,
-                        ev.CompletionStatus,
-                        ev.CompletionInformation,
-                        finalPath,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-            }
+            var resolved = resolver.Resolve(ev.DestinationPath);
+            if (!string.IsNullOrWhiteSpace(resolved) && PathPolicy.Under(resolved, root))
+                finalPath = resolved;
         }
 
-        return await renameStore.RecordCompletionAsync(
+        var completion = await renameStore.RecordCompletionAsync(
                 ev.RelatedSequence,
-                RenameCompletionState.SucceededNameUnresolved,
+                finalPath is not null
+                    ? RenameCompletionState.Succeeded
+                    : RenameCompletionState.SucceededNameUnresolved,
                 ev.CompletionStatus,
                 ev.CompletionInformation,
-                null,
+                finalPath,
                 cancellationToken)
             .ConfigureAwait(false);
+
+        DurableFileIdentity? finalIdentity = null;
+        if (ev.IdentityStatus == (uint)RgIdentityStatus.Resolved &&
+            (ev.VolumeSerialNumber != 0 || ev.FileIdLow != 0 || ev.FileIdHigh != 0))
+        {
+            finalIdentity = new DurableFileIdentity(
+                ev.VolumeSerialNumber.ToString("X16"),
+                ev.FileIdLow.ToString("X16") + ev.FileIdHigh.ToString("X16"));
+        }
+
+        var intent = renameStore.Intents.Single(x => x.RequestSequence == ev.RelatedSequence);
+        var identityState = finalIdentity is null
+            ? RenameIdentityState.QueryFailed
+            : finalIdentity.Equals(intent.SourceIdentity)
+                ? RenameIdentityState.Resolved
+                : RenameIdentityState.Mismatch;
+
+        _ = await renameIdentityStore.RecordAsync(
+                ev.RelatedSequence,
+                identityState,
+                finalIdentity,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return completion;
     }
 
     private static bool NtSuccess(uint status) => (status & 0x80000000u) == 0;

@@ -196,6 +196,37 @@ try
     catch (InvalidDataException) { createJournalRejected = true; }
     Check(createJournalRejected, "create baseline journal corruption is rejected");
 
+    Check(CreateGatePolicy.Decide(CreateDisposition.Supersede, CreateTargetState.File) ==
+        CreatePreservationAction.CaptureExistingPreimage, "FILE_SUPERSEDE existing file requires pre-image");
+    Check(CreateGatePolicy.Decide(CreateDisposition.Overwrite, CreateTargetState.File) ==
+        CreatePreservationAction.CaptureExistingPreimage, "FILE_OVERWRITE existing file requires pre-image");
+    Check(CreateGatePolicy.Decide(CreateDisposition.OverwriteIf, CreateTargetState.File) ==
+        CreatePreservationAction.CaptureExistingPreimage, "FILE_OVERWRITE_IF existing file requires pre-image");
+    Check(CreateGatePolicy.Decide(CreateDisposition.Open, CreateTargetState.File) ==
+        CreatePreservationAction.NoPreservationRequired, "FILE_OPEN existing file is non-destructive at CREATE time");
+    Check(CreateGatePolicy.Decide(CreateDisposition.OpenIf, CreateTargetState.File) ==
+        CreatePreservationAction.NoPreservationRequired, "FILE_OPEN_IF existing file is non-destructive at CREATE time");
+    Check(CreateGatePolicy.Decide(CreateDisposition.Create, CreateTargetState.File) ==
+        CreatePreservationAction.NoPreservationRequired, "FILE_CREATE existing file needs no snapshot because create fails");
+
+    foreach (var disposition in new[]
+    {
+        CreateDisposition.Supersede, CreateDisposition.Create,
+        CreateDisposition.OpenIf, CreateDisposition.OverwriteIf
+    })
+        Check(CreateGatePolicy.Decide(disposition, CreateTargetState.Missing) ==
+            CreatePreservationAction.RecordOriginallyAbsent,
+            $"{disposition} missing path records originally-absent baseline");
+
+    foreach (var disposition in new[] { CreateDisposition.Open, CreateDisposition.Overwrite })
+        Check(CreateGatePolicy.Decide(disposition, CreateTargetState.Missing) ==
+            CreatePreservationAction.NoPreservationRequired,
+            $"{disposition} missing path needs no baseline because create fails");
+
+    Check(!CreateGatePolicy.TryParseDisposition(6, out _), "unknown create disposition is rejected");
+    Check(CreateGatePolicy.Decide(CreateDisposition.Create, CreateTargetState.Directory) ==
+        CreatePreservationAction.NoPreservationRequired, "directory CREATE does not claim file-content preservation");
+
     // Repository-wide verification must include nested write-cow and create-state stores.
     var nestedRepo = new RollbackRepository(Path.Combine(root, "nested-repo"));
     var nestedSession = nestedRepo.CreateSession("nested");

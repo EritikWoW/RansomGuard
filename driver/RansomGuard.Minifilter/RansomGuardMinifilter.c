@@ -277,7 +277,11 @@ FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJE
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    if (!RgGateEvent(&event, &gateError)) {
+    if (InterlockedCompareExchange(&gReconciliationFaulted, 0, 0) != 0) {
+        return RgCompleteDenied(Data);
+    }
+
+    if (!RgGateEvent(&event, &gateError, NULL)) {
         UNREFERENCED_PARAMETER(gateError);
         return RgCompleteDenied(Data);
     }
@@ -319,7 +323,11 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    if (!RgGateEvent(&event, &gateError)) {
+    if (InterlockedCompareExchange(&gReconciliationFaulted, 0, 0) != 0) {
+        return RgCompleteDenied(Data);
+    }
+
+    if (!RgGateEvent(&event, &gateError, NULL)) {
         UNREFERENCED_PARAMETER(gateError);
         return RgCompleteDenied(Data);
     }
@@ -424,7 +432,7 @@ static BOOLEAN RgEventIsInsideGateRoot(const RG_EVENT *Event)
     return result;
 }
 
-static BOOLEAN RgGateEvent(const RG_EVENT *Event, PULONG ErrorCode)
+static BOOLEAN RgGateEvent(const RG_EVENT *Event, PULONG ErrorCode, PRG_GATE_DECISION Decision)
 {
     LARGE_INTEGER timeout;
     RG_GATE_REPLY reply;
@@ -455,10 +463,46 @@ static BOOLEAN RgGateEvent(const RG_EVENT *Event, PULONG ErrorCode)
         return FALSE;
     }
 
+    if (Decision != NULL) {
+        *Decision = (RG_GATE_DECISION)reply.Decision;
+    }
+
     allow = (reply.Decision == RgGateSnapshotCommitted ||
              reply.Decision == RgGateBaselineCommitted ||
              reply.Decision == RgGateNoPreservationRequired);
     return allow;
+}
+
+static BOOLEAN RgCommitCreateResult(const RG_EVENT *Event, PULONG ErrorCode)
+{
+    LARGE_INTEGER timeout;
+    RG_GATE_REPLY reply;
+    ULONG replyLength = sizeof(reply);
+    NTSTATUS status = STATUS_PORT_DISCONNECTED;
+
+    RtlZeroMemory(&reply, sizeof(reply));
+    timeout.QuadPart = -(RG_GATE_TIMEOUT_MS * 10LL * 1000LL);
+
+    ExAcquireFastMutex(&gPortMutex);
+    if (gClientPort != NULL && gClientMode == RgClientLabGate &&
+        InterlockedCompareExchange(&gUnloading, 0, 0) == 0) {
+        status = FltSendMessage(gFilter, &gClientPort,
+            (PVOID)Event, sizeof(*Event),
+            &reply, &replyLength, &timeout);
+    }
+    ExReleaseFastMutex(&gPortMutex);
+
+    if (ErrorCode != NULL) {
+        *ErrorCode = NT_SUCCESS(status) ? reply.ErrorCode : (ULONG)status;
+    }
+
+    if (!NT_SUCCESS(status) || status == STATUS_TIMEOUT || replyLength < sizeof(reply)) {
+        return FALSE;
+    }
+
+    return reply.ProtocolVersion == RG_PROTOCOL_VERSION &&
+           reply.RequestSequence == Event->Sequence &&
+           reply.Decision == RgGateReconciliationCommitted;
 }
 
 static VOID RgQueueEvent(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjects,

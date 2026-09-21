@@ -1,4 +1,4 @@
-# RansomGuard 0.7.14.0
+# RansomGuard 0.7.15.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
@@ -6,7 +6,7 @@ and recover data through rollback plus adaptive crypto analysis.
 
 ## Core preservation milestone
 
-0.7.14.0 retains the 0.7.2 range-aware COW gate and adds explicit CREATE preservation semantics.
+0.7.15.0 retains the 0.7.2 range-aware COW gate and adds explicit CREATE preservation semantics.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 
@@ -65,6 +65,8 @@ Protocol v11 also removes the previous blind skip of paging-write callbacks. Aft
 
 0.7.14 adds a disposable-VM runtime integration harness. GitHub-hosted CI still stops at source, userspace and compile/API validation. A separate manual workflow can run only on a self-hosted Windows VM labeled `ransomguard-lab-vm`: it builds the exact checkout, signs the current SYS/catalog with a preinstalled LAB certificate, installs/attaches only inside that VM, then exercises two real mapping scenarios. First, a writable mapped view is created before GateClient while the original file/mapping handles are already closed; activation must fail and persist `writableViewPresent=true`. Second, a clean activation is followed by a writable mapping/write; the run must prove matching full pre-image SHA-256, `WritableSection = BaselineVerified`, and paging-write evidence. The workflow uploads runtime evidence/logs only and removes the signed driver package.
 
+0.7.15 extends activation preflight from files to directory topology. Before file probing begins, GateClient opens the protected root and every ordinary non-reparse directory with FILE_READ_ATTRIBUTES and FILE_SHARE_READ only, records each directory FILE_ID_INFO in a write-through hash-chained activation-topology journal, and keeps all directory handles open until the kernel accepts ActivateGate. A pre-existing directory handle with write/delete/delete-on-close access therefore causes a sharing failure before activation, while new external CREATE/rename/delete operations are already denied by the NotActivated kernel barrier. This closes the main pre-existing directory-handle race without changing protocol v11.
+
 ## Recovery safety
 
 Range recovery:
@@ -115,7 +117,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.7.14.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.7.15.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 Manual disposable-VM runtime workflow:
 

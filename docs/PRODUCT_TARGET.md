@@ -51,6 +51,8 @@ Protocol v11 adds non-blocking visibility for paging writes associated with stre
 
 0.7.14 adds a manual runtime-proof workflow for a preconfigured disposable self-hosted Windows VM. The workflow builds the Engineering LAB bundle and minifilter from the exact checked-out commit, signs the current SYS and generated catalog with a certificate already present in the VM, and validates real Filter Manager behavior. One scenario keeps a user-writable view alive after closing the original file/mapping handles and requires startup activation to reject it. A second scenario activates cleanly, creates a new writable mapping, mutates/flushed pages, and requires a matching full pre-image plus `BaselineVerified` section evidence and paging evidence. Signed driver packages are removed after the run and are not uploaded as artifacts.
 
-The next core milestones are broader NTFS/ReFS runtime/fault-injection coverage, remaining pre-existing delete-on-close/topology races, deeper crash recovery for requests interrupted before authoritative kernel completion delivery,
+0.7.15 extends startup protection to directory topology. GateClient holds the protected root and every ordinary non-reparse directory with read-only sharing through the explicit ActivateGate handshake, binds each directory to FILE_ID_INFO, and persists the set in a hash-chained activation-topology journal. Pre-existing directory handles carrying write/delete/delete-on-close access therefore prevent activation through Windows share-access enforcement; new external topology opens/mutations remain blocked by the kernel NotActivated barrier.
+
+The next core milestones are broader NTFS/ReFS runtime/fault-injection coverage, directory-topology rollback semantics beyond startup handle exclusion, deeper crash recovery for requests interrupted before authoritative kernel completion delivery,
 containment, process-state capture,
 adaptive crypto analysis, and verified recovery orchestration.

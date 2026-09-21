@@ -1,3 +1,12 @@
+# RansomGuard 0.7.5.0
+- Protocol v6 adds a correlated no-reply `RenameResult` event for post-operation rename outcomes.
+- The minifilter retains the pre-operation destination name-info, uses `FltDoCompletionProcessingWhenSafe`, and reconciles successful renames with `FltGetTunneledName`.
+- Added a separate write-through SHA-256 hash-chained `rename-completion-journal.jsonl` linked to the exact pre-operation intent hash and kernel request sequence.
+- Rename completion explicitly distinguishes `Succeeded`, `SucceededNameUnresolved`, and `Failed`; missing result delivery leaves the intent pending instead of inferring success.
+- GateClient persists rename results without sending `FilterReplyMessage` for the no-reply post-operation event.
+- Added completion correlation, reopen, duplicate-conflict and journal-corruption rollback tests plus protocol-v6 kernel/userspace source gates.
+- This milestone confirms rename outcome/final tunneled name when available; post-operation kernel file-ID confirmation and post-CREATE reconciliation are still required.
+
 # RansomGuard 0.7.4.0
 - Protocol v5 adds a normalized destination path and destination path status for RENAME events.
 - The minifilter obtains rename destinations with `FltGetDestinationFileNameInformation` instead of reconstructing relative names in user mode.

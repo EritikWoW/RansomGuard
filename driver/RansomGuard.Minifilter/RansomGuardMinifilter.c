@@ -378,6 +378,168 @@ static VOID RgPopulateRenameDestination(PRG_EVENT Event, PFLT_CALLBACK_DATA Data
     FltReleaseFileNameInformation(destinationInfo);
 }
 
+static NTSTATUS RgCreateRenamePostContext(PFLT_CALLBACK_DATA Data,
+                                          PCFLT_RELATED_OBJECTS FltObjects,
+                                          ULONGLONG RequestSequence,
+                                          PRG_POST_CONTEXT *PostContext)
+{
+    PFILE_RENAME_INFORMATION renameInfo;
+    PFLT_FILE_NAME_INFORMATION destinationInfo = NULL;
+    PRG_POST_CONTEXT context = NULL;
+    ULONG bufferLength;
+    ULONG minimumLength = FIELD_OFFSET(FILE_RENAME_INFORMATION, FileName);
+    NTSTATUS status;
+
+    *PostContext = NULL;
+    bufferLength = Data->Iopb->Parameters.SetFileInformation.Length;
+    renameInfo = (PFILE_RENAME_INFORMATION)Data->Iopb->Parameters.SetFileInformation.InfoBuffer;
+
+    if (renameInfo == NULL || bufferLength < minimumLength ||
+        renameInfo->FileNameLength == 0 ||
+        renameInfo->FileNameLength > (bufferLength - minimumLength) ||
+        (renameInfo->FileNameLength % sizeof(WCHAR)) != 0) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    status = FltGetDestinationFileNameInformation(
+        FltObjects->Instance,
+        FltObjects->FileObject,
+        renameInfo->RootDirectory,
+        renameInfo->FileName,
+        renameInfo->FileNameLength,
+        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
+        &destinationInfo);
+
+    if (!NT_SUCCESS(status) || destinationInfo == NULL) {
+        return NT_SUCCESS(status) ? STATUS_UNSUCCESSFUL : status;
+    }
+
+    context = (PRG_POST_CONTEXT)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(RG_POST_CONTEXT), RG_POOL_TAG);
+    if (context == NULL) {
+        FltReleaseFileNameInformation(destinationInfo);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    RtlZeroMemory(context, sizeof(*context));
+    context->RequestSequence = RequestSequence;
+    context->PreDestinationNameInfo = destinationInfo;
+    *PostContext = context;
+    return STATUS_SUCCESS;
+}
+
+static VOID RgFreePostContext(PRG_POST_CONTEXT PostContext)
+{
+    if (PostContext == NULL) {
+        return;
+    }
+
+    if (PostContext->PreDestinationNameInfo != NULL) {
+        FltReleaseFileNameInformation(PostContext->PreDestinationNameInfo);
+        PostContext->PreDestinationNameInfo = NULL;
+    }
+
+    RtlSecureZeroMemory(PostContext, sizeof(*PostContext));
+    ExFreePoolWithTag(PostContext, RG_POOL_TAG);
+}
+
+FLT_POSTOP_CALLBACK_STATUS RgPostSetInformation(PFLT_CALLBACK_DATA Data,
+                                                PCFLT_RELATED_OBJECTS FltObjects,
+                                                PVOID CompletionContext,
+                                                FLT_POST_OPERATION_FLAGS Flags)
+{
+    FLT_POSTOP_CALLBACK_STATUS result = FLT_POSTOP_FINISHED_PROCESSING;
+
+    if (CompletionContext == NULL) {
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    }
+
+    if (FlagOn(Flags, FLTFL_POST_OPERATION_DRAINING)) {
+        RgFreePostContext((PRG_POST_CONTEXT)CompletionContext);
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    }
+
+    if (!FLT_IS_IRP_OPERATION(Data)) {
+        RgFreePostContext((PRG_POST_CONTEXT)CompletionContext);
+        InterlockedIncrement(&gDropped);
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    }
+
+    if (FltDoCompletionProcessingWhenSafe(
+            Data,
+            FltObjects,
+            CompletionContext,
+            Flags,
+            RgPostSetInformationSafe,
+            &result)) {
+        return result;
+    }
+
+    RgFreePostContext((PRG_POST_CONTEXT)CompletionContext);
+    InterlockedIncrement(&gDropped);
+    return FLT_POSTOP_FINISHED_PROCESSING;
+}
+
+static FLT_POSTOP_CALLBACK_STATUS RgPostSetInformationSafe(PFLT_CALLBACK_DATA Data,
+                                                           PCFLT_RELATED_OBJECTS FltObjects,
+                                                           PVOID CompletionContext,
+                                                           FLT_POST_OPERATION_FLAGS Flags)
+{
+    PRG_POST_CONTEXT context = (PRG_POST_CONTEXT)CompletionContext;
+    PFLT_FILE_NAME_INFORMATION tunneledInfo = NULL;
+    PFLT_FILE_NAME_INFORMATION finalInfo = NULL;
+    RG_EVENT event;
+    NTSTATUS status = STATUS_SUCCESS;
+    ULONG chars = 0;
+    LARGE_INTEGER systemTime;
+
+    UNREFERENCED_PARAMETER(FltObjects);
+    UNREFERENCED_PARAMETER(Flags);
+
+    if (context == NULL) {
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    }
+
+    RtlZeroMemory(&event, sizeof(event));
+    event.ProtocolVersion = RG_PROTOCOL_VERSION;
+    event.EventType = RgEventRenameResult;
+    event.Sequence = (ULONGLONG)InterlockedIncrement64(&gSequence);
+    event.RelatedSequence = context->RequestSequence;
+    event.CompletionStatus = (ULONG)Data->IoStatus.Status;
+    event.CompletionInformation = (ULONGLONG)Data->IoStatus.Information;
+    event.DestinationPathStatus = RgPathUnknown;
+    KeQuerySystemTimePrecise(&systemTime);
+    event.SystemTime100ns = systemTime.QuadPart;
+
+    if (NT_SUCCESS(Data->IoStatus.Status)) {
+        status = FltGetTunneledName(Data, context->PreDestinationNameInfo, &tunneledInfo);
+        if (NT_SUCCESS(status)) {
+            finalInfo = (tunneledInfo != NULL) ? tunneledInfo : context->PreDestinationNameInfo;
+            chars = finalInfo->Name.Length / sizeof(WCHAR);
+            if (chars >= RG_PATH_CHARS) {
+                chars = RG_PATH_CHARS - 1;
+                event.DestinationPathStatus = RgPathTruncated;
+            } else {
+                event.DestinationPathStatus = RgPathResolved;
+            }
+
+            if (chars != 0) {
+                RtlCopyMemory(event.DestinationPath, finalInfo->Name.Buffer, chars * sizeof(WCHAR));
+            }
+            event.DestinationPath[chars] = L'\0';
+        } else {
+            event.DestinationPathStatus = RgPathQueryFailed;
+        }
+    }
+
+    RgQueueRawEvent(&event, RgClientLabGate);
+
+    if (tunneledInfo != NULL) {
+        FltReleaseFileNameInformation(tunneledInfo);
+    }
+    RgFreePostContext(context);
+    return FLT_POSTOP_FINISHED_PROCESSING;
+}
+
 static BOOLEAN RgEventIsInsideGateRoot(const RG_EVENT *Event)
 {
     UNICODE_STRING eventPath;

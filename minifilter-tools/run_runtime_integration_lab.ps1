@@ -365,7 +365,7 @@ try{
         throw 'Contained runtime probe did not exit.'
     }
     $containOutcome=(Get-Content -LiteralPath $containResult -Raw).Trim()
-    if($containOutcome -notmatch '^(denied|io-denied:)'){
+    if($containOutcome -ne 'denied'){
         throw "Contained process mutation was not denied. outcome=$containOutcome exit=$($containProbe.ExitCode)"
     }
     if($containProbe.ExitCode -ne 0){

@@ -347,6 +347,8 @@ static class ActivationPreflight
                 if (winner != receive)
                 {
                     Native.Cancel(port);
+                    _ = await receive.ConfigureAwait(false); // Do not free the unmanaged buffer until canceled I/O has completed.
+                    cancellationToken.ThrowIfCancellationRequested();
                     throw new TimeoutException($"Timed out waiting for activation preflight evidence for '{expectedPath}'.");
                 }
 

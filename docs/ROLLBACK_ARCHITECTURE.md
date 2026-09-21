@@ -1,7 +1,7 @@
-# RansomGuard 0.7.8.0 - CREATE completion and identity reconciliation milestone
+# RansomGuard 0.7.9.0 - CREATE completion and identity reconciliation milestone
 
 RansomGuard is moving from detection-only telemetry to `preserve -> contain -> recover`.
-0.7.8.0 retains the deliberately constrained engineering minifilter gate, range-aware WRITE COW,
+0.7.9.0 retains the deliberately constrained engineering minifilter gate, range-aware WRITE COW,
 CREATE/RENAME preservation and rename outcome reconciliation, and adds durable post-CREATE outcome,
 tunneled-name and kernel file-identity reconciliation.
 
@@ -190,7 +190,7 @@ These checks do not yet reconcile an interrupted in-flight kernel request. They 
 
 ## Bounded concurrent gate execution
 
-0.7.8.0 removes the previous global serialization around blocking gate sends. The minifilter now:
+0.7.9.0 removes the previous global serialization around blocking gate sends. The minifilter now:
 - admits at most 8 simultaneous blocking gate requests;
 - fails closed with STATUS_DEVICE_BUSY when that bound is exceeded;
 - holds gPortMutex only long enough to acquire/release a client-port lease;
@@ -199,6 +199,14 @@ These checks do not yet reconcile an interrupted in-flight kernel request. They 
 The LAB GateClient receives messages continuously and dispatches preservation/reconciliation through a bounded worker pool. The default is 4 workers and the supported range is 1..8, matching the kernel admission ceiling. Store-level durability locks still serialize journal commit points where required.
 
 This is bounded concurrency, not yet full crash reconciliation. A worker/process crash can still leave CREATE/RENAME completion intent pending and must not be inferred as success.
+
+## Pending-operation crash quarantine
+
+0.7.9.0 treats a durable CREATE or RENAME intent without a matching completion record as ambiguous crash state. Repository verification still validates all journals, then `PendingSessions()` reports exact pending request sequences by session.
+
+The LAB gate checks that report before creating a new session. Any pending operation causes startup to fail closed. `--inspect-pending` is read-only: it does not validate a LAB root, connect to the minifilter, create a session, write a completion, or infer an outcome from current filesystem state. No bypass flag is provided.
+
+This is quarantine, not reconciliation. A future recovery workflow must use stronger evidence or explicit operator review to resolve these intents.
 
 ## Still required before production
 

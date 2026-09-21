@@ -1,3 +1,11 @@
+# RansomGuard 0.7.7.0
+- Protocol v8 binds successful post-RENAME reconciliation to `FileIdInformation` queried from the actual completed kernel file object.
+- Rename completion journals now persist final volume serial + 128-bit file ID alongside the reconciled destination name.
+- Successful rename completion distinguishes authoritative, name-unresolved, identity-unresolved and fully unresolved states.
+- Any reported post-op identity that differs from the source identity committed in the rename intent is rejected.
+- Added rollback tests and source gates for rename identity persistence, partial reconciliation and mismatched-identity rejection.
+- Normal product remains AuditOnly; blocking preservation remains engineering LAB-only.
+
 # RansomGuard 0.7.6.0
 - Protocol v7 adds a correlated no-reply `CreateResult` event for post-operation CREATE outcomes.
 - The gate durably records a hash-chained CREATE intent linked to its preservation proof before returning any allow decision.

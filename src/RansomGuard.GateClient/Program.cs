@@ -263,6 +263,18 @@ static class ActivationPreflight
                 if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
                     throw new InvalidOperationException($"Activation preflight refuses reparse file: {path}");
 
+                var arm = Native.Control(port, new RgControlRequest
+                {
+                    ProtocolVersion = 11,
+                    Command = (uint)RgControlCommand.ArmPreflight
+                });
+                if (arm.ProtocolVersion != 11 ||
+                    arm.Command != (uint)RgControlCommand.ArmPreflight ||
+                    arm.Status != 0 ||
+                    arm.GateActivated != 0)
+                    throw new InvalidOperationException(
+                        $"Kernel refused to arm activation preflight for '{path}'. NTSTATUS=0x{arm.Status:X8}.");
+
                 var file = Native.OpenPreflight(path);
                 heldHandles.Add(file);
                 var ev = await ReceivePreflightEventAsync(port, path, resolver, cancellationToken).ConfigureAwait(false);
@@ -1072,7 +1084,7 @@ struct RgGateReply
     public uint Reserved;
 }
 
-enum RgControlCommand : uint { Invalid = 0, ActivateGate = 1, QueryActivation = 2 }
+enum RgControlCommand : uint { Invalid = 0, ActivateGate = 1, QueryActivation = 2, ArmPreflight = 3 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 struct RgControlRequest

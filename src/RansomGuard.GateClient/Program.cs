@@ -419,9 +419,10 @@ sealed class DevicePathResolver
 }
 
 enum RgClientMode : uint { Audit = 1, LabGate = 2 }
-enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5 }
+enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, CreateReconcile = 6 }
 enum RgPathStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2, Truncated = 3 }
-enum RgGateDecision : uint { Invalid = 0, SnapshotCommitted = 1, Deny = 2, BaselineCommitted = 3, NoPreservationRequired = 4 }
+enum RgIdentityStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2, NotApplicable = 3 }
+enum RgGateDecision : uint { Invalid = 0, SnapshotCommitted = 1, Deny = 2, BaselineCommitted = 3, NoPreservationRequired = 4, Reconciled = 5 }
 
 [StructLayout(LayoutKind.Sequential)]
 struct FilterMessageHeader { public uint ReplyLength; public ulong MessageId; }
@@ -447,6 +448,10 @@ struct RgEvent
     public ulong ProcessId, ThreadId;
     public long ByteOffset;
     public uint Length, FileInformationClass, DroppedBeforeThis, Reserved;
+    public ulong RelatedSequence;
+    public uint OperationStatus, IdentityStatus;
+    public ulong VolumeSerialNumber;
+    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)] public byte[]? FileId128;
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 512)] public string? Path;
 }
 

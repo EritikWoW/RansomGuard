@@ -230,7 +230,7 @@ After a successful in-scope CREATE, the minifilter attaches a nonpaged `FLT_STRE
 
 GateClient persists those observations in a separate write-through SHA-256 hash-chained `paging-write-journal.jsonl`. Repository-wide validation includes that journal.
 
-This closes the observability gap for memory-mapped/cache-manager writes associated with already tracked streams. It does **not** claim that those writes are recoverable: no pre-image is captured from the paging callback itself, and the paging path remains deliberately non-blocking.
+This closes the observability gap for memory-mapped/cache-manager writes associated with already tracked streams. The paging callback itself still captures no pre-image and remains deliberately non-blocking. For a stream whose content-write capable handle was opened after 0.7.11 policy became active, the required full-file pre-image was already committed during CREATE, so mapped mutations through that handle have a conservative recovery baseline.
 
 ## Bounded concurrent gate execution
 
@@ -247,7 +247,7 @@ Bounded concurrency and conservative restart evidence are implemented. A worker/
 ## Still required before production
 
 - deeper crash recovery for requests interrupted before authoritative kernel completion delivery;
-- safe pre-preservation for writable memory mappings/cache-manager paging writes;
+- section-synchronization attestation and coverage for writable mappings backed by handles that predate LAB gate activation;
 - storage quotas, retention and pressure policy;
 - transition from protected-root health to containment/block policy;
 - process-state capture and adaptive crypto analysis;

@@ -29,6 +29,18 @@ var restartSummary = await RestartReconciliation.ObservePendingAsync(
     CancellationToken.None).ConfigureAwait(false);
 var sessionId = options.SessionId ?? $"gate-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}";
 var store = repository.CreateSession(sessionId);
+var storageBudget = new RollbackStorageBudget(
+    store.Root,
+    checked(options.MaxStoreMiB * RollbackStorageBudget.MiB),
+    checked(options.MinFreeMiB * RollbackStorageBudget.MiB));
+var lifecycleStore = new RollbackSessionLifecycleStore(store.Root);
+await using (var lifecycleOpenReservation = await storageBudget.ReserveAsync(
+                 RollbackStorageBudget.MetadataReservationBytes,
+                 "session-lifecycle-open",
+                 CancellationToken.None).ConfigureAwait(false))
+{
+    _ = await lifecycleStore.RecordOpenedAsync(CancellationToken.None).ConfigureAwait(false);
+}
 var writeStore = new RangeRollbackStore(Path.Combine(store.Root, "write-cow"));
 var createStore = new CreateRollbackStore(Path.Combine(store.Root, "create-state"));
 var createOperationStore = new CreateOperationStore(Path.Combine(store.Root, "create-state"));
@@ -38,10 +50,6 @@ var pagingStore = new PagingWriteEvidenceStore(Path.Combine(store.Root, "paging-
 var sectionStore = new WritableSectionEvidenceStore(Path.Combine(store.Root, "section-state"));
 var activationStore = new ActivationPreflightStore(Path.Combine(store.Root, "activation-state"));
 var topologyStore = new ActivationTopologyStore(Path.Combine(store.Root, "activation-topology-state"));
-var storageBudget = new RollbackStorageBudget(
-    store.Root,
-    checked(options.MaxStoreMiB * RollbackStorageBudget.MiB),
-    checked(options.MinFreeMiB * RollbackStorageBudget.MiB));
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
 Console.WriteLine("RansomGuard LAB pre-write gate v0.7.17.0");
@@ -257,6 +265,12 @@ finally
     Marshal.FreeHGlobal(buffer);
     if (activeWorkers.Count != 0)
         await Task.WhenAll(activeWorkers).ConfigureAwait(false);
+
+    await using var lifecycleCloseReservation = await storageBudget.ReserveAsync(
+        RollbackStorageBudget.MetadataReservationBytes,
+        "session-lifecycle-close",
+        CancellationToken.None).ConfigureAwait(false);
+    _ = await lifecycleStore.RecordClosedCleanlyAsync(CancellationToken.None).ConfigureAwait(false);
 }
 
 static class ActivationPreflight

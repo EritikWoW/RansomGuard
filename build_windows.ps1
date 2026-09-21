@@ -195,7 +195,7 @@ try {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'docs\LAB_QUICKSTART.txt') -Destination (Join-Path $labRelease 'START_HERE.txt') -Force
         $labDocs=Join-Path $labRelease 'docs'
         New-Item -ItemType Directory -Path $labDocs -Force | Out-Null
-        foreach($file in @('MINIFILTER_LAB.md','ROLLBACK_ARCHITECTURE.md','PRODUCT_TARGET.md','SECURITY.md','TESTING.md')){
+        foreach($file in @('MINIFILTER_LAB.md','ROLLBACK_ARCHITECTURE.md','PRODUCT_TARGET.md','SECURITY.md','TESTING.md','RUNTIME_VM.md')){
             Copy-Item -LiteralPath (Join-Path $PSScriptRoot ('docs\'+$file)) -Destination $labDocs
         }
     }

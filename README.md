@@ -29,8 +29,9 @@ The engineering minifilter protocol is now v4 and reports CREATE, WRITE, RENAME,
 
 For CREATE, the gate distinguishes Windows create dispositions instead of treating every open as destructive:
 existing `FILE_SUPERSEDE`, `FILE_OVERWRITE` and `FILE_OVERWRITE_IF` require a durable full pre-image;
+`FILE_DELETE_ON_CLOSE` also requires a pre-image for an existing file even with an ordinary open;
 create-capable dispositions on a missing path durably record that the path was originally absent; ordinary
-non-destructive opens require no snapshot. Paths marked originally absent do not later manufacture rollback
+non-destructive opens require no snapshot. Existing-directory delete-on-close is denied until directory-topology rollback exists. Paths marked originally absent do not later manufacture rollback
 pre-images from data created during the same incident.
 
 ## Recovery safety

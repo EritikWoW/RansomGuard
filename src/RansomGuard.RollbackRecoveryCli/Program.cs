@@ -106,6 +106,7 @@ static void WriteNewJson<T>(string path, T value, JsonSerializerOptions options)
     var full = Path.GetFullPath(path);
     var parent = Path.GetDirectoryName(full)
         ?? throw new ArgumentException("Plan output must have a parent directory.", nameof(path));
+    RejectExistingReparseAncestors(parent);
     Directory.CreateDirectory(parent);
     if ((File.GetAttributes(parent) & FileAttributes.ReparsePoint) != 0)
         throw new IOException("Plan output parent must not be a reparse point: " + parent);
@@ -116,6 +117,18 @@ static void WriteNewJson<T>(string path, T value, JsonSerializerOptions options)
         64 * 1024, FileOptions.WriteThrough);
     stream.Write(bytes);
     stream.Flush(true);
+}
+
+static void RejectExistingReparseAncestors(string path)
+{
+    var current = new DirectoryInfo(Path.GetFullPath(path));
+    if (!current.Exists) current = current.Parent;
+    while (current is not null)
+    {
+        if (current.Exists && (current.Attributes & FileAttributes.ReparsePoint) != 0)
+            throw new IOException("Plan output path must not traverse a reparse point: " + current.FullName);
+        current = current.Parent;
+    }
 }
 
 static void Usage()

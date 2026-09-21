@@ -88,6 +88,12 @@ general-purpose protected folder yet.
 
 Stop the client with Ctrl+C before unloading the filter.
 
+## Writable-open preservation
+
+For an existing test file, opening it with FILE_WRITE_DATA, FILE_APPEND_DATA or GENERIC_WRITE now requires a committed full pre-image before the handle is returned. This is deliberate LAB behavior to establish a safe baseline for later writable mappings.
+
+Read-only opens remain non-eager. Paths recorded as originally absent remain absence-governed even if they are later reopened writable.
+
 ## Paging-write evidence test
 
 On a disposable VM, open a test file through the LAB root, create a writable memory mapping, modify a page and flush/unmap it. A protocol-v9 `PagingWrite` record should appear in the session's `paging-state` journal with the tracked path, offset/length and kernel identity when available.

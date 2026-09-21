@@ -66,6 +66,8 @@ foreach($required in @(
     'CreateCompletionState.Failed',
     'IntentRecordSha256',
     'Conflicting duplicate CREATE completion',
+    'CREATE intent preservation action does not match the disposition/target policy',
+    'CreateGatePolicy.Decide(disposition, targetState, createOptions)',
     'FileOptions.WriteThrough',
     'Flush(true)'
 )){

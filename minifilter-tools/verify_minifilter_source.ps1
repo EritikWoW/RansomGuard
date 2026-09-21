@@ -91,7 +91,9 @@ foreach($required in @(
     'gActivationHazard',
     'RgMessage',
     'RgControlActivateGate',
-    'RgControlQueryActivation'
+    'RgControlQueryActivation',
+    'RgControlArmPreflight',
+    'gPreflightProbeArmed'
 )){
     if($src -notmatch [regex]::Escape($required)){throw "LAB write-gate invariant missing: $required"}
 }
@@ -170,6 +172,10 @@ if($src -notmatch [regex]::Escape('postContext->ActivationPreflight = 1') -or
    $src -notmatch [regex]::Escape('RG_EVENT_FLAG_PREFLIGHT_WRITABLE_VIEW')){
     throw 'Gate-client preflight CREATE must query pre-existing user-writable mappings in post-create.'
 }
+if($src -notmatch [regex]::Escape('InterlockedExchange(&gPreflightProbeArmed, 0) == 1')){
+    throw 'Only an explicitly armed gate-client CREATE may become an activation preflight probe.'
+}
+
 if($src -notmatch 'InterlockedCompareExchange\(&gGateActivated,\s*0,\s*0\)\s*==\s*0' -or
    $src -notmatch 'InterlockedExchange\(&gActivationHazard,\s*1\)'){
     throw 'LAB gate activation state/hazard invariants are missing.'
@@ -179,7 +185,7 @@ if($messageStart -lt 0){throw 'Kernel control-message callback missing.'}
 $messageEnd=$src.IndexOf('static VOID RgDisconnect',$messageStart)
 if($messageEnd -lt 0){throw 'Kernel control-message callback boundary missing.'}
 $messageBlock=$src.Substring($messageStart,$messageEnd-$messageStart)
-foreach($required in @('RgControlActivateGate','RgControlQueryActivation','gActivationHazard','gGateActivated','STATUS_DEVICE_BUSY')){
+foreach($required in @('RgControlActivateGate','RgControlQueryActivation','RgControlArmPreflight','gPreflightProbeArmed','gActivationHazard','gGateActivated','STATUS_DEVICE_BUSY')){
     if($messageBlock -notmatch [regex]::Escape($required)){throw "Activation control callback missing invariant: $required"}
 }
 if($src -notmatch 'FltCreateCommunicationPort\([^;]*RgConnect,\s*RgDisconnect,\s*RgMessage,\s*1\)' -and

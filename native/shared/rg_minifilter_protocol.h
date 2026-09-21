@@ -59,7 +59,8 @@ typedef enum _RG_GATE_DECISION {
 typedef enum _RG_CONTROL_COMMAND {
     RgControlInvalid = 0,
     RgControlActivateGate = 1,
-    RgControlQueryActivation = 2
+    RgControlQueryActivation = 2,
+    RgControlArmPreflight = 3
 } RG_CONTROL_COMMAND;
 
 #pragma pack(push, 1)

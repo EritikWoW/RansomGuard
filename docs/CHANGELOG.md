@@ -1,3 +1,16 @@
+# RansomGuard 0.7.20.0
+
+- Added minifilter protocol v12 with an explicit LAB-only atomic activation-and-containment command.
+- Kernel containment resolves the requested PID with PsLookupProcessByProcessId and holds a referenced PEPROCESS; enforcement compares requestor process objects rather than trusting reusable numeric PIDs.
+- A contained process is denied mutation-capable CREATE plus non-paging WRITE/RENAME/DELETE/TRUNCATE inside the explicit LAB root before user-mode preservation is consulted.
+- Read-only CREATE/open remains allowed and non-contained processes continue through the normal preservation gate.
+- Containment rejects system PIDs and GateClient itself, exposes query-only status, has no runtime release/bypass command, and is cleared on client disconnect or driver unload.
+- GateClient exposes containment only through explicit --contain-pid and binds it atomically with successful activation preflight.
+- Added disposable-VM containment coverage proving the contained target cannot change while an ordinary peer can still mutate through the normal gate.
+- Fixed the Audit FilterClient connect context to use the current protocol constant instead of a stale protocol-v8 literal.
+- Extended minifilter, GateClient and runtime source gates for protocol-v12/process-object containment invariants.
+- Bumped userspace/LAB and driver package version to 0.7.20.0.
+
 # RansomGuard 0.7.19.0
 
 - Added conservative restart-evidence assessment for pending CREATE/RENAME operations, bound to exact operation kind, kernel request sequence and intent record SHA-256.

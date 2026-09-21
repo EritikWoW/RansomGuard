@@ -208,6 +208,15 @@ try
         CreatePreservationAction.NoPreservationRequired, "FILE_OPEN_IF existing file is non-destructive at CREATE time");
     Check(CreateGatePolicy.Decide(CreateDisposition.Create, CreateTargetState.File) ==
         CreatePreservationAction.NoPreservationRequired, "FILE_CREATE existing file needs no snapshot because create fails");
+    Check(CreateGatePolicy.Decide(CreateDisposition.Open, CreateTargetState.File,
+            CreateGatePolicy.FileDeleteOnClose) == CreatePreservationAction.CaptureExistingPreimage,
+        "FILE_DELETE_ON_CLOSE existing file requires pre-image even for FILE_OPEN");
+    Check(CreateGatePolicy.Decide(CreateDisposition.Open, CreateTargetState.Directory,
+            CreateGatePolicy.FileDeleteOnClose) == CreatePreservationAction.DenyUnsupported,
+        "FILE_DELETE_ON_CLOSE existing directory is denied until topology rollback exists");
+    Check(CreateGatePolicy.Decide(CreateDisposition.Create, CreateTargetState.Missing,
+            CreateGatePolicy.FileDeleteOnClose) == CreatePreservationAction.RecordOriginallyAbsent,
+        "FILE_DELETE_ON_CLOSE newly created path still records originally-absent baseline");
 
     foreach (var disposition in new[]
     {

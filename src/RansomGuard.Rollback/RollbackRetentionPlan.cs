@@ -40,6 +40,7 @@ public static class RollbackRetentionPlanner
         var protectedCount = 0;
         var heldCount = 0;
         var legacyCount = 0;
+        long protectedCompletedBytes = 0;
 
         var latestRetention = retention.Records
             .GroupBy(x => x.SessionId, StringComparer.Ordinal)
@@ -164,7 +165,7 @@ public static class RollbackRetentionPlanner
 
             if (snapshot.IsHeld) heldCount++;
 
-            if (snapshot.State != RollbackSessionLifecycleState.Completed || snapshot.IsHeld)
+            if (snapshot.State != RollbackSessionLifecycleState.Completed)
             {
                 protectedCount++;
                 inventory.Add(new RetentionInventoryItem(
@@ -173,21 +174,32 @@ public static class RollbackRetentionPlanner
                 continue;
             }
 
-            if (HasPendingTransactions(store.Root))
-            {
-                protectedCount++;
-                issues.Add(new RollbackRetentionIssue(
-                    sessionId, "Completed lifecycle has pending CREATE/RENAME transaction evidence; protected from retention."));
-                inventory.Add(new RetentionInventoryItem(
-                    sessionId, snapshot.State, false, snapshot.CompletedUtc,
-                    0, string.Empty, snapshot.LastRecordSha256));
-                continue;
-            }
-
             var sessionBytes = MeasureTreeBytes(store.Root);
             var digest = ComputeSessionDigest(store.Root);
             var completedUtc = snapshot.CompletedUtc
                 ?? throw new InvalidDataException("Completed lifecycle is missing CompletedUtc.");
+
+            if (snapshot.IsHeld)
+            {
+                protectedCount++;
+                protectedCompletedBytes = checked(protectedCompletedBytes + sessionBytes);
+                inventory.Add(new RetentionInventoryItem(
+                    sessionId, snapshot.State, true, completedUtc,
+                    sessionBytes, digest, snapshot.LastRecordSha256));
+                continue;
+            }
+
+            if (HasPendingTransactions(store.Root))
+            {
+                protectedCount++;
+                protectedCompletedBytes = checked(protectedCompletedBytes + sessionBytes);
+                issues.Add(new RollbackRetentionIssue(
+                    sessionId, "Completed lifecycle has pending CREATE/RENAME transaction evidence; protected from retention."));
+                inventory.Add(new RetentionInventoryItem(
+                    sessionId, snapshot.State, false, completedUtc,
+                    sessionBytes, digest, snapshot.LastRecordSha256));
+                continue;
+            }
 
             managedCompleted.Add(new RetentionCompletedCandidate(
                 sessionId, store.Root, completedUtc, sessionBytes,
@@ -208,7 +220,8 @@ public static class RollbackRetentionPlanner
             selected[candidate.SessionId] = (RollbackRetentionPurgeReason.AgeExpired, candidate);
         }
 
-        var totalCompletedBytes = managedCompleted.Sum(x => x.SessionBytes);
+        var totalCompletedBytes = checked(
+            managedCompleted.Sum(x => x.SessionBytes) + protectedCompletedBytes);
         var plannedReclaimBytes = selected.Values.Sum(x => x.Candidate.SessionBytes);
         var remainingBytes = totalCompletedBytes - plannedReclaimBytes;
 

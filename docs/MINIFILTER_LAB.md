@@ -1,4 +1,4 @@
-# RansomGuard minifilter engineering lab — v0.7.10.0
+# RansomGuard minifilter engineering lab — v0.7.11.0
 
 The minifilter has two mutually exclusive user-mode connection modes:
 
@@ -9,7 +9,7 @@ The minifilter has two mutually exclusive user-mode connection modes:
 The LAB Gate exists to validate preservation ordering. It is **not** a production driver configuration.
 Do not load it on a primary workstation and do not point it at real documents.
 
-On startup, v0.7.10.0 also scans older pending CREATE/RENAME intents under the same LAB root and appends conservative restart evidence (path state + FILE_ID_INFO when available). This evidence is diagnostic/recovery input only and never substitutes for the original kernel completion event.
+On startup, v0.7.11.0 also scans older pending CREATE/RENAME intents under the same LAB root and appends conservative restart evidence (path state + FILE_ID_INFO when available). This evidence is diagnostic/recovery input only and never substitutes for the original kernel completion event.
 
 Protocol v9 also observes paging writes on streams that were successfully opened inside the LAB root. The driver uses a pre-established nonpaged stream context and emits no-reply evidence only; it does not run a filesystem name query or synchronous preservation gate in the paging path. Treat these events as visibility, not as proof that memory-mapped writes are recoverable.
 
@@ -38,7 +38,7 @@ Build the engineering package:
 .\build_lab.cmd
 ```
 
-Then, from the generated `RansomGuard-Lab-v0.7.10.0-*` directory, build/install the minifilter only in a
+Then, from the generated `RansomGuard-Lab-v0.7.11.0-*` directory, build/install the minifilter only in a
 Windows test VM using the existing lab scripts.
 
 ## Audit mode
@@ -78,10 +78,7 @@ unresolved. User mode records both name and identity when available and rejects 
 pre-operation source identity. If reconciliation cannot be delivered, the durable intent remains pending and must not
 be treated as completed.
 
-For CREATE, the gate now also commits a durable operation intent before allow. After completion, protocol v9 emits
-a correlated no-reply `CreateResult`: successful operations reconcile the tunneled final name and query
-`FileIdInformation` from the actual completed file object; failed operations record their NTSTATUS without claiming
-success. Missing or partially resolved completion data remains explicit, and missing delivery leaves the intent pending.
+For CREATE, the gate commits a durable operation intent before allow. Existing files opened via FILE_OPEN/FILE_OPEN_IF with write-capable desired access are now treated conservatively: GateClient binds the current FILE_ID_INFO identity and commits a full-file pre-image before allowing the handle. This is intended to establish a baseline before that handle can be used for PAGE_READWRITE/PAGE_EXECUTE_READWRITE file mappings. Read-only opens still use the no-preservation path. After completion, protocol v9 emits a correlated no-reply `CreateResult`: successful operations reconcile the tunneled final name and query `FileIdInformation` from the actual completed file object; failed operations record their NTSTATUS without claiming success. Missing or partially resolved completion data remains explicit, and missing delivery leaves the intent pending.
 
 CREATE classification still begins with a path-based pre-operation probe, so do not use the lab gate as a
 general-purpose protected folder yet.
@@ -92,17 +89,17 @@ Stop the client with Ctrl+C before unloading the filter.
 
 On a disposable VM, open a test file through the LAB root, create a writable memory mapping, modify a page and flush/unmap it. A protocol-v9 `PagingWrite` record should appear in the session's `paging-state` journal with the tracked path, offset/length and kernel identity when available.
 
-This test proves visibility only. It does not prove pre-preservation of mapped writes.
+This test still proves paging visibility separately. For a mapping created from a write-capable handle opened after the LAB gate is active, 0.7.11 should also show a committed full-file CREATE pre-image before the mapping is created. The current milestone does not cover writable mappings created from file handles that predate LAB-gate attachment.
 
 ## What a successful gate test proves
 
 It proves that, for the tested path and operation, the minifilter can hold the destructive I/O while user
 mode durably captures the pre-image and can deny the I/O when that commit is unavailable. It does **not**
-prove production compatibility, crash safety, memory-mapped-write coverage, large-file performance,
+prove production compatibility, complete pre-existing-handle memory-mapped-write coverage, large-file performance,
 containment efficacy, or universal rollback.
 
 
-## Bounded gate concurrency (0.7.10.0)
+## Bounded gate concurrency (0.7.11.0)
 
 The LAB gate no longer serializes the full blocking FltSendMessage duration under the global port mutex. Up to 8 kernel gate requests may be in flight. Additional in-scope destructive I/O fails closed rather than creating an unbounded queue.
 

@@ -34,7 +34,7 @@ foreach($required in @(
     'RecordSha256',
     'RestoreToNewCopyAsync',
     'Rollback pre-image hash mismatch',
-    'existing recovery output'
+    'Recovery output already exists'
 )){
     if($text -notmatch [regex]::Escape($required)){throw "Rollback source gate missing invariant: $required"}
 }

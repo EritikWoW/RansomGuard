@@ -43,3 +43,18 @@ ACL read denial, wrong owner, reparse point, existing extra-user FullControl ent
 no-op for correct ACL, content retention after recovery, existing handles, concurrent
 start/save attempts, rename failure, fresh-root failure, audit failure, service restart.
 Use an isolated test environment and snapshots for fault injection.
+
+
+## Protocol v4 CREATE preservation coverage
+
+The rollback policy tests exercise every supported Windows create disposition against existing and missing
+file states. Existing `SUPERSEDE`, `OVERWRITE` and `OVERWRITE_IF` must select a full pre-image.
+Missing `SUPERSEDE`, `CREATE`, `OPEN_IF` and `OVERWRITE_IF` must select an originally-absent
+baseline. Invalid disposition values are rejected.
+
+The tests also reopen and verify the hash-chained create journal, reject corruption, reject attempts to mark
+an existing target as absent, and verify that repository-wide startup validation includes nested
+`create-state` stores.
+
+These are userspace policy/store tests plus kernel source gates. They do not prove native IRP_MJ_CREATE
+execution, tunneled-name handling, or file-ID race safety; those still require an isolated Windows VM.

@@ -55,7 +55,8 @@ The blocking gate is still deliberately restricted:
 - requires `.ransomguard-gate-lab-root`;
 - refuses an entire drive, Windows, Program Files, ProgramData and reparse roots;
 - rollback storage must be outside the gated root;
-- unresolved/out-of-root I/O fails open;
+- out-of-root or name-query-failed I/O fails open;
+- a path truncated after an already verified in-root prefix is denied rather than preserved against an ambiguous name;
 - in-scope preservation failure or timeout fails closed;
 - negative/special write offsets are denied rather than guessed;
 - demand-start filter, automatic attachment suppressed;

@@ -71,14 +71,18 @@ The journal is append-only, SHA-256 hash-chained and write-through flushed. Re-o
 identity reuses the committed baseline. If the same path resolves to a different file identity later in the incident,
 the gate fails closed rather than capturing the replacement file as though it were the original object.
 
+The expected identity is also passed into the full-preimage and range-COW stores. Those stores query `FILE_ID_INFO`
+from the exact source handle they read, before copying any bytes. This closes the userspace gap where the path could
+be replaced between an identity probe and a second snapshot open.
+
 A renamed file may appear under another observed path with the same identity; the identity store keeps those aliases.
 This is groundwork for identity-safe rename recovery, not the completed rename transaction model. Originally-absent
 paths remain governed by the create baseline because replacing one incident-created file with another does not change
 the pre-incident requirement that the path was absent.
 
-The remaining identity gap is kernel/post-create reconciliation: user mode still observes an existing path by opening
-it before preservation, while production handling must bind the completed CREATE/rename operation to the exact kernel
-file object and destination identity.
+The remaining identity gap is kernel/post-create reconciliation: even though the snapshot handle is identity-checked,
+user mode still opens that handle by path. Production handling must bind the completed CREATE/rename operation to the
+exact kernel file object and destination identity.
 
 ## Range recovery
 

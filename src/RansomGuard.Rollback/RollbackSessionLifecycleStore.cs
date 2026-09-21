@@ -96,6 +96,16 @@ public sealed class RollbackSessionLifecycleStore
         CancellationToken cancellationToken = default) =>
         AppendAsync(RollbackSessionLifecycleEventType.Completed, reason, cancellationToken);
 
+    public Task<RollbackSessionLifecycleRecord> MarkCompletedAtAsync(
+        string reason,
+        DateTime occurredUtc,
+        CancellationToken cancellationToken = default) =>
+        AppendAsync(
+            RollbackSessionLifecycleEventType.Completed,
+            reason,
+            cancellationToken,
+            occurredUtc.ToUniversalTime());
+
     public Task<RollbackSessionLifecycleRecord> MarkFaultedAsync(
         string reason,
         CancellationToken cancellationToken = default) =>
@@ -116,7 +126,8 @@ public sealed class RollbackSessionLifecycleStore
     private async Task<RollbackSessionLifecycleRecord> AppendAsync(
         RollbackSessionLifecycleEventType eventType,
         string reason,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        DateTime? occurredUtc = null)
     {
         if (string.IsNullOrWhiteSpace(reason))
             throw new ArgumentException("Lifecycle reason is required.", nameof(reason));
@@ -124,7 +135,7 @@ public sealed class RollbackSessionLifecycleStore
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            return AppendCore(eventType, reason, DateTime.UtcNow);
+            return AppendCore(eventType, reason, occurredUtc ?? DateTime.UtcNow);
         }
         finally
         {

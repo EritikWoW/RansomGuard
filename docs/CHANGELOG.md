@@ -1,3 +1,14 @@
+# RansomGuard 0.7.12.0
+
+- Bumped the engineering minifilter protocol to v10 with a no-reply `WritableSection` attestation event.
+- Registered `IRP_MJ_ACQUIRE_FOR_SECTION_SYNCHRONIZATION` to observe `SyncTypeCreateSection` requests for `PAGE_READWRITE` and `PAGE_EXECUTE_READWRITE`.
+- CREATE gate decisions and request sequences are propagated into the nonpaged stream context after successful CREATE.
+- Writable-section callbacks read only the established stream context and never call the blocking gate, file-name queries, `FltQueryInformationFile`, or complete/deny the FSFilter operation.
+- GateClient correlates writable-section events to durable CREATE intent/completion state and records `BaselineVerified`, `Unprotected`, `MissingCreateIntent`, `DecisionMismatch`, or `PathMismatch`.
+- Added a write-through SHA-256 hash-chained `writable-section-journal.jsonl` plus repository-wide verification and corruption/idempotency tests.
+- This attests mappings created from handles opened under the LAB gate; handles that predate gate activation remain a known gap.
+- Normal product remains AuditOnly and the section/paging paths remain engineering LAB-only.
+
 # RansomGuard 0.7.11.0
 
 - Existing files opened with content-write capable CREATE access now receive a durable full pre-image before the handle is returned.

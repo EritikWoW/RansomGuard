@@ -39,6 +39,8 @@ before allow. A missing or partially resolved result remains explicit; pre-opera
 
 The current LAB gate now uses bounded concurrent preservation: kernel admission caps simultaneous blocking gate sends at 8, while user mode dispatches a configurable 1..8 worker pool (default 4). Slow preservation no longer holds the global port mutex across the 30-second gate wait.
 
-The next core milestones are crash-reconciled gating, memory-mapped write coverage,
+Crash/restart safety now includes fail-closed pending-intent quarantine: an earlier session with missing CREATE/RENAME completion evidence prevents a new blocking LAB session. Read-only inspection exposes exact pending request sequences; current filesystem state is never used to guess success or failure.
+
+The next core milestones are verified/operator reconciliation for quarantined intents, memory-mapped write coverage,
 containment, process-state capture,
 adaptive crypto analysis, and verified recovery orchestration.

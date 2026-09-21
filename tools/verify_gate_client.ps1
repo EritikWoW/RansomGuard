@@ -109,19 +109,19 @@ if($createIdentity -lt 0 -or $createIdentity -gt $existingCapture){
 
 $resultBranch=$text.IndexOf('if ((RgEventType)ev.EventType == RgEventType.RenameResult)')
 $resultPersist=$text.IndexOf('RenameReconciliation.HandleAsync(',$resultBranch)
-$resultContinue=$text.IndexOf('continue;',$resultPersist)
+$resultReturn=$text.IndexOf('return;',$resultPersist)
 $resultReply=$text.IndexOf('Native.Reply(',$resultBranch)
-if($resultBranch -lt 0 -or $resultPersist -lt 0 -or $resultContinue -lt 0 -or
-   ($resultReply -ge 0 -and $resultReply -lt $resultContinue)){
+if($resultBranch -lt 0 -or $resultPersist -lt 0 -or $resultReturn -lt 0 -or
+   ($resultReply -ge 0 -and $resultReply -lt $resultReturn)){
   throw 'RenameResult must be persisted as completion metadata and must not receive FilterReplyMessage.'
 }
 
 $createResultBranch=$text.IndexOf('if ((RgEventType)ev.EventType == RgEventType.CreateResult)')
 $createResultPersist=$text.IndexOf('CreateReconciliation.HandleAsync(',$createResultBranch)
-$createResultContinue=$text.IndexOf('continue;',$createResultPersist)
+$createResultReturn=$text.IndexOf('return;',$createResultPersist)
 $createResultReply=$text.IndexOf('Native.Reply(',$createResultBranch)
-if($createResultBranch -lt 0 -or $createResultPersist -lt 0 -or $createResultContinue -lt 0 -or
-   ($createResultReply -ge 0 -and $createResultReply -lt $createResultContinue)){
+if($createResultBranch -lt 0 -or $createResultPersist -lt 0 -or $createResultReturn -lt 0 -or
+   ($createResultReply -ge 0 -and $createResultReply -lt $createResultReturn)){
   throw 'CreateResult must be persisted as completion metadata and must not receive FilterReplyMessage.'
 }
 

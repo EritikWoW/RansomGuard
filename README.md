@@ -1,12 +1,12 @@
-# RansomGuard 0.7.2.0
+# RansomGuard 0.7.3.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
 and recover data through rollback plus adaptive crypto analysis.
 
-## Core milestone in 0.7.2.0
+## Core preservation milestone
 
-0.7.2.0 keeps the engineering-only pre-write gate from 0.7.1.0 and replaces whole-file snapshots
+0.7.3.0 retains the 0.7.2 range-aware COW gate and adds explicit CREATE preservation semantics on top of the existing range-aware write path
 for ordinary WRITE operations with **range-aware copy-on-write**:
 
     WRITE arrives
@@ -77,7 +77,7 @@ Use only output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.7.2.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.7.3.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 LAB gate documentation:
 

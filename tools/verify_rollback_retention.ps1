@@ -36,7 +36,8 @@ foreach($required in @(
     'RecordOpenedAsync',
     '"session-lifecycle-close"',
     'RecordClosedCleanlyAsync',
-    'await Task.WhenAll(activeWorkers)'
+    'await Task.WhenAll(activeWorkers)',
+    'if (cts.IsCancellationRequested)'
 )){
     if($gateText -notmatch [regex]::Escape($required)){throw "Gate lifecycle invariant missing: $required"}
 }
@@ -49,6 +50,10 @@ if($openPos -lt 0 -or $preflightPos -lt 0 -or $openPos -gt $preflightPos){
 }
 if($workersPos -lt 0 -or $closePos -lt 0 -or $closePos -lt $workersPos){
     throw 'ClosedCleanly lifecycle record must be written only after all gate workers finish.'
+}
+$shutdownGuardPos=$gateText.IndexOf('if (cts.IsCancellationRequested)',$workersPos)
+if($shutdownGuardPos -lt 0 -or $shutdownGuardPos -gt $closePos){
+    throw 'ClosedCleanly lifecycle record must be guarded by explicit cancellation/normal shutdown.'
 }
 
 $releaseText=Get-Content -LiteralPath $release -Raw

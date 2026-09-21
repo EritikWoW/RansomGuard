@@ -68,6 +68,12 @@ if($proto -notmatch 'RgEventCreateResult' -or $proto -notmatch 'IdentityStatus' 
    $proto -notmatch 'VolumeSerialNumber' -or $proto -notmatch 'FileIdLow' -or $proto -notmatch 'FileIdHigh'){
     throw 'Protocol v7 must carry correlated post-operation identity metadata.'
 }
+$renameSafe=$src.IndexOf('static FLT_POSTOP_CALLBACK_STATUS RgPostSetInformationSafe')
+$renameIdentity=$src.IndexOf('RgPopulatePostOperationIdentity(&event, FltObjects);',$renameSafe)
+$renameQueue=$src.IndexOf('RgQueueRawEvent(&event, RgClientLabGate);',$renameSafe)
+if($renameSafe -lt 0 -or $renameIdentity -lt 0 -or $renameQueue -lt 0 -or $renameIdentity -gt $renameQueue){
+    throw 'Post-rename FILE_ID_INFO must be populated before RenameResult is queued.'
+}
 if($proto -notmatch 'RgGateBaselineCommitted' -or $proto -notmatch 'RgGateNoPreservationRequired'){throw 'Protocol must distinguish committed absence baselines from no-op create opens.'}
 if($infText -notmatch 'StartType\s*=\s*3'){throw 'Driver must remain demand-start in the lab prototype.'}
 if($infText -notmatch 'Instance1\.Flags\s*=\s*0x1'){throw 'Automatic volume attachment must remain suppressed.'}

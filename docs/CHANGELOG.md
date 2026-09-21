@@ -1,3 +1,12 @@
+# RansomGuard 0.7.7.0
+- Successful post-RENAME reconciliation now queries `FileIdInformation` from the actual completed kernel `FileObject`.
+- Protocol v7 reuses its existing completion identity fields for RENAME without another ABI/version bump.
+- Added a separate backward-compatible write-through SHA-256 hash-chained `rename-identity-journal.jsonl` linked to the exact rename completion hash and request sequence.
+- A rename identity is `Resolved` only when the completed object identity matches the source `FILE_ID_INFO` committed before the operation.
+- Identity-query failure and observed identity mismatch are persisted explicitly as non-authoritative outcomes rather than guessed.
+- Repository startup validation now includes nested `rename-identity-state`; tests cover pending identity, match, mismatch, query failure, idempotence, reopen and corruption.
+- Normal product remains AuditOnly; blocking and identity reconciliation remain Engineering-LAB-only pending live Windows VM validation.
+
 # RansomGuard 0.7.6.0
 - Protocol v7 adds a correlated no-reply `CreateResult` event for post-operation CREATE outcomes.
 - The gate durably records a hash-chained CREATE intent linked to its preservation proof before returning any allow decision.

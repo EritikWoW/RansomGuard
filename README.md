@@ -1,4 +1,4 @@
-# RansomGuard 0.7.6.0
+# RansomGuard 0.7.7.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
@@ -6,7 +6,7 @@ and recover data through rollback plus adaptive crypto analysis.
 
 ## Core preservation milestone
 
-0.7.6.0 retains the 0.7.2 range-aware COW gate and adds explicit CREATE preservation semantics.
+0.7.7.0 retains the range-aware COW and two-phase CREATE/RENAME transaction model, and closes the post-RENAME kernel identity gap.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 
@@ -46,9 +46,11 @@ destination gets its own identity-bound full pre-image; a missing destination ge
 a hash-chained rename intent records source identity, destination state, flags and exact pre-operation names. Cross-root,
 ambiguous, directory-topology and same-file-alias cases fail closed. After the filesystem completes the rename, the
 minifilter reconciles the result on a safe post-operation path, applies `FltGetTunneledName` for successful operations,
-and sends a correlated `RenameResult`. User mode durably records success, failure, or a successful-but-unresolved final
-name in a separate hash-chained completion journal. If reconciliation cannot be delivered, the intent remains pending
-instead of being treated as completed. Kernel file-ID confirmation of the completed object is still a separate milestone.
+and sends a correlated `RenameResult`. The safe post-operation path also queries `FileIdInformation` from the actual
+completed file object. User mode first persists the rename completion, then appends a separate backward-compatible
+hash-chained identity reconciliation record. A rename is identity-authoritative only when that final `FILE_ID_INFO`
+matches the source identity committed before the rename; query failure and identity mismatch remain explicit
+non-authoritative states. Missing result or identity delivery remains pending instead of being inferred.
 
 ## Recovery safety
 
@@ -100,7 +102,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.7.6.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.7.7.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 LAB gate documentation:
 
@@ -112,8 +114,8 @@ LAB gate documentation:
 This milestone validates the preservation model and reduces write-path storage amplification.
 It is not yet production ransomware blocking.
 
-Remaining core work includes post-operation kernel file-ID confirmation for completed renames,
-bounded concurrent gate workers, crash reconciliation for pending/missing CREATE/RENAME completion events,
-memory-mapped/cache-manager write coverage,
+Remaining core work includes closing the pre-CREATE classification race against the completed kernel result,
+bounded concurrent gate workers, crash reconciliation for pending/missing CREATE/RENAME completion or identity events,
+memory-mapped/cache-manager write coverage, storage quotas/retention/pressure policy,
 containment policy, process-state capture, adaptive crypto reconstruction, verified recovery orchestration,
 driver signing and Microsoft-assigned production altitude.

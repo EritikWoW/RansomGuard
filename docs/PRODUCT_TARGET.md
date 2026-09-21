@@ -34,7 +34,11 @@ Before allowing a rename, the LAB gate preserves the source, preserves an existi
 and durably records a rename intent. After completion, the minifilter resolves the tunneled final name on a safe post-op
 path and user mode appends a second hash-chained record for success, failure, or unresolved successful completion.
 A missing result leaves the intent pending; pre-operation intent is never promoted to success by inference.
+Successful post-RENAME processing now also queries `FileIdInformation` from the actual completed kernel
+`FileObject`. A separate write-through identity journal links that observation to the exact rename completion.
+Only a final identity equal to the pre-operation source identity is authoritative; identity-query failures and
+mismatches remain explicit and block automatic topology assumptions.
 
-The next core milestones are post-operation kernel file-ID binding for completed renames,
-bounded concurrent and crash-reconciled gating, memory-mapped write coverage, containment, process-state capture,
-adaptive crypto analysis, and verified recovery orchestration.
+The next core milestones are closing the remaining pre-CREATE classification race, bounded concurrent and
+crash-reconciled gating, memory-mapped/cache-manager write coverage, storage pressure policy, containment,
+process-state capture, adaptive crypto analysis, and verified recovery orchestration.

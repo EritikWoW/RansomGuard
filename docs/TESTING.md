@@ -88,9 +88,9 @@ The minifilter source gate requires the safe post-operation path, `FltDoCompleti
 `FltGetTunneledName`, the correlated `RenameResult` event, and protocol-v6 completion fields. The GateClient
 source gate additionally requires result persistence without `FilterReplyMessage`.
 
-These tests and compile gates do not prove real filesystem tunneling behavior, completion-message delivery under
-fault injection, or post-operation file-ID identity. Those require an isolated Windows VM and remain separate
-from the normal product bundle.
+These tests and compile gates do not prove real filesystem tunneling behavior or completion-message delivery under
+fault injection. The post-operation identity layer is covered separately below; live kernel behavior still requires
+an isolated Windows VM and remains separate from the normal product bundle.
 
 
 ## Protocol v7 CREATE completion reconciliation coverage
@@ -108,3 +108,21 @@ without `FilterReplyMessage`.
 
 These tests and compile gates do not prove real filesystem tunneling behavior, completion-message delivery under
 fault injection, or all NTFS/ReFS create edge cases. Those remain isolated Windows-VM validation work.
+
+
+## Protocol v7 RENAME kernel identity reconciliation coverage
+
+Rename reconciliation tests now add a third durable layer after intent and filesystem completion. They verify that
+successful completions remain identity-pending until an explicit kernel identity outcome is persisted; a matching
+source `FILE_ID_INFO` becomes `Resolved`, unavailable identity becomes `QueryFailed`, and a different observed
+identity becomes `Mismatch`. Tests also cover reopen/rebuild, exact-duplicate idempotence, rejection of false
+`Resolved` claims, rejection of identity records for failed renames, and repository-wide corruption detection for
+the nested `rename-identity-state` journal.
+
+The minifilter source gate requires `FltQueryInformationFile(..., FileIdInformation, ...)` to run in the safe
+post-rename callback before the correlated `RenameResult` is queued. The GateClient source gate requires the
+filesystem completion to be durably committed before the post-rename identity record.
+
+These are userspace journal/policy tests plus compile/source validation. They do not prove a live installed driver
+returns stable NTFS/ReFS file IDs under rename tunneling, fault injection, power loss, or filter detach; those cases
+remain disposable-VM validation work.

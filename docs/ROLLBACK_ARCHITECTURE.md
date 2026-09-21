@@ -1,9 +1,9 @@
-# RansomGuard 0.7.6.0 - CREATE completion and identity reconciliation milestone
+# RansomGuard 0.7.7.0 - completed CREATE/RENAME identity reconciliation milestone
 
 RansomGuard is moving from detection-only telemetry to `preserve -> contain -> recover`.
-0.7.6.0 retains the deliberately constrained engineering minifilter gate, range-aware WRITE COW,
-CREATE/RENAME preservation and rename outcome reconciliation, and adds durable post-CREATE outcome,
-tunneled-name and kernel file-identity reconciliation.
+0.7.7.0 retains the deliberately constrained engineering minifilter gate, range-aware WRITE COW,
+durable CREATE/RENAME intents and completion reconciliation, and adds post-RENAME kernel file-identity
+reconciliation without rewriting the existing rename completion journal.
 
 ## WRITE ordering
 
@@ -40,7 +40,7 @@ Protocol v7 exposes five mutation classes and adds a normalized destination path
 
 ## CREATE ordering
 
-For `IRP_MJ_CREATE`, protocol v6 carries the original Windows CreateDisposition/CreateOptions before
+For `IRP_MJ_CREATE`, protocol v7 carries the original Windows CreateDisposition/CreateOptions before
 the create completes.
 
 - If an existing file is opened with `FILE_SUPERSEDE`, `FILE_OVERWRITE` or `FILE_OVERWRITE_IF`,
@@ -100,12 +100,12 @@ paths remain governed by the create baseline because replacing one incident-crea
 the pre-incident requirement that the path was absent.
 
 Existing-file snapshot reads remain userspace path opens protected by exact-handle identity verification. Completed
-CREATE operations now additionally report identity from the kernel file object itself. Completed RENAME operations
-still require the same post-operation kernel file-ID binding before automatic topology recovery can be production-safe.
+CREATE and RENAME operations now additionally report identity from the actual completed kernel file object. For RENAME,
+the final identity is accepted as authoritative only when it matches the source identity committed before the operation.
 
 ## RENAME destination ordering
 
-For a rename inside the LAB root, protocol v6 carries the normalized destination obtained by the minifilter with
+For a rename inside the LAB root, protocol v7 carries the normalized destination obtained by the minifilter with
 `FltGetDestinationFileNameInformation`.
 
 Before returning `SnapshotCommitted`, user mode:
@@ -135,9 +135,25 @@ A completion may be `Succeeded`, `SucceededNameUnresolved`, or `Failed`. If the 
 the result cannot be delivered, or user mode stops before persisting it, the intent remains **pending**. Recovery must
 never infer success from the presence of a pre-operation intent alone.
 
-This milestone confirms the filesystem outcome and reconciled final name when available. It does **not** yet bind that
-completed name to a post-operation kernel file ID; identity confirmation of the completed object remains required before
-automatic topology recovery can be considered production-safe.
+The completion journal confirms filesystem outcome and reconciled final name when available. Identity authority is
+tracked separately so the existing v0.7.5 completion schema and record hashes remain backward compatible.
+
+## RENAME kernel identity reconciliation
+
+For every successful rename completion delivered by protocol v7:
+
+1. the safe post-operation callback queries `FileIdInformation` from the actual completed `FileObject`;
+2. the same `RenameResult` carries the volume serial and 128-bit file ID when the query succeeds;
+3. GateClient first persists the ordinary rename completion, preserving its existing hash-chain semantics;
+4. `RenameIdentityStore` appends a separate write-through SHA-256 hash-chained record linked to the exact
+   rename completion hash and kernel request sequence;
+5. `Resolved` is valid only when the final identity equals the source identity committed in the pre-rename intent;
+6. an observed different identity is persisted as `Mismatch`, never silently accepted;
+7. an unavailable kernel identity is persisted as `QueryFailed`;
+8. if the identity event cannot be persisted, the successful rename remains identity-pending and must not be
+   treated as authoritative for automatic topology recovery.
+
+This closes the user-mode path-alias ambiguity for completed renames without changing protocol-v7 ABI fields.
 
 ## Range recovery
 
@@ -181,17 +197,18 @@ Rollback startup validation now treats ambiguous durable state as a hard failure
 - unjournaled range `.block` objects are rejected;
 - leftover `.tmp` artifacts are rejected as incomplete capture evidence;
 - range block geometry must exactly match the recorded original file length and configured block size;
-- repository-wide verification descends into each session's nested `write-cow`, `create-state`, `identity-state` and `rename-state` stores;
+- repository-wide verification descends into each session's nested `write-cow`, `create-state`, `identity-state`, `rename-state` and `rename-identity-state` stores;
 - CREATE and RENAME completion records are hash-chained separately and cryptographically linked to their exact pre-operation intents;
+- post-RENAME identity records are hash-chained separately and cryptographically linked to the exact rename completion hash;
 - the LAB gate validates all existing sessions before opening a new one.
 
 These checks do not yet reconcile an interrupted in-flight kernel request. They prevent a restart from proceeding on top of rollback state whose commit boundary is ambiguous.
 
 ## Still required before production
 
-- post-operation kernel file-ID confirmation for completed rename operations;
+- close the remaining pre-CREATE path-classification race against the completed kernel result;
 - bounded concurrent pending-I/O workers;
-- crash/restart reconciliation for requests pending during user-mode failure or missing CREATE/RENAME result delivery;
+- crash/restart reconciliation for requests pending during user-mode failure or missing CREATE/RENAME completion/identity delivery;
 - memory-mapped/cache-manager write coverage;
 - storage quotas, retention and pressure policy;
 - transition from protected-root health to containment/block policy;

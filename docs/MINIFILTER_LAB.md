@@ -1,4 +1,4 @@
-# RansomGuard minifilter engineering lab — v0.7.6.0
+# RansomGuard minifilter engineering lab — v0.7.7.0
 
 The minifilter has two mutually exclusive user-mode connection modes:
 
@@ -34,7 +34,7 @@ Build the engineering package:
 .\build_lab.cmd
 ```
 
-Then, from the generated `RansomGuard-Lab-v0.7.6.0-*` directory, build/install the minifilter only in a
+Then, from the generated `RansomGuard-Lab-v0.7.7.0-*` directory, build/install the minifilter only in a
 Windows test VM using the existing lab scripts.
 
 ## Audit mode
@@ -68,8 +68,10 @@ An originally-absent path is committed as metadata-only recovery state; it does 
 For rename, source and destination preservation plus a durable pre-operation intent are committed before allow. A destination
 outside the LAB root, an unresolved/truncated destination, an existing directory, or a same-file alias is denied. After the
 filesystem completes the operation, protocol v7 emits a correlated no-reply `RenameResult`. Successful renames reconcile
-the retained destination name through `FltGetTunneledName`; failures are recorded as failures. If reconciliation cannot be
-delivered, the durable intent remains pending and must not be treated as completed. Post-operation file-ID binding for rename is not yet implemented.
+the retained destination name through `FltGetTunneledName`; failures are recorded as failures. On successful rename,
+the same safe post-operation path queries `FileIdInformation` from the actual completed file object. User mode persists
+a separate identity result: `Resolved` only when it matches the pre-rename source identity, otherwise `Mismatch` or
+`QueryFailed`. Missing completion or identity delivery remains pending and is never inferred as authoritative.
 
 For CREATE, the gate now also commits a durable operation intent before allow. After completion, protocol v7 emits
 a correlated no-reply `CreateResult`: successful operations reconcile the tunneled final name and query

@@ -39,6 +39,8 @@ before allow. A missing or partially resolved result remains explicit; pre-opera
 
 The current LAB gate now uses bounded concurrent preservation: kernel admission caps simultaneous blocking gate sends at 8, while user mode dispatches a configurable 1..8 worker pool (default 4). Slow preservation no longer holds the global port mutex across the 30-second gate wait.
 
-The next core milestones are crash-reconciled gating, memory-mapped write coverage,
+On restart, pending CREATE/RENAME intents are conservatively re-observed under the same explicit LAB root. Current path presence and Windows file identity are appended to a separate hash-chained restart-reconciliation journal and classified as evidence supporting completion, supporting non-completion, indeterminate, or ambiguous. This evidence never becomes an authoritative completion by inference.
+
+The next core milestones are deeper crash recovery for requests interrupted before authoritative kernel completion delivery, memory-mapped write coverage,
 containment, process-state capture,
 adaptive crypto analysis, and verified recovery orchestration.

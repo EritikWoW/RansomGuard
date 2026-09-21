@@ -143,8 +143,10 @@ if(-not $ResultsDirectory){
 $ResultsDirectory=[IO.Path]::GetFullPath($ResultsDirectory)
 New-Item -ItemType Directory -Path $ResultsDirectory -Force | Out-Null
 
+$dirRoot=Join-Path $RootBase "predirectory-$stamp"
 $preRoot=Join-Path $RootBase "preexisting-$stamp"
 $postRoot=Join-Path $RootBase "postactivation-$stamp"
+$dirStore=Join-Path $ResultsDirectory 'predirectory-store'
 $preStore=Join-Path $ResultsDirectory 'preexisting-store'
 $postStore=Join-Path $ResultsDirectory 'postactivation-store'
 $volume=[IO.Path]::GetPathRoot($RootBase).TrimEnd('\')
@@ -158,6 +160,7 @@ $summary=[ordered]@{
     vm=$vm
     rootBase=$RootBase
     driverPackage=$DriverPackageDirectory
+    preexistingDirectoryHandleRejected=$false
     preexistingMappingRejected=$false
     postActivationBaselineVerified=$false
     postActivationPagingObserved=$false
@@ -166,9 +169,12 @@ $summary=[ordered]@{
 }
 
 $installed=$false
+$dirHolder=$null
 $holder=$null
+$gateDir=$null
 $gatePre=$null
 $gatePost=$null
+$dirRelease=$null
 $release=$null
 try{
     $existing=(& fltmc filters 2>$null | Out-String)
@@ -179,6 +185,46 @@ try{
     & $installScript -Volume $volume -PackageDirectory $DriverPackageDirectory -Confirmation 'LAB-MINIFILTER'
     if($LASTEXITCODE -ne 0){throw "Minifilter install/attach failed, exit=$LASTEXITCODE"}
     $installed=$true
+
+    # Scenario 0: a directory handle that already owns DELETE access must prevent activation.
+    Prepare-GateRoot $gateExe $dirRoot
+    $lockedDirectory=Join-Path $dirRoot 'locked-directory'
+    New-Item -ItemType Directory -Path $lockedDirectory -Force | Out-Null
+    $dirReady=Join-Path $ResultsDirectory 'predirectory.ready'
+    $dirRelease=Join-Path $ResultsDirectory 'predirectory.release'
+    $dirHolderOut=Join-Path $ResultsDirectory 'predirectory-holder.out.log'
+    $dirHolderErr=Join-Path $ResultsDirectory 'predirectory-holder.err.log'
+    $dirHolder=Start-LoggedProcess $helperExe @(
+        'hold-dir-delete','--directory',(Quote-Arg $lockedDirectory),'--ready',(Quote-Arg $dirReady),'--release',(Quote-Arg $dirRelease)
+    ) $dirHolderOut $dirHolderErr
+    Wait-Path $dirReady 15 'pre-existing DELETE directory handle'
+
+    $dirOut=Join-Path $ResultsDirectory 'predirectory-gate.out.log'
+    $dirErr=$dirOut + '.err'
+    $gateDir=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $dirRoot),'--store',(Quote-Arg $dirStore),'--session','predirectory'
+    ) $dirOut $dirErr
+
+    if(-not $gateDir.WaitForExit(30000)){
+        Stop-Process -Id $gateDir.Id -Force -ErrorAction SilentlyContinue
+        throw 'Activation unexpectedly stayed alive with a pre-existing DELETE directory handle.'
+    }
+    if($gateDir.ExitCode -eq 0){throw 'Activation unexpectedly succeeded with a pre-existing DELETE directory handle.'}
+    $dirFailure=((Get-Content -LiteralPath $dirOut -Raw -ErrorAction SilentlyContinue)+[Environment]::NewLine+
+        (Get-Content -LiteralPath $dirErr -Raw -ErrorAction SilentlyContinue))
+    if($dirFailure -notmatch '(?i)Activation topology preflight|sharing|used by another process|could not hold directory'){
+        throw "Directory-handle activation failed for an unexpected reason: $dirFailure"
+    }
+    $summary.preexistingDirectoryHandleRejected=$true
+
+    New-Item -ItemType File -Path $dirRelease -Force | Out-Null
+    if(-not $dirHolder.WaitForExit(15000)){
+        Stop-Process -Id $dirHolder.Id -Force -ErrorAction SilentlyContinue
+        throw 'Directory DELETE-handle holder did not exit.'
+    }
+    if($dirHolder.ExitCode -ne 0){throw "Directory DELETE-handle holder failed, exit=$($dirHolder.ExitCode)"}
+    $dirHolder=$null
+    $gateDir=$null
 
     Prepare-GateRoot $gateExe $preRoot
     $preFile=Join-Path $preRoot 'preexisting-map.bin'
@@ -278,11 +324,15 @@ try{
     Write-Host "RUNTIME MINIFILTER LAB PASSED: $ResultsDirectory" -ForegroundColor Green
 }
 finally{
+    if($dirHolder -and -not $dirHolder.HasExited){
+        if($dirRelease){New-Item -ItemType File -Path $dirRelease -Force -ErrorAction SilentlyContinue | Out-Null}
+        Stop-Process -Id $dirHolder.Id -Force -ErrorAction SilentlyContinue
+    }
     if($holder -and -not $holder.HasExited){
         if($release){New-Item -ItemType File -Path $release -Force -ErrorAction SilentlyContinue | Out-Null}
         Stop-Process -Id $holder.Id -Force -ErrorAction SilentlyContinue
     }
-    foreach($p in @($gatePre,$gatePost)){
+    foreach($p in @($gateDir,$gatePre,$gatePost)){
         if($p -and -not $p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}
     }
     if($installed){

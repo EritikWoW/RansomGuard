@@ -32,8 +32,9 @@ CREATE classification still begins with a path-based pre-operation probe, but pr
 Protocol v8 retains the normalized pre-operation rename destination and correlated post-operation `RenameResult`.
 Before allowing a rename, the LAB gate preserves the source, preserves an existing destination or commits its absence,
 and durably records a rename intent. After completion, the minifilter resolves the tunneled final name on a safe post-op
-path, queries `FileIdInformation` on the completed kernel file object, and user mode appends a second hash-chained
-record containing final name and identity when available. The post-op identity must match the source identity committed
+path and, only at PASSIVE_LEVEL with special kernel APCs enabled, queries `FileIdInformation` on the completed kernel
+file object. Otherwise identity remains explicitly unresolved. User mode appends a second hash-chained record containing
+final name and identity when available. The post-op identity must match the source identity committed
 before allow. A missing or partially resolved result remains explicit; pre-operation intent is never promoted to success by inference.
 
 The next core milestones are bounded concurrent and crash-reconciled gating, memory-mapped write coverage,

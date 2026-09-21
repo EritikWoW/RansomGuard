@@ -55,7 +55,13 @@ foreach($required in @(
     '--contain-pid',
     'containmentDeniedTarget',
     'containmentPreservedTargetHash',
-    'containmentAllowedPeer'
+    'containmentAllowedPeer',
+    'containment-transition',
+    '--contain-after-pid',
+    'transitionRequested',
+    'transitionKernelActive',
+    'transitionDeniedNextWrite',
+    'containment-journal.jsonl'
 )){
     if($runtime -notmatch [regex]::Escape($required)){throw "Runtime integration script missing invariant: $required"}
 }
@@ -97,6 +103,9 @@ foreach($required in @(
     'hold-dir-delete',
     'map-write',
     'containment-probe',
+    'containment-transition',
+    'ContainmentTransitionProbe',
+    'denied-after-threshold',
     'RANSOMGUARD-CONTAINMENT-PROBE-SHOULD-NOT-WRITE',
     'DeleteAccess',
     'FileFlagBackupSemantics',
@@ -140,6 +149,34 @@ if($runtime -notmatch 'LAB containment\\s\+: ACTIVE' -or
     throw 'Runtime containment scenario must prove target denial/hash preservation and ordinary-peer mutation.'
 }
 
+$transitionStart=$helper.IndexOf('static void ContainmentTransitionProbe')
+$transitionEnd=$helper.IndexOf('static void MapAndWrite',$transitionStart)
+if($transitionStart -lt 0 -or $transitionEnd -lt 0){throw 'ContainmentTransitionProbe source block missing.'}
+$transitionBlock=$helper.Substring($transitionStart,$transitionEnd-$transitionStart)
+foreach($required in @(
+    'FileMode.Open',
+    'FileAccess.Write',
+    'FileOptions.WriteThrough',
+    'a.Write(new byte[] { 0xA1 })',
+    'b.Write(new byte[] { 0xB2 })',
+    'denied-after-threshold'
+)){
+    if($transitionBlock -notmatch [regex]::Escape($required)){throw "Event-bound containment runtime helper missing invariant: $required"}
+}
+foreach($required in @(
+    "'--contain-after-pid'",
+    "'--contain-after-events','4'",
+    "'--contain-after-paths','2'",
+    '[int]$x.phase -eq 1',
+    '[int]$x.evidenceCount -eq 4',
+    '[int]$x.distinctPathCount -eq 2',
+    '[int]$x.phase -eq 2',
+    'transitionRequest.kernelSequence',
+    'LAB CONTAINMENT ACTIVE'
+)){
+    if($runtime -notmatch [regex]::Escape($required)){throw "Event-bound containment runtime scenario missing invariant: $required"}
+}
+
 $install=Get-Content -LiteralPath $installScript -Raw
 if($install -notmatch [regex]::Escape("ValidateSet('','LAB-MINIFILTER')") -or
    $install -notmatch [regex]::Escape('$Confirmation')){
@@ -155,4 +192,4 @@ foreach($required in @(
     if($buildText -notmatch [regex]::Escape($required)){throw "Engineering LAB build missing runtime harness packaging invariant: $required"}
 }
 
-Write-Host 'Runtime VM harness source gate PASSED: manual self-hosted VM only, exact-commit signed driver provenance, activation races, real mapping coverage and PID-scoped kernel containment scenario, no boot/trust/Defender mutation.' -ForegroundColor Green
+Write-Host 'Runtime VM harness source gate PASSED: manual self-hosted VM only, exact-commit signed driver provenance, mapping coverage, pre-armed containment and event-bound containment transition, no boot/trust/Defender mutation.' -ForegroundColor Green

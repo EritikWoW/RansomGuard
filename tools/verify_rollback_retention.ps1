@@ -49,7 +49,7 @@ foreach($required in @(
 
 $repositoryText=Get-Content -LiteralPath $repository -Raw
 foreach($required in @(
-    'new RollbackSessionLifecycleStore(path).InitializeCreated()',
+    'new RollbackSessionLifecycleStore(path).InitializeCreated(createdUtc)',
     'new RollbackSessionLifecycleStore(store.Root).VerifyAll()',
     'new RollbackRetentionStore(_root, createIfMissing: false).VerifyAll()'
 )){
@@ -156,6 +156,10 @@ foreach($required in @(
     'Active, Faulted, Held, legacy and pending-transaction sessions are never selected'
 )){
     if($cliText -notmatch [regex]::Escape($required)){throw "Maintenance CLI invariant missing: $required"}
+}
+$leaseOccurrences=[regex]::Matches($cliText,[regex]::Escape('RollbackMaintenanceLease.Acquire(repositoryRoot)')).Count
+if($leaseOccurrences -lt 2){
+    throw 'Both hold and release-hold must acquire the repository maintenance lease.'
 }
 if($cliText -match '(?i)case\s+"(delete|purge-now|force-delete|ignore-hold|ignore-pending)"'){
     throw 'Rollback maintenance CLI must not expose force/destructive bypass verbs.'

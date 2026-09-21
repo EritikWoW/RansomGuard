@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 
 const string PortName = @"\RansomGuardMinifilterPort";
-const int ProtocolVersion = 4;
+const int ProtocolVersion = 5;
 
 var options = Options.Parse(args);
 Console.WriteLine("RansomGuard Minifilter AUDIT client v0.7.3.0");
@@ -33,7 +33,7 @@ using var writer = new StreamWriter(new FileStream(logPath, FileMode.CreateNew, 
 var headerSize = Marshal.SizeOf<FilterMessageHeader>();
 var eventSize = Marshal.SizeOf<RgEvent>();
 if (headerSize != 16) throw new InvalidOperationException($"Unexpected FILTER_MESSAGE_HEADER size: {headerSize}");
-if (eventSize != 1096) throw new InvalidOperationException($"Protocol struct size mismatch: {eventSize}, expected 1096");
+if (eventSize != 1144) throw new InvalidOperationException($"Protocol struct size mismatch: {eventSize}, expected 1144");
 var bufferSize = checked(headerSize + eventSize);
 var buffer = Marshal.AllocHGlobal(bufferSize);
 var lastFlush = Stopwatch.StartNew();
@@ -260,7 +260,7 @@ sealed class AuditStats
     };
 }
 
-enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5 }
+enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, CreateResult = 6 }
 enum RgPathStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2, Truncated = 3 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -284,6 +284,8 @@ struct RgEvent
     public ulong ProcessId, ThreadId;
     public long ByteOffset;
     public uint Length, FileInformationClass, DroppedBeforeThis, Reserved;
+    public ulong RelatedSequence, VolumeSerialNumber, FileIdPart0, FileIdPart1;
+    public uint CompletionStatus, CreateAction, IdentityStatus, Reserved2;
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 512)] public string? Path;
 }
 
@@ -304,7 +306,7 @@ static class Native
         const uint FLT_PORT_FLAG_SYNC_HANDLE = 0x00000001;
         var context = new RgConnectContext
         {
-            ProtocolVersion = 4,
+            ProtocolVersion = 5,
             ClientMode = 1,
             ClientProcessId = processId,
             GateRootLengthBytes = 0,

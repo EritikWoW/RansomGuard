@@ -236,7 +236,91 @@ try
     Check(CreateGatePolicy.Decide(CreateDisposition.Create, CreateTargetState.Directory) ==
         CreatePreservationAction.NoPreservationRequired, "directory CREATE does not claim file-content preservation");
 
-    // Repository-wide verification must include nested write-cow and create-state stores.
+    Check(CreateGatePolicy.IsSuccessfulResultConsistent(CreateDisposition.Create, CreateTargetState.Missing,
+        CreateResult.Created), "missing FILE_CREATE reconciles only as FILE_CREATED");
+    Check(!CreateGatePolicy.IsSuccessfulResultConsistent(CreateDisposition.Open, CreateTargetState.Missing,
+        CreateResult.Opened), "missing FILE_OPEN cannot reconcile as a successful open");
+    Check(CreateGatePolicy.IsSuccessfulResultConsistent(CreateDisposition.Open, CreateTargetState.File,
+        CreateResult.Opened), "existing FILE_OPEN reconciles as FILE_OPENED");
+    Check(CreateGatePolicy.IsSuccessfulResultConsistent(CreateDisposition.Overwrite, CreateTargetState.File,
+        CreateResult.Overwritten), "existing FILE_OVERWRITE reconciles as FILE_OVERWRITTEN");
+    Check(!CreateGatePolicy.IsSuccessfulResultConsistent(CreateDisposition.Overwrite, CreateTargetState.File,
+        CreateResult.Created), "existing FILE_OVERWRITE cannot silently reconcile as FILE_CREATED");
+    Check(CreateGatePolicy.IsSuccessfulResultConsistent(CreateDisposition.Supersede, CreateTargetState.File,
+        CreateResult.Superseded), "existing FILE_SUPERSEDE reconciles as FILE_SUPERSEDED");
+    Check(CreateGatePolicy.RequiresStableExistingIdentity(CreateDisposition.Overwrite, CreateTargetState.File),
+        "overwrite of existing file requires stable identity across CREATE");
+    Check(!CreateGatePolicy.RequiresStableExistingIdentity(CreateDisposition.Supersede, CreateTargetState.File),
+        "supersede may legitimately replace the existing file identity");
+
+    var identityRoot = Path.Combine(root, "create-identity-state");
+    var identityStore = new CreateIdentityStore(identityRoot);
+    const string idA = "00112233445566778899AABBCCDDEEFF";
+    const string idB = "FFEEDDCCBBAA99887766554433221100";
+    var preId = new RollbackFileIdentity(0x1122334455667788, idA);
+    var originalIdentityPath = Path.Combine(sourceDir, "identity-original.bin");
+    var finalIdentityPath = Path.Combine(sourceDir, "identity-final.bin");
+
+    var identityObservation = await identityStore.RecordAsync(
+        1001, originalIdentityPath, finalIdentityPath,
+        CreateDisposition.Overwrite, CreateTargetState.File,
+        CreatePreservationAction.CaptureExistingPreimage, CreateResult.Overwritten,
+        preId.VolumeSerialNumber, idA, preId);
+    Check(identityObservation.RequestSequence == 1001, "post-create identity records related pre-create sequence");
+    Check(identityObservation.FileId128Hex == idA, "post-create identity stores final 128-bit file id");
+    identityStore.VerifyAll(); Check(true, "post-create identity hash chain verifies");
+    var identityReopened = new CreateIdentityStore(identityRoot);
+    Check(identityReopened.HasRequest(1001), "post-create identity journal rebuilds request index");
+
+    var identityMismatchRejected = false;
+    try
+    {
+        await identityStore.RecordAsync(
+            1002, originalIdentityPath, finalIdentityPath,
+            CreateDisposition.Overwrite, CreateTargetState.File,
+            CreatePreservationAction.CaptureExistingPreimage, CreateResult.Overwritten,
+            preId.VolumeSerialNumber, idB, preId);
+    }
+    catch (InvalidDataException) { identityMismatchRejected = true; }
+    Check(identityMismatchRejected, "stable existing-file CREATE rejects post-create identity substitution");
+
+    var resultMismatchRejected = false;
+    try
+    {
+        await identityStore.RecordAsync(
+            1003, originalIdentityPath, finalIdentityPath,
+            CreateDisposition.Create, CreateTargetState.Missing,
+            CreatePreservationAction.RecordOriginallyAbsent, CreateResult.Opened,
+            7, idA);
+    }
+    catch (InvalidDataException) { resultMismatchRejected = true; }
+    Check(resultMismatchRejected, "post-create result inconsistent with pre-create state is rejected");
+
+    var supersedeObservation = await identityStore.RecordAsync(
+        1004, originalIdentityPath, finalIdentityPath,
+        CreateDisposition.Supersede, CreateTargetState.File,
+        CreatePreservationAction.CaptureExistingPreimage, CreateResult.Superseded,
+        9, idB, new RollbackFileIdentity(8, idA));
+    Check(supersedeObservation.FileId128Hex == idB,
+        "supersede records replacement identity without requiring old/new identity equality");
+
+    var absentIdentityObservation = await identityStore.RecordAsync(
+        1005, originalIdentityPath, finalIdentityPath,
+        CreateDisposition.Create, CreateTargetState.Missing,
+        CreatePreservationAction.RecordOriginallyAbsent, CreateResult.Created,
+        11, idA);
+    Check(absentIdentityObservation.PreFileId128Hex.Length == 0,
+        "originally-absent CREATE records no fake pre-create identity");
+
+    var identityJournalBytes = await File.ReadAllBytesAsync(identityStore.JournalPath);
+    identityJournalBytes[^2] ^= 1;
+    await File.WriteAllBytesAsync(identityStore.JournalPath, identityJournalBytes);
+    var identityCorruptionRejected = false;
+    try { _ = new CreateIdentityStore(identityRoot); }
+    catch (InvalidDataException) { identityCorruptionRejected = true; }
+    Check(identityCorruptionRejected, "post-create identity journal corruption is rejected");
+
+    // Repository-wide verification must include nested write-cow, create-state and identity journals.
     var nestedRepo = new RollbackRepository(Path.Combine(root, "nested-repo"));
     var nestedSession = nestedRepo.CreateSession("nested");
     var nestedSource = Path.Combine(sourceDir, "nested.bin");
@@ -264,6 +348,23 @@ try
     try { nestedCreateRepo.VerifyAll(); }
     catch (InvalidDataException) { nestedCreateRejected = true; }
     Check(nestedCreateRejected, "repository verification includes nested create-state journal");
+
+    var nestedIdentityRepo = new RollbackRepository(Path.Combine(root, "nested-identity-repo"));
+    var nestedIdentitySession = nestedIdentityRepo.CreateSession("nested_identity");
+    var nestedIdentityRoot = Path.Combine(nestedIdentitySession.Root, "create-state");
+    var nestedIdentityStore = new CreateIdentityStore(nestedIdentityRoot);
+    await nestedIdentityStore.RecordAsync(
+        2001, Path.Combine(sourceDir, "nested-pre.bin"), Path.Combine(sourceDir, "nested-post.bin"),
+        CreateDisposition.Create, CreateTargetState.Missing,
+        CreatePreservationAction.RecordOriginallyAbsent, CreateResult.Created,
+        0xAA55, idA);
+    var nestedIdentityJournal = await File.ReadAllBytesAsync(nestedIdentityStore.JournalPath);
+    nestedIdentityJournal[^2] ^= 1;
+    await File.WriteAllBytesAsync(nestedIdentityStore.JournalPath, nestedIdentityJournal);
+    var nestedIdentityRejected = false;
+    try { nestedIdentityRepo.VerifyAll(); }
+    catch (InvalidDataException) { nestedIdentityRejected = true; }
+    Check(nestedIdentityRejected, "repository verification includes nested post-create identity journal");
 
     Console.WriteLine($"All {passed} rollback tests passed. These are file-store tests, not minifilter integration tests.");
     return 0;

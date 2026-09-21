@@ -2,10 +2,12 @@ namespace RansomGuard.Rollback;
 
 /// <summary>
 /// Pure policy for IRP_MJ_CREATE preservation decisions. It contains no filesystem or driver calls,
-/// which keeps the create-disposition matrix directly testable.
+/// which keeps the create-disposition/options matrix directly testable.
 /// </summary>
 public static class CreateGatePolicy
 {
+    public const uint FileDeleteOnClose = 0x00001000;
+
     public static bool TryParseDisposition(uint raw, out CreateDisposition disposition)
     {
         if (raw <= (uint)CreateDisposition.OverwriteIf)
@@ -18,14 +20,20 @@ public static class CreateGatePolicy
         return false;
     }
 
-    public static CreatePreservationAction Decide(CreateDisposition disposition, CreateTargetState target)
+    public static CreatePreservationAction Decide(CreateDisposition disposition, CreateTargetState target,
+        uint createOptions = 0)
     {
+        var deleteOnClose = (createOptions & FileDeleteOnClose) != 0;
+
         if (target == CreateTargetState.Directory)
-            return CreatePreservationAction.NoPreservationRequired;
+            return deleteOnClose
+                ? CreatePreservationAction.DenyUnsupported
+                : CreatePreservationAction.NoPreservationRequired;
 
         if (target == CreateTargetState.File)
         {
-            return disposition is CreateDisposition.Supersede or CreateDisposition.Overwrite or CreateDisposition.OverwriteIf
+            return deleteOnClose ||
+                   disposition is CreateDisposition.Supersede or CreateDisposition.Overwrite or CreateDisposition.OverwriteIf
                 ? CreatePreservationAction.CaptureExistingPreimage
                 : CreatePreservationAction.NoPreservationRequired;
         }
@@ -58,5 +66,6 @@ public enum CreatePreservationAction
 {
     NoPreservationRequired = 0,
     CaptureExistingPreimage = 1,
-    RecordOriginallyAbsent = 2
+    RecordOriginallyAbsent = 2,
+    DenyUnsupported = 3
 }

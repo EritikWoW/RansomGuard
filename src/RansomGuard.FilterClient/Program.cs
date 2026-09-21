@@ -4,10 +4,10 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 
 const string PortName = @"\RansomGuardMinifilterPort";
-const int ProtocolVersion = 12;
+const int ProtocolVersion = 13;
 
 var options = Options.Parse(args);
-Console.WriteLine("RansomGuard Minifilter AUDIT client v0.7.20.0");
+Console.WriteLine("RansomGuard Minifilter AUDIT client v0.7.21.0");
 Console.WriteLine("READ-ONLY: this client cannot block, suspend, kill, rename, delete, or modify files.");
 Console.WriteLine("It only receives metadata emitted by the lab minifilter.");
 Console.WriteLine();
@@ -303,7 +303,7 @@ struct RgEvent
 
 static class Native
 {
-    private const uint WireProtocolVersion = 12;
+    private const uint WireProtocolVersion = 13;
 
     [DllImport("fltlib.dll", CharSet = CharSet.Unicode)]
     private static extern int FilterConnectCommunicationPort(string lpPortName, uint dwOptions, IntPtr lpContext,

@@ -1,11 +1,12 @@
 #pragma once
 
 // Wire protocol between the RansomGuard lab minifilter and user-mode clients.
-// v4 adds explicit IRP_MJ_CREATE semantics: create disposition/options are carried in RG_EVENT.Flags,
-// and user mode can distinguish destructive replacement from an originally-absent new file.
+// v5 adds post-create reconciliation evidence. Mutation-capable CREATEs receive a post-operation
+// event carrying the related pre-create sequence, actual CreateAction, completion status and
+// FILE_ID_INFORMATION identity from the completed kernel FileObject.
 // The production bundle still does not install or enable the driver.
 
-#define RG_PROTOCOL_VERSION 4u
+#define RG_PROTOCOL_VERSION 5u
 #define RG_PATH_CHARS 512u
 #define RG_GATE_ROOT_CHARS 260u
 #define RG_PORT_NAME L"\\RansomGuardMinifilterPort"
@@ -20,7 +21,8 @@ typedef enum _RG_EVENT_TYPE {
     RgEventRename = 2,
     RgEventDeleteDisposition = 3,
     RgEventTruncate = 4,
-    RgEventCreate = 5
+    RgEventCreate = 5,
+    RgEventCreateResult = 6
 } RG_EVENT_TYPE;
 
 typedef enum _RG_PATH_STATUS {
@@ -40,7 +42,8 @@ typedef enum _RG_GATE_DECISION {
     RgGateSnapshotCommitted = 1,
     RgGateDeny = 2,
     RgGateBaselineCommitted = 3,
-    RgGateNoPreservationRequired = 4
+    RgGateNoPreservationRequired = 4,
+    RgGateReconciliationCommitted = 5
 } RG_GATE_DECISION;
 
 #pragma pack(push, 1)
@@ -67,6 +70,14 @@ typedef struct _RG_EVENT {
     unsigned long FileInformationClass;
     unsigned long DroppedBeforeThis;
     unsigned long Reserved;
+    unsigned long long RelatedSequence;
+    unsigned long long VolumeSerialNumber;
+    unsigned long long FileIdPart0;
+    unsigned long long FileIdPart1;
+    unsigned long CompletionStatus;
+    unsigned long CreateAction;
+    unsigned long IdentityStatus;
+    unsigned long Reserved2;
     wchar_t Path[RG_PATH_CHARS];
 } RG_EVENT, *PRG_EVENT;
 

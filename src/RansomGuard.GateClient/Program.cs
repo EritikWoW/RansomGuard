@@ -29,7 +29,7 @@ var identityStore = new FileIdentityStore(Path.Combine(store.Root, "identity-sta
 var renameStore = new RenameRollbackStore(Path.Combine(store.Root, "rename-state"));
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
-Console.WriteLine("RansomGuard LAB pre-write gate v0.7.6.0");
+Console.WriteLine("RansomGuard LAB pre-write gate v0.7.7.0");
 Console.WriteLine("LAB ONLY: use only inside a disposable test directory on a test machine/VM.");
 Console.WriteLine($"Protected LAB root : {options.Root}");
 Console.WriteLine($"Kernel NT root     : {ntRoot}");
@@ -40,7 +40,7 @@ Console.WriteLine("Press Ctrl+C to disconnect. The driver then stops gating beca
 
 var context = new RgConnectContext
 {
-    ProtocolVersion = 7,
+    ProtocolVersion = 8,
     ClientMode = (uint)RgClientMode.LabGate,
     ClientProcessId = (ulong)Environment.ProcessId,
     GateRootLengthBytes = checked((uint)(ntRoot.Length * 2)),
@@ -113,7 +113,7 @@ static class CreateReconciliation
         CreateOperationStore operationStore,
         CancellationToken cancellationToken)
     {
-        if (ev.ProtocolVersion != 7 || ev.RelatedSequence == 0)
+        if (ev.ProtocolVersion != 8 || ev.RelatedSequence == 0)
             throw new InvalidDataException("Invalid CREATE completion correlation.");
 
         if (!NtSuccess(ev.CompletionStatus))
@@ -177,7 +177,7 @@ static class RenameReconciliation
         RenameRollbackStore renameStore,
         CancellationToken cancellationToken)
     {
-        if (ev.ProtocolVersion != 7 || ev.RelatedSequence == 0)
+        if (ev.ProtocolVersion != 8 || ev.RelatedSequence == 0)
             throw new InvalidDataException("Invalid rename completion correlation.");
 
         if (!NtSuccess(ev.CompletionStatus))
@@ -188,32 +188,43 @@ static class RenameReconciliation
                     ev.CompletionStatus,
                     ev.CompletionInformation,
                     null,
+                    null,
                     cancellationToken)
                 .ConfigureAwait(false);
         }
 
+        string? finalPath = null;
         if (ev.DestinationPathStatus == (uint)RgPathStatus.Resolved)
         {
-            var finalPath = resolver.Resolve(ev.DestinationPath);
-            if (!string.IsNullOrWhiteSpace(finalPath) && PathPolicy.Under(finalPath, root))
-            {
-                return await renameStore.RecordCompletionAsync(
-                        ev.RelatedSequence,
-                        RenameCompletionState.Succeeded,
-                        ev.CompletionStatus,
-                        ev.CompletionInformation,
-                        finalPath,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-            }
+            var resolved = resolver.Resolve(ev.DestinationPath);
+            if (!string.IsNullOrWhiteSpace(resolved) && PathPolicy.Under(resolved, root))
+                finalPath = resolved;
         }
+
+        DurableFileIdentity? finalIdentity = null;
+        if (ev.IdentityStatus == (uint)RgIdentityStatus.Resolved &&
+            (ev.VolumeSerialNumber != 0 || ev.FileIdLow != 0 || ev.FileIdHigh != 0))
+        {
+            finalIdentity = new DurableFileIdentity(
+                ev.VolumeSerialNumber.ToString("X16"),
+                ev.FileIdLow.ToString("X16") + ev.FileIdHigh.ToString("X16"));
+        }
+
+        var state = (finalPath is not null, finalIdentity is not null) switch
+        {
+            (true, true) => RenameCompletionState.Succeeded,
+            (false, true) => RenameCompletionState.SucceededNameUnresolved,
+            (true, false) => RenameCompletionState.SucceededIdentityUnresolved,
+            _ => RenameCompletionState.SucceededNameAndIdentityUnresolved
+        };
 
         return await renameStore.RecordCompletionAsync(
                 ev.RelatedSequence,
-                RenameCompletionState.SucceededNameUnresolved,
+                state,
                 ev.CompletionStatus,
                 ev.CompletionInformation,
-                null,
+                finalPath,
+                finalIdentity,
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -232,7 +243,7 @@ static class GateDecision
         {
             // Never preserve or authorize against a truncated path. The kernel only sends a truncated
             // gate event when its known prefix is already inside the explicit LAB root, so deny it here.
-            if (ev.ProtocolVersion != 7 || ev.PathStatus != (uint)RgPathStatus.Resolved)
+            if (ev.ProtocolVersion != 8 || ev.PathStatus != (uint)RgPathStatus.Resolved)
                 return Deny(ev.Sequence, 1);
 
             var path = resolver.Resolve(ev.Path);
@@ -462,7 +473,7 @@ static class GateDecision
 
     private static RgGateReply Allow(ulong sequence, RgGateDecision decision) => new()
     {
-        ProtocolVersion = 7,
+        ProtocolVersion = 8,
         Decision = decision,
         RequestSequence = sequence,
         ErrorCode = 0
@@ -470,7 +481,7 @@ static class GateDecision
 
     private static RgGateReply Deny(ulong sequence, uint errorCode) => new()
     {
-        ProtocolVersion = 7,
+        ProtocolVersion = 8,
         Decision = RgGateDecision.Deny,
         RequestSequence = sequence,
         ErrorCode = errorCode

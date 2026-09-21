@@ -77,20 +77,21 @@ driver loadability on a target machine, minifilter attachment, Filter Manager me
 IRP ordering, filesystem semantics, Driver Verifier behavior or production signing.
 
 
-## Protocol v6 RENAME completion reconciliation coverage
+## Protocol v8 RENAME completion identity reconciliation coverage
 
 The rollback tests now treat a rename as two durable records: a pre-operation preservation intent and a correlated
-post-operation completion. They verify successful final-name recording, failed filesystem operations, successful
-operations whose tunneled final name cannot be resolved, reopen/rebuild correlation, pending-intent semantics,
-conflicting duplicate rejection, and completion-journal corruption detection.
+post-operation completion. They verify successful final-name recording, failed filesystem operations, authoritative success with final name plus kernel identity, successful operations with name-only or identity-only
+partial reconciliation, fully unresolved success, reopen/rebuild correlation, pending-intent semantics, conflicting
+duplicate rejection, source-identity mismatch rejection, and completion-journal corruption detection.
 
 The minifilter source gate requires the safe post-operation path, `FltDoCompletionProcessingWhenSafe`,
-`FltGetTunneledName`, the correlated `RenameResult` event, and protocol-v6 completion fields. The GateClient
+`FltGetTunneledName`, and an explicit PASSIVE_LEVEL plus special-kernel-APC guard before
+`FltQueryInformationFile(..., FileIdInformation, ...)`. It also requires the correlated `RenameResult` event
+and protocol-v8 completion identity fields. The GateClient
 source gate additionally requires result persistence without `FilterReplyMessage`.
 
-These tests and compile gates do not prove real filesystem tunneling behavior, completion-message delivery under
-fault injection, or post-operation file-ID identity. Those require an isolated Windows VM and remain separate
-from the normal product bundle.
+These tests and compile gates do not prove real filesystem tunneling behavior or completion-message delivery under
+fault injection. Those require an isolated Windows VM and remain separate from the normal product bundle.
 
 
 ## Protocol v7 CREATE completion reconciliation coverage
@@ -102,7 +103,7 @@ result delivery, reopen/rebuild correlation, exact duplicate idempotence, confli
 rejection, and completion-journal corruption detection.
 
 The minifilter source gate requires the post-CREATE callback, `FltGetTunneledName`,
-`FltQueryInformationFile(..., FileIdInformation, ...)`, the correlated `CreateResult` event and protocol-v7
+`FltQueryInformationFile(..., FileIdInformation, ...)`, the correlated `CreateResult` event and protocol-v8
 identity fields. The GateClient source gate requires CREATE intent persistence before allow and result persistence
 without `FilterReplyMessage`.
 

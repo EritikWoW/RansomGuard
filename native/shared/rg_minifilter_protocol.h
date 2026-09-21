@@ -1,11 +1,11 @@
 #pragma once
 
 // Wire protocol between the RansomGuard lab minifilter and user-mode clients.
-// v7 retains CREATE/RENAME preservation semantics, adds post-rename completion reconciliation,
-// and adds correlated post-CREATE final-name plus kernel FILE_ID_INFORMATION reconciliation.
+// v8 retains CREATE/RENAME preservation semantics and requires post-operation FILE_ID_INFORMATION
+// reconciliation for both CREATE and RENAME results.
 // The production bundle still does not install or enable the driver.
 
-#define RG_PROTOCOL_VERSION 7u
+#define RG_PROTOCOL_VERSION 8u
 #define RG_PATH_CHARS 512u
 #define RG_GATE_ROOT_CHARS 260u
 #define RG_PORT_NAME L"\\RansomGuardMinifilterPort"

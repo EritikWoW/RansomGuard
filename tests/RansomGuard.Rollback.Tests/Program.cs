@@ -604,26 +604,61 @@ try
         "rename intents remain pending until post-operation completion is recorded");
 
     var renameSucceeded = await renameStore.RecordCompletionAsync(
-        101, RenameCompletionState.Succeeded, 0, 0, renameDestination);
+        101, RenameCompletionState.Succeeded, 0, 0, renameDestination, sourceIdentity);
     Check(renameSucceeded.State == RenameCompletionState.Succeeded &&
-          renameSucceeded.FinalDestinationPath.Equals(renameDestination, StringComparison.OrdinalIgnoreCase),
-        "successful rename completion records final destination");
+          renameSucceeded.FinalDestinationPath.Equals(renameDestination, StringComparison.OrdinalIgnoreCase) &&
+          renameSucceeded.FinalIdentity == sourceIdentity,
+        "successful rename completion records final destination and source file identity");
 
     var renameFailed = await renameStore.RecordCompletionAsync(
-        102, RenameCompletionState.Failed, 0xC0000035u, 0, null);
+        102, RenameCompletionState.Failed, 0xC0000035u, 0, null, null);
     Check(renameFailed.State == RenameCompletionState.Failed,
         "failed rename completion is recorded separately from intent");
 
     var renameUnresolved = await renameStore.RecordCompletionAsync(
-        103, RenameCompletionState.SucceededNameUnresolved, 0, 0, null);
-    Check(renameUnresolved.State == RenameCompletionState.SucceededNameUnresolved,
-        "successful rename with unresolved tunneled name remains non-authoritative");
+        103, RenameCompletionState.SucceededNameUnresolved, 0, 0, null, sourceIdentity);
+    Check(renameUnresolved.State == RenameCompletionState.SucceededNameUnresolved &&
+          renameUnresolved.FinalIdentity == sourceIdentity,
+        "successful rename can retain kernel identity while tunneled name is unresolved");
     Check(renameStore.PendingIntents.Count == 0,
         "completed rename intents leave no pending reconciliation");
 
+    _ = await renameStore.CaptureIntentAsync(
+        106, renameSource, renameDestination, sourceIdentity, false,
+        RenameDestinationState.OriginallyAbsent, null, 0, 10);
+    var identityUnresolvedCompletion = await renameStore.RecordCompletionAsync(
+        106, RenameCompletionState.SucceededIdentityUnresolved, 0, 0, renameDestination, null);
+    Check(identityUnresolvedCompletion.State == RenameCompletionState.SucceededIdentityUnresolved &&
+          identityUnresolvedCompletion.FinalIdentity is null,
+        "rename success can explicitly retain final name while kernel identity is unresolved");
+
+    _ = await renameStore.CaptureIntentAsync(
+        107, renameSource, renameDestination, sourceIdentity, false,
+        RenameDestinationState.OriginallyAbsent, null, 0, 10);
+    var fullyUnresolvedCompletion = await renameStore.RecordCompletionAsync(
+        107, RenameCompletionState.SucceededNameAndIdentityUnresolved, 0, 0, null, null);
+    Check(fullyUnresolvedCompletion.State == RenameCompletionState.SucceededNameAndIdentityUnresolved,
+        "rename success explicitly represents unresolved final name and identity");
+
+    var mismatchStore = new RenameRollbackStore(Path.Combine(root, "rename-identity-mismatch"));
+    _ = await mismatchStore.CaptureIntentAsync(
+        108, renameSource, renameDestination, sourceIdentity, false,
+        RenameDestinationState.OriginallyAbsent, null, 0, 10);
+    var wrongFinalIdentityRejected = false;
+    try
+    {
+        _ = await mismatchStore.RecordCompletionAsync(
+            108, RenameCompletionState.Succeeded, 0, 0, renameDestination, destinationIdentity);
+    }
+    catch (InvalidDataException) { wrongFinalIdentityRejected = true; }
+    Check(wrongFinalIdentityRejected,
+        "rename completion rejects a final kernel identity different from the committed source identity");
+    Check(mismatchStore.PendingIntents.Single().RequestSequence == 108,
+        "identity-mismatched rename remains pending instead of being promoted to completed");
+
     var reopenedRename = new RenameRollbackStore(renameRoot);
-    Check(reopenedRename.Completions.Count == 3,
-        "rename completion journal rebuilds after reopen");
+    Check(reopenedRename.Completions.Count == 5,
+        "rename completion journal rebuilds all authoritative and unresolved states after reopen");
     Check(reopenedRename.PendingIntents.Count == 0,
         "reopened rename state preserves completion correlation");
 
@@ -631,7 +666,7 @@ try
     try
     {
         _ = await renameStore.RecordCompletionAsync(
-            101, RenameCompletionState.Failed, 0xC0000001u, 0, null);
+            101, RenameCompletionState.Failed, 0xC0000001u, 0, null, null);
     }
     catch (InvalidDataException) { conflictingRenameCompletionRejected = true; }
     Check(conflictingRenameCompletionRejected,
@@ -661,7 +696,7 @@ try
         150, renameSource, renameDestination, sourceIdentity, false,
         RenameDestinationState.OriginallyAbsent, null, 0, 10);
     _ = await completionCorruptionStore.RecordCompletionAsync(
-        150, RenameCompletionState.Succeeded, 0, 0, renameDestination);
+        150, RenameCompletionState.Succeeded, 0, 0, renameDestination, sourceIdentity);
     var completionJournalBytes = await File.ReadAllBytesAsync(completionCorruptionStore.CompletionJournalPath);
     completionJournalBytes[^2] ^= 1;
     await File.WriteAllBytesAsync(completionCorruptionStore.CompletionJournalPath, completionJournalBytes);

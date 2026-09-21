@@ -62,7 +62,9 @@ Or choose another disposable non-system directory:
 The first run creates only the gate marker before connecting. Put **copies** of test files into that folder
 before starting the gate. Once connected, CREATE / WRITE / rename / delete-disposition / truncate requests in that folder are gated.
 Protocol v4 distinguishes destructive replacement of an existing file from creation of an originally-absent path.
-The latter is committed as metadata-only recovery state; it does not cause the recovery library to delete files.
+It also treats `FILE_DELETE_ON_CLOSE` on an existing file as destructive and captures a full pre-image first;
+existing-directory delete-on-close is denied because directory-topology rollback is not modeled yet.
+An originally-absent path is committed as metadata-only recovery state; it does not cause the recovery library to delete files.
 
 CREATE classification is still path-based and native post-create/file-ID reconciliation is not complete, so do
 not use the lab gate as a general-purpose protected folder yet.

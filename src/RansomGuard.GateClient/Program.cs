@@ -550,7 +550,8 @@ static class GateDecision
     public static async Task<RgGateReply> EvaluateAsync(RgEvent ev, DevicePathResolver resolver, string root,
         RollbackStore store, RangeRollbackStore writeStore, CreateRollbackStore createStore,
         CreateOperationStore createOperationStore, FileIdentityStore identityStore,
-        RenameRollbackStore renameStore, CancellationToken cancellationToken)
+        RenameRollbackStore renameStore, RollbackStorageBudget storageBudget,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -564,8 +565,15 @@ static class GateDecision
                 return Deny(ev.Sequence, 2);
 
             var eventType = (RgEventType)ev.EventType;
+            await using var eventReservation = await storageBudget.ReserveAsync(
+                RollbackStorageBudget.MetadataReservationBytes,
+                $"gate-event:{eventType}",
+                cancellationToken).ConfigureAwait(false);
+
             if (eventType == RgEventType.Create)
-                return await EvaluateCreateAsync(ev, path, store, createStore, createOperationStore, identityStore, cancellationToken).ConfigureAwait(false);
+                return await EvaluateCreateAsync(
+                    ev, path, store, createStore, createOperationStore, identityStore,
+                    storageBudget, cancellationToken).ConfigureAwait(false);
 
             var state = PathProbe.Get(path);
             if (state != CreateTargetState.File)
@@ -577,7 +585,8 @@ static class GateDecision
 
             if (eventType == RgEventType.Rename)
                 return await EvaluateRenameAsync(ev, resolver, root, path, store, createStore,
-                    identityStore, renameStore, identityBaseline, sourceOriginallyAbsent, cancellationToken).ConfigureAwait(false);
+                    identityStore, renameStore, identityBaseline, sourceOriginallyAbsent,
+                    storageBudget, cancellationToken).ConfigureAwait(false);
 
             // Once a path is known to have been absent at incident start, later non-rename mutations must not
             // manufacture a pre-image from data that was created during the incident.
@@ -588,6 +597,10 @@ static class GateDecision
             {
                 if (ev.ByteOffset < 0)
                     return Deny(ev.Sequence, 6);
+                var estimate = RollbackStorageBudget.EstimateRangeCaptureBytes(
+                    writeStore, path, ev.ByteOffset, ev.Length);
+                await using var captureReservation = await storageBudget.ReserveAsync(
+                    estimate, "range-write-preimage", cancellationToken).ConfigureAwait(false);
                 await writeStore.CaptureWritePreimageAsync(path, ev.ByteOffset, ev.Length,
                         identityBaseline.Identity, cancellationToken)
                     .ConfigureAwait(false);
@@ -600,11 +613,20 @@ static class GateDecision
                     RgEventType.Truncate => RollbackMutationKind.Write,
                     _ => throw new InvalidOperationException("Unsupported gate event type.")
                 };
+                var estimate = RollbackStorageBudget.EstimateFullPreimageBytes(store, path);
+                await using var captureReservation = await storageBudget.ReserveAsync(
+                    estimate, $"full-preimage:{eventType}", cancellationToken).ConfigureAwait(false);
                 _ = await store.CapturePreimageAsync(path, mutation, identityBaseline.Identity, cancellationToken)
                     .ConfigureAwait(false);
             }
 
             return Allow(ev.Sequence, RgGateDecision.SnapshotCommitted);
+        }
+        catch (RollbackStorageBudgetExceededException ex)
+        {
+            Console.Error.WriteLine(
+                $"Rollback storage budget denied {ex.Purpose}: requested={ex.RequestedBytes}, actual={ex.ActualSessionBytes}, reserved={ex.ReservedBytes}, free={ex.AvailableFreeBytes}, max={ex.MaxSessionBytes}, minFree={ex.MinFreeBytes}.");
+            return Deny(ev.Sequence, 13);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

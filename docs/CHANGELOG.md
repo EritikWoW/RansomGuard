@@ -1,4 +1,13 @@
-# RansomGuard 0.7.7.0
+# RansomGuard 0.7.8.0
+
+- Added bounded concurrent LAB gate execution without changing protocol v8.
+- Kernel gate admission is capped at 8 simultaneous blocking preservation requests and fails closed when saturated.
+- Removed long-held gPortMutex coverage around FltSendMessage; port lifetime is protected by short leases and disconnect/unload waits for active users.
+- GateClient now dispatches messages through a configurable bounded worker pool (default 4, range 1..8).
+- Already-received blocking messages are still dispatched during shutdown so they can return an explicit deny instead of being silently abandoned.
+- Added source gates preventing regression to globally serialized FltSendMessage and enforcing matching concurrency bounds.
+
+# RansomGuard 0.7.8.0
 - Protocol v8 binds successful post-RENAME reconciliation to `FileIdInformation` from the actual completed kernel file object only at PASSIVE_LEVEL with special kernel APCs enabled; otherwise identity remains explicitly unresolved.
 - Rename completion journals now persist final volume serial + 128-bit file ID alongside the reconciled destination name.
 - Successful rename completion distinguishes authoritative, name-unresolved, identity-unresolved and fully unresolved states.

@@ -37,6 +37,8 @@ file object. Otherwise identity remains explicitly unresolved. User mode appends
 final name and identity when available. The post-op identity must match the source identity committed
 before allow. A missing or partially resolved result remains explicit; pre-operation intent is never promoted to success by inference.
 
-The next core milestones are bounded concurrent and crash-reconciled gating, memory-mapped write coverage,
+The current LAB gate now uses bounded concurrent preservation: kernel admission caps simultaneous blocking gate sends at 8, while user mode dispatches a configurable 1..8 worker pool (default 4). Slow preservation no longer holds the global port mutex across the 30-second gate wait.
+
+The next core milestones are crash-reconciled gating, memory-mapped write coverage,
 containment, process-state capture,
 adaptive crypto analysis, and verified recovery orchestration.

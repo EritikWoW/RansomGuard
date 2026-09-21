@@ -29,13 +29,14 @@ var identityStore = new FileIdentityStore(Path.Combine(store.Root, "identity-sta
 var renameStore = new RenameRollbackStore(Path.Combine(store.Root, "rename-state"));
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
-Console.WriteLine("RansomGuard LAB pre-write gate v0.7.7.0");
+Console.WriteLine("RansomGuard LAB pre-write gate v0.7.8.0");
 Console.WriteLine("LAB ONLY: use only inside a disposable test directory on a test machine/VM.");
 Console.WriteLine($"Protected LAB root : {options.Root}");
 Console.WriteLine($"Kernel NT root     : {ntRoot}");
 Console.WriteLine($"Rollback session   : {sessionId}");
 Console.WriteLine($"Rollback store     : {store.Root}");
 Console.WriteLine("CREATE/write/rename/delete/truncate in this root are gated by durable preservation semantics.");
+Console.WriteLine($"Bounded gate workers : {options.GateWorkers}");
 Console.WriteLine("Press Ctrl+C to disconnect. The driver then stops gating because no client is connected.");
 
 var context = new RgConnectContext
@@ -59,7 +60,61 @@ if (headerSize != 16 || eventSize != 2168 || replyHeaderSize != 16 || gateReplyS
     throw new InvalidOperationException($"Unexpected protocol sizes: message={headerSize}, event={eventSize}, replyHeader={replyHeaderSize}, gateReply={gateReplySize}");
 
 var resolver = new DevicePathResolver();
+using var workerSlots = new SemaphoreSlim(options.GateWorkers, options.GateWorkers);
+var activeWorkers = new List<Task>();
+var replySync = new object();
 var buffer = Marshal.AllocHGlobal(checked(headerSize + eventSize));
+
+async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
+{
+    try
+    {
+        if ((RgEventType)ev.EventType == RgEventType.CreateResult)
+        {
+            var completion = await CreateReconciliation.HandleAsync(
+                ev, resolver, options.Root, createOperationStore, cts.Token).ConfigureAwait(false);
+            Console.WriteLine(
+                $"{DateTime.Now:HH:mm:ss.fff} {RgEventType.CreateResult,-20} request={ev.RelatedSequence,-7} {completion.State,-34} status=0x{completion.CompletionStatus:X8} {completion.FinalPath}");
+            return;
+        }
+
+        if ((RgEventType)ev.EventType == RgEventType.RenameResult)
+        {
+            var completion = await RenameReconciliation.HandleAsync(
+                ev, resolver, options.Root, renameStore, cts.Token).ConfigureAwait(false);
+            Console.WriteLine(
+                $"{DateTime.Now:HH:mm:ss.fff} {RgEventType.RenameResult,-20} request={ev.RelatedSequence,-7} {completion.State,-24} status=0x{completion.CompletionStatus:X8} {completion.FinalDestinationPath}");
+            return;
+        }
+
+        var reply = await GateDecision.EvaluateAsync(
+            ev, resolver, options.Root, store, writeStore, createStore, createOperationStore,
+            identityStore, renameStore, cts.Token).ConfigureAwait(false);
+
+        lock (replySync)
+        {
+            Native.Reply(port, header.MessageId, reply);
+        }
+
+        var path = resolver.Resolve(ev.Path) ?? ev.Path ?? "<unresolved>";
+        Console.WriteLine(
+            $"{DateTime.Now:HH:mm:ss.fff} {((RgEventType)ev.EventType),-20} pid={ev.ProcessId,-7} {reply.Decision,-18} {path}");
+    }
+    catch (OperationCanceledException) when (cts.IsCancellationRequested)
+    {
+        // Shutdown cancels outstanding preservation work. GateDecision itself returns Deny for
+        // ordinary blocking requests; reconciliation events are simply left pending for restart.
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"Gate worker failed: {ex.GetType().Name}: {ex.Message}");
+    }
+    finally
+    {
+        workerSlots.Release();
+    }
+}
+
 try
 {
     while (!cts.IsCancellationRequested)
@@ -74,34 +129,19 @@ try
         var header = Marshal.PtrToStructure<FilterMessageHeader>(buffer);
         var ev = Marshal.PtrToStructure<RgEvent>(IntPtr.Add(buffer, headerSize));
 
-        if ((RgEventType)ev.EventType == RgEventType.CreateResult)
-        {
-            var completion = await CreateReconciliation.HandleAsync(
-                ev, resolver, options.Root, createOperationStore, cts.Token).ConfigureAwait(false);
-            Console.WriteLine(
-                $"{DateTime.Now:HH:mm:ss.fff} {RgEventType.CreateResult,-20} request={ev.RelatedSequence,-7} {completion.State,-34} status=0x{completion.CompletionStatus:X8} {completion.FinalPath}");
-            continue;
-        }
-
-        if ((RgEventType)ev.EventType == RgEventType.RenameResult)
-        {
-            var completion = await RenameReconciliation.HandleAsync(
-                ev, resolver, options.Root, renameStore, cts.Token).ConfigureAwait(false);
-            Console.WriteLine(
-                $"{DateTime.Now:HH:mm:ss.fff} {RgEventType.RenameResult,-20} request={ev.RelatedSequence,-7} {completion.State,-24} status=0x{completion.CompletionStatus:X8} {completion.FinalDestinationPath}");
-            continue;
-        }
-
-        var reply = await GateDecision.EvaluateAsync(ev, resolver, options.Root, store, writeStore, createStore, createOperationStore, identityStore, renameStore, cts.Token);
-        Native.Reply(port, header.MessageId, reply);
-
-        var path = resolver.Resolve(ev.Path) ?? ev.Path ?? "<unresolved>";
-        Console.WriteLine($"{DateTime.Now:HH:mm:ss.fff} {((RgEventType)ev.EventType),-20} pid={ev.ProcessId,-7} {reply.Decision,-18} {path}");
+        await workerSlots.WaitAsync().ConfigureAwait(false);
+        activeWorkers.RemoveAll(static task => task.IsCompleted);
+        activeWorkers.Add(Task.Run(() => ProcessMessageAsync(header, ev)));
     }
+}
+catch (OperationCanceledException) when (cts.IsCancellationRequested)
+{
 }
 finally
 {
     Marshal.FreeHGlobal(buffer);
+    if (activeWorkers.Count != 0)
+        await Task.WhenAll(activeWorkers).ConfigureAwait(false);
 }
 
 static class CreateReconciliation
@@ -502,14 +542,18 @@ static class PathProbe
     }
 }
 
-sealed record Options(string Root, string StoreRoot, string? SessionId, bool PrepareOnly)
+sealed record Options(string Root, string StoreRoot, string? SessionId, bool PrepareOnly, int GateWorkers)
 {
+    public const int DefaultGateWorkers = 4;
+    public const int MaxGateWorkers = 8;
+
     public static Options Parse(string[] args)
     {
         string? root = null;
         string? store = null;
         string? session = null;
         var prepare = false;
+        var gateWorkers = DefaultGateWorkers;
         for (var i = 0; i < args.Length; i++)
         {
             switch (args[i].ToLowerInvariant())
@@ -517,13 +561,18 @@ sealed record Options(string Root, string StoreRoot, string? SessionId, bool Pre
                 case "--root" when i + 1 < args.Length: root = Path.GetFullPath(args[++i]).TrimEnd('\\'); break;
                 case "--store" when i + 1 < args.Length: store = Path.GetFullPath(args[++i]); break;
                 case "--session" when i + 1 < args.Length: session = args[++i]; break;
+                case "--gate-workers" when i + 1 < args.Length:
+                    if (!int.TryParse(args[++i], out gateWorkers) || gateWorkers < 1 || gateWorkers > MaxGateWorkers)
+                        throw new ArgumentOutOfRangeException(nameof(args),
+                            $"--gate-workers must be between 1 and {MaxGateWorkers}.");
+                    break;
                 case "--prepare-root": prepare = true; break;
                 default: throw new ArgumentException($"Unknown/incomplete argument: {args[i]}");
             }
         }
         if (string.IsNullOrWhiteSpace(root)) throw new ArgumentException("Pass --root <disposable-test-directory>.");
         store ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RansomGuardV072", "GateRollback");
-        return new Options(root, store, session, prepare);
+        return new Options(root, store, session, prepare, gateWorkers);
     }
 }
 

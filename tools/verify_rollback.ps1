@@ -169,4 +169,4 @@ if($repository -notmatch 'new CreateOperationStore\(createRoot\)\.VerifyAll\(\)'
 if($repository -notmatch 'new FileIdentityStore\(identityRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested identity-state stores.'}
 if($repository -notmatch 'new RenameRollbackStore\(renameRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested rename-state stores.'}
 Write-Host 'Rollback source gate PASSED: full-file, range-COW, create-baseline, CREATE intent/completion, durable file-identity, rename-intent/completion journals, hashes, crash-artifact rejection, write-through commits, first-state semantics, copy-only restore.'
-Write-Host 'Normal service capture remains disabled; v0.7.7 keeps blocking preservation inside the explicit LAB gate only.'
+Write-Host 'Normal service capture remains disabled; v0.7.8 keeps blocking preservation inside the explicit LAB gate only.'

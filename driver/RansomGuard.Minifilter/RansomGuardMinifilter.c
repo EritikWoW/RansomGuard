@@ -9,6 +9,9 @@ static PFLT_PORT gServerPort = NULL;
 static PFLT_PORT gClientPort = NULL;
 static FAST_MUTEX gPortMutex;
 static EX_RUNDOWN_REF gRundown;
+static EX_RUNDOWN_REF gPortRundown;
+static volatile LONG gPortRundownCompleted = 0;
+static volatile LONG gGateInFlight = 0;
 static volatile LONG gUnloading = 0;
 static volatile LONG gClientConnected = 0;
 static volatile LONG gClientMode = 0;
@@ -48,6 +51,9 @@ static VOID RgPopulateRenameDestination(_Inout_ PRG_EVENT Event, _Inout_ PFLT_CA
                                         _In_ PCFLT_RELATED_OBJECTS FltObjects);
 static BOOLEAN RgEventIsInsideGateRoot(_In_ const RG_EVENT *Event);
 static BOOLEAN RgGateEvent(_In_ const RG_EVENT *Event, _Out_opt_ PULONG ErrorCode);
+static BOOLEAN RgAcquireClientPort(_In_ LONG ExpectedMode);
+static VOID RgReleaseClientPort(VOID);
+static VOID RgWaitForPortUsers(VOID);
 static LONG RgCurrentClientMode(VOID);
 static FLT_PREOP_CALLBACK_STATUS RgCompleteDenied(_Inout_ PFLT_CALLBACK_DATA Data);
 
@@ -744,18 +750,28 @@ static BOOLEAN RgGateEvent(const RG_EVENT *Event, PULONG ErrorCode)
     ULONG replyLength = sizeof(reply);
     NTSTATUS status = STATUS_PORT_DISCONNECTED;
     BOOLEAN allow = FALSE;
+    LONG inFlight;
 
     RtlZeroMemory(&reply, sizeof(reply));
     timeout.QuadPart = -(RG_GATE_TIMEOUT_MS * 10LL * 1000LL);
 
-    ExAcquireFastMutex(&gPortMutex);
-    if (gClientPort != NULL && gClientMode == RgClientLabGate &&
-        InterlockedCompareExchange(&gUnloading, 0, 0) == 0) {
+    inFlight = InterlockedIncrement(&gGateInFlight);
+    if (inFlight > RG_MAX_GATE_INFLIGHT) {
+        InterlockedDecrement(&gGateInFlight);
+        if (ErrorCode != NULL) {
+            *ErrorCode = (ULONG)STATUS_DEVICE_BUSY;
+        }
+        return FALSE;
+    }
+
+    if (RgAcquireClientPort(RgClientLabGate)) {
         status = FltSendMessage(gFilter, &gClientPort,
             (PVOID)Event, sizeof(*Event),
             &reply, &replyLength, &timeout);
+        RgReleaseClientPort();
     }
-    ExReleaseFastMutex(&gPortMutex);
+
+    InterlockedDecrement(&gGateInFlight);
 
     if (ErrorCode != NULL) {
         *ErrorCode = NT_SUCCESS(status) ? reply.ErrorCode : (ULONG)status;
@@ -863,14 +879,12 @@ static VOID RgSendWorker(PVOID Parameter)
     timeout.QuadPart = -(((work->ClientMode == RgClientLabGate) ?
         RG_RECONCILE_SEND_TIMEOUT_MS : RG_SEND_TIMEOUT_MS) * 10LL * 1000LL);
 
-    ExAcquireFastMutex(&gPortMutex);
-    if (gClientPort != NULL && gClientMode == work->ClientMode &&
-        InterlockedCompareExchange(&gUnloading, 0, 0) == 0) {
+    if (RgAcquireClientPort(work->ClientMode)) {
         status = FltSendMessage(gFilter, &gClientPort,
             &work->Event, sizeof(work->Event),
             NULL, NULL, &timeout);
+        RgReleaseClientPort();
     }
-    ExReleaseFastMutex(&gPortMutex);
 
     if (status == STATUS_TIMEOUT) {
         InterlockedIncrement(&gDropped);
@@ -880,6 +894,40 @@ static VOID RgSendWorker(PVOID Parameter)
     ExFreePoolWithTag(work, RG_POOL_TAG);
     InterlockedDecrement(&gPending);
     ExReleaseRundownProtection(&gRundown);
+}
+
+static BOOLEAN RgAcquireClientPort(LONG ExpectedMode)
+{
+    BOOLEAN acquired = FALSE;
+
+    if (!ExAcquireRundownProtection(&gPortRundown)) {
+        return FALSE;
+    }
+
+    ExAcquireFastMutex(&gPortMutex);
+    if (gClientPort != NULL &&
+        gClientMode == ExpectedMode &&
+        InterlockedCompareExchange(&gClientConnected, 0, 0) != 0 &&
+        InterlockedCompareExchange(&gUnloading, 0, 0) == 0) {
+        acquired = TRUE;
+    }
+    ExReleaseFastMutex(&gPortMutex);
+
+    if (!acquired) {
+        ExReleaseRundownProtection(&gPortRundown);
+    }
+    return acquired;
+}
+
+static VOID RgReleaseClientPort(VOID)
+{
+    ExReleaseRundownProtection(&gPortRundown);
+}
+
+static VOID RgWaitForPortUsers(VOID)
+{
+    ExWaitForRundownProtectionRelease(&gPortRundown);
+    InterlockedExchange(&gPortRundownCompleted, 1);
 }
 
 static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID ConnectionContext,
@@ -924,6 +972,9 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
     if (gClientPort != NULL || InterlockedCompareExchange(&gUnloading, 0, 0) != 0) {
         status = STATUS_DEVICE_BUSY;
     } else {
+        if (InterlockedExchange(&gPortRundownCompleted, 0) != 0) {
+            ExReInitializeRundownProtection(&gPortRundown);
+        }
         RtlZeroMemory(gGateRoot, sizeof(gGateRoot));
         gGateRootLengthBytes = 0;
         gClientPort = ClientPort;
@@ -948,6 +999,7 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
 static VOID RgDisconnect(PVOID ConnectionCookie)
 {
     UNREFERENCED_PARAMETER(ConnectionCookie);
+
     ExAcquireFastMutex(&gPortMutex);
     InterlockedExchange(&gClientConnected, 0);
     InterlockedExchange(&gClientMode, 0);
@@ -958,6 +1010,8 @@ static VOID RgDisconnect(PVOID ConnectionCookie)
         FltCloseClientPort(gFilter, &gClientPort);
     }
     ExReleaseFastMutex(&gPortMutex);
+
+    RgWaitForPortUsers();
 }
 
 NTSTATUS RgInstanceSetup(PCFLT_RELATED_OBJECTS FltObjects, FLT_INSTANCE_SETUP_FLAGS Flags,
@@ -995,6 +1049,7 @@ NTSTATUS RgUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
         FltCloseClientPort(gFilter, &gClientPort);
     }
     ExReleaseFastMutex(&gPortMutex);
+    RgWaitForPortUsers();
 
     ExWaitForRundownProtectionRelease(&gRundown);
     if (gFilter != NULL) {
@@ -1014,6 +1069,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     UNREFERENCED_PARAMETER(RegistryPath);
     ExInitializeFastMutex(&gPortMutex);
     ExInitializeRundownProtection(&gRundown);
+    ExInitializeRundownProtection(&gPortRundown);
     RtlZeroMemory(gGateRoot, sizeof(gGateRoot));
 
     status = FltRegisterFilter(DriverObject, &gRegistration, &gFilter);

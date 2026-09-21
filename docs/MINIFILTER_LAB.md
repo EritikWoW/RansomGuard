@@ -1,4 +1,4 @@
-# RansomGuard minifilter engineering lab — v0.7.7.0
+# RansomGuard minifilter engineering lab — v0.7.8.0
 
 The minifilter has two mutually exclusive user-mode connection modes:
 
@@ -34,7 +34,7 @@ Build the engineering package:
 .\build_lab.cmd
 ```
 
-Then, from the generated `RansomGuard-Lab-v0.7.7.0-*` directory, build/install the minifilter only in a
+Then, from the generated `RansomGuard-Lab-v0.7.8.0-*` directory, build/install the minifilter only in a
 Windows test VM using the existing lab scripts.
 
 ## Audit mode
@@ -90,3 +90,14 @@ It proves that, for the tested path and operation, the minifilter can hold the d
 mode durably captures the pre-image and can deny the I/O when that commit is unavailable. It does **not**
 prove production compatibility, crash safety, memory-mapped-write coverage, large-file performance,
 containment efficacy, or universal rollback.
+
+
+## Bounded gate concurrency (0.7.8.0)
+
+The LAB gate no longer serializes the full blocking FltSendMessage duration under the global port mutex. Up to 8 kernel gate requests may be in flight. Additional in-scope destructive I/O fails closed rather than creating an unbounded queue.
+
+GateClient uses a bounded worker pool. Default: 4 workers. Override only in a disposable LAB environment with:
+
+    --gate-workers <1..8>
+
+The upper bound intentionally matches the kernel admission ceiling. This change improves independent timeout behavior and allows preservation work on unrelated files to overlap; it does not make the prototype production-safe.

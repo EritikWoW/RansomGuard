@@ -60,7 +60,7 @@ public sealed class ActivationPreflightStore
                     if (existing.Path.Equals(full, StringComparison.OrdinalIgnoreCase) &&
                         existing.CompletionStatus == completionStatus &&
                         existing.WritableViewPresent == writableViewPresent &&
-                        Nullable.Equals(existing.Identity, identity))
+                        Equals(existing.Identity, identity))
                         return existing;
                     throw new InvalidDataException("Conflicting duplicate activation-preflight kernel sequence.");
                 }

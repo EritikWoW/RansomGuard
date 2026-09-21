@@ -51,7 +51,9 @@ foreach($required in @(
     'CreateDisposition.Supersede',
     'CreateDisposition.Overwrite',
     'CreateDisposition.OverwriteIf',
-    'CreateDisposition.OpenIf'
+    'CreateDisposition.OpenIf',
+    'FileDeleteOnClose',
+    'CreatePreservationAction.DenyUnsupported'
 )){
     if($policyText -notmatch [regex]::Escape($required)){throw "Create gate policy missing invariant: $required"}
 }

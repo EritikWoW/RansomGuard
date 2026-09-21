@@ -239,9 +239,25 @@ The section callback never calls `RgGateEvent`, never performs a file-name query
 
 The activation callback does not perform rollback I/O. `MmDoesFileHaveUserWritableReferences` is used only from post-CREATE, where Filter Manager guarantees PASSIVE_LEVEL. The normal paging and section callbacks remain no-reply/non-blocking.
 
+## Directory topology activation barrier
+
+0.7.15 extends the protocol-v11 activation barrier to directory handles without adding a new kernel message type.
+
+Before ordinary file probes begin, GateClient:
+
+1. opens the protected root with FILE_READ_ATTRIBUTES and FILE_SHARE_READ only;
+2. recursively opens every ordinary non-reparse directory with FILE_FLAG_BACKUP_SEMANTICS and the same read-only share mode;
+3. queries FILE_ID_INFO from each exact directory handle;
+4. appends identity-bound records to activation-topology-state/activation-topology-journal.jsonl;
+5. keeps all directory handles open until the kernel accepts ActivateGate.
+
+Because Windows share-access checks are bidirectional, an already-open directory handle carrying write or delete access is incompatible with the new read-only-share handle and activation fails before protection is declared active. Once the LAB client is connected but still NotActivated, new external CREATE/rename/delete operations are already fail-closed in the minifilter, so the held directory set closes the startup race through the activation handshake.
+
+This milestone prevents pre-existing mutating directory handles from silently crossing startup. It does not yet implement directory-topology rollback for an allowed production rename/delete tree operation; those semantics remain future recovery work.
+
 ## Disposable-VM runtime proof
 
-0.7.14.0 adds a manual integration harness for a preconfigured disposable Windows VM. It is deliberately separate from ordinary GitHub-hosted CI.
+0.7.15.0 adds a manual integration harness for a preconfigured disposable Windows VM. It is deliberately separate from ordinary GitHub-hosted CI.
 
 The runtime workflow requires a self-hosted runner labeled `ransomguard-lab-vm`, an elevated runner account, Visual Studio/WDK, lab signing already configured in the VM image, and a trusted test certificate with a private key. The workflow itself does not enable TESTSIGNING, modify Secure Boot, import trust roots, or change Defender.
 
@@ -284,7 +300,7 @@ Bounded concurrency and conservative restart evidence are implemented. A worker/
 ## Still required before production
 
 - deeper crash recovery for requests interrupted before authoritative kernel completion delivery;
-- broader live NTFS/ReFS validation beyond the automated mapping harness: reboot, Driver Verifier, storage pressure and fault injection;
+- broader live NTFS/ReFS validation beyond the automated mapping harness: directory-handle startup cases, reboot, Driver Verifier, storage pressure and fault injection;
 - storage quotas, retention and pressure policy;
 - transition from protected-root health to containment/block policy;
 - process-state capture and adaptive crypto analysis;

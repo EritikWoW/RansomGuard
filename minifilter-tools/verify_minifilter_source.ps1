@@ -44,6 +44,12 @@ foreach($required in @(
     'FltDoCompletionProcessingWhenSafe',
     'RgPostSetInformation',
     'RgEventRenameResult',
+    'RgPostCreate',
+    'RgEventCreateResult',
+    'RgPopulatePostCreateIdentity',
+    'FltQueryInformationFile',
+    'FileIdInformation',
+    'IdentityStatus',
     'RelatedSequence',
     'CompletionStatus',
     'DestinationPathStatus',
@@ -51,20 +57,24 @@ foreach($required in @(
 )){
     if($src -notmatch [regex]::Escape($required)){throw "LAB write-gate invariant missing: $required"}
 }
-if($proto -notmatch '#define\s+RG_PROTOCOL_VERSION\s+6u'){throw 'Minifilter protocol must be v6 for rename completion reconciliation.'}
+if($proto -notmatch '#define\s+RG_PROTOCOL_VERSION\s+7u'){throw 'Minifilter protocol must be v7 for CREATE completion and identity reconciliation.'}
 if($proto -notmatch 'RG_GATE_ROOT_CHARS'){throw 'Protocol must carry an explicit bounded gate root.'}
 if($src -notmatch 'Unresolved/out-of-root paths fail open'){throw 'LAB gate must document fail-open behavior outside the explicitly resolved gate root.'}
 if($src -notmatch 'requestorPid\s*==\s*\(ULONGLONG\)InterlockedCompareExchange64\(&gClientProcessId'){throw 'Gate client PID must be excluded to prevent rollback-store self-deadlock.'}
 if($proto -notmatch 'RG_CREATE_DISPOSITION_SHIFT'){throw 'Protocol must carry CREATE disposition/options semantics.'}
-if($proto -notmatch 'DestinationPathStatus' -or $proto -notmatch 'DestinationPath\[RG_PATH_CHARS\]'){throw 'Protocol v6 must carry bounded rename destination path metadata.'}
-if($proto -notmatch 'RgEventRenameResult' -or $proto -notmatch 'RelatedSequence' -or $proto -notmatch 'CompletionStatus'){throw 'Protocol v6 must carry correlated post-rename completion metadata.'}
+if($proto -notmatch 'DestinationPathStatus' -or $proto -notmatch 'DestinationPath\[RG_PATH_CHARS\]'){throw 'Protocol v7 must carry bounded rename destination path metadata.'}
+if($proto -notmatch 'RgEventRenameResult' -or $proto -notmatch 'RelatedSequence' -or $proto -notmatch 'CompletionStatus'){throw 'Protocol v7 must carry correlated post-rename completion metadata.'}
+if($proto -notmatch 'RgEventCreateResult' -or $proto -notmatch 'IdentityStatus' -or
+   $proto -notmatch 'VolumeSerialNumber' -or $proto -notmatch 'FileIdLow' -or $proto -notmatch 'FileIdHigh'){
+    throw 'Protocol v7 must carry correlated post-CREATE identity metadata.'
+}
 if($proto -notmatch 'RgGateBaselineCommitted' -or $proto -notmatch 'RgGateNoPreservationRequired'){throw 'Protocol must distinguish committed absence baselines from no-op create opens.'}
 if($infText -notmatch 'StartType\s*=\s*3'){throw 'Driver must remain demand-start in the lab prototype.'}
 if($infText -notmatch 'Instance1\.Flags\s*=\s*0x1'){throw 'Automatic volume attachment must remain suppressed.'}
 if($infText -notmatch 'Instance1\.Altitude\s*=\s*"370099\.4242"'){throw 'Unexpected LAB altitude. Review altitude policy manually.'}
 Write-Host 'LAB pre-write gate source check PASSED.' -ForegroundColor Green
 Write-Host 'Gate scope: one explicit NT root negotiated by the single connected client.'
-Write-Host 'In-scope CREATE/WRITE/RENAME/DELETE/TRUNCATE require an explicit user-mode preservation decision; allowed renames emit post-operation reconciliation.'
+Write-Host 'In-scope CREATE/WRITE/RENAME/DELETE/TRUNCATE require an explicit user-mode preservation decision; allowed CREATE/RENAME operations emit correlated post-operation reconciliation.'
 Write-Host 'Out-of-scope/unresolved I/O remains fail-open; no process-control or kernel file-writing APIs are present.'
 Write-Host 'Demand start: yes; automatic attachment suppressed: yes.'
 Write-Host 'x64 build/validation tools required; ApiValidator remains enabled.'

@@ -61,7 +61,7 @@ typedef enum _RG_CONTROL_COMMAND {
     RgControlActivateGate = 1,
     RgControlQueryActivation = 2,
     RgControlArmPreflight = 3,
-    RgControlContainProcess = 4,
+    RgControlActivateAndContainProcess = 4,
     RgControlQueryContainment = 5
 } RG_CONTROL_COMMAND;
 

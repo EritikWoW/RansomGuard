@@ -650,6 +650,7 @@ static class GateDecision
         RenameRollbackStore renameStore,
         FileIdentityBaseline sourceIdentity,
         bool sourceOriginallyAbsent,
+        RollbackStorageBudget storageBudget,
         CancellationToken cancellationToken)
     {
         if (ev.DestinationPathStatus != (uint)RgPathStatus.Resolved)
@@ -663,6 +664,9 @@ static class GateDecision
         // must not become a false pre-incident pre-image.
         if (!sourceOriginallyAbsent)
         {
+            var sourceEstimate = RollbackStorageBudget.EstimateFullPreimageBytes(store, sourcePath);
+            await using var sourceReservation = await storageBudget.ReserveAsync(
+                sourceEstimate, "rename-source-preimage", cancellationToken).ConfigureAwait(false);
             _ = await store.CapturePreimageAsync(sourcePath, RollbackMutationKind.Rename,
                     sourceIdentity.Identity, cancellationToken)
                 .ConfigureAwait(false);
@@ -685,8 +689,14 @@ static class GateDecision
                     // Record pre-incident absence so recovery can distinguish a rename-created name
                     // from a destination that existed before the incident.
                     if (!createStore.WasOriginallyAbsent(destinationPath))
+                    {
+                        var absenceEstimate = RollbackStorageBudget.EstimateOriginallyAbsentBytes(
+                            createStore, destinationPath);
+                        await using var absenceReservation = await storageBudget.ReserveAsync(
+                            absenceEstimate, "rename-destination-absence", cancellationToken).ConfigureAwait(false);
                         _ = await createStore.CaptureAbsentAsync(destinationPath, cancellationToken)
                             .ConfigureAwait(false);
+                    }
                     destinationState = RenameDestinationState.OriginallyAbsent;
                     break;
 
@@ -700,6 +710,10 @@ static class GateDecision
                         return Deny(ev.Sequence, 11);
                     }
 
+                    var destinationEstimate = RollbackStorageBudget.EstimateFullPreimageBytes(
+                        store, destinationPath);
+                    await using var destinationReservation = await storageBudget.ReserveAsync(
+                        destinationEstimate, "rename-destination-preimage", cancellationToken).ConfigureAwait(false);
                     _ = await store.CapturePreimageAsync(destinationPath, RollbackMutationKind.RenameDestination,
                             destinationIdentity, cancellationToken)
                         .ConfigureAwait(false);
@@ -730,7 +744,8 @@ static class GateDecision
 
     private static async Task<RgGateReply> EvaluateCreateAsync(RgEvent ev, string path,
         RollbackStore store, CreateRollbackStore createStore, CreateOperationStore createOperationStore,
-        FileIdentityStore identityStore, CancellationToken cancellationToken)
+        FileIdentityStore identityStore, RollbackStorageBudget storageBudget,
+        CancellationToken cancellationToken)
     {
         var rawDisposition = (ev.Flags >> 24) & 0xFF;
         if (!CreateGatePolicy.TryParseDisposition(rawDisposition, out var disposition))
@@ -758,6 +773,9 @@ static class GateDecision
                     var identityBaseline = await identityStore.CaptureOrVerifyAsync(path, cancellationToken)
                         .ConfigureAwait(false);
                     originalIdentity = identityBaseline.Identity;
+                    var fullEstimate = RollbackStorageBudget.EstimateFullPreimageBytes(store, path);
+                    await using var fullReservation = await storageBudget.ReserveAsync(
+                        fullEstimate, "create-existing-preimage", cancellationToken).ConfigureAwait(false);
                     var capture = await store.CapturePreimageAsync(
                             path,
                             RollbackMutationKind.Create,
@@ -768,9 +786,16 @@ static class GateDecision
                     break;
 
                 case CreatePreservationAction.RecordOriginallyAbsent:
-                    var absent = await createStore.CaptureAbsentAsync(path, cancellationToken)
-                        .ConfigureAwait(false);
-                    preservationRecordSha256 = absent.RecordSha256;
+                    var absenceEstimate = RollbackStorageBudget.EstimateOriginallyAbsentBytes(
+                        createStore, path);
+                    await using (var absenceReservation = await storageBudget.ReserveAsync(
+                                     absenceEstimate, "create-absence-baseline", cancellationToken)
+                               .ConfigureAwait(false))
+                    {
+                        var absent = await createStore.CaptureAbsentAsync(path, cancellationToken)
+                            .ConfigureAwait(false);
+                        preservationRecordSha256 = absent.RecordSha256;
+                    }
                     break;
 
                 case CreatePreservationAction.DenyUnsupported:

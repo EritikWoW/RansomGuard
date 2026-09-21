@@ -39,7 +39,7 @@ public static class RollbackRecoveryPlanner
                 capture.OriginalPath,
                 null,
                 capture.RecordSha256,
-                capture.Sequence,
+                checked((ulong)capture.Sequence),
                 false,
                 "Verified full pre-image can be restored only to a new recovery copy."));
         }
@@ -60,7 +60,7 @@ public static class RollbackRecoveryPlanner
                     full,
                     null,
                     baseline.RecordSha256,
-                    baseline.Sequence,
+                    checked((ulong)baseline.Sequence),
                     true,
                     hasFull
                         ? "A full pre-image exists for the same path and supersedes range-COW recovery."
@@ -85,7 +85,7 @@ public static class RollbackRecoveryPlanner
                     baseline.OriginalPath,
                     null,
                     baseline.RecordSha256,
-                    baseline.Sequence,
+                    checked((ulong)baseline.Sequence),
                     false,
                     "Path was originally absent. Recovery must not delete a current file automatically."));
             }
@@ -101,7 +101,7 @@ public static class RollbackRecoveryPlanner
                         intent.OriginalPath,
                         null,
                         intent.RecordSha256,
-                        checked((long)intent.RequestSequence),
+                        intent.RequestSequence,
                         false,
                         "CREATE intent has no authoritative kernel completion."));
                     continue;
@@ -133,7 +133,7 @@ public static class RollbackRecoveryPlanner
                     intent.OriginalPath,
                     string.IsNullOrWhiteSpace(completion.FinalPath) ? null : completion.FinalPath,
                     completion.RecordSha256,
-                    checked((long)intent.RequestSequence),
+                    intent.RequestSequence,
                     false,
                     reason));
             }
@@ -156,7 +156,7 @@ public static class RollbackRecoveryPlanner
                         intent.SourcePath,
                         intent.DestinationPath,
                         intent.RecordSha256,
-                        checked((long)intent.RequestSequence),
+                        intent.RequestSequence,
                         false,
                         "RENAME intent has no authoritative kernel completion."));
                     continue;
@@ -186,7 +186,7 @@ public static class RollbackRecoveryPlanner
                         ? intent.DestinationPath
                         : completion.FinalDestinationPath,
                     completion.RecordSha256,
-                    checked((long)intent.RequestSequence),
+                    intent.RequestSequence,
                     false,
                     reason));
             }
@@ -220,7 +220,7 @@ public static class RollbackRecoveryPlanner
         string primaryPath,
         string? relatedPath,
         string evidenceRecordSha256,
-        long evidenceSequence,
+        ulong evidenceSequence,
         bool requiresLiveSource,
         string reason) =>
         new(
@@ -306,7 +306,7 @@ public sealed record RollbackRecoveryAction(
     string PrimaryPath,
     string RelatedPath,
     string EvidenceRecordSha256,
-    long EvidenceSequence,
+    ulong EvidenceSequence,
     bool RequiresLiveSource,
     string Reason);
 

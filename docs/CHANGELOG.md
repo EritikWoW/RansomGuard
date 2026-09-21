@@ -1,4 +1,14 @@
-# RansomGuard 0.7.8.0
+# RansomGuard 0.7.9.0
+
+- Added fail-closed crash ambiguity quarantine for durable CREATE/RENAME intents missing correlated completion records.
+- RollbackRepository now reports pending request sequences grouped by session without inferring filesystem outcomes.
+- LAB gate refuses to create a new blocking session while any older pending operation exists.
+- Added read-only `--inspect-pending` mode that exits before LAB-root validation or driver connection and performs no completion writes.
+- No bypass/force option is provided for pending operation quarantine.
+- Added rollback and source-gate tests proving completed operations are excluded and pending state survives reopen unchanged.
+- Protocol remains v8; normal product remains AuditOnly.
+
+# RansomGuard 0.7.9.0
 
 - Added bounded concurrent LAB gate execution without changing protocol v8.
 - Kernel gate admission is capped at 8 simultaneous blocking preservation requests and fails closed when saturated.
@@ -7,7 +17,7 @@
 - Already-received blocking messages are still dispatched during shutdown so they can return an explicit deny instead of being silently abandoned.
 - Added source gates preventing regression to globally serialized FltSendMessage and enforcing matching concurrency bounds.
 
-# RansomGuard 0.7.8.0
+# RansomGuard 0.7.9.0
 - Protocol v8 binds successful post-RENAME reconciliation to `FileIdInformation` from the actual completed kernel file object only at PASSIVE_LEVEL with special kernel APCs enabled; otherwise identity remains explicitly unresolved.
 - Rename completion journals now persist final volume serial + 128-bit file ID alongside the reconciled destination name.
 - Successful rename completion distinguishes authoritative, name-unresolved, identity-unresolved and fully unresolved states.

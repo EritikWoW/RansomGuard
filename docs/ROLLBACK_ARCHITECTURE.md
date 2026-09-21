@@ -335,11 +335,35 @@ A blocking destructive operation that cannot satisfy session quota or free-space
 
 The storage walk refuses reparse-point files/directories. The LAB client exposes only bounded numeric tuning flags; there is no runtime switch to disable or bypass storage admission.
 
+## Safe rollback retention
+
+0.7.18 adds explicit lifecycle and release barriers before any rollback session may be purged.
+
+New GateClient sessions commit `session-lifecycle.jsonl` with `Opened` before activation preflight. `ClosedCleanly` is appended only after the receive loop exits normally and all outstanding gate workers finish. Missing lifecycle, opened-only lifecycle, hash corruption or invalid state ordering keeps retention blocked.
+
+Retention acknowledgement lives outside the session tree in `Retention/retention-release-journal.jsonl`. A release is accepted only after repository/session verification, clean close, zero pending CREATE/RENAME intents and a recovery plan with zero Blocked actions. The release records the exact current `RecoveryPlanId`; any later session evidence changes that plan ID and turns the release stale.
+
+The deterministic retention planner classifies every session and applies an independent age barrier. Planning itself does not delete or move data.
+
+Explicit purge is single-session and revalidates the full retention `PlanId` before destructive work. The durable ordering is:
+
+1. append purge `Intent`;
+2. verify the exact canonical session tree has no reparse points;
+3. atomically move `Sessions/<id>` into `Retention/PurgeQuarantine/...`;
+4. append `Quarantined`;
+5. verify the quarantine tree again;
+6. recursively delete only that quarantine directory;
+7. append `Completed`.
+
+An interruption after the move leaves the evidence in quarantine rather than partially deleting the original session. The purge audit journal is write-through and SHA-256 hash chained.
+
+The LAB CLI requires exact `RELEASE:<session>` / `PURGE:<session>` confirmation tokens, defaults to 168 hours minimum age, refuses purge plans below 24 hours, and exposes no force/all/wildcard purge switch.
+
 ## Still required before production
 
 - deeper crash recovery for requests interrupted before authoritative kernel completion delivery;
 - broader live NTFS/ReFS validation beyond the automated mapping harness: directory-handle startup cases, reboot, Driver Verifier and fault injection;
-- retention/cleanup policy for completed rollback sessions and long-running incident rotation;
+- incomplete-quarantine recovery/cleanup and production retention scheduling/UI;
 - transition from protected-root health to containment/block policy;
 - process-state capture and adaptive crypto analysis;
 - production recovery UI/orchestration across rollback and crypto recovery;

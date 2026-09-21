@@ -335,11 +335,23 @@ A blocking destructive operation that cannot satisfy session quota or free-space
 
 The storage walk refuses reparse-point files/directories. The LAB client exposes only bounded numeric tuning flags; there is no runtime switch to disable or bypass storage admission.
 
+## Session lifecycle and retention cleanup
+
+0.7.18 adds an explicit retention boundary around rollback evidence.
+
+Every new session gets a write-through SHA-256 hash-chained lifecycle journal. GateClient records Completed only after worker drain, repository verification, no worker failure and no pending CREATE/RENAME intent. Faulted, Active, Held, legacy-unmanaged and pending-transaction sessions are retention-protected.
+
+Retention planning is manual and read-only. It binds the current inventory into SHA-256 digests and a deterministic PlanId. Defaults are 30-day completed age, 32 GiB completed-storage cap and a 24-hour minimum age for pressure-driven purge. Protected completed bytes remain counted; if they prevent reaching the cap, UnresolvedExcessBytes remains nonzero rather than weakening protection.
+
+Purge is staged and crash-resumable: append PurgeStarted, atomically move Sessions/<id> to Retired/<id>, append Quarantined, delete only the quarantined tree through reparse-safe traversal, then append PurgeCompleted. Incomplete chains are recognized by the next plan and resumed conservatively.
+
+No startup path invokes the retention executor and the normal Audit package does not contain the maintenance CLI.
+
 ## Still required before production
 
 - deeper crash recovery for requests interrupted before authoritative kernel completion delivery;
 - broader live NTFS/ReFS validation beyond the automated mapping harness: directory-handle startup cases, reboot, Driver Verifier and fault injection;
-- retention/cleanup policy for completed rollback sessions and long-running incident rotation;
+- production retention UI/policy integration, incident-aware holds and long-running repository telemetry;
 - transition from protected-root health to containment/block policy;
 - process-state capture and adaptive crypto analysis;
 - production recovery UI/orchestration across rollback and crypto recovery;

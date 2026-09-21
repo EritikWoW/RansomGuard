@@ -24,6 +24,8 @@ var sessionId = options.SessionId ?? $"gate-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{G
 var store = repository.CreateSession(sessionId);
 var writeStore = new RangeRollbackStore(Path.Combine(store.Root, "write-cow"));
 var createStore = new CreateRollbackStore(Path.Combine(store.Root, "create-state"));
+var identityStore = new CreateIdentityStore(Path.Combine(store.Root, "create-state"));
+var createTracker = new CreateReconciliationTracker();
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
 Console.WriteLine("RansomGuard LAB pre-write gate v0.7.3.0");
@@ -37,7 +39,7 @@ Console.WriteLine("Press Ctrl+C to disconnect. The driver then stops gating beca
 
 var context = new RgConnectContext
 {
-    ProtocolVersion = 4,
+    ProtocolVersion = 5,
     ClientMode = (uint)RgClientMode.LabGate,
     ClientProcessId = (ulong)Environment.ProcessId,
     GateRootLengthBytes = checked((uint)(ntRoot.Length * 2)),
@@ -52,7 +54,7 @@ var headerSize = Marshal.SizeOf<FilterMessageHeader>();
 var eventSize = Marshal.SizeOf<RgEvent>();
 var replyHeaderSize = Marshal.SizeOf<FilterReplyHeader>();
 var gateReplySize = Marshal.SizeOf<RgGateReply>();
-if (headerSize != 16 || eventSize != 1096 || replyHeaderSize != 16 || gateReplySize != 24)
+if (headerSize != 16 || eventSize != 1136 || replyHeaderSize != 16 || gateReplySize != 24)
     throw new InvalidOperationException($"Unexpected protocol sizes: message={headerSize}, event={eventSize}, replyHeader={replyHeaderSize}, gateReply={gateReplySize}");
 
 var resolver = new DevicePathResolver();
@@ -70,7 +72,8 @@ try
 
         var header = Marshal.PtrToStructure<FilterMessageHeader>(buffer);
         var ev = Marshal.PtrToStructure<RgEvent>(IntPtr.Add(buffer, headerSize));
-        var reply = await GateDecision.EvaluateAsync(ev, resolver, options.Root, store, writeStore, createStore, cts.Token);
+        var reply = await GateDecision.EvaluateAsync(ev, resolver, options.Root, store, writeStore, createStore,
+            identityStore, createTracker, cts.Token);
         Native.Reply(port, header.MessageId, reply);
 
         var path = resolver.Resolve(ev.Path) ?? ev.Path ?? "<unresolved>";

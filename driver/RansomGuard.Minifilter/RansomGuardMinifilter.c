@@ -681,8 +681,14 @@ static FLT_POSTOP_CALLBACK_STATUS RgPostSetInformationSafe(PFLT_CALLBACK_DATA Da
             event.DestinationPathStatus = RgPathQueryFailed;
         }
 
-        // Bind the successful completed rename to the exact kernel file object, independently of name reconciliation.
-        RgPopulatePostOperationIdentity(&event, FltObjects);
+        // FltDoCompletionProcessingWhenSafe guarantees only IRQL <= APC_LEVEL. FltQueryInformationFile
+        // requires PASSIVE_LEVEL with special kernel APCs enabled, so never issue the identity query
+        // from an APC_LEVEL/improper APC context. Partial reconciliation remains explicit in protocol v8.
+        if (KeGetCurrentIrql() == PASSIVE_LEVEL && !KeAreAllApcsDisabled()) {
+            RgPopulatePostOperationIdentity(&event, FltObjects);
+        } else {
+            event.IdentityStatus = RgIdentityQueryFailed;
+        }
     }
 
     RgQueueRawEvent(&event, RgClientLabGate);

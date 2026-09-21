@@ -1,6 +1,6 @@
 #include "RansomGuardMinifilter.h"
 
-C_ASSERT(sizeof(RG_EVENT) == 1096);
+C_ASSERT(sizeof(RG_EVENT) == 1144);
 C_ASSERT(sizeof(RG_CONNECT_CONTEXT) == 544);
 C_ASSERT(sizeof(RG_GATE_REPLY) == 24);
 
@@ -14,6 +14,8 @@ static volatile LONG gClientConnected = 0;
 static volatile LONG gClientMode = 0;
 static volatile LONG64 gClientProcessId = 0;
 static volatile LONG gPending = 0;
+static volatile LONG gCreatePending = 0;
+static volatile LONG gReconciliationFaulted = 0;
 static volatile LONG gDropped = 0;
 static volatile LONG64 gSequence = 0;
 static WCHAR gGateRoot[RG_GATE_ROOT_CHARS];
@@ -29,12 +31,14 @@ static VOID RgDisconnect(_In_opt_ PVOID ConnectionCookie);
 static NTSTATUS RgPopulateEvent(_Out_ PRG_EVENT Event, _Inout_ PFLT_CALLBACK_DATA Data,
                                 _In_ RG_EVENT_TYPE EventType, _In_ ULONG FileInformationClass);
 static BOOLEAN RgEventIsInsideGateRoot(_In_ const RG_EVENT *Event);
-static BOOLEAN RgGateEvent(_In_ const RG_EVENT *Event, _Out_opt_ PULONG ErrorCode);
+static BOOLEAN RgGateEvent(_In_ const RG_EVENT *Event, _Out_opt_ PULONG ErrorCode,
+                           _Out_opt_ PRG_GATE_DECISION Decision);
+static BOOLEAN RgCommitCreateResult(_In_ const RG_EVENT *Event, _Out_opt_ PULONG ErrorCode);
 static LONG RgCurrentClientMode(VOID);
 static FLT_PREOP_CALLBACK_STATUS RgCompleteDenied(_Inout_ PFLT_CALLBACK_DATA Data);
 
 static const FLT_OPERATION_REGISTRATION gCallbacks[] = {
-    { IRP_MJ_CREATE, 0, RgPreCreate, NULL, NULL },
+    { IRP_MJ_CREATE, 0, RgPreCreate, RgPostCreate, NULL },
     { IRP_MJ_WRITE, FLTFL_OPERATION_REGISTRATION_SKIP_PAGING_IO, RgPreWrite, NULL, NULL },
     { IRP_MJ_SET_INFORMATION, 0, RgPreSetInformation, NULL, NULL },
     { IRP_MJ_OPERATION_END }

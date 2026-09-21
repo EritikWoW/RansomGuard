@@ -921,6 +921,105 @@ try
     Check(nestedPagingRejected,
         "repository verification includes nested paging-write evidence journal");
 
+    // Writable-section attestation proves that a mapping is backed by a committed CREATE baseline.
+    var writableIntent = createOps.Intents.Single(x => x.RequestSequence == 308);
+    createOps.TryGetCompletion(308, out var writableCompletion);
+    var verifiedSectionState = WritableSectionAttestation.Evaluate(
+        writableIntent,
+        writableCompletion,
+        writableOpenPath,
+        WritableSectionAttestation.SnapshotCommitted);
+    Check(verifiedSectionState == WritableSectionAttestationState.BaselineVerified,
+        "writable section attests full pre-image committed before write-capable CREATE returned");
+
+    var readOnlyIntent = createOps.Intents.Single(x => x.RequestSequence == 303);
+    createOps.TryGetCompletion(303, out var readOnlyCompletion);
+    var unprotectedSectionState = WritableSectionAttestation.Evaluate(
+        readOnlyIntent,
+        readOnlyCompletion,
+        createNameUnresolvedPath,
+        WritableSectionAttestation.NoPreservationRequired);
+    Check(unprotectedSectionState == WritableSectionAttestationState.Unprotected,
+        "section attestation explicitly exposes a CREATE that had no preservation baseline");
+
+    Check(WritableSectionAttestation.Evaluate(
+            null, null, writableOpenPath, WritableSectionAttestation.SnapshotCommitted) ==
+          WritableSectionAttestationState.MissingCreateIntent,
+        "section attestation rejects missing CREATE intent");
+    Check(WritableSectionAttestation.Evaluate(
+            writableIntent, writableCompletion, writableOpenPath,
+            WritableSectionAttestation.NoPreservationRequired) ==
+          WritableSectionAttestationState.DecisionMismatch,
+        "section attestation detects gate decision mismatch");
+    Check(WritableSectionAttestation.Evaluate(
+            writableIntent, writableCompletion, Path.Combine(sourceDir, "wrong-section-path.bin"),
+            WritableSectionAttestation.SnapshotCommitted) ==
+          WritableSectionAttestationState.PathMismatch,
+        "section attestation detects tracked path mismatch");
+
+    var sectionRoot = Path.Combine(root, "section-evidence");
+    var sectionStore = new WritableSectionEvidenceStore(sectionRoot);
+    var sectionEvidence = await sectionStore.RecordAsync(
+        501,
+        writableIntent.RequestSequence,
+        writableOpenPath,
+        0x04,
+        WritableSectionAttestation.SnapshotCommitted,
+        verifiedSectionState,
+        createOriginalIdentity);
+    Check(sectionEvidence.Sequence == 1 &&
+          sectionEvidence.State == WritableSectionAttestationState.BaselineVerified,
+        "writable-section evidence commits verified baseline state");
+    var duplicateSection = await sectionStore.RecordAsync(
+        501,
+        writableIntent.RequestSequence,
+        writableOpenPath,
+        0x04,
+        WritableSectionAttestation.SnapshotCommitted,
+        verifiedSectionState,
+        createOriginalIdentity);
+    Check(duplicateSection.Sequence == sectionEvidence.Sequence &&
+          sectionStore.Records.Count == 1,
+        "writable-section evidence is idempotent for identical kernel sequence");
+    var conflictingSectionRejected = false;
+    try
+    {
+        _ = await sectionStore.RecordAsync(
+            501,
+            writableIntent.RequestSequence,
+            writableOpenPath,
+            0x40,
+            WritableSectionAttestation.SnapshotCommitted,
+            verifiedSectionState,
+            createOriginalIdentity);
+    }
+    catch (InvalidDataException) { conflictingSectionRejected = true; }
+    Check(conflictingSectionRejected,
+        "conflicting duplicate writable-section kernel sequence is rejected");
+    sectionStore.VerifyAll();
+    Check(new WritableSectionEvidenceStore(sectionRoot).Records.Count == 1,
+        "writable-section evidence journal rebuilds after reopen");
+
+    var nestedSectionRepo = new RollbackRepository(Path.Combine(root, "nested-section-repo"));
+    var nestedSectionSession = nestedSectionRepo.CreateSession("nested_section");
+    var nestedSection = new WritableSectionEvidenceStore(Path.Combine(nestedSectionSession.Root, "section-state"));
+    _ = await nestedSection.RecordAsync(
+        502,
+        writableIntent.RequestSequence,
+        writableOpenPath,
+        0x04,
+        WritableSectionAttestation.SnapshotCommitted,
+        WritableSectionAttestationState.BaselineVerified,
+        createOriginalIdentity);
+    var sectionJournalBytes = await File.ReadAllBytesAsync(nestedSection.JournalPath);
+    sectionJournalBytes[^2] ^= 1;
+    await File.WriteAllBytesAsync(nestedSection.JournalPath, sectionJournalBytes);
+    var nestedSectionRejected = false;
+    try { nestedSectionRepo.VerifyAll(); }
+    catch (InvalidDataException) { nestedSectionRejected = true; }
+    Check(nestedSectionRejected,
+        "repository verification includes nested writable-section evidence journal");
+
     Console.WriteLine($"All {passed} rollback tests passed. These are file-store tests, not minifilter integration tests.");
     return 0;
 }

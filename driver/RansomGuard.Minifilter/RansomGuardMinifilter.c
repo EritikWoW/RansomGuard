@@ -643,6 +643,7 @@ static VOID RgQueueEvent(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjec
     }
 
     RtlZeroMemory(work, sizeof(*work));
+    work->ClientMode = RgClientAudit;
     status = RgPopulateEvent(&work->Event, Data, FltObjects, EventType, FileInformationClass);
     if (!NT_SUCCESS(status) && work->Event.PathStatus != RgPathQueryFailed) {
         RtlSecureZeroMemory(&work->Event, sizeof(work->Event));
@@ -656,6 +657,42 @@ static VOID RgQueueEvent(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjec
     ExQueueWorkItem(&work->WorkItem, DelayedWorkQueue);
 }
 
+static VOID RgQueueRawEvent(const RG_EVENT *Event, LONG ClientMode)
+{
+    PRG_WORK_ITEM work = NULL;
+    LONG pending;
+
+    if (Event == NULL || (ClientMode != RgClientAudit && ClientMode != RgClientLabGate)) {
+        return;
+    }
+
+    if (!ExAcquireRundownProtection(&gRundown)) {
+        return;
+    }
+
+    pending = InterlockedIncrement(&gPending);
+    if (pending > RG_MAX_PENDING) {
+        InterlockedDecrement(&gPending);
+        InterlockedIncrement(&gDropped);
+        ExReleaseRundownProtection(&gRundown);
+        return;
+    }
+
+    work = (PRG_WORK_ITEM)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(RG_WORK_ITEM), RG_POOL_TAG);
+    if (work == NULL) {
+        InterlockedDecrement(&gPending);
+        InterlockedIncrement(&gDropped);
+        ExReleaseRundownProtection(&gRundown);
+        return;
+    }
+
+    RtlZeroMemory(work, sizeof(*work));
+    RtlCopyMemory(&work->Event, Event, sizeof(*Event));
+    work->ClientMode = ClientMode;
+    ExInitializeWorkItem(&work->WorkItem, RgSendWorker, work);
+    ExQueueWorkItem(&work->WorkItem, DelayedWorkQueue);
+}
+
 static VOID RgSendWorker(PVOID Parameter)
 {
     PRG_WORK_ITEM work = (PRG_WORK_ITEM)Parameter;
@@ -663,10 +700,11 @@ static VOID RgSendWorker(PVOID Parameter)
     NTSTATUS status = STATUS_PORT_DISCONNECTED;
 
     work->Event.DroppedBeforeThis = (ULONG)InterlockedExchange(&gDropped, 0);
-    timeout.QuadPart = -(RG_SEND_TIMEOUT_MS * 10LL * 1000LL);
+    timeout.QuadPart = -(((work->ClientMode == RgClientLabGate) ?
+        RG_RECONCILE_SEND_TIMEOUT_MS : RG_SEND_TIMEOUT_MS) * 10LL * 1000LL);
 
     ExAcquireFastMutex(&gPortMutex);
-    if (gClientPort != NULL && gClientMode == RgClientAudit &&
+    if (gClientPort != NULL && gClientMode == work->ClientMode &&
         InterlockedCompareExchange(&gUnloading, 0, 0) == 0) {
         status = FltSendMessage(gFilter, &gClientPort,
             &work->Event, sizeof(work->Event),

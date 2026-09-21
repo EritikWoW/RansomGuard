@@ -740,6 +740,7 @@ static class GateDecision
                     break;
 
                 case CreateTargetState.File:
+                {
                     var destinationBaseline = await identityStore.CaptureOrVerifyAsync(destinationPath, cancellationToken)
                         .ConfigureAwait(false);
                     destinationIdentity = destinationBaseline.Identity;
@@ -758,6 +759,7 @@ static class GateDecision
                         .ConfigureAwait(false);
                     destinationState = RenameDestinationState.ExistingFile;
                     break;
+                }
 
                 default:
                     // Directory topology replacement/rename is outside the current recovery model.
@@ -809,6 +811,7 @@ static class GateDecision
             switch (action)
             {
                 case CreatePreservationAction.CaptureExistingPreimage:
+                {
                     var identityBaseline = await identityStore.CaptureOrVerifyAsync(path, cancellationToken)
                         .ConfigureAwait(false);
                     originalIdentity = identityBaseline.Identity;
@@ -823,6 +826,7 @@ static class GateDecision
                         .ConfigureAwait(false);
                     preservationRecordSha256 = capture.RecordSha256;
                     break;
+                }
 
                 case CreatePreservationAction.RecordOriginallyAbsent:
                     var absenceEstimate = RollbackStorageBudget.EstimateOriginallyAbsentBytes(

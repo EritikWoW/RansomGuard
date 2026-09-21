@@ -130,11 +130,11 @@ public sealed class FileIdentityStore
 
             if (line.Sequence != expectedSequence)
                 throw new InvalidDataException("File identity journal sequence gap.");
+            if (!IsFixedHex(line.VolumeSerialHex, 16) || !IsFixedHex(line.FileIdHex, 32) ||
+                !IsFixedHex(line.PreviousRecordSha256, 64) || !IsFixedHex(line.RecordSha256, 64))
+                throw new InvalidDataException("Invalid file identity journal fields.");
             if (!line.PreviousRecordSha256.Equals(expectedPrevious, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("File identity journal hash chain mismatch.");
-            if (!IsFixedHex(line.VolumeSerialHex, 16) || !IsFixedHex(line.FileIdHex, 32) ||
-                !IsFixedHex(line.RecordSha256, 64))
-                throw new InvalidDataException("Invalid file identity journal fields.");
 
             var calculated = HashPayload(line.Payload);
             if (!calculated.Equals(line.RecordSha256, StringComparison.OrdinalIgnoreCase))
@@ -195,8 +195,8 @@ public sealed class FileIdentityStore
         return full;
     }
 
-    private static bool IsFixedHex(string value, int length) =>
-        value.Length == length && value.All(char.IsAsciiHexDigit);
+    private static bool IsFixedHex(string? value, int length) =>
+        value is not null && value.Length == length && value.All(char.IsAsciiHexDigit);
 
     private static void RejectReparse(string path)
     {

@@ -87,7 +87,8 @@ public sealed class CreateOperationStore
             throw new InvalidDataException("Denied CREATE operations must not be recorded as allowed intents.");
 
         var full = NormalizePath(originalPath);
-        ValidateIntentFields(observedTargetState, preservationAction, preservationRecordSha256, originalIdentity);
+        ValidateIntentFields(disposition, createOptions, observedTargetState, preservationAction,
+            preservationRecordSha256, originalIdentity);
 
         await _appendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -283,6 +284,8 @@ public sealed class CreateOperationStore
                 ? null
                 : new DurableFileIdentity(line.OriginalVolumeSerialHex, line.OriginalFileIdHex);
             ValidateIntentFields(
+                line.Disposition,
+                line.CreateOptions,
                 line.ObservedTargetState,
                 line.PreservationAction,
                 line.PreservationRecordSha256,
@@ -387,13 +390,21 @@ public sealed class CreateOperationStore
     }
 
     private static void ValidateIntentFields(
+        CreateDisposition disposition,
+        uint createOptions,
         CreateTargetState targetState,
         CreatePreservationAction preservationAction,
         string preservationRecordSha256,
         DurableFileIdentity? originalIdentity)
     {
-        if (!Enum.IsDefined(targetState) || !Enum.IsDefined(preservationAction))
+        if (!Enum.IsDefined(disposition) || !Enum.IsDefined(targetState) || !Enum.IsDefined(preservationAction))
             throw new InvalidDataException("Invalid CREATE intent state.");
+
+        var expectedAction = CreateGatePolicy.Decide(disposition, targetState, createOptions);
+        if (expectedAction == CreatePreservationAction.DenyUnsupported)
+            throw new InvalidDataException("Unsupported CREATE policy outcome must not be committed as an allowed intent.");
+        if (preservationAction != expectedAction)
+            throw new InvalidDataException("CREATE intent preservation action does not match the disposition/target policy.");
 
         switch (preservationAction)
         {

@@ -71,8 +71,9 @@ public sealed class RollbackRepository
             var renameIdentityRoot = Path.Combine(store.Root, "rename-identity-state");
             if (Directory.Exists(renameIdentityRoot))
             {
-                renameStore ??= throw new InvalidDataException(
-                    "Rename identity state exists without the corresponding rename transaction state.");
+                if (renameStore is null)
+                    throw new InvalidDataException(
+                        "Rename identity state exists without the corresponding rename transaction state.");
                 new RenameIdentityStore(renameIdentityRoot, renameStore).VerifyAll();
             }
         }

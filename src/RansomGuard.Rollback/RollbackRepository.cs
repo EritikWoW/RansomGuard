@@ -41,7 +41,14 @@ public sealed class RollbackRepository
 
     public void VerifyAll()
     {
-        foreach (var id in SessionIds()) OpenSession(id).VerifyAll();
+        foreach (var id in SessionIds())
+        {
+            var store = OpenSession(id);
+            store.VerifyAll();
+            var rangeRoot = Path.Combine(store.Root, "write-cow");
+            if (Directory.Exists(rangeRoot))
+                new RangeRollbackStore(rangeRoot).VerifyAll();
+        }
     }
 
     private static void ValidateSessionId(string sessionId)

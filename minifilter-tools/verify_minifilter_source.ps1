@@ -48,6 +48,8 @@ foreach($required in @(
     'RgEventCreateResult',
     'RgPopulatePostOperationIdentity',
     'RgPopulatePostOperationIdentity(&event, FltObjects);',
+    'KeGetCurrentIrql() == PASSIVE_LEVEL',
+    '!KeAreAllApcsDisabled()',
     'FltQueryInformationFile',
     'FileIdInformation',
     'IdentityStatus',
@@ -70,8 +72,10 @@ if($proto -notmatch 'RgEventCreateResult' -or $proto -notmatch 'IdentityStatus' 
     throw 'Protocol v8 must carry correlated post-operation identity metadata.'
 }
 if($src -notmatch 'RgEventRenameResult' -or
+   $src -notmatch 'KeGetCurrentIrql\(\)\s*==\s*PASSIVE_LEVEL' -or
+   $src -notmatch '!KeAreAllApcsDisabled\(\)' -or
    $src -notmatch 'RgPopulatePostOperationIdentity\(&event, FltObjects\)'){
-    throw 'Successful RENAME completion must query kernel file identity before emitting RenameResult.'
+    throw 'Successful RENAME completion must guard FltQueryInformationFile by PASSIVE_LEVEL/APC state before emitting RenameResult.'
 }
 if($proto -notmatch 'RgGateBaselineCommitted' -or $proto -notmatch 'RgGateNoPreservationRequired'){throw 'Protocol must distinguish committed absence baselines from no-op create opens.'}
 if($infText -notmatch 'StartType\s*=\s*3'){throw 'Driver must remain demand-start in the lab prototype.'}

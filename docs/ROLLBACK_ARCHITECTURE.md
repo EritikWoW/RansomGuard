@@ -126,19 +126,19 @@ The rename intent is deliberately a **pre-operation intent**, not proof that the
 After an allowed rename returns from the filesystem, the minifilter executes a post-operation completion path:
 
 1. the pre-operation normalized destination name-info object is retained in the completion context;
-2. `FltDoCompletionProcessingWhenSafe` moves reconciliation to a safe post-operation context when required;
+2. `FltDoCompletionProcessingWhenSafe` moves reconciliation to a context no higher than APC_LEVEL when required;
 3. a failed rename emits a correlated result carrying the final NTSTATUS and no successful topology claim;
 4. on success, `FltGetTunneledName` reconciles the retained pre-operation destination against Windows file-name tunneling;
-5. the driver emits a no-reply protocol-v8 `RenameResult` correlated by the original kernel request sequence;
-6. `RenameRollbackStore` appends a separate write-through SHA-256 hash-chained completion record linked to the exact intent hash.
+5. because `FltQueryInformationFile` requires PASSIVE_LEVEL with special kernel APCs enabled, the driver queries
+   `FileIdInformation` only when that stricter execution contract is satisfied; otherwise identity is explicitly unresolved;
+6. the driver emits a no-reply protocol-v8 `RenameResult` correlated by the original kernel request sequence;
+7. `RenameRollbackStore` appends a separate write-through SHA-256 hash-chained completion record containing the
+   final name and volume/file identity when available, linked to the exact intent hash.
 
-A completion may be `Succeeded`, `SucceededNameUnresolved`, or `Failed`. If the safe post path cannot run,
-the result cannot be delivered, or user mode stops before persisting it, the intent remains **pending**. Recovery must
-never infer success from the presence of a pre-operation intent alone.
-
-This milestone confirms the filesystem outcome and reconciled final name when available. It does **not** yet bind that
-completed name to a post-operation kernel file ID; identity confirmation of the completed object remains required before
-automatic topology recovery can be considered production-safe.
+A completion may be authoritative `Succeeded`, `SucceededNameUnresolved`, `SucceededIdentityUnresolved`,
+`SucceededNameAndIdentityUnresolved`, or `Failed`. Any supplied post-operation identity must exactly match the
+source identity committed before allow. If the safe post path cannot run, the result cannot be delivered, or user mode
+stops before persisting it, the intent remains **pending**. Recovery must never infer success from the pre-operation intent alone.
 
 ## Range recovery
 
@@ -190,7 +190,6 @@ These checks do not yet reconcile an interrupted in-flight kernel request. They 
 
 ## Still required before production
 
-- post-operation kernel file-ID confirmation for completed rename operations;
 - bounded concurrent pending-I/O workers;
 - crash/restart reconciliation for requests pending during user-mode failure or missing CREATE/RENAME result delivery;
 - memory-mapped/cache-manager write coverage;

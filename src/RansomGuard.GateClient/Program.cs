@@ -109,17 +109,18 @@ static class GateDecision
             if (state != CreateTargetState.File)
                 return Deny(ev.Sequence, 3);
 
-            // Once a path is known to have been absent at incident start, later mutations must not
-            // manufacture a pre-image from data that was created during the incident.
-            if (createStore.WasOriginallyAbsent(path))
-                return Allow(ev.Sequence, RgGateDecision.BaselineCommitted);
-
+            var sourceOriginallyAbsent = createStore.WasOriginallyAbsent(path);
             var identityBaseline = await identityStore.CaptureOrVerifyAsync(path, cancellationToken)
                 .ConfigureAwait(false);
 
             if (eventType == RgEventType.Rename)
                 return await EvaluateRenameAsync(ev, resolver, root, path, store, createStore,
-                    identityStore, renameStore, identityBaseline, cancellationToken).ConfigureAwait(false);
+                    identityStore, renameStore, identityBaseline, sourceOriginallyAbsent, cancellationToken).ConfigureAwait(false);
+
+            // Once a path is known to have been absent at incident start, later non-rename mutations must not
+            // manufacture a pre-image from data that was created during the incident.
+            if (sourceOriginallyAbsent)
+                return Allow(ev.Sequence, RgGateDecision.BaselineCommitted);
 
             if (eventType == RgEventType.Write)
             {
@@ -164,6 +165,7 @@ static class GateDecision
         FileIdentityStore identityStore,
         RenameRollbackStore renameStore,
         FileIdentityBaseline sourceIdentity,
+        bool sourceOriginallyAbsent,
         CancellationToken cancellationToken)
     {
         if (ev.DestinationPathStatus != (uint)RgPathStatus.Resolved)
@@ -173,10 +175,14 @@ static class GateDecision
         if (string.IsNullOrWhiteSpace(destinationPath) || !PathPolicy.Under(destinationPath, root))
             return Deny(ev.Sequence, 10);
 
-        // Preserve the source first. A rename can remove the source name even when the bytes themselves survive.
-        _ = await store.CapturePreimageAsync(sourcePath, RollbackMutationKind.Rename,
-                sourceIdentity.Identity, cancellationToken)
-            .ConfigureAwait(false);
+        // Preserve the source only when it existed before the incident. Incident-created source bytes
+        // must not become a false pre-incident pre-image.
+        if (!sourceOriginallyAbsent)
+        {
+            _ = await store.CapturePreimageAsync(sourcePath, RollbackMutationKind.Rename,
+                    sourceIdentity.Identity, cancellationToken)
+                .ConfigureAwait(false);
+        }
 
         RenameDestinationState destinationState;
         DurableFileIdentity? destinationIdentity = null;
@@ -227,6 +233,7 @@ static class GateDecision
                 sourcePath,
                 destinationPath,
                 sourceIdentity.Identity,
+                sourceOriginallyAbsent,
                 destinationState,
                 destinationIdentity,
                 ev.Flags,

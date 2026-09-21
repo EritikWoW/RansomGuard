@@ -20,6 +20,7 @@ static volatile LONG gClientMode = 0;
 static volatile LONG64 gClientProcessId = 0;
 static volatile LONG gGateActivated = 0;
 static volatile LONG gActivationHazard = 0;
+static volatile LONG gPreflightProbeArmed = 0;
 static volatile LONG gPending = 0;
 static volatile LONG gDropped = 0;
 static volatile LONG64 gSequence = 0;
@@ -206,7 +207,8 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
 
     if (InterlockedCompareExchange(&gGateActivated, 0, 0) == 0 &&
         event.ProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId, 0, 0) &&
-        RgEventPathMatchesGateRoot(&event)) {
+        RgEventPathMatchesGateRoot(&event) &&
+        InterlockedExchange(&gPreflightProbeArmed, 0) == 1) {
         status = RgCreateCreatePostContext(Data, event.Sequence, &postContext);
         if (!NT_SUCCESS(status)) {
             return RgCompleteDenied(Data);
@@ -1289,6 +1291,7 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
         InterlockedExchange64(&gClientProcessId, (LONG64)context->ClientProcessId);
         InterlockedExchange(&gGateActivated, context->ClientMode == RgClientLabGate ? 0 : 1);
         InterlockedExchange(&gActivationHazard, 0);
+        InterlockedExchange(&gPreflightProbeArmed, 0);
 
         if (context->ClientMode == RgClientLabGate) {
             RtlCopyMemory(gGateRoot, context->GateRoot, rootBytes);
@@ -1340,8 +1343,17 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
         status = STATUS_REVISION_MISMATCH;
     } else if (request->Command == RgControlQueryActivation) {
         status = STATUS_SUCCESS;
+    } else if (request->Command == RgControlArmPreflight) {
+        if (InterlockedCompareExchange(&gGateActivated, 0, 0) != 0 ||
+            InterlockedCompareExchange(&gActivationHazard, 0, 0) != 0) {
+            status = STATUS_DEVICE_BUSY;
+        } else {
+            InterlockedExchange(&gPreflightProbeArmed, 1);
+            status = STATUS_SUCCESS;
+        }
     } else if (request->Command == RgControlActivateGate) {
-        if (InterlockedCompareExchange(&gActivationHazard, 0, 0) != 0) {
+        if (InterlockedCompareExchange(&gActivationHazard, 0, 0) != 0 ||
+            InterlockedCompareExchange(&gPreflightProbeArmed, 0, 0) != 0) {
             status = STATUS_DEVICE_BUSY;
         } else {
             InterlockedExchange(&gGateActivated, 1);
@@ -1367,6 +1379,7 @@ static VOID RgDisconnect(PVOID ConnectionCookie)
     InterlockedExchange64(&gClientProcessId, 0);
     InterlockedExchange(&gGateActivated, 0);
     InterlockedExchange(&gActivationHazard, 0);
+    InterlockedExchange(&gPreflightProbeArmed, 0);
     gGateRootLengthBytes = 0;
     RtlSecureZeroMemory(gGateRoot, sizeof(gGateRoot));
     if (gClientPort != NULL) {

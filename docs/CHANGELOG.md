@@ -1,3 +1,13 @@
+# RansomGuard 0.7.14.0
+
+- Added a manual disposable-Windows-VM runtime integration harness for the protocol-v11 mapping path.
+- Added a dedicated `workflow_dispatch` workflow that requires the self-hosted labels `Windows`, `X64` and `ransomguard-lab-vm`; normal push/PR CI never loads the driver.
+- Runtime workflow builds the exact checked-out GateClient and minifilter, test-signs the freshly built SYS/catalog using a pre-provisioned lab certificate, installs/loads/attaches that exact driver, and always detaches/unloads it afterward.
+- Added a pre-existing mapping scenario: a writable mapped view is kept alive after the original file handle closes; GateClient activation must fail and persist `writableViewPresent=true`.
+- Added a clean activation scenario: PAGE_READWRITE mapping created after activation must produce `BaselineVerified` writable-section evidence, paging-write evidence and a committed pre-image whose SHA-256 matches the original file.
+- Added source gates that prevent automatic runtime triggers, GitHub-hosted runner labels, automatic TESTSIGNING/Defender/trust-root changes, and missing cleanup.
+- Runtime tooling remains Engineering-LAB-only and requires a disposable snapshot VM with test-signing prerequisites already configured.
+
 # RansomGuard 0.7.13.0
 
 - Bumped the engineering minifilter protocol to v11 with an explicit startup activation barrier.

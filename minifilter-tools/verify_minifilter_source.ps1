@@ -218,6 +218,8 @@ if($containmentHelperStart -lt 0 -or $containmentHelperEnd -lt 0){throw 'Kernel 
 $containmentHelpers=$src.Substring($containmentHelperStart,$containmentHelperEnd-$containmentHelperStart)
 foreach($required in @(
     'FltGetRequestorProcess(Data)',
+    'PsGetProcessId(requestor)',
+    '!= Event->ProcessId',
     'gContainedProcess == requestor',
     'RgCreateMayMutate',
     'FILE_WRITE_DATA',

@@ -87,7 +87,7 @@ public sealed class CreateOperationStore
             throw new InvalidDataException("Denied CREATE operations must not be recorded as allowed intents.");
 
         var full = NormalizePath(originalPath);
-        ValidateIntentFields(disposition, createOptions, observedTargetState, preservationAction,
+        ValidateIntentFields(disposition, createOptions, desiredAccess, observedTargetState, preservationAction,
             preservationRecordSha256, originalIdentity);
 
         await _appendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -286,6 +286,7 @@ public sealed class CreateOperationStore
             ValidateIntentFields(
                 line.Disposition,
                 line.CreateOptions,
+                line.DesiredAccess,
                 line.ObservedTargetState,
                 line.PreservationAction,
                 line.PreservationRecordSha256,
@@ -392,6 +393,7 @@ public sealed class CreateOperationStore
     private static void ValidateIntentFields(
         CreateDisposition disposition,
         uint createOptions,
+        uint desiredAccess,
         CreateTargetState targetState,
         CreatePreservationAction preservationAction,
         string preservationRecordSha256,
@@ -400,7 +402,7 @@ public sealed class CreateOperationStore
         if (!Enum.IsDefined(disposition) || !Enum.IsDefined(targetState) || !Enum.IsDefined(preservationAction))
             throw new InvalidDataException("Invalid CREATE intent state.");
 
-        var expectedAction = CreateGatePolicy.Decide(disposition, targetState, createOptions);
+        var expectedAction = CreateGatePolicy.Decide(disposition, targetState, createOptions, desiredAccess);
         if (expectedAction == CreatePreservationAction.DenyUnsupported)
             throw new InvalidDataException("Unsupported CREATE policy outcome must not be committed as an allowed intent.");
         if (preservationAction != expectedAction)

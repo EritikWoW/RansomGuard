@@ -44,6 +44,8 @@ foreach($required in @(
     'DefaultMinFreeMiB = 2048',
     '--max-store-mib',
     '--min-free-mib',
+    'minFreeMiB < 64',
+    '--min-free-mib must be between 64 and',
     'new RollbackStorageBudget(',
     'Rollback budget      : max-session=',
     'RollbackStorageBudget.MetadataReservationBytes',

@@ -1254,6 +1254,13 @@ static BOOLEAN RgGateEvent(PFLT_CALLBACK_DATA Data,
         if (!RgBindContainedRequestor(Data, Event, ErrorCode)) {
             return FALSE;
         }
+    } else if (allow && RgIsContainedRequestor(Data)) {
+        // A sibling IRP may already have installed containment while this request waited in user mode.
+        // Do not let an older in-flight mutation escape after the latch becomes active.
+        if (ErrorCode != NULL) {
+            *ErrorCode = (ULONG)STATUS_ACCESS_DENIED;
+        }
+        return FALSE;
     }
 
     if (allow && Decision != NULL) {

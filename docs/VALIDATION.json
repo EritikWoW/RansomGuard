@@ -1,27 +1,24 @@
 {
-  "version": "0.7.9.0",
+  "version": "0.7.10.0",
   "scope": "automated Windows userspace validation plus compile-only x64 minifilter validation",
-  "validated_source_sha": "8d66ce5d32326ed6d5c30dd572b85119e373759d",
+  "validated_source_sha": "f41aa917879e892ee9a9e3b7e5210a7a20d43c1f",
   "evidence": {
-    "pull_request": 15,
-    "windows_build_run": 35616321497,
-    "minifilter_compile_run": 35616321466
+    "pull_request": 16,
+    "windows_build_run": 35621084636,
+    "minifilter_compile_run": 35621084786
   },
   "performed": [
-    "validated Directory.Build.props and all Windows manifests at version 0.7.9.0",
-    "ran protocol v8 minifilter, rollback, administration, localization, recovery and read-only UI/API source gates",
-    "ran 121 core policy tests",
+    "validated Directory.Build.props and all Windows manifests at version 0.7.10.0",
+    "ran protocol v9 minifilter, rollback, administration, localization, recovery and read-only UI/API source gates",
+    "ran 121 rollback/store tests including paging-write evidence idempotency, conflict rejection, repository verification and journal-corruption rejection",
     "ran 32 offline recovery/framing tests",
-    "ran 102 scoped trust policy tests",
     "ran 125 administration contract tests",
     "ran 2194 localization resource/contract checks",
-    "ran 116 rollback/store tests including restart CREATE/RENAME evidence classification, idempotent restart observations, no-inferred-completion semantics and restart-journal corruption rejection",
     "ran WPF synthetic smoke rendering for 130 frames with no recorded binding errors",
-    "published normal and Engineering LAB 0.7.9.0 userspace ZIPs",
-    "validated restart reconciliation source invariants: repository verification precedes restart scan, restart scan precedes new session creation, root scoping is explicit, and restart code cannot call RecordCompletionAsync",
-    "restored pinned Microsoft Windows WDK x64 and SDK C++ 10.0.28000.2526 packages",
-    "validated protocol v8 minifilter source boundary including bounded concurrent gate admission",
-    "compiled and linked RansomGuardMinifilter.sys as Release x64 with protocol v8 and signing disabled",
+    "published normal and Engineering LAB 0.7.10.0 userspace ZIPs",
+    "validated protocol-v9 paging source invariants: IRP_MJ_WRITE no longer skips paging I/O, paging callback uses FLT_STREAM_CONTEXT, and paging path forbids synchronous RgGateEvent/file-name/FileId queries",
+    "validated userspace PagingWrite as a no-reply evidence path with a write-through SHA-256 hash-chained paging journal",
+    "compiled and linked RansomGuardMinifilter.sys as Release x64 with protocol v9 and signing disabled",
     "ran x64 ApiValidator against the compiled SYS and received Universal DDI validation success",
     "verified the compile-only minifilter artifact is not Authenticode-signed",
     "uploaded the unsigned SYS, INF, protocol header and SHA256SUMS as a CI artifact"
@@ -29,10 +26,9 @@
   "not_performed": [
     "driver installation, loading or volume attachment",
     "live FilterGetMessage/FilterReplyMessage kernel-to-user round trip with the compiled driver",
-    "native protocol-v8 blocking/reconciliation test on NTFS/ReFS",
-    "live crash/restart fault injection with a gate process terminated between intent commit and kernel completion delivery",
-    "authoritative reconstruction of a lost in-flight kernel completion from restart evidence",
-    "paging-I/O or memory-mapped write preservation",
+    "native writable memory-mapping test on NTFS/ReFS producing a live PagingWrite event",
+    "pre-preservation of writable memory mappings or proof that paging writes are recoverable",
+    "live crash/restart fault injection between intent commit and authoritative kernel completion delivery",
     "production driver signing or Microsoft-assigned altitude validation"
   ],
   "safety_boundary": "The blocking minifilter remains Engineering-LAB-only. CI compiles and validates an unsigned artifact but never installs, loads or attaches it. The normal bundle remains AuditOnly.",

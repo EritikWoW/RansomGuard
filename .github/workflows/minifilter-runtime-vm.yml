@@ -1,0 +1,100 @@
+name: Minifilter runtime VM lab
+
+on:
+  workflow_dispatch:
+    inputs:
+      root_base:
+        description: Disposable VM-only root base. Must contain RansomGuard.
+        required: true
+        default: C:\RansomGuard-VM-Integration
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ransomguard-runtime-vm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  runtime:
+    environment: ransomguard-lab-vm
+    runs-on: [self-hosted, Windows, X64, ransomguard-lab-vm]
+    timeout-minutes: 60
+    env:
+      RANSOMGUARD_LAB_VM: I_UNDERSTAND
+      RANSOMGUARD_LAB_CERT_THUMBPRINT: ${{ secrets.RANSOMGUARD_LAB_CERT_THUMBPRINT }}
+
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Verify disposable VM contract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $id=[Security.Principal.WindowsIdentity]::GetCurrent()
+          $p=New-Object Security.Principal.WindowsPrincipal($id)
+          if(-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){throw 'Self-hosted runtime runner must run elevated.'}
+          $cs=Get-CimInstance Win32_ComputerSystem
+          $vm="$($cs.Manufacturer) $($cs.Model)"
+          if($vm -notmatch '(?i)virtual|vmware|virtualbox|kvm|qemu|hyper-v|parallels|xen'){throw "Runner is not an obvious VM: $vm"}
+          if($env:RANSOMGUARD_LAB_VM -cne 'I_UNDERSTAND'){throw 'LAB VM marker missing.'}
+          if([string]::IsNullOrWhiteSpace($env:RANSOMGUARD_LAB_CERT_THUMBPRINT)){throw 'Environment secret RANSOMGUARD_LAB_CERT_THUMBPRINT is required.'}
+          Write-Host "Disposable VM contract accepted: $vm"
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build Engineering LAB userspace bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          .\build_lab.cmd
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          $lab=Get-ChildItem .\release -Directory -Filter 'RansomGuard-Lab-v*' | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+          if(-not $lab){throw 'Engineering LAB release directory not found.'}
+          "RG_LAB_RELEASE=$($lab.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build and sign exact-commit runtime driver package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $package=Join-Path $env:RUNNER_TEMP 'ransomguard-runtime-driver'
+          .\minifilter-tools\prepare_runtime_driver_package.ps1 -CertificateThumbprint $env:RANSOMGUARD_LAB_CERT_THUMBPRINT -OutputDirectory $package
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          $provenance=Get-Content -LiteralPath (Join-Path $package 'runtime-package.json') -Raw | ConvertFrom-Json
+          if($provenance.commit -ne '${{ github.sha }}'){throw "Runtime driver provenance commit '$($provenance.commit)' does not match workflow commit '${{ github.sha }}'."}
+          "RG_DRIVER_PACKAGE=$package" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run real minifilter activation and mapping scenarios
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $results=Join-Path $env:RUNNER_TEMP 'ransomguard-runtime-results'
+          .\minifilter-tools\run_runtime_integration_lab.ps1 -LabReleaseDirectory $env:RG_LAB_RELEASE -DriverPackageDirectory $env:RG_DRIVER_PACKAGE -RootBase '${{ inputs.root_base }}' -ResultsDirectory $results
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          $summary=Get-Content -LiteralPath (Join-Path $results 'runtime-result.json') -Raw | ConvertFrom-Json
+          if(-not $summary.passed){throw 'Runtime result did not report passed=true.'}
+          "RG_RUNTIME_RESULTS=$results" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ransomguard-minifilter-runtime-evidence
+          path: ${{ runner.temp }}/ransomguard-runtime-results/**
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Remove signed lab package
+        if: always()
+        shell: pwsh
+        run: |
+          if($env:RG_DRIVER_PACKAGE -and (Test-Path -LiteralPath $env:RG_DRIVER_PACKAGE)){
+            Remove-Item -LiteralPath $env:RG_DRIVER_PACKAGE -Recurse -Force -ErrorAction SilentlyContinue
+          }

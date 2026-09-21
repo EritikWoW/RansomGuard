@@ -88,12 +88,19 @@ public static class RollbackRetentionPlanner
 
             if (retiredExists)
             {
-                var digest = ComputeSessionDigest(retiredPath);
-                if (!digest.Equals(pair.Value.SessionEvidenceSha256, StringComparison.OrdinalIgnoreCase))
+                if (pair.Value.EventType == RollbackRetentionEventType.PurgeStarted)
                 {
-                    issues.Add(new RollbackRetentionIssue(
-                        sessionId, "Quarantined purge source no longer matches its recorded evidence digest."));
-                    continue;
+                    var digest = ComputeSessionDigest(retiredPath);
+                    if (!digest.Equals(pair.Value.SessionEvidenceSha256, StringComparison.OrdinalIgnoreCase))
+                    {
+                        issues.Add(new RollbackRetentionIssue(
+                            sessionId, "Moved purge source changed before Quarantined receipt was committed."));
+                        continue;
+                    }
+                }
+                else
+                {
+                    ValidateTreeHasNoReparse(retiredPath);
                 }
 
                 actions.Add(new RollbackRetentionAction(
@@ -300,6 +307,11 @@ public static class RollbackRetentionPlanner
             return true;
 
         return false;
+    }
+
+    public static void ValidateTreeHasNoReparse(string root)
+    {
+        _ = EnumerateFilesSafe(root).Count();
     }
 
     private static IEnumerable<string> EnumerateFilesSafe(string root)

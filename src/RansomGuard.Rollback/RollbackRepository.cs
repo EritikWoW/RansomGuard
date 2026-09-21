@@ -67,6 +67,10 @@ public sealed class RollbackRepository
             var restartRoot = Path.Combine(store.Root, "restart-state");
             if (Directory.Exists(restartRoot))
                 new RestartReconciliationStore(restartRoot).VerifyAll();
+
+            var pagingRoot = Path.Combine(store.Root, "paging-state");
+            if (Directory.Exists(pagingRoot))
+                new PagingWriteEvidenceStore(pagingRoot).VerifyAll();
         }
     }
 

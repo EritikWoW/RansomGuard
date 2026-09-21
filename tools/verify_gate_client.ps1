@@ -38,7 +38,7 @@ foreach($required in @(
   'CreateGatePolicy.TryParseDisposition',
   '(ev.Flags >> 24) & 0xFF',
   'ev.Flags & 0x00FFFFFF',
-  'ProtocolVersion = 8',
+  'ProtocolVersion = 9',
   'CreatePreservationAction.CaptureExistingPreimage',
   'CreatePreservationAction.RecordOriginallyAbsent',
   'CreatePreservationAction.DenyUnsupported',
@@ -71,7 +71,11 @@ foreach($required in @(
   'RestartReconciliationStore',
   'RestartReconciliationClassifier.ClassifyCreate',
   'RestartReconciliationClassifier.ClassifyRename',
-  'PathProbe.ObserveForRestart'
+  'PathProbe.ObserveForRestart',
+  'PagingWriteEvidenceStore',
+  'RgEventType.PagingWrite',
+  'pagingStore.RecordAsync',
+  'evidence-only'
 )){
   if($text -notmatch [regex]::Escape($required)){throw "Gate client invariant missing: $required"}
 }
@@ -119,6 +123,15 @@ $resultReply=$text.IndexOf('Native.Reply(',$resultBranch)
 if($resultBranch -lt 0 -or $resultPersist -lt 0 -or $resultReturn -lt 0 -or
    ($resultReply -ge 0 -and $resultReply -lt $resultReturn)){
   throw 'RenameResult must be persisted as completion metadata and must not receive FilterReplyMessage.'
+}
+
+$pagingBranch=$text.IndexOf('if ((RgEventType)ev.EventType == RgEventType.PagingWrite)')
+$pagingPersist=$text.IndexOf('pagingStore.RecordAsync(',$pagingBranch)
+$pagingReturn=$text.IndexOf('return;',$pagingPersist)
+$pagingReply=$text.IndexOf('Native.Reply(',$pagingBranch)
+if($pagingBranch -lt 0 -or $pagingPersist -lt 0 -or $pagingReturn -lt 0 -or
+   ($pagingReply -ge 0 -and $pagingReply -lt $pagingReturn)){
+  throw 'PagingWrite must be persisted as evidence only and must not receive FilterReplyMessage.'
 }
 
 $createResultBranch=$text.IndexOf('if ((RgEventType)ev.EventType == RgEventType.CreateResult)')
@@ -173,4 +186,4 @@ if($restartBlock -notmatch [regex]::Escape('PathPolicy.Under(intent.OriginalPath
   throw 'Restart reconciliation must remain scoped to the explicitly selected LAB root.'
 }
 
-Write-Host 'LAB gate client source check PASSED: explicit disposable root, protocol-v8 CREATE/RENAME semantics, bounded concurrent workers, durable FILE_ID_INFO binding, restart evidence for pending intents, range COW, durable CREATE/RENAME intents/completions, originally-absent baselines, no destructive/process-control APIs.'
+Write-Host 'LAB gate client source check PASSED: explicit disposable root, protocol-v9 CREATE/RENAME semantics, bounded workers, durable FILE_ID_INFO binding, restart evidence, non-blocking paging-write evidence, range COW, durable intents/completions, no destructive/process-control APIs.'

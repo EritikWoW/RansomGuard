@@ -14,7 +14,7 @@ pre-mutation preservation path.
 
 ## Current milestone
 
-The current engineering branch extends the range-aware write COW gate with protocol v8 CREATE completion, RENAME destination and rename-completion semantics:
+The current engineering branch extends the range-aware write COW gate with protocol v9 CREATE completion, RENAME destination and rename-completion semantics:
 
 `CREATE -> classify disposition -> durable existing-file pre-image OR originally-absent baseline -> allow`
 
@@ -27,9 +27,9 @@ from data that did not exist before the incident.
 The gate is intentionally not enabled in the normal bundle and is not production-safe yet. Existing-file
 preservation is now additionally bound to a durable Windows `FILE_ID_INFO` identity journal
 (volume serial + 128-bit file ID), so a path that changes to a different file during one incident is rejected.
-CREATE classification still begins with a path-based pre-operation probe, but protocol v8 now records a durable CREATE intent before allow and correlates it with a post-operation result containing the tunneled final name and kernel `FileIdInformation` identity when available. Missing or partial reconciliation stays explicit and pending/unknown rather than being inferred.
+CREATE classification still begins with a path-based pre-operation probe, but protocol v9 now records a durable CREATE intent before allow and correlates it with a post-operation result containing the tunneled final name and kernel `FileIdInformation` identity when available. Missing or partial reconciliation stays explicit and pending/unknown rather than being inferred.
 
-Protocol v8 retains the normalized pre-operation rename destination and correlated post-operation `RenameResult`.
+Protocol v9 retains the normalized pre-operation rename destination and correlated post-operation `RenameResult`.
 Before allowing a rename, the LAB gate preserves the source, preserves an existing destination or commits its absence,
 and durably records a rename intent. After completion, the minifilter resolves the tunneled final name on a safe post-op
 path and, only at PASSIVE_LEVEL with special kernel APCs enabled, queries `FileIdInformation` on the completed kernel
@@ -41,6 +41,8 @@ The current LAB gate now uses bounded concurrent preservation: kernel admission 
 
 On restart, pending CREATE/RENAME intents are conservatively re-observed under the same explicit LAB root. Current path presence and Windows file identity are appended to a separate hash-chained restart-reconciliation journal and classified as evidence supporting completion, supporting non-completion, indeterminate, or ambiguous. This evidence never becomes an authoritative completion by inference.
 
-The next core milestones are deeper crash recovery for requests interrupted before authoritative kernel completion delivery, memory-mapped write coverage,
+Protocol v9 adds non-blocking visibility for paging writes associated with streams opened through the explicit LAB root. The driver attaches a nonpaged stream context after successful CREATE reconciliation and paging-write callbacks read only that context; they do not perform name queries or synchronously call the user-mode gate. GateClient records these observations in a separate write-through hash-chained paging evidence journal. This is evidence only and does not yet prove that memory-mapped mutations were pre-preserved.
+
+The next core milestones are safe pre-preservation for writable memory mappings/cache-manager paging writes, deeper crash recovery for requests interrupted before authoritative kernel completion delivery,
 containment, process-state capture,
 adaptive crypto analysis, and verified recovery orchestration.

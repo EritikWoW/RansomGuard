@@ -21,6 +21,15 @@ typedef struct _RG_POST_CONTEXT {
     PFLT_FILE_NAME_INFORMATION PreCreateNameInfo;
 } RG_POST_CONTEXT, *PRG_POST_CONTEXT;
 
+typedef struct _RG_STREAM_CONTEXT {
+    ULONG PathStatus;
+    ULONG IdentityStatus;
+    ULONGLONG VolumeSerialNumber;
+    ULONGLONG FileIdLow;
+    ULONGLONG FileIdHigh;
+    WCHAR Path[RG_PATH_CHARS];
+} RG_STREAM_CONTEXT, *PRG_STREAM_CONTEXT;
+
 DRIVER_INITIALIZE DriverEntry;
 NTSTATUS RgUnload(_In_ FLT_FILTER_UNLOAD_FLAGS Flags);
 NTSTATUS RgInstanceSetup(_In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ FLT_INSTANCE_SETUP_FLAGS Flags,

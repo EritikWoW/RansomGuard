@@ -27,7 +27,8 @@ typedef enum _RG_EVENT_TYPE {
     RgEventCreateResult = 7,
     RgEventPagingWrite = 8,
     RgEventWritableSection = 9,
-    RgEventActivationPreflight = 10
+    RgEventActivationPreflight = 10,
+    RgEventContainmentActivated = 11
 } RG_EVENT_TYPE;
 
 typedef enum _RG_PATH_STATUS {

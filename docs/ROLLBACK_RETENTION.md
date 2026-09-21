@@ -103,7 +103,7 @@ rollback_maintenance.cmd retention-execute ^
   --report "C:\Recovery\retention-report.json"
 ```
 
-The executor rebuilds the current plan first. If inventory/PlanId changed, execution is refused.
+The executor first acquires the repository-wide cross-process maintenance lease, then rebuilds the current plan. `hold` and `release-hold` acquire the same lease, so a Hold cannot race the final purge revalidation. If inventory/PlanId changed, execution is refused.
 
 ## Purge ordering
 

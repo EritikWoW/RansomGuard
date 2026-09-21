@@ -389,13 +389,31 @@ public sealed record CreateTransactionOutcome(
     string RecordSha256)
 {
     [JsonIgnore]
+    public DurableFileIdentity? PreIdentity =>
+        PreVolumeSerialHex.Length == 0 ? null : new DurableFileIdentity(PreVolumeSerialHex, PreFileIdHex);
+
+    [JsonIgnore]
     public DurableFileIdentity? PostIdentity =>
         PostVolumeSerialHex.Length == 0 ? null : new DurableFileIdentity(PostVolumeSerialHex, PostFileIdHex);
 
     [JsonIgnore]
-    public bool IsReconciled =>
-        unchecked((int)CompletionStatus) < 0 ||
-        (unchecked((int)IdentityStatus) >= 0 && PostIdentity is not null);
+    public bool IsReconciled
+    {
+        get
+        {
+            if (unchecked((int)CompletionStatus) < 0) return true;
+            if (unchecked((int)IdentityStatus) < 0 || PostIdentity is null) return false;
+
+            return CreateAction switch
+            {
+                0 => PreIdentity is not null && !PreIdentity.Equals(PostIdentity), // FILE_SUPERSEDED
+                1 => PreIdentity is not null && PreIdentity.Equals(PostIdentity),  // FILE_OPENED
+                2 => PreIdentity is null,                                           // FILE_CREATED
+                3 => PreIdentity is not null && PreIdentity.Equals(PostIdentity),   // FILE_OVERWRITTEN
+                _ => false
+            };
+        }
+    }
 }
 
 public sealed record CreateTransactionState(

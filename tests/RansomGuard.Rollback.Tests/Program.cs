@@ -1115,6 +1115,118 @@ try
     Check(nestedTopologyRejected,
         "repository verification includes nested activation-topology journal");
 
+    // Verified recovery planning must expose safe copy-out actions while never guessing topology repair.
+    var planRepoRoot = Path.Combine(root, "recovery-plan-repo");
+    var planRepo = new RollbackRepository(planRepoRoot);
+    var planSession = planRepo.CreateSession("plan_case");
+    var planSource = Path.Combine(root, "recovery-plan-source");
+    Directory.CreateDirectory(planSource);
+
+    var fullPlanPath = Path.Combine(planSource, "full.bin");
+    await File.WriteAllBytesAsync(fullPlanPath, Enumerable.Range(0, 8192).Select(x => (byte)(x % 251)).ToArray());
+    var fullCapture = await planSession.CapturePreimageAsync(fullPlanPath, RollbackMutationKind.Delete);
+
+    var planRange = new RangeRollbackStore(Path.Combine(planSession.Root, "write-cow"));
+    await planRange.CaptureWritePreimageAsync(fullPlanPath, 0, 64);
+    var rangeOnlyPath = Path.Combine(planSource, "range-only.bin");
+    await File.WriteAllBytesAsync(rangeOnlyPath, Enumerable.Range(0, 128 * 1024).Select(x => (byte)((x * 7) % 251)).ToArray());
+    await planRange.CaptureWritePreimageAsync(rangeOnlyPath, 4096, 128);
+    using (var mutate = new FileStream(rangeOnlyPath, FileMode.Open, FileAccess.Write, FileShare.Read))
+    {
+        mutate.Position = 4096;
+        await mutate.WriteAsync(Enumerable.Repeat((byte)0xCC, 128).ToArray());
+        await mutate.FlushAsync();
+        mutate.Flush(true);
+    }
+
+    var planCreateRoot = Path.Combine(planSession.Root, "create-state");
+    var planCreateBaselines = new CreateRollbackStore(planCreateRoot);
+    var planCreateOps = new CreateOperationStore(planCreateRoot);
+    var originallyAbsent = Path.Combine(planSource, "incident-created.bin");
+    var absentBaseline = await planCreateBaselines.CaptureAbsentAsync(originallyAbsent);
+    var planIdentity = new DurableFileIdentity(
+        "0102030405060708", "00112233445566778899AABBCCDDEEFF");
+    _ = await planCreateOps.RecordIntentAsync(
+        9001, originallyAbsent, CreateDisposition.Create, 0, CreateGatePolicy.GenericWrite,
+        CreateTargetState.Missing, CreatePreservationAction.RecordOriginallyAbsent,
+        absentBaseline.RecordSha256, null);
+    _ = await planCreateOps.RecordCompletionAsync(
+        9001, CreateCompletionState.Succeeded, 0, 0, originallyAbsent, planIdentity);
+
+    var pendingCreatePath = Path.Combine(planSource, "pending-open.bin");
+    _ = await planCreateOps.RecordIntentAsync(
+        9002, pendingCreatePath, CreateDisposition.Open, 0, 0,
+        CreateTargetState.Missing, CreatePreservationAction.NoPreservationRequired,
+        string.Empty, null);
+
+    var planRenameRoot = Path.Combine(planSession.Root, "rename-state");
+    var planRenames = new RenameRollbackStore(planRenameRoot);
+    var renameSourceA = Path.Combine(planSource, "rename-source-a.bin");
+    var renameDestinationA = Path.Combine(planSource, "rename-destination-a.bin");
+    _ = await planRenames.CaptureIntentAsync(
+        9101, renameSourceA, renameDestinationA, planIdentity, false,
+        RenameDestinationState.OriginallyAbsent, null, 0, 10);
+    _ = await planRenames.RecordCompletionAsync(
+        9101, RenameCompletionState.Succeeded, 0, 0, renameDestinationA, planIdentity);
+
+    var renameSourceB = Path.Combine(planSource, "rename-source-b.bin");
+    var renameDestinationB = Path.Combine(planSource, "rename-destination-b.bin");
+    _ = await planRenames.CaptureIntentAsync(
+        9102, renameSourceB, renameDestinationB, planIdentity, false,
+        RenameDestinationState.OriginallyAbsent, null, 0, 10);
+
+    var recoveryPlan = RollbackRecoveryPlanner.Build(planRepoRoot, "plan_case");
+    Check(recoveryPlan.ReadyCount == 2 &&
+          recoveryPlan.ReviewCount == 3 &&
+          recoveryPlan.BlockedCount == 2 &&
+          !recoveryPlan.AutomaticTopologyMutationAllowed,
+        "recovery planner separates copy-out readiness from review/blocked topology");
+    Check(recoveryPlan.Actions.Any(x =>
+            x.Kind == RecoveryActionKind.RestoreFullPreimageCopy &&
+            x.State == RecoveryActionState.Ready &&
+            x.PrimaryPath.Equals(fullPlanPath, StringComparison.OrdinalIgnoreCase) &&
+            x.EvidenceRecordSha256 == fullCapture.RecordSha256),
+        "recovery planner exposes verified full pre-image as ready copy-out");
+    Check(recoveryPlan.Actions.Any(x =>
+            x.Kind == RecoveryActionKind.RestoreRangeCowCopy &&
+            x.State == RecoveryActionState.Informational &&
+            x.PrimaryPath.Equals(fullPlanPath, StringComparison.OrdinalIgnoreCase)),
+        "full pre-image supersedes range-COW for the same path");
+    Check(recoveryPlan.Actions.Any(x =>
+            x.Kind == RecoveryActionKind.RestoreRangeCowCopy &&
+            x.State == RecoveryActionState.Ready &&
+            x.PrimaryPath.Equals(rangeOnlyPath, StringComparison.OrdinalIgnoreCase) &&
+            x.RequiresLiveSource),
+        "range-only evidence remains ready but explicitly requires the live damaged source");
+    Check(recoveryPlan.Actions.Any(x =>
+            x.Kind == RecoveryActionKind.ReviewOriginallyAbsentPath &&
+            x.State == RecoveryActionState.Review &&
+            x.PrimaryPath.Equals(originallyAbsent, StringComparison.OrdinalIgnoreCase)),
+        "originally-absent path is review-only and never an automatic delete");
+    Check(recoveryPlan.Actions.Any(x =>
+            x.Kind == RecoveryActionKind.ReviewCreateTransaction &&
+            x.State == RecoveryActionState.Blocked &&
+            x.EvidenceSequence == 9002),
+        "pending CREATE is blocked without authoritative completion");
+    Check(recoveryPlan.Actions.Any(x =>
+            x.Kind == RecoveryActionKind.ReviewRenameTopology &&
+            x.State == RecoveryActionState.Review &&
+            x.EvidenceSequence == 9101),
+        "authoritative successful RENAME is topology review, not automatic rename");
+    Check(recoveryPlan.Actions.Any(x =>
+            x.Kind == RecoveryActionKind.ReviewRenameTopology &&
+            x.State == RecoveryActionState.Blocked &&
+            x.EvidenceSequence == 9102),
+        "pending RENAME is blocked without authoritative completion");
+    Check(recoveryPlan.PlanId.Length == 64 &&
+          recoveryPlan.JournalEvidenceSha256.Length == 64,
+        "recovery plan binds deterministic SHA-256 plan/evidence digests");
+
+    var repeatedRecoveryPlan = RollbackRecoveryPlanner.Build(planRepoRoot, "plan_case");
+    Check(repeatedRecoveryPlan.PlanId == recoveryPlan.PlanId &&
+          repeatedRecoveryPlan.JournalEvidenceSha256 == recoveryPlan.JournalEvidenceSha256,
+        "recovery plan identity is stable for unchanged validated evidence");
+
     Console.WriteLine($"All {passed} rollback tests passed. These are file-store tests, not minifilter integration tests.");
     return 0;
 }

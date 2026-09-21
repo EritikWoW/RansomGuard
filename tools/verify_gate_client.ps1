@@ -22,6 +22,11 @@ foreach($required in @(
   'RgIdentityStatus.Resolved',
   'FileIdentityStore',
   'RenameRollbackStore',
+  'RenameIdentityStore',
+  'RenameIdentityState.Resolved',
+  'RenameIdentityState.QueryFailed',
+  'RenameIdentityState.Mismatch',
+  'renameIdentityStore.RecordAsync(',
   'CaptureOrVerifyAsync',
   'CaptureIntentAsync',
   'RecordCompletionAsync',
@@ -108,6 +113,14 @@ if($resultBranch -lt 0 -or $resultPersist -lt 0 -or $resultContinue -lt 0 -or
   throw 'RenameResult must be persisted as completion metadata and must not receive FilterReplyMessage.'
 }
 
+$renameReconcile=$text.IndexOf('static class RenameReconciliation')
+$renameCompletionCommit=$text.IndexOf('renameStore.RecordCompletionAsync(',$renameReconcile)
+$renameIdentityCommit=$text.IndexOf('renameIdentityStore.RecordAsync(',$renameCompletionCommit)
+if($renameReconcile -lt 0 -or $renameCompletionCommit -lt 0 -or $renameIdentityCommit -lt 0 -or
+   $renameCompletionCommit -gt $renameIdentityCommit){
+  throw 'RenameResult must persist filesystem completion before post-operation FILE_ID_INFO reconciliation.'
+}
+
 $createResultBranch=$text.IndexOf('if ((RgEventType)ev.EventType == RgEventType.CreateResult)')
 $createResultPersist=$text.IndexOf('CreateReconciliation.HandleAsync(',$createResultBranch)
 $createResultContinue=$text.IndexOf('continue;',$createResultPersist)
@@ -133,4 +146,4 @@ if($renameBranch -lt 0 -or $renameSourceCapture -lt 0 -or $renameIntent -lt 0 -o
   throw 'RENAME must preserve source/destination state and durably commit rename intent before allow.'
 }
 
-Write-Host 'LAB gate client source check PASSED: explicit disposable root, protocol-v7 CREATE/RENAME semantics, durable FILE_ID_INFO identity binding, range COW for writes, durable CREATE/RENAME intents and completions, originally-absent baselines, no destructive/process-control APIs.'
+Write-Host 'LAB gate client source check PASSED: explicit disposable root, protocol-v7 CREATE/RENAME semantics, durable pre/post FILE_ID_INFO identity binding, range COW for writes, durable CREATE/RENAME intents and completions, originally-absent baselines, no destructive/process-control APIs.'

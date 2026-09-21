@@ -1,4 +1,4 @@
-# RansomGuard 0.7.17.0
+# RansomGuard 0.7.18.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
@@ -6,7 +6,7 @@ and recover data through rollback plus adaptive crypto analysis.
 
 ## Core preservation milestone
 
-0.7.17.0 retains the 0.7.2 range-aware COW gate and adds explicit CREATE preservation semantics.
+0.7.18.0 retains the 0.7.2 range-aware COW gate and adds explicit CREATE preservation semantics.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 
@@ -71,6 +71,8 @@ Protocol v11 also removes the previous blind skip of paging-write callbacks. Aft
 
 0.7.17 adds fail-closed rollback storage admission. Each LAB session has a concurrency-safe storage budget that combines actual committed session bytes, all in-flight reservations, and current filesystem free space. Defaults are 8192 MiB maximum session storage and a 2048 MiB free-space reserve; LAB runs may tighten these with `--max-store-mib` and `--min-free-mib`. WRITE range-COW, full pre-images, absence baselines, activation evidence, paging/section evidence and CREATE/RENAME completion journals all reserve capacity before writing. Blocking destructive I/O is denied when quota/free-space admission fails rather than allowing an unpreserved mutation.
 
+0.7.18 adds explicit safe retention for completed rollback sessions. New LAB sessions durably record `Opened -> ClosedCleanly`; legacy/unclosed sessions are never purge-eligible. Retention release is bound to the exact current recovery `PlanId`, so later evidence makes the release stale. The LAB-only retention CLI requires a fresh deterministic retention plan, a minimum age (7 days by default, never below 24 hours through the CLI), and exact typed confirmation. Purge is single-session only and uses `Intent -> atomic move to Retention/PurgeQuarantine -> Quarantined -> delete -> Completed`, so interruption after the move leaves evidence quarantined instead of partially deleted.
+
 ## Recovery safety
 
 Range recovery:
@@ -94,6 +96,7 @@ The blocking gate is still deliberately restricted:
 - refuses an entire drive, Windows, Program Files, ProgramData and reparse roots;
 - rollback storage must be outside the gated root;
 - rollback storage is bounded by a per-session quota plus a minimum filesystem free-space reserve; admission failure fails closed;
+- completed-session purge is never automatic: clean lifecycle, exact current recovery release, age barrier and single-session typed confirmation are required;
 - out-of-root or name-query-failed I/O fails open;
 - a path truncated after an already verified in-root prefix is denied rather than preserved against an ambiguous name;
 - in-scope preservation failure or timeout fails closed;
@@ -122,7 +125,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.7.17.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.7.18.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 Manual disposable-VM runtime workflow:
 
@@ -133,6 +136,7 @@ LAB gate documentation:
     docs\MINIFILTER_LAB.md
     docs\ROLLBACK_ARCHITECTURE.md
     docs\ROLLBACK_RECOVERY.md
+    docs\ROLLBACK_RETENTION.md
 
 ## Current boundary
 
@@ -145,5 +149,5 @@ Restart evidence for pending/missing CREATE/RENAME completion events is durable 
 
 Remaining core work includes deeper crash recovery for in-flight kernel requests,
 broader live NTFS/ReFS/fault-injection coverage beyond the automated disposable-VM mapping harness,
-retention/cleanup policy for completed rollback sessions, containment policy, process-state capture, adaptive crypto reconstruction, production recovery UI/topology orchestration,
+incomplete-quarantine recovery/cleanup, containment policy, process-state capture, adaptive crypto reconstruction, production recovery/retention UI orchestration,
 driver signing and Microsoft-assigned production altitude.

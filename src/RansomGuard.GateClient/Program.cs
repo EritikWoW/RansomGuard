@@ -105,7 +105,7 @@ static class GateDecision
                 return await EvaluateCreateAsync(ev, path, store, createStore, cancellationToken).ConfigureAwait(false);
 
             var state = PathProbe.Get(path);
-            if (state != PathState.File)
+            if (state != CreateTargetState.File)
                 return Deny(ev.Sequence, 3);
 
             // Once a path is known to have been absent at incident start, later mutations must not

@@ -1,3 +1,13 @@
+# RansomGuard 0.7.6.0
+- Protocol v7 adds a correlated no-reply `CreateResult` event while retaining protocol-v6 rename reconciliation semantics.
+- Tracked CREATE operations now commit a write-through SHA-256 hash-chained pre-operation intent only after the required full pre-image or originally-absent baseline is durable.
+- CREATE intents link to the exact preservation-record hash and retain disposition/options, desired access, target state, request sequence and durable existing-file identity when available.
+- The minifilter retains normalized pre-CREATE name information, runs completion processing on a safe post-operation path, and applies `FltGetTunneledName` on successful operations.
+- Added a separate hash-chained CREATE completion journal with `Succeeded`, `SucceededNameUnresolved`, and `Failed` states; missing result delivery leaves the intent pending.
+- Plain non-destructive `FILE_OPEN` is not journaled as a CREATE transaction; CREATE-capable dispositions and delete-on-close remain tracked.
+- Added CREATE transaction reopen/correlation, pending, duplicate-conflict, invalid-state and corruption tests plus protocol-v7 kernel/userspace source gates.
+- Post-operation kernel file-ID binding is still required before completed CREATE/RENAME topology can be treated as production-safe.
+
 # RansomGuard 0.7.5.0
 - Protocol v6 adds a correlated no-reply `RenameResult` event for post-operation rename outcomes.
 - The minifilter retains the pre-operation destination name-info, uses `FltDoCompletionProcessingWhenSafe`, and reconciles successful renames with `FltGetTunneledName`.

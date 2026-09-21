@@ -1,7 +1,7 @@
-# RansomGuard 0.7.10.0 - CREATE completion and identity reconciliation milestone
+# RansomGuard 0.7.11.0 - CREATE completion and identity reconciliation milestone
 
 RansomGuard is moving from detection-only telemetry to `preserve -> contain -> recover`.
-0.7.10.0 retains the deliberately constrained engineering minifilter gate, range-aware WRITE COW,
+0.7.11.0 retains the deliberately constrained engineering minifilter gate, range-aware WRITE COW,
 CREATE/RENAME preservation and rename outcome reconciliation, and adds durable post-CREATE outcome,
 tunneled-name and kernel file-identity reconciliation.
 
@@ -190,7 +190,7 @@ These checks prevent a restart from proceeding on top of corrupt rollback state.
 
 ## Restart reconciliation evidence
 
-0.7.10.0 adds a separate append-only, SHA-256 hash-chained `restart-reconciliation-journal.jsonl` for older CREATE/RENAME intents that have no authoritative completion record.
+0.7.11.0 adds a separate append-only, SHA-256 hash-chained `restart-reconciliation-journal.jsonl` for older CREATE/RENAME intents that have no authoritative completion record.
 
 Before creating a new LAB session, GateClient validates the repository and then scans pending intents whose paths are still under the same explicit LAB root. It records current path state and, for ordinary files, `FILE_ID_INFO` from the exact opened handle. A pure classifier records one of four evidence outcomes:
 
@@ -205,7 +205,7 @@ Restart evidence is deliberately **not** a CREATE/RENAME completion. The origina
 
 ## Paging-write visibility
 
-0.7.10.0 removes the registration-level `SKIP_PAGING_IO` blind spot without turning paging I/O into a synchronous user-mode gate.
+0.7.11.0 removes the registration-level `SKIP_PAGING_IO` blind spot without turning paging I/O into a synchronous user-mode gate.
 
 After a successful in-scope CREATE, the minifilter attaches a nonpaged `FLT_STREAM_CONTEXT` containing the already-resolved bounded path plus kernel file identity when available. A paging write then:
 
@@ -220,7 +220,7 @@ This closes the observability gap for memory-mapped/cache-manager writes associa
 
 ## Bounded concurrent gate execution
 
-0.7.10.0 removes the previous global serialization around blocking gate sends. The minifilter now:
+0.7.11.0 removes the previous global serialization around blocking gate sends. The minifilter now:
 - admits at most 8 simultaneous blocking gate requests;
 - fails closed with STATUS_DEVICE_BUSY when that bound is exceeded;
 - holds gPortMutex only long enough to acquire/release a client-port lease;

@@ -102,6 +102,45 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
 {
     try
     {
+        if ((RgEventType)ev.EventType == RgEventType.ContainmentActivated)
+        {
+            if (ev.ProtocolVersion != 13 ||
+                ev.RelatedSequence == 0 ||
+                ev.ProcessId <= 4 ||
+                ev.CompletionStatus != 0)
+                throw new InvalidDataException("Invalid containment activation evidence event.");
+
+            var request = containmentStore.Records.SingleOrDefault(x =>
+                x.Phase == ContainmentEvidencePhase.Requested &&
+                x.KernelSequence == ev.RelatedSequence);
+            if (request is null ||
+                request.ProcessId != ev.ProcessId)
+                throw new InvalidDataException("Containment activation evidence has no exact durable request.");
+
+            await using (var reservation = await storageBudget.ReserveAsync(
+                             RollbackStorageBudget.MetadataReservationBytes,
+                             "containment-kernel-active",
+                             cts.Token).ConfigureAwait(false))
+            {
+                _ = await containmentStore.RecordKernelActiveAsync(
+                    request.KernelSequence,
+                    request.ProcessId,
+                    request.ProcessCreationFileTimeUtc,
+                    request.EventType,
+                    request.Path,
+                    request.PreservationDecision,
+                    request.EvidenceCount,
+                    request.DistinctPathCount,
+                    ev.CompletionStatus,
+                    ev.ProcessId,
+                    cts.Token).ConfigureAwait(false);
+            }
+
+            Console.WriteLine(
+                $"LAB CONTAINMENT ACTIVE: pid={ev.ProcessId}; exact gate sequence={ev.RelatedSequence}; process-object latch confirmed by kernel evidence.");
+            return;
+        }
+
         if ((RgEventType)ev.EventType == RgEventType.WritableSection)
         {
             if (ev.ProtocolVersion != 13 ||
@@ -240,53 +279,15 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
             reply.Flags |= (uint)RgGateReplyFlags.ContainRequestor;
         }
 
-        RgControlReply containmentStatus = default;
         lock (replySync)
         {
             Native.Reply(port, header.MessageId, reply);
-            if (containmentRequest is not null)
-            {
-                containmentStatus = Native.Control(port, new RgControlRequest
-                {
-                    ProtocolVersion = 13,
-                    Command = (uint)RgControlCommand.QueryContainment,
-                    TargetProcessId = 0
-                });
-            }
         }
 
         if (containmentRequest is not null)
         {
-            if (containmentStatus.ProtocolVersion != 13 ||
-                containmentStatus.Command != (uint)RgControlCommand.QueryContainment ||
-                containmentStatus.Status != 0 ||
-                containmentStatus.GateActivated != 1 ||
-                containmentStatus.ContainmentActive != 1 ||
-                containmentStatus.ContainedProcessId != ev.ProcessId)
-                throw new InvalidOperationException(
-                    $"Kernel did not confirm event-bound containment for sequence={ev.Sequence}, pid={ev.ProcessId}. status=0x{containmentStatus.Status:X8}, active={containmentStatus.ContainmentActive}, contained={containmentStatus.ContainedProcessId}.");
-
-            await using (var reservation = await storageBudget.ReserveAsync(
-                             RollbackStorageBudget.MetadataReservationBytes,
-                             "containment-kernel-active",
-                             cts.Token).ConfigureAwait(false))
-            {
-                _ = await containmentStore.RecordKernelActiveAsync(
-                    ev.Sequence,
-                    ev.ProcessId,
-                    containmentRequest.ProcessCreationFileTimeUtc,
-                    ev.EventType,
-                    path,
-                    (uint)reply.Decision,
-                    containmentRequest.EvidenceCount,
-                    containmentRequest.DistinctPathCount,
-                    containmentStatus.Status,
-                    containmentStatus.ContainedProcessId,
-                    cts.Token).ConfigureAwait(false);
-            }
-
             Console.WriteLine(
-                $"LAB CONTAINMENT ACTIVE: pid={ev.ProcessId}; exact gate sequence={ev.Sequence}; preserved-before-latch; process-object bound in kernel.");
+                $"LAB containment requested: pid={ev.ProcessId}; exact gate sequence={ev.Sequence}; awaiting no-reply kernel activation evidence.");
         }
 
         Console.WriteLine(
@@ -340,10 +341,19 @@ finally
 repository.VerifyAll();
 var pendingCreateCount = createOperationStore.PendingIntents.Count;
 var pendingRenameCount = renameStore.PendingIntents.Count;
+var containmentRecords = containmentStore.Records;
+var pendingContainmentAckCount = containmentRecords.Count(x =>
+    x.Phase == ContainmentEvidencePhase.Requested &&
+    !containmentRecords.Any(y =>
+        y.Phase == ContainmentEvidencePhase.KernelActive &&
+        y.KernelSequence == x.KernelSequence));
 var workerFailureCount = Volatile.Read(ref gateWorkerFailures);
-var lifecycleReason = workerFailureCount == 0 && pendingCreateCount == 0 && pendingRenameCount == 0
+var lifecycleReason = workerFailureCount == 0 &&
+                      pendingCreateCount == 0 &&
+                      pendingRenameCount == 0 &&
+                      pendingContainmentAckCount == 0
     ? "clean-gate-shutdown"
-    : $"gate-shutdown-faulted:workers={workerFailureCount};pending-create={pendingCreateCount};pending-rename={pendingRenameCount}";
+    : $"gate-shutdown-faulted:workers={workerFailureCount};pending-create={pendingCreateCount};pending-rename={pendingRenameCount};pending-containment-ack={pendingContainmentAckCount}";
 
 await using (var lifecycleReservation = await storageBudget.ReserveAsync(
                  RollbackStorageBudget.MetadataReservationBytes,
@@ -1440,7 +1450,7 @@ sealed class DevicePathResolver
 }
 
 enum RgClientMode : uint { Audit = 1, LabGate = 2 }
-enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, RenameResult = 6, CreateResult = 7, PagingWrite = 8, WritableSection = 9, ActivationPreflight = 10 }
+enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, RenameResult = 6, CreateResult = 7, PagingWrite = 8, WritableSection = 9, ActivationPreflight = 10, ContainmentActivated = 11 }
 enum RgPathStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2, Truncated = 3 }
 enum RgIdentityStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2 }
 enum RgGateDecision : uint { Invalid = 0, SnapshotCommitted = 1, Deny = 2, BaselineCommitted = 3, NoPreservationRequired = 4 }

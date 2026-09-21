@@ -52,7 +52,12 @@ foreach($required in @(
     'x.OperationKind == operationKind',
     'x.RequestSequence == requestSequence',
     'x.IntentRecordSha256.Equals(intentRecordSha256',
-    'matches.All(x => x.Evidence == first)',
+    'matches.All(x =>',
+    'SameObservedTopology(x, firstObservation)',
+    'left.SourceVolumeSerialHex.Equals(right.SourceVolumeSerialHex',
+    'left.SourceFileIdHex.Equals(right.SourceFileIdHex',
+    'left.DestinationVolumeSerialHex.Equals(right.DestinationVolumeSerialHex',
+    'left.DestinationFileIdHex.Equals(right.DestinationFileIdHex',
     'matches[^1].RecordSha256'
 )){
     if($restartText -notmatch [regex]::Escape($required)){throw "Restart recovery invariant missing: $required"}
@@ -147,6 +152,7 @@ if($launcherText -notmatch [regex]::Escape('RollbackRecovery\RansomGuard.Rollbac
 $testText=Get-Content -LiteralPath $tests -Raw
 foreach($required in @(
     'restart assessment accepts only exact consistent decisive evidence',
+    'restart assessment rejects same-decision evidence with identity drift',
     'restart assessment keeps conflicting observations unresolved',
     'restart assessment does not borrow evidence from another request or intent',
     'consistent restart CREATE evidence becomes review-only crash recovery',

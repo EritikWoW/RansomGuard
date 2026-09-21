@@ -5,7 +5,7 @@ if (!OperatingSystem.IsWindows())
     throw new PlatformNotSupportedException("RansomGuard minifilter runtime harness is Windows-only.");
 
 if (args.Length == 0)
-    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | map-write --file <path>");
+    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | map-write --file <path> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker>");
 
 var command = args[0].ToLowerInvariant();
 var options = Parse(args.Skip(1).ToArray());
@@ -26,6 +26,13 @@ switch (command)
         break;
     case "map-write":
         MapAndWrite(Require(options, "--file"));
+        break;
+    case "containment-probe":
+        ContainmentProbe(
+            Require(options, "--file"),
+            Require(options, "--ready"),
+            Require(options, "--go"),
+            Require(options, "--result"));
         break;
     default:
         throw new ArgumentException($"Unknown command: {args[0]}");
@@ -117,6 +124,42 @@ static void HoldDirectoryDeleteHandle(string directoryPath, string readyMarker, 
         if (DateTime.UtcNow >= deadline)
             throw new TimeoutException("Timed out waiting for directory-handle release marker.");
         Thread.Sleep(100);
+    }
+}
+
+static void ContainmentProbe(string filePath, string readyMarker, string goMarker, string resultMarker)
+{
+    EnsureFile(filePath);
+    foreach (var marker in new[] { readyMarker, goMarker, resultMarker })
+    {
+        var parent = Path.GetDirectoryName(marker);
+        if (!string.IsNullOrWhiteSpace(parent)) Directory.CreateDirectory(parent);
+        if (File.Exists(marker)) File.Delete(marker);
+    }
+
+    File.WriteAllText(readyMarker, $"pid={Environment.ProcessId};file={filePath};utc={DateTime.UtcNow:O}");
+    var deadline = DateTime.UtcNow.AddMinutes(5);
+    while (!File.Exists(goMarker))
+    {
+        if (DateTime.UtcNow >= deadline)
+            throw new TimeoutException("Timed out waiting for containment probe trigger.");
+        Thread.Sleep(100);
+    }
+
+    try
+    {
+        File.AppendAllText(filePath, "RANSOMGUARD-CONTAINMENT-PROBE-SHOULD-NOT-WRITE");
+        File.WriteAllText(resultMarker, "allowed");
+        Environment.ExitCode = 9;
+    }
+    catch (UnauthorizedAccessException)
+    {
+        File.WriteAllText(resultMarker, "denied");
+    }
+    catch (IOException ex)
+    {
+        File.WriteAllText(resultMarker, "io-error:" + ex.HResult.ToString("X8"));
+        Environment.ExitCode = 10;
     }
 }
 

@@ -1,7 +1,7 @@
-# RansomGuard rollback architecture — current through 0.7.19.0
+# RansomGuard rollback architecture — current through 0.7.20.0
 
 RansomGuard is moving from detection-only telemetry to `preserve -> contain -> recover`.
-The current 0.7.19 engineering line retains the deliberately constrained protocol-v11 minifilter gate, range-aware WRITE COW, CREATE/RENAME preservation and kernel completion reconciliation, activation/mapping evidence, verified copy-out recovery, bounded storage and crash-resumable retention. It additionally makes exact, fully-consistent restart reconciliation evidence usable for Review-only crash recovery without converting that evidence into authoritative completion.
+The current 0.7.20 engineering line retains the deliberately constrained protocol-v12 minifilter gate, range-aware WRITE COW, CREATE/RENAME preservation and kernel completion reconciliation, activation/mapping evidence, verified copy-out recovery, bounded storage and crash-resumable retention. It additionally makes exact, fully-consistent restart reconciliation evidence usable for Review-only crash recovery without converting that evidence into authoritative completion.
 
 ## WRITE ordering
 
@@ -374,3 +374,12 @@ On a disposable VM and disposable LAB directory:
 10. Verify files outside the LAB root remain unaffected.
 
 Do not load the blocking prototype on a primary workstation.
+
+
+## Kernel containment — 0.7.20
+
+Containment is deliberately separate from rollback evidence. GateClient may request one process at activation time only after file and directory preflight has succeeded. The driver resolves the numeric PID with `PsLookupProcessByProcessId`, retains the resulting `PEPROCESS`, and compares `FltGetRequestorProcess(Data)` by object identity on subsequent callbacks.
+
+For that process, mutating CREATE requests are classified from disposition/options/desired access and denied before a user-mode preservation message. Non-paging WRITE and interesting set-information operations (RENAME, delete-disposition and truncate/allocation changes) are likewise denied before `RgGateEvent`. Read-only CREATE/open remains possible. Paging-write and section callbacks remain evidence-only/non-blocking; activation preflight is expected to prevent pre-existing writable mapping hazards.
+
+No release command exists in protocol v12. Disconnect or unload clears the referenced process object. This first containment milestone is intentionally explicit and LAB-only; the ordinary service's heuristic detector is not permitted to arm it yet.

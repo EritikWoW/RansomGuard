@@ -93,7 +93,17 @@ foreach($required in @(
     'RgControlActivateGate',
     'RgControlQueryActivation',
     'RgControlArmPreflight',
-    'gPreflightProbeArmed'
+    'gPreflightProbeArmed',
+    'gContainedProcess',
+    'gContainedProcessId',
+    'RgIsContainedRequestor',
+    'RgCreateMayMutate',
+    'RgClearContainedProcess',
+    'FltGetRequestorProcess',
+    'PsLookupProcessByProcessId',
+    'ObDereferenceObject',
+    'RgControlActivateAndContainProcess',
+    'RgControlQueryContainment'
 )){
     if($src -notmatch [regex]::Escape($required)){throw "LAB write-gate invariant missing: $required"}
 }
@@ -185,15 +195,82 @@ if($messageStart -lt 0){throw 'Kernel control-message callback missing.'}
 $messageEnd=$src.IndexOf('static VOID RgDisconnect',$messageStart)
 if($messageEnd -lt 0){throw 'Kernel control-message callback boundary missing.'}
 $messageBlock=$src.Substring($messageStart,$messageEnd-$messageStart)
-foreach($required in @('RgControlActivateGate','RgControlQueryActivation','RgControlArmPreflight','gPreflightProbeArmed','gActivationHazard','gGateActivated','STATUS_DEVICE_BUSY')){
+foreach($required in @('RgControlActivateGate','RgControlQueryActivation','RgControlArmPreflight','RgControlActivateAndContainProcess','RgControlQueryContainment','TargetProcessId','PsLookupProcessByProcessId','gContainedProcess','gContainedProcessId','gPreflightProbeArmed','gActivationHazard','gGateActivated','STATUS_DEVICE_BUSY')){
     if($messageBlock -notmatch [regex]::Escape($required)){throw "Activation control callback missing invariant: $required"}
 }
+$containmentHelperStart=$src.IndexOf('static BOOLEAN RgIsContainedRequestor(PFLT_CALLBACK_DATA Data)')
+$containmentHelperEnd=$src.IndexOf('static BOOLEAN RgGateEvent',$containmentHelperStart)
+if($containmentHelperStart -lt 0 -or $containmentHelperEnd -lt 0){throw 'Kernel containment helper block missing.'}
+$containmentHelpers=$src.Substring($containmentHelperStart,$containmentHelperEnd-$containmentHelperStart)
+foreach($required in @(
+    'FltGetRequestorProcess(Data)',
+    'gContainedProcess == requestor',
+    'RgCreateMayMutate',
+    'FILE_WRITE_DATA',
+    'FILE_APPEND_DATA',
+    'FILE_DELETE_ON_CLOSE',
+    'FILE_OVERWRITE_IF',
+    'RgClearContainedProcess',
+    'ObDereferenceObject(previous)'
+)){
+    if($containmentHelpers -notmatch [regex]::Escape($required)){throw "Kernel containment helper invariant missing: $required"}
+}
+
+$containCommand=$messageBlock.IndexOf('request->Command == RgControlActivateAndContainProcess')
+$lookupProcess=$messageBlock.IndexOf('PsLookupProcessByProcessId',$containCommand)
+$bindProcess=$messageBlock.IndexOf('gContainedProcess = targetProcess',$lookupProcess)
+$bindPid=$messageBlock.IndexOf('InterlockedExchange64(&gContainedProcessId',$bindProcess)
+$activateContained=$messageBlock.IndexOf('InterlockedExchange(&gGateActivated, 1)',$bindPid)
+if($containCommand -lt 0 -or $lookupProcess -lt 0 -or $bindProcess -lt 0 -or $bindPid -lt 0 -or $activateContained -lt 0 -or
+   $containCommand -gt $lookupProcess -or $lookupProcess -gt $bindProcess -or $bindProcess -gt $bindPid -or $bindPid -gt $activateContained){
+    throw 'Containment must bind a referenced process object and PID before atomically activating the LAB gate.'
+}
+if($messageBlock -notmatch [regex]::Escape('request->TargetProcessId <= 4') -or
+   $messageBlock -notmatch [regex]::Escape('request->TargetProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId')){
+    throw 'Containment control must reject system PIDs and the GateClient PID.'
+}
+if($proto -match '(?i)ReleaseContainment|ClearContainment' -or $messageBlock -match '(?i)RgControl(Release|Clear)Contain'){
+    throw 'LAB containment must not expose a runtime release/bypass command; disconnect/unload is the release boundary.'
+}
+
+$preCreateStart=$src.IndexOf('FLT_PREOP_CALLBACK_STATUS RgPreCreate(')
+$preCreateEnd=$src.IndexOf('FLT_PREOP_CALLBACK_STATUS RgPreAcquireForSectionSynchronization',$preCreateStart)
+$preWriteStart=$src.IndexOf('FLT_PREOP_CALLBACK_STATUS RgPreWrite(')
+$preWriteEnd=$src.IndexOf('FLT_PREOP_CALLBACK_STATUS RgPreSetInformation',$preWriteStart)
+$preSetStart=$src.IndexOf('FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(')
+$preSetEnd=$src.IndexOf('static NTSTATUS RgPopulateEvent',$preSetStart)
+if($preCreateStart -lt 0 -or $preCreateEnd -lt 0 -or $preWriteStart -lt 0 -or $preWriteEnd -lt 0 -or $preSetStart -lt 0 -or $preSetEnd -lt 0){
+    throw 'Containment callback source boundaries missing.'
+}
+$preCreateBlock=$src.Substring($preCreateStart,$preCreateEnd-$preCreateStart)
+$preWriteBlock=$src.Substring($preWriteStart,$preWriteEnd-$preWriteStart)
+$preSetBlock=$src.Substring($preSetStart,$preSetEnd-$preSetStart)
+if($preCreateBlock -notmatch [regex]::Escape('RgIsContainedRequestor(Data) && RgCreateMayMutate(&event)') -or
+   $preCreateBlock.IndexOf('RgIsContainedRequestor(Data) && RgCreateMayMutate(&event)') -gt $preCreateBlock.LastIndexOf('RgGateEvent(&event')){
+    throw 'Mutation-capable CREATE must fail in kernel for the contained process before the user-mode gate.'
+}
+if($preWriteBlock -notmatch [regex]::Escape('if (RgIsContainedRequestor(Data))') -or
+   $preWriteBlock.IndexOf('if (RgIsContainedRequestor(Data))') -gt $preWriteBlock.IndexOf('RgGateEvent(&event')){
+    throw 'Non-paging WRITE must fail in kernel for the contained process before the user-mode gate.'
+}
+if($preSetBlock -notmatch [regex]::Escape('if (RgIsContainedRequestor(Data))') -or
+   $preSetBlock.IndexOf('if (RgIsContainedRequestor(Data))') -gt $preSetBlock.IndexOf('RgGateEvent(&event')){
+    throw 'RENAME/DELETE/TRUNCATE must fail in kernel for the contained process before the user-mode gate.'
+}
+if($src -notmatch 'static VOID RgDisconnect[\s\S]*RgClearContainedProcess\(\)' -or
+   $src -notmatch 'NTSTATUS RgUnload[\s\S]*RgClearContainedProcess\(\)'){
+    throw 'Disconnect and unload must release the referenced containment process object.'
+}
+
 if($src -notmatch 'FltCreateCommunicationPort\([^;]*RgConnect,\s*RgDisconnect,\s*RgMessage,\s*1\)' -and
    $src -notmatch 'RgConnect, RgDisconnect, RgMessage, 1'){
     throw 'Communication port must register RgMessage for activation handshake.'
 }
-if($proto -notmatch '#define\s+RG_PROTOCOL_VERSION\s+11u'){throw 'Minifilter protocol must be v11 for activation preflight and writable-section attestation.'}
+if($proto -notmatch '#define\s+RG_PROTOCOL_VERSION\s+12u'){throw 'Minifilter protocol must be v12 for activation preflight plus process-object containment.'}
 if($proto -notmatch 'RG_GATE_ROOT_CHARS'){throw 'Protocol must carry an explicit bounded gate root.'}
+foreach($required in @('RgControlActivateAndContainProcess','RgControlQueryContainment','TargetProcessId','ContainmentActive','ContainedProcessId')){
+    if($proto -notmatch [regex]::Escape($required)){throw "Protocol v12 containment field missing: $required"}
+}
 if($src -notmatch 'Unresolved/out-of-root paths fail open'){throw 'LAB gate must document fail-open behavior outside the explicitly resolved gate root.'}
 if($src -notmatch 'requestorPid\s*==\s*\(ULONGLONG\)InterlockedCompareExchange64\(&gClientProcessId'){throw 'Gate client PID must be excluded to prevent rollback-store self-deadlock.'}
 if($proto -notmatch 'RG_CREATE_DISPOSITION_SHIFT'){throw 'Protocol must carry CREATE disposition/options semantics.'}
@@ -215,9 +292,9 @@ if($proto -notmatch 'RgGateBaselineCommitted' -or $proto -notmatch 'RgGateNoPres
 if($infText -notmatch 'StartType\s*=\s*3'){throw 'Driver must remain demand-start in the lab prototype.'}
 if($infText -notmatch 'Instance1\.Flags\s*=\s*0x1'){throw 'Automatic volume attachment must remain suppressed.'}
 if($infText -notmatch 'Instance1\.Altitude\s*=\s*"370099\.4242"'){throw 'Unexpected LAB altitude. Review altitude policy manually.'}
-Write-Host 'LAB pre-write gate source check PASSED, including fail-closed activation preflight, bounded admission, paging visibility and no-reply writable-section attestation.' -ForegroundColor Green
+Write-Host 'LAB pre-write gate source check PASSED, including protocol-v12 PEPROCESS containment, fail-closed activation preflight, bounded admission, paging visibility and no-reply writable-section attestation.' -ForegroundColor Green
 Write-Host 'Gate scope: one explicit NT root negotiated by the single connected client.'
-Write-Host 'In-scope CREATE/WRITE/RENAME/DELETE/TRUNCATE require an explicit user-mode preservation decision; allowed CREATE/RENAME operations emit correlated post-operation reconciliation.'
+Write-Host 'In-scope mutations normally require an explicit preservation decision; an activation-bound contained PEPROCESS is denied before the user-mode gate.'
 Write-Host 'Out-of-scope/unresolved I/O remains fail-open; no process-control or kernel file-writing APIs are present.'
 Write-Host 'Demand start: yes; automatic attachment suppressed: yes.'
 Write-Host 'x64 build/validation tools required; ApiValidator remains enabled.'

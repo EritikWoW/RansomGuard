@@ -4,7 +4,7 @@ C_ASSERT(sizeof(RG_EVENT) == 2168);
 C_ASSERT(sizeof(RG_CONNECT_CONTEXT) == 544);
 C_ASSERT(sizeof(RG_GATE_REPLY) == 24);
 C_ASSERT(sizeof(RG_CONTROL_REQUEST) == 16);
-C_ASSERT(sizeof(RG_CONTROL_REPLY) == 16);
+C_ASSERT(sizeof(RG_CONTROL_REPLY) == 32);
 
 static PFLT_FILTER gFilter = NULL;
 static PFLT_PORT gServerPort = NULL;
@@ -18,6 +18,8 @@ static volatile LONG gUnloading = 0;
 static volatile LONG gClientConnected = 0;
 static volatile LONG gClientMode = 0;
 static volatile LONG64 gClientProcessId = 0;
+static PEPROCESS gContainedProcess = NULL;
+static volatile LONG64 gContainedProcessId = 0;
 static volatile LONG gGateActivated = 0;
 static volatile LONG gActivationHazard = 0;
 static volatile LONG gPreflightProbeArmed = 0;
@@ -62,6 +64,9 @@ static VOID RgPopulateRenameDestination(_Inout_ PRG_EVENT Event, _Inout_ PFLT_CA
                                         _In_ PCFLT_RELATED_OBJECTS FltObjects);
 static BOOLEAN RgEventPathMatchesGateRoot(_In_ const RG_EVENT *Event);
 static BOOLEAN RgEventIsInsideGateRoot(_In_ const RG_EVENT *Event);
+static BOOLEAN RgIsContainedRequestor(_In_ PFLT_CALLBACK_DATA Data);
+static BOOLEAN RgCreateMayMutate(_In_ const RG_EVENT *Event);
+static VOID RgClearContainedProcess(VOID);
 static BOOLEAN RgGateEvent(_In_ const RG_EVENT *Event, _Out_opt_ PULONG ErrorCode,
                            _Out_opt_ PULONG Decision);
 static BOOLEAN RgAcquireClientPort(_In_ LONG ExpectedMode);
@@ -228,6 +233,10 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
         return RgCompleteDenied(Data);
     }
 
+    if (RgIsContainedRequestor(Data) && RgCreateMayMutate(&event)) {
+        return RgCompleteDenied(Data);
+    }
+
     status = RgCreateCreatePostContext(Data, event.Sequence, &postContext);
     if (!NT_SUCCESS(status)) {
         return RgCompleteDenied(Data);
@@ -312,6 +321,10 @@ FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJE
         return RgCompleteDenied(Data);
     }
 
+    if (RgIsContainedRequestor(Data)) {
+        return RgCompleteDenied(Data);
+    }
+
     if (!RgGateEvent(&event, &gateError, NULL)) {
         UNREFERENCED_PARAMETER(gateError);
         return RgCompleteDenied(Data);
@@ -356,6 +369,10 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
     }
 
     if (InterlockedCompareExchange(&gGateActivated, 0, 0) == 0) {
+        return RgCompleteDenied(Data);
+    }
+
+    if (RgIsContainedRequestor(Data)) {
         return RgCompleteDenied(Data);
     }
 
@@ -1046,6 +1063,68 @@ static BOOLEAN RgEventIsInsideGateRoot(const RG_EVENT *Event)
     return RgEventPathMatchesGateRoot(Event);
 }
 
+static BOOLEAN RgIsContainedRequestor(PFLT_CALLBACK_DATA Data)
+{
+    PEPROCESS requestor;
+    BOOLEAN contained = FALSE;
+
+    requestor = FltGetRequestorProcess(Data);
+    if (requestor == NULL) {
+        return FALSE;
+    }
+
+    ExAcquireFastMutex(&gPortMutex);
+    contained = (gContainedProcess != NULL && gContainedProcess == requestor);
+    ExReleaseFastMutex(&gPortMutex);
+    return contained;
+}
+
+static BOOLEAN RgCreateMayMutate(const RG_EVENT *Event)
+{
+    ULONG disposition;
+    ULONG options;
+    ACCESS_MASK desiredAccess;
+    const ACCESS_MASK mutatingAccess =
+        FILE_WRITE_DATA |
+        FILE_APPEND_DATA |
+        FILE_WRITE_EA |
+        FILE_WRITE_ATTRIBUTES |
+        DELETE |
+        WRITE_DAC |
+        WRITE_OWNER |
+        GENERIC_WRITE |
+        GENERIC_ALL;
+
+    disposition = (Event->Flags & RG_CREATE_DISPOSITION_MASK) >> RG_CREATE_DISPOSITION_SHIFT;
+    options = Event->Flags & RG_CREATE_OPTIONS_MASK;
+    desiredAccess = (ACCESS_MASK)Event->Length;
+
+    if (FlagOn(options, FILE_DELETE_ON_CLOSE) || FlagOn(desiredAccess, mutatingAccess)) {
+        return TRUE;
+    }
+
+    return disposition == FILE_SUPERSEDE ||
+           disposition == FILE_CREATE ||
+           disposition == FILE_OPEN_IF ||
+           disposition == FILE_OVERWRITE ||
+           disposition == FILE_OVERWRITE_IF;
+}
+
+static VOID RgClearContainedProcess(VOID)
+{
+    PEPROCESS previous = NULL;
+
+    ExAcquireFastMutex(&gPortMutex);
+    previous = gContainedProcess;
+    gContainedProcess = NULL;
+    InterlockedExchange64(&gContainedProcessId, 0);
+    ExReleaseFastMutex(&gPortMutex);
+
+    if (previous != NULL) {
+        ObDereferenceObject(previous);
+    }
+}
+
 static BOOLEAN RgGateEvent(const RG_EVENT *Event, PULONG ErrorCode, PULONG Decision)
 {
     LARGE_INTEGER timeout;
@@ -1278,7 +1357,8 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
     }
 
     ExAcquireFastMutex(&gPortMutex);
-    if (gClientPort != NULL || InterlockedCompareExchange(&gUnloading, 0, 0) != 0) {
+    if (gClientPort != NULL || gContainedProcess != NULL ||
+        InterlockedCompareExchange(&gUnloading, 0, 0) != 0) {
         status = STATUS_DEVICE_BUSY;
     } else {
         if (InterlockedExchange(&gPortRundownCompleted, 0) != 0) {
@@ -1317,6 +1397,8 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
 {
     PRG_CONTROL_REQUEST request;
     PRG_CONTROL_REPLY reply;
+    PEPROCESS targetProcess = NULL;
+    ULONGLONG containedProcessId;
     NTSTATUS status = STATUS_SUCCESS;
 
     UNREFERENCED_PARAMETER(ConnectionCookie);
@@ -1341,30 +1423,71 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
         InterlockedCompareExchange(&gClientConnected, 0, 0) == 0 ||
         RgCurrentClientMode() != RgClientLabGate) {
         status = STATUS_REVISION_MISMATCH;
-    } else if (request->Command == RgControlQueryActivation) {
-        status = STATUS_SUCCESS;
+    } else if (request->Command == RgControlQueryActivation ||
+               request->Command == RgControlQueryContainment) {
+        if (request->TargetProcessId != 0) {
+            status = STATUS_INVALID_PARAMETER;
+        }
     } else if (request->Command == RgControlArmPreflight) {
-        if (InterlockedCompareExchange(&gGateActivated, 0, 0) != 0 ||
-            InterlockedCompareExchange(&gActivationHazard, 0, 0) != 0) {
+        if (request->TargetProcessId != 0) {
+            status = STATUS_INVALID_PARAMETER;
+        } else if (InterlockedCompareExchange(&gGateActivated, 0, 0) != 0 ||
+                   InterlockedCompareExchange(&gActivationHazard, 0, 0) != 0) {
             status = STATUS_DEVICE_BUSY;
         } else {
             InterlockedExchange(&gPreflightProbeArmed, 1);
             status = STATUS_SUCCESS;
         }
     } else if (request->Command == RgControlActivateGate) {
-        if (InterlockedCompareExchange(&gActivationHazard, 0, 0) != 0 ||
-            InterlockedCompareExchange(&gPreflightProbeArmed, 0, 0) != 0) {
+        if (request->TargetProcessId != 0) {
+            status = STATUS_INVALID_PARAMETER;
+        } else if (InterlockedCompareExchange(&gActivationHazard, 0, 0) != 0 ||
+                   InterlockedCompareExchange(&gPreflightProbeArmed, 0, 0) != 0) {
             status = STATUS_DEVICE_BUSY;
         } else {
             InterlockedExchange(&gGateActivated, 1);
             status = STATUS_SUCCESS;
         }
+    } else if (request->Command == RgControlActivateAndContainProcess) {
+        if (InterlockedCompareExchange(&gGateActivated, 0, 0) != 0 ||
+            InterlockedCompareExchange(&gActivationHazard, 0, 0) != 0 ||
+            InterlockedCompareExchange(&gPreflightProbeArmed, 0, 0) != 0) {
+            status = STATUS_DEVICE_BUSY;
+        } else if (request->TargetProcessId <= 4 ||
+                   request->TargetProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId, 0, 0) ||
+                   (ULONGLONG)(ULONG_PTR)request->TargetProcessId != request->TargetProcessId) {
+            status = STATUS_INVALID_PARAMETER;
+        } else {
+            status = PsLookupProcessByProcessId(
+                (HANDLE)(ULONG_PTR)request->TargetProcessId,
+                &targetProcess);
+            if (NT_SUCCESS(status)) {
+                ExAcquireFastMutex(&gPortMutex);
+                if (gContainedProcess != NULL || gClientPort == NULL) {
+                    status = STATUS_DEVICE_BUSY;
+                } else {
+                    gContainedProcess = targetProcess;
+                    targetProcess = NULL;
+                    InterlockedExchange64(&gContainedProcessId, (LONG64)request->TargetProcessId);
+                    InterlockedExchange(&gGateActivated, 1);
+                    status = STATUS_SUCCESS;
+                }
+                ExReleaseFastMutex(&gPortMutex);
+            }
+        }
     } else {
         status = STATUS_INVALID_PARAMETER;
     }
 
+    if (targetProcess != NULL) {
+        ObDereferenceObject(targetProcess);
+    }
+
+    containedProcessId = (ULONGLONG)InterlockedCompareExchange64(&gContainedProcessId, 0, 0);
     reply->Status = (ULONG)status;
     reply->GateActivated = (ULONG)InterlockedCompareExchange(&gGateActivated, 0, 0);
+    reply->ContainmentActive = containedProcessId != 0 ? 1u : 0u;
+    reply->ContainedProcessId = containedProcessId;
     *ReturnOutputBufferLength = sizeof(*reply);
     return STATUS_SUCCESS;
 }
@@ -1372,6 +1495,8 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
 static VOID RgDisconnect(PVOID ConnectionCookie)
 {
     UNREFERENCED_PARAMETER(ConnectionCookie);
+
+    RgClearContainedProcess();
 
     ExAcquireFastMutex(&gPortMutex);
     InterlockedExchange(&gClientConnected, 0);
@@ -1414,6 +1539,7 @@ NTSTATUS RgUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
     InterlockedExchange(&gUnloading, 1);
     InterlockedExchange(&gClientConnected, 0);
     InterlockedExchange(&gClientMode, 0);
+    RgClearContainedProcess();
 
     if (gServerPort != NULL) {
         FltCloseCommunicationPort(gServerPort);

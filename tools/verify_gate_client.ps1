@@ -38,7 +38,7 @@ foreach($required in @(
   'CreateGatePolicy.TryParseDisposition',
   '(ev.Flags >> 24) & 0xFF',
   'ev.Flags & 0x00FFFFFF',
-  'ProtocolVersion = 11',
+  'ProtocolVersion = 12',
   'CreatePreservationAction.CaptureExistingPreimage',
   'CreatePreservationAction.RecordOriginallyAbsent',
   'CreatePreservationAction.DenyUnsupported',
@@ -91,6 +91,11 @@ foreach($required in @(
   'DirectoriesHeld',
   'Native.Control',
   'RgControlCommand.ActivateGate',
+  'RgControlCommand.ActivateAndContainProcess',
+  '--contain-pid',
+  'TargetProcessId = containPid ?? 0',
+  'ContainmentActive',
+  'ContainedProcessId',
   'FilterSendMessage',
   'RgEventType.ActivationPreflight',
   'Activation refused:'
@@ -206,7 +211,7 @@ $preflightStart=$text.IndexOf('static class ActivationPreflight')
 $preflightEnd=$text.IndexOf('readonly record struct ActivationPreflightSummary',$preflightStart)
 if($preflightStart -lt 0 -or $preflightEnd -lt 0){throw 'ActivationPreflight implementation missing.'}
 $preflightBlock=$text.Substring($preflightStart,$preflightEnd-$preflightStart)
-foreach($required in @('Directory.EnumerateFiles','Directory.EnumerateDirectories','FileAttributes.ReparsePoint','Native.OpenPreflight','Native.OpenPreflightDirectory','ActivationPreflightStore','ActivationTopologyStore','FileIdentityStore.QueryHandleIdentity','RgEventType.ActivationPreflight','RgEventType.PagingWrite','RgEventType.WritableSection','heldHandles','RgControlCommand.ArmPreflight','RgControlCommand.ActivateGate','Native.Control')){
+foreach($required in @('Directory.EnumerateFiles','Directory.EnumerateDirectories','FileAttributes.ReparsePoint','Native.OpenPreflight','Native.OpenPreflightDirectory','ActivationPreflightStore','ActivationTopologyStore','FileIdentityStore.QueryHandleIdentity','RgEventType.ActivationPreflight','RgEventType.PagingWrite','RgEventType.WritableSection','heldHandles','RgControlCommand.ArmPreflight','RgControlCommand.ActivateGate','RgControlCommand.ActivateAndContainProcess','TargetProcessId = containPid ?? 0','Native.Control')){
   if($preflightBlock -notmatch [regex]::Escape($required)){throw "Activation preflight missing invariant: $required"}
 }
 $armInPreflight=$preflightBlock.IndexOf('RgControlCommand.ArmPreflight')
@@ -218,6 +223,17 @@ if($armInPreflight -lt 0 -or $openInPreflight -lt 0 -or $armInPreflight -gt $ope
 }
 if($activateInPreflight -lt 0 -or $disposeInPreflight -lt 0 -or $activateInPreflight -gt $disposeInPreflight){
   throw 'Activation must occur while share-read preflight handles are still held.'
+}
+
+$containActivation=$preflightBlock.IndexOf('RgControlCommand.ActivateAndContainProcess')
+$containPidBind=$preflightBlock.IndexOf('TargetProcessId = containPid ?? 0',$containActivation)
+$containReplyCheck=$preflightBlock.IndexOf('activationReply.ContainedProcessId != containPid.Value',$containPidBind)
+if($containActivation -lt 0 -or $containPidBind -lt 0 -or $containReplyCheck -lt 0 -or
+   $containActivation -gt $containPidBind -or $containPidBind -gt $containReplyCheck){
+  throw 'Explicit LAB containment must be armed atomically with activation and verified against the exact requested PID.'
+}
+if($preflightBlock -match '(?i)ReleaseContainment|ClearContainment'){
+  throw 'GateClient must not expose a runtime containment release/bypass command.'
 }
 
 $directoryOpenStart=$text.IndexOf('public static SafeFileHandle OpenPreflightDirectory(string path)')
@@ -238,6 +254,14 @@ if($rootOpen -lt 0 -or $directoryEnumeration -lt 0 -or $activateAfterTopology -l
   throw 'Protected root must be held before directory enumeration and remain held until kernel activation.'
 }
 if($preflightBlock -match 'Native\.Reply\('){throw 'Activation preflight events must remain no-reply evidence.'}
+
+$containOption=$text.IndexOf('case "--contain-pid"')
+$containRejectSystem=$text.IndexOf('parsedPid <= 4',$containOption)
+$containRejectSelf=$text.IndexOf('parsedPid == Environment.ProcessId',$containOption)
+$containPrepareReject=$text.IndexOf('--contain-pid cannot be combined with --prepare-root')
+if($containOption -lt 0 -or $containRejectSystem -lt 0 -or $containRejectSelf -lt 0 -or $containPrepareReject -lt 0){
+  throw 'LAB containment CLI must reject system/self PID and prepare-only combinations.'
+}
 
 $workerDispatch=$text.IndexOf('Task.Run(() => ProcessMessageAsync(header, ev))')
 $workerEvaluate=$text.IndexOf('GateDecision.EvaluateAsync(',$text.IndexOf('async Task ProcessMessageAsync'))
@@ -266,4 +290,4 @@ if($restartBlock -notmatch [regex]::Escape('PathPolicy.Under(intent.OriginalPath
   throw 'Restart reconciliation must remain scoped to the explicitly selected LAB root.'
 }
 
-Write-Host 'LAB gate client source check PASSED: protocol-v11 file+topology activation preflight, eager writable-open pre-image, no-reply section/paging evidence, bounded workers, durable identity/restart evidence, no destructive/process-control APIs.'
+Write-Host 'LAB gate client source check PASSED: protocol-v12 activation-bound containment, file+topology preflight, eager writable-open pre-image, no-reply section/paging evidence, bounded workers, durable identity/restart evidence, no destructive/process-control APIs.'

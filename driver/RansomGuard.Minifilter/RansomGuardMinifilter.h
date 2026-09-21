@@ -18,6 +18,7 @@ typedef struct _RG_WORK_ITEM {
 typedef struct _RG_POST_CONTEXT {
     ULONGLONG RequestSequence;
     ULONG GateDecision;
+    ULONG ActivationPreflight;
     PFLT_FILE_NAME_INFORMATION PreDestinationNameInfo;
     PFLT_FILE_NAME_INFORMATION PreCreateNameInfo;
 } RG_POST_CONTEXT, *PRG_POST_CONTEXT;

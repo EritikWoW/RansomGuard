@@ -54,6 +54,7 @@ public partial class MainWindow : Window
             Dispatcher.BeginInvoke(new Action(UpdateOverviewLayout));
     }
     private void MainContent_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateOverviewLayout();
+    internal void ApplyResponsiveLayoutForTest() => UpdateOverviewLayout();
     private void UpdateOverviewLayout()
     {
         // Preserve the reference's four-card and 2x2 composition at desktop sizes.

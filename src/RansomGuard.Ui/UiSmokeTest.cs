@@ -78,6 +78,8 @@ internal static class UiSmokeTest
                     window.Model.SelectedPage=page;
                     await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
                     window.UpdateLayout();
+                    window.ApplyResponsiveLayoutForTest();
+                    window.UpdateLayout();
                     refinements[$"{language}-{theme}-{page}"]=CheckUiRefinement(window,page);
                     if(page=="overview") layouts[$"{language}-{theme}-reference-1600"]=OverviewLayout(window,true);
                     Save(window,Path.Combine(directory,$"{theme}-{page}.png"));
@@ -121,11 +123,15 @@ internal static class UiSmokeTest
                 window.Model.TextScale=1.2; window.Model.SelectedPage="overview";
                 await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
                 window.UpdateLayout();
+                window.ApplyResponsiveLayoutForTest();
+                window.UpdateLayout();
                 Save(window,Path.Combine(directory,$"{theme}-compact-large-text.png"));
                 captures.Add($"{language}/{theme}-compact-large-text.png");
                 window.Model.TextScale=1; window.Width=1335; window.Height=902;
                 window.Model.SelectedPage="overview";
                 await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+                window.UpdateLayout();
+                window.ApplyResponsiveLayoutForTest();
                 window.UpdateLayout();
                 layouts[$"{language}-{theme}-user-1335"]=OverviewLayout(window,true);
                 Save(window,Path.Combine(directory,$"{theme}-overview-1335.png"));

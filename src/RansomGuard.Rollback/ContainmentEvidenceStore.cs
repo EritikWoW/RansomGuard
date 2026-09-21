@@ -172,6 +172,22 @@ public sealed class ContainmentEvidenceStore
 
                     throw new InvalidDataException("Conflicting duplicate containment evidence.");
                 }
+
+                if (phase == ContainmentEvidencePhase.KernelActive)
+                {
+                    var request = _records.SingleOrDefault(x =>
+                        x.KernelSequence == kernelSequence &&
+                        x.Phase == ContainmentEvidencePhase.Requested);
+                    if (request is null ||
+                        request.ProcessId != processId ||
+                        request.ProcessCreationFileTimeUtc != processCreationFileTimeUtc ||
+                        request.EventType != eventType ||
+                        !request.Path.Equals(full, StringComparison.OrdinalIgnoreCase) ||
+                        request.PreservationDecision != preservationDecision ||
+                        request.EvidenceCount != evidenceCount ||
+                        request.DistinctPathCount != distinctPathCount)
+                        throw new InvalidDataException("Containment kernel-active evidence is not linked to the exact durable request.");
+                }
             }
 
             var sequence = checked(++_nextSequence);

@@ -135,11 +135,12 @@ static FLT_PREOP_CALLBACK_STATUS RgCompleteDenied(PFLT_CALLBACK_DATA Data)
 FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjects, PVOID *CompletionContext)
 {
     RG_EVENT event;
+    PRG_POST_CONTEXT postContext = NULL;
     NTSTATUS status;
     LONG mode;
     ULONG gateError = 0;
 
-    UNREFERENCED_PARAMETER(CompletionContext);
+    *CompletionContext = NULL;
     if (!RgShouldObserve(Data)) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
@@ -160,12 +161,19 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    if (!RgGateEvent(&event, &gateError)) {
-        UNREFERENCED_PARAMETER(gateError);
+    status = RgCreateCreatePostContext(Data, event.Sequence, &postContext);
+    if (!NT_SUCCESS(status)) {
         return RgCompleteDenied(Data);
     }
 
-    return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    if (!RgGateEvent(&event, &gateError)) {
+        UNREFERENCED_PARAMETER(gateError);
+        RgFreePostContext(postContext);
+        return RgCompleteDenied(Data);
+    }
+
+    *CompletionContext = postContext;
+    return FLT_PREOP_SUCCESS_WITH_CALLBACK;
 }
 
 FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjects, PVOID *CompletionContext)

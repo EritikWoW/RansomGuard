@@ -5,9 +5,11 @@ $program=Join-Path $root 'src\RansomGuard.Service\Program.cs'
 $rangeStore=Join-Path $root 'src\RansomGuard.Rollback\RangeRollbackStore.cs'
 $createStore=Join-Path $root 'src\RansomGuard.Rollback\CreateRollbackStore.cs'
 $createPolicy=Join-Path $root 'src\RansomGuard.Rollback\CreateGatePolicy.cs'
+$identityStore=Join-Path $root 'src\RansomGuard.Rollback\FileIdentityStore.cs'
 if(-not(Test-Path -LiteralPath $rangeStore)){throw 'RangeRollbackStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $createStore)){throw 'CreateRollbackStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $createPolicy)){throw 'CreateGatePolicy.cs missing.'}
+if(-not(Test-Path -LiteralPath $identityStore)){throw 'FileIdentityStore.cs missing.'}
 $rangeText=Get-Content -LiteralPath $rangeStore -Raw
 foreach($required in @(
     'CaptureWritePreimageAsync',
@@ -21,7 +23,9 @@ foreach($required in @(
     'Range rollback block SHA-256 mismatch',
     'Unjournaled range rollback object found',
     'Incomplete range rollback temp artifact found',
-    'Range rollback block does not match the original file geometry'
+    'Range rollback block does not match the original file geometry',
+    'Range pre-image source handle identity does not match the expected incident identity',
+    'FileIdentityStore.QueryHandleIdentity(input.SafeFileHandle)'
 )){
     if($rangeText -notmatch [regex]::Escape($required)){throw "Range rollback source gate missing invariant: $required"}
 }
@@ -58,6 +62,20 @@ foreach($required in @(
     if($policyText -notmatch [regex]::Escape($required)){throw "Create gate policy missing invariant: $required"}
 }
 
+$identityText=Get-Content -LiteralPath $identityStore -Raw
+foreach($required in @(
+    'GetFileInformationByHandleEx',
+    'FileIdInfo',
+    'VolumeSerialHex',
+    'FileIdHex',
+    'identity-journal.jsonl',
+    'File identity changed for a path already observed in this incident',
+    'FileOptions.WriteThrough',
+    'Flush(true)'
+)){
+    if($identityText -notmatch [regex]::Escape($required)){throw "File identity source gate missing invariant: $required"}
+}
+
 if(-not(Test-Path -LiteralPath $store)){throw 'RollbackStore.cs missing.'}
 $text=Get-Content -LiteralPath $store -Raw
 foreach($required in @(
@@ -72,7 +90,9 @@ foreach($required in @(
     'Recovery output already exists',
     'Committed rollback object SHA-256 mismatch',
     'Unjournaled rollback object found',
-    'Incomplete rollback temp artifact found'
+    'Incomplete rollback temp artifact found',
+    'Full pre-image source handle identity does not match the expected incident identity',
+    'FileIdentityStore.QueryHandleIdentity(input.SafeFileHandle)'
 )){
     if($text -notmatch [regex]::Escape($required)){throw "Rollback source gate missing invariant: $required"}
 }
@@ -87,5 +107,6 @@ if($gate -notmatch 'repository\.VerifyAll\(\)'){throw 'LAB gate must validate al
 $repository=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Rollback\RollbackRepository.cs') -Raw
 if($repository -notmatch 'new RangeRollbackStore\(rangeRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested write-cow stores.'}
 if($repository -notmatch 'new CreateRollbackStore\(createRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested create-state stores.'}
-Write-Host 'Rollback source gate PASSED: full-file, range-COW and originally-absent create journals, hashes, crash-artifact rejection, write-through commits, first-state semantics, copy-only restore.'
+if($repository -notmatch 'new FileIdentityStore\(identityRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested identity-state stores.'}
+Write-Host 'Rollback source gate PASSED: full-file, range-COW, create-baseline and durable file-identity journals, hashes, crash-artifact rejection, write-through commits, first-state semantics, copy-only restore.'
 Write-Host 'Normal service capture remains disabled; v0.7.3 keeps blocking preservation inside the explicit LAB gate only.'

@@ -265,6 +265,80 @@ try
     catch (InvalidDataException) { nestedCreateRejected = true; }
     Check(nestedCreateRejected, "repository verification includes nested create-state journal");
 
+    // Durable Windows identity distinguishes path aliases from path replacement.
+    var identityRoot = Path.Combine(root, "identity-state");
+    var identityStore = new FileIdentityStore(identityRoot);
+    var identityPath = Path.Combine(sourceDir, "identity-original.bin");
+    var identityMoved = Path.Combine(sourceDir, "identity-moved.bin");
+    await File.WriteAllTextAsync(identityPath, "identity-original");
+    var identityFirst = await identityStore.CaptureOrVerifyAsync(identityPath);
+    Check(identityFirst.Identity.FileIdHex.Length == 32, "file identity captures 128-bit file id");
+    Check(identityFirst.Identity.VolumeSerialHex.Length == 16, "file identity captures volume serial");
+    var identityAgain = await identityStore.CaptureOrVerifyAsync(identityPath);
+    Check(identityAgain.RecordSha256 == identityFirst.RecordSha256,
+        "same path and same file identity reuses the committed baseline");
+
+    File.Move(identityPath, identityMoved);
+    var identityAlias = await identityStore.CaptureOrVerifyAsync(identityMoved);
+    Check(identityAlias.Identity == identityFirst.Identity,
+        "rename keeps the same durable file identity");
+    Check(identityStore.PathsFor(identityFirst.Identity).Length == 2,
+        "identity journal can associate multiple observed paths with one file");
+
+    await File.WriteAllTextAsync(identityPath, "replacement-at-old-path");
+    var identityReplacementRejected = false;
+    try { _ = await identityStore.CaptureOrVerifyAsync(identityPath); }
+    catch (InvalidDataException) { identityReplacementRejected = true; }
+    Check(identityReplacementRejected,
+        "same path changing to a different file identity is rejected");
+
+    var handleBoundFull = new RollbackStore(Path.Combine(root, "identity-full-preimage"));
+    var fullHandleMismatchRejected = false;
+    try
+    {
+        _ = await handleBoundFull.CapturePreimageAsync(identityPath, RollbackMutationKind.Write,
+            identityFirst.Identity);
+    }
+    catch (InvalidDataException) { fullHandleMismatchRejected = true; }
+    Check(fullHandleMismatchRejected,
+        "full pre-image verifies expected identity on the exact source handle");
+
+    var handleBoundRange = new RangeRollbackStore(Path.Combine(root, "identity-range-preimage"));
+    var rangeHandleMismatchRejected = false;
+    try
+    {
+        await handleBoundRange.CaptureWritePreimageAsync(identityPath, 0, 1, identityFirst.Identity);
+    }
+    catch (InvalidDataException) { rangeHandleMismatchRejected = true; }
+    Check(rangeHandleMismatchRejected,
+        "range COW verifies expected identity on the exact source handle");
+
+    identityStore.VerifyAll();
+    Check(true, "file identity hash-chain journal verifies");
+
+    var malformedIdentityRoot = Path.Combine(root, "malformed-identity-state");
+    Directory.CreateDirectory(malformedIdentityRoot);
+    await File.WriteAllTextAsync(Path.Combine(malformedIdentityRoot, "identity-journal.jsonl"),
+        "{\"sequence\":1,\"capturedUtc\":\"2026-09-21T00:00:00Z\",\"originalPath\":null,\"volumeSerialHex\":null,\"fileIdHex\":null,\"previousRecordSha256\":null,\"recordSha256\":null}\n");
+    var malformedIdentityRejected = false;
+    try { _ = new FileIdentityStore(malformedIdentityRoot); }
+    catch (InvalidDataException) { malformedIdentityRejected = true; }
+    Check(malformedIdentityRejected, "malformed/null file identity journal fields are rejected deterministically");
+
+    var nestedIdentityRepo = new RollbackRepository(Path.Combine(root, "nested-identity-repo"));
+    var nestedIdentitySession = nestedIdentityRepo.CreateSession("nested_identity");
+    var nestedIdentityState = new FileIdentityStore(Path.Combine(nestedIdentitySession.Root, "identity-state"));
+    var nestedIdentityPath = Path.Combine(sourceDir, "nested-identity.bin");
+    await File.WriteAllTextAsync(nestedIdentityPath, "nested identity");
+    await nestedIdentityState.CaptureOrVerifyAsync(nestedIdentityPath);
+    var nestedIdentityJournal = await File.ReadAllBytesAsync(nestedIdentityState.JournalPath);
+    nestedIdentityJournal[^2] ^= 1;
+    await File.WriteAllBytesAsync(nestedIdentityState.JournalPath, nestedIdentityJournal);
+    var nestedIdentityRejected = false;
+    try { nestedIdentityRepo.VerifyAll(); }
+    catch (InvalidDataException) { nestedIdentityRejected = true; }
+    Check(nestedIdentityRejected, "repository verification includes nested identity-state journal");
+
     Console.WriteLine($"All {passed} rollback tests passed. These are file-store tests, not minifilter integration tests.");
     return 0;
 }

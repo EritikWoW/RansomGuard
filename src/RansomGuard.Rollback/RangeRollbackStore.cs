@@ -54,8 +54,16 @@ public sealed class RangeRollbackStore
     /// Durably captures the original blocks intersecting a pending write.
     /// The caller may allow the write only after this task completes successfully.
     /// </summary>
-    public async Task CaptureWritePreimageAsync(string path, long byteOffset, uint length,
-        CancellationToken cancellationToken = default)
+    public Task CaptureWritePreimageAsync(string path, long byteOffset, uint length,
+        CancellationToken cancellationToken = default) =>
+        CaptureWritePreimageCoreAsync(path, byteOffset, length, null, cancellationToken);
+
+    public Task CaptureWritePreimageAsync(string path, long byteOffset, uint length,
+        DurableFileIdentity expectedIdentity, CancellationToken cancellationToken = default) =>
+        CaptureWritePreimageCoreAsync(path, byteOffset, length, expectedIdentity, cancellationToken);
+
+    private async Task CaptureWritePreimageCoreAsync(string path, long byteOffset, uint length,
+        DurableFileIdentity? expectedIdentity, CancellationToken cancellationToken)
     {
         if (length == 0) return;
         if (byteOffset < 0) throw new ArgumentOutOfRangeException(nameof(byteOffset), "Special/negative write offsets are not safe for range COW.");
@@ -68,8 +76,17 @@ public sealed class RangeRollbackStore
         await _appendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var info = new FileInfo(full);
-            var baseline = EnsureBaselineCommitted(full, info.Length);
+            using var input = new FileStream(full, FileMode.Open, FileAccess.Read,
+                FileShare.Read | FileShare.Write | FileShare.Delete, _blockSize,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            if (expectedIdentity is not null)
+            {
+                var actualIdentity = FileIdentityStore.QueryHandleIdentity(input.SafeFileHandle);
+                if (actualIdentity != expectedIdentity)
+                    throw new InvalidDataException("Range pre-image source handle identity does not match the expected incident identity.");
+            }
+
+            var baseline = EnsureBaselineCommitted(full, input.Length);
             var writeEnd = checked(byteOffset + (long)length);
             var originalEnd = Math.Min(writeEnd, baseline.OriginalLength);
             if (byteOffset >= originalEnd)
@@ -79,10 +96,6 @@ public sealed class RangeRollbackStore
             }
 
             var firstBlock = (byteOffset / _blockSize) * _blockSize;
-            using var input = new FileStream(full, FileMode.Open, FileAccess.Read,
-                FileShare.Read | FileShare.Write | FileShare.Delete, _blockSize,
-                FileOptions.Asynchronous | FileOptions.SequentialScan);
-
             for (var blockOffset = firstBlock; blockOffset < originalEnd; blockOffset = checked(blockOffset + _blockSize))
             {
                 cancellationToken.ThrowIfCancellationRequested();

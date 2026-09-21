@@ -24,9 +24,11 @@ Rename, delete and truncate-class operations remain on a conservative full-file 
 An originally-absent path is remembered for the whole incident so later writes do not create a false pre-image
 from data that did not exist before the incident.
 
-The gate is intentionally not enabled in the normal bundle and is not production-safe yet. CREATE existence
-classification is still path-based; durable volume/file identity and post-create reconciliation remain required.
+The gate is intentionally not enabled in the normal bundle and is not production-safe yet. Existing-file
+preservation is now additionally bound to a durable Windows `FILE_ID_INFO` identity journal
+(volume serial + 128-bit file ID), so a path that changes to a different file during one incident is rejected.
+CREATE existence classification itself is still path-based; post-create/kernel identity reconciliation remains required.
 
-The next core milestones are identity-safe rename/create reconciliation, durable volume/file identity,
-bounded concurrent and crash-reconciled gating, containment, process-state capture, adaptive crypto analysis,
-and verified recovery orchestration.
+The next core milestones are identity-safe rename/create reconciliation, kernel binding of completed operations
+to durable file identity, bounded concurrent and crash-reconciled gating, containment, process-state capture,
+adaptive crypto analysis, and verified recovery orchestration.

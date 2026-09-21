@@ -24,6 +24,7 @@ var sessionId = options.SessionId ?? $"gate-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{G
 var store = repository.CreateSession(sessionId);
 var writeStore = new RangeRollbackStore(Path.Combine(store.Root, "write-cow"));
 var createStore = new CreateRollbackStore(Path.Combine(store.Root, "create-state"));
+var identityStore = new FileIdentityStore(Path.Combine(store.Root, "identity-state"));
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
 Console.WriteLine("RansomGuard LAB pre-write gate v0.7.3.0");
@@ -70,7 +71,7 @@ try
 
         var header = Marshal.PtrToStructure<FilterMessageHeader>(buffer);
         var ev = Marshal.PtrToStructure<RgEvent>(IntPtr.Add(buffer, headerSize));
-        var reply = await GateDecision.EvaluateAsync(ev, resolver, options.Root, store, writeStore, createStore, cts.Token);
+        var reply = await GateDecision.EvaluateAsync(ev, resolver, options.Root, store, writeStore, createStore, identityStore, cts.Token);
         Native.Reply(port, header.MessageId, reply);
 
         var path = resolver.Resolve(ev.Path) ?? ev.Path ?? "<unresolved>";
@@ -86,7 +87,7 @@ static class GateDecision
 {
     public static async Task<RgGateReply> EvaluateAsync(RgEvent ev, DevicePathResolver resolver, string root,
         RollbackStore store, RangeRollbackStore writeStore, CreateRollbackStore createStore,
-        CancellationToken cancellationToken)
+        FileIdentityStore identityStore, CancellationToken cancellationToken)
     {
         try
         {
@@ -101,7 +102,7 @@ static class GateDecision
 
             var eventType = (RgEventType)ev.EventType;
             if (eventType == RgEventType.Create)
-                return await EvaluateCreateAsync(ev, path, store, createStore, cancellationToken).ConfigureAwait(false);
+                return await EvaluateCreateAsync(ev, path, store, createStore, identityStore, cancellationToken).ConfigureAwait(false);
 
             var state = PathProbe.Get(path);
             if (state != CreateTargetState.File)
@@ -112,11 +113,15 @@ static class GateDecision
             if (createStore.WasOriginallyAbsent(path))
                 return Allow(ev.Sequence, RgGateDecision.BaselineCommitted);
 
+            var identityBaseline = await identityStore.CaptureOrVerifyAsync(path, cancellationToken)
+                .ConfigureAwait(false);
+
             if (eventType == RgEventType.Write)
             {
                 if (ev.ByteOffset < 0)
                     return Deny(ev.Sequence, 6);
-                await writeStore.CaptureWritePreimageAsync(path, ev.ByteOffset, ev.Length, cancellationToken)
+                await writeStore.CaptureWritePreimageAsync(path, ev.ByteOffset, ev.Length,
+                        identityBaseline.Identity, cancellationToken)
                     .ConfigureAwait(false);
             }
             else
@@ -128,7 +133,8 @@ static class GateDecision
                     RgEventType.Truncate => RollbackMutationKind.Write,
                     _ => throw new InvalidOperationException("Unsupported gate event type.")
                 };
-                _ = await store.CapturePreimageAsync(path, mutation, cancellationToken).ConfigureAwait(false);
+                _ = await store.CapturePreimageAsync(path, mutation, identityBaseline.Identity, cancellationToken)
+                    .ConfigureAwait(false);
             }
 
             return Allow(ev.Sequence, RgGateDecision.SnapshotCommitted);
@@ -145,7 +151,8 @@ static class GateDecision
     }
 
     private static async Task<RgGateReply> EvaluateCreateAsync(RgEvent ev, string path,
-        RollbackStore store, CreateRollbackStore createStore, CancellationToken cancellationToken)
+        RollbackStore store, CreateRollbackStore createStore, FileIdentityStore identityStore,
+        CancellationToken cancellationToken)
     {
         var rawDisposition = (ev.Flags >> 24) & 0xFF;
         if (!CreateGatePolicy.TryParseDisposition(rawDisposition, out var disposition))
@@ -161,7 +168,10 @@ static class GateDecision
         switch (action)
         {
             case CreatePreservationAction.CaptureExistingPreimage:
-                _ = await store.CapturePreimageAsync(path, RollbackMutationKind.Create, cancellationToken)
+                var identityBaseline = await identityStore.CaptureOrVerifyAsync(path, cancellationToken)
+                    .ConfigureAwait(false);
+                _ = await store.CapturePreimageAsync(path, RollbackMutationKind.Create,
+                        identityBaseline.Identity, cancellationToken)
                     .ConfigureAwait(false);
                 return Allow(ev.Sequence, RgGateDecision.SnapshotCommitted);
 

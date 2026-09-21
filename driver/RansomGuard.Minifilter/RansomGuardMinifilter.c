@@ -590,9 +590,17 @@ static BOOLEAN RgGateEvent(const RG_EVENT *Event, PULONG ErrorCode)
         return FALSE;
     }
 
+    if (Event->EventType == RgEventCreateReconcile) {
+        return reply.Decision == RgGateReconciled;
+    }
+    if (Event->EventType == RgEventCreate) {
+        return reply.Decision == RgGateSnapshotCommitted ||
+               reply.Decision == RgGateBaselineCommitted ||
+               reply.Decision == RgGateNoPreservationRequired;
+    }
+
     allow = (reply.Decision == RgGateSnapshotCommitted ||
-             reply.Decision == RgGateBaselineCommitted ||
-             reply.Decision == RgGateNoPreservationRequired);
+             reply.Decision == RgGateBaselineCommitted);
     return allow;
 }
 
@@ -707,6 +715,11 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
     ExAcquireFastMutex(&gPortMutex);
     if (gClientPort != NULL || InterlockedCompareExchange(&gUnloading, 0, 0) != 0) {
         status = STATUS_DEVICE_BUSY;
+    } else if (context->ClientMode == RgClientLabGate &&
+               InterlockedCompareExchange(&gGateAmbiguous, 0, 0) != 0) {
+        // A successful CREATE could not be reconciled. Require driver unload/reload before another
+        // blocking LAB session so no later process can silently continue on ambiguous identity state.
+        status = STATUS_DATA_ERROR;
     } else {
         RtlZeroMemory(gGateRoot, sizeof(gGateRoot));
         gGateRootLengthBytes = 0;

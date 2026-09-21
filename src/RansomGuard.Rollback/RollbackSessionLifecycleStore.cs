@@ -167,6 +167,11 @@ public sealed class RollbackSessionLifecycleStore
         Directory.CreateDirectory(_root);
         RejectReparse(_root);
         ValidateTransition(eventType);
+        lock (_records)
+        {
+            if (_records.Count != 0 && occurredUtc.ToUniversalTime() < _records[^1].OccurredUtc)
+                throw new InvalidOperationException("Rollback session lifecycle timestamps must be monotonic.");
+        }
 
         var sequence = checked(++_nextSequence);
         var payload = new RollbackSessionLifecyclePayload(
@@ -315,8 +320,12 @@ public sealed class RollbackSessionLifecycleStore
         var createdCount = 0;
         var terminalCount = 0;
         var held = false;
+        DateTime? previousUtc = null;
         foreach (var record in records)
         {
+            if (previousUtc is not null && record.OccurredUtc < previousUtc.Value)
+                throw new InvalidDataException("Rollback session lifecycle timestamps are not monotonic.");
+            previousUtc = record.OccurredUtc;
             if (record.EventType == RollbackSessionLifecycleEventType.Created)
             {
                 createdCount++;

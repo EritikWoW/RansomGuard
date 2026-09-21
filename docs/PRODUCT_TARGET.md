@@ -57,6 +57,8 @@ Protocol v11 adds non-blocking visibility for paging writes associated with stre
 
 0.7.17 adds bounded rollback storage admission to the LAB gate. Every session measures its already committed bytes and combines them with concurrent in-flight reservations plus current filesystem free space. The default limit is 8192 MiB per session with 2048 MiB left free on the rollback-store volume. Preservation/evidence writers reserve estimated growth before commit; quota/free-space refusal is fail-closed for blocking destructive I/O. Repeated full/range/absence evidence is recognized so already committed preservation is not charged again.
 
-The next core milestones are broader NTFS/ReFS runtime/fault-injection coverage, retention/cleanup policy for completed rollback sessions, directory-topology rollback semantics beyond startup handle exclusion, deeper crash recovery for requests interrupted before authoritative kernel completion delivery,
+0.7.18 adds explicit retention semantics for completed rollback sessions. GateClient records a durable lifecycle journal and only cleanly closed sessions can proceed. A repository-level release must reference the exact current recovery PlanId; any new evidence makes that release stale. The retention planner also requires no pending CREATE/RENAME transactions, no blocked recovery actions and a minimum age. LAB purge is single-session, typed-confirmed and quarantine-first with a durable Intent/Quarantined/Completed audit trail. Legacy, unclean, unresolved or unreleased sessions remain non-purgeable.
+
+The next core milestones are broader NTFS/ReFS runtime/fault-injection coverage, incomplete-quarantine recovery/cleanup, directory-topology rollback semantics beyond startup handle exclusion, deeper crash recovery for requests interrupted before authoritative kernel completion delivery,
 containment, process-state capture,
-adaptive crypto analysis, and production recovery UI/orchestration across rollback plus crypto evidence.
+adaptive crypto analysis, and production recovery/retention UI orchestration across rollback plus crypto evidence.

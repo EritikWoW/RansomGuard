@@ -1373,6 +1373,21 @@ try
     // Retention lifecycle and cleanup must never select Active/Faulted/Held/pending sessions.
     var retentionRepoRoot = Path.Combine(root, "retention-repo");
     var retentionRepo = new RollbackRepository(retentionRepoRoot);
+    var maintenanceLeaseConflictRejected = false;
+    using (var maintenanceLease = RollbackMaintenanceLease.Acquire(retentionRepoRoot))
+    {
+        try
+        {
+            using var secondMaintenanceLease = RollbackMaintenanceLease.Acquire(retentionRepoRoot);
+        }
+        catch (IOException) { maintenanceLeaseConflictRejected = true; }
+    }
+    using (var reacquiredMaintenanceLease = RollbackMaintenanceLease.Acquire(retentionRepoRoot))
+    {
+        Check(maintenanceLeaseConflictRejected,
+            "rollback maintenance lease serializes retention and hold changes");
+    }
+
     var retentionSource = Path.Combine(root, "retention-source");
     Directory.CreateDirectory(retentionSource);
     var retentionNow = DateTime.UtcNow;

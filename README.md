@@ -46,8 +46,10 @@ destination gets its own identity-bound full pre-image; a missing destination ge
 a hash-chained rename intent records source identity, destination state, flags and exact pre-operation names. Cross-root,
 ambiguous, directory-topology and same-file-alias cases fail closed. After the filesystem completes the rename, the
 minifilter reconciles the result on a safe post-operation path, applies `FltGetTunneledName` for successful operations,
-and queries `FileIdInformation` from the actual renamed kernel file object before sending a correlated `RenameResult`.
-User mode durably records the final tunneled name and 128-bit file identity when available, with explicit name-only,
+and, when the safe post-operation callback is at PASSIVE_LEVEL with special kernel APCs enabled, queries
+`FileIdInformation` from the actual renamed kernel file object before sending a correlated `RenameResult`.
+If that API contract is not satisfied, identity is explicitly unresolved rather than queried unsafely. User mode
+durably records the final tunneled name and 128-bit file identity when available, with explicit name-only,
 identity-only or fully unresolved success states. A post-op identity that differs from the pre-op source identity is
 rejected. If reconciliation cannot be delivered, the intent remains pending instead of being treated as completed.
 

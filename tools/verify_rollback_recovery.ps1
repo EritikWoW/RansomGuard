@@ -108,10 +108,10 @@ foreach($required in @(
 )){
     if($buildText -notmatch [regex]::Escape($required)){throw "Recovery LAB packaging invariant missing: $required"}
 }
-$publishPos=$buildText.IndexOf("publish',$rollbackRecovery")
-$labPos=$buildText.IndexOf('if($IncludeLab){')
-if($publishPos -lt 0 -or $labPos -lt 0 -or $publishPos -lt $labPos){
-    throw 'Rollback recovery CLI must be published only inside the Engineering LAB block.'
+$publishPos=$buildText.IndexOf("publish',`$rollbackRecovery")
+$labPublishPos=$buildText.IndexOf("`$rollbackRecoveryDir=Join-Path `$labRelease 'RollbackRecovery'")
+if($publishPos -lt 0 -or $labPublishPos -lt 0 -or $publishPos -lt $labPublishPos){
+    throw 'Rollback recovery CLI must be published only inside the Engineering LAB packaging block.'
 }
 
 $launcherText=Get-Content -LiteralPath $launcher -Raw

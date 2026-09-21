@@ -1377,18 +1377,14 @@ try
     Directory.CreateDirectory(retentionSource);
     var retentionNow = DateTime.UtcNow;
 
-    var oldSession = retentionRepo.CreateSession("old_completed");
-    var oldSource = Path.Combine(retentionSource, "old.bin");
-    await File.WriteAllBytesAsync(oldSource, new byte[16 * 1024]);
-    _ = await oldSession.CapturePreimageAsync(oldSource, RollbackMutationKind.Delete);
+    var oldSession = retentionRepo.CreateSession(
+        "old_completed", retentionNow.AddDays(-41));
     var oldLifecycle = new RollbackSessionLifecycleStore(oldSession.Root);
     _ = await oldLifecycle.MarkCompletedAtAsync(
         "test-old-completed", retentionNow.AddDays(-40));
 
-    var heldSession = retentionRepo.CreateSession("held_completed");
-    var heldSource = Path.Combine(retentionSource, "held.bin");
-    await File.WriteAllBytesAsync(heldSource, new byte[8 * 1024]);
-    _ = await heldSession.CapturePreimageAsync(heldSource, RollbackMutationKind.Delete);
+    var heldSession = retentionRepo.CreateSession(
+        "held_completed", retentionNow.AddDays(-46));
     var heldLifecycle = new RollbackSessionLifecycleStore(heldSession.Root);
     _ = await heldLifecycle.MarkCompletedAtAsync(
         "test-held-completed", retentionNow.AddDays(-45));
@@ -1417,8 +1413,8 @@ try
         string.Empty,
         null);
     var pendingLifecycle = new RollbackSessionLifecycleStore(pendingSession.Root);
-    _ = await pendingLifecycle.MarkCompletedAtAsync(
-        "synthetic-invalid-completed", retentionNow.AddDays(-50));
+    _ = await pendingLifecycle.MarkCompletedAsync(
+        "synthetic-invalid-completed");
 
     var retentionPlanHeld = RollbackRetentionPlanner.Build(retentionRepoRoot);
     Check(retentionPlanHeld.Actions.Any(x =>
@@ -1479,12 +1475,11 @@ try
     var capacityRepo = new RollbackRepository(capacityRepoRoot);
     for (var n = 0; n < 2; n++)
     {
-        var session = capacityRepo.CreateSession($"capacity_{n}");
-        var path = Path.Combine(retentionSource, $"capacity-{n}.bin");
-        await File.WriteAllBytesAsync(path, new byte[12 * 1024]);
-        _ = await session.CapturePreimageAsync(path, RollbackMutationKind.Delete);
+        var completedAt = retentionNow.AddDays(-2 - n);
+        var session = capacityRepo.CreateSession(
+            $"capacity_{n}", completedAt.AddHours(-1));
         _ = await new RollbackSessionLifecycleStore(session.Root).MarkCompletedAtAsync(
-            "capacity-test", retentionNow.AddDays(-2 - n));
+            "capacity-test", completedAt);
     }
     var capacityPlan = RollbackRetentionPlanner.Build(
         capacityRepoRoot,
@@ -1501,11 +1496,8 @@ try
     // Incomplete purge must resume safely from Retired after a crash between move and Quarantined receipt.
     var resumeRepoRoot = Path.Combine(root, "retention-resume-repo");
     var resumeRepo = new RollbackRepository(resumeRepoRoot);
-    var resumeSession = resumeRepo.CreateSession("resume_case");
-    var resumeSource = Path.Combine(retentionSource, "resume.bin");
-    await File.WriteAllBytesAsync(resumeSource, new byte[4096]);
-    _ = await resumeSession.CapturePreimageAsync(
-        resumeSource, RollbackMutationKind.Delete);
+    var resumeSession = resumeRepo.CreateSession(
+        "resume_case", retentionNow.AddDays(-61));
     _ = await new RollbackSessionLifecycleStore(resumeSession.Root)
         .MarkCompletedAtAsync("resume-test", retentionNow.AddDays(-60));
 

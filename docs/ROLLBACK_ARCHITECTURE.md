@@ -203,6 +203,20 @@ For RENAME, source identity found at the destination while the source name is ab
 
 Restart evidence is deliberately **not** a CREATE/RENAME completion. The original completion journals remain authoritative only when populated by the correlated kernel post-operation event. Repeated identical restart observations are idempotent.
 
+## Writable-open pre-preservation
+
+0.7.11.0 extends CREATE policy for existing files. If the requested DesiredAccess contains FILE_WRITE_DATA, FILE_APPEND_DATA or GENERIC_WRITE, the LAB gate treats the open as preservation-sensitive even when the CreateDisposition itself is non-destructive.
+
+Ordering is:
+
+1. resolve the existing file inside the explicit LAB root;
+2. bind its current FILE_ID_INFO;
+3. commit the full-file pre-image;
+4. commit the CREATE intent including DesiredAccess;
+5. only then return SnapshotCommitted and allow CREATE to finish.
+
+This is intentionally conservative. It establishes a durable pre-mutation baseline before a write-capable handle can later be used for writable memory mapping. Read-only opens still avoid eager full-file capture. Incident-created paths remain governed by their originally-absent baseline and never acquire a synthetic pre-incident image.
+
 ## Paging-write visibility
 
 0.7.11.0 removes the registration-level `SKIP_PAGING_IO` blind spot without turning paging I/O into a synchronous user-mode gate.

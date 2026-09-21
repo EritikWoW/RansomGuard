@@ -1,4 +1,4 @@
-# RansomGuard 0.7.3.0 - CREATE-aware preservation milestone
+# RansomGuard 0.7.4.0 - rename-destination preservation milestone
 
 RansomGuard is moving from detection-only telemetry to `preserve -> contain -> recover`.
 0.7.3.0 retains the deliberately constrained engineering minifilter gate, range-aware WRITE COW,
@@ -29,7 +29,7 @@ Rename, delete-disposition, end-of-file, allocation-length and valid-data-length
 full-file pre-image store. These operations can destroy or relocate information in ways that are not yet modeled
 as block-only transactions.
 
-Protocol v4 exposes five mutation classes:
+Protocol v5 exposes five mutation classes and adds a normalized destination path/status to RENAME events:
 
 - CREATE
 - WRITE
@@ -84,6 +84,26 @@ The remaining identity gap is kernel/post-create reconciliation: even though the
 user mode still opens that handle by path. Production handling must bind the completed CREATE/rename operation to the
 exact kernel file object and destination identity.
 
+## RENAME destination ordering
+
+For a rename inside the LAB root, protocol v5 carries the normalized destination obtained by the minifilter with
+`FltGetDestinationFileNameInformation`.
+
+Before returning `SnapshotCommitted`, user mode:
+
+1. requires both source and destination names to be fully resolved and inside the explicit LAB root;
+2. binds and preserves the source file by durable `FILE_ID_INFO`;
+3. if the destination is missing, durably records that it was absent;
+4. if the destination is an existing file, binds its distinct file identity and captures a full pre-image;
+5. rejects existing directories, cross-root destinations, ambiguous/truncated destinations and same-file aliases;
+6. appends a write-through SHA-256 hash-chained rename intent containing source/destination paths, identities,
+   destination state, rename flags, information class and kernel request sequence.
+
+The rename intent is deliberately a **pre-operation intent**, not proof that the filesystem completed the rename.
+Microsoft documents that normalized names obtained before CREATE/RENAME can be invalidated by file-name tunneling;
+post-operation `FltGetTunneledName` plus completed file identity reconciliation remains required before recovery can
+apply topology changes automatically.
+
 ## Range recovery
 
 Range recovery never modifies the damaged source.
@@ -133,8 +153,8 @@ These checks do not yet reconcile an interrupted in-flight kernel request. They 
 
 ## Still required before production
 
-- post-create identity reconciliation and tunneled-name/file-ID confirmation;
-- rename destination capture and identity-safe rename rollback;
+- post-create and post-rename tunneled-name/file-ID confirmation;
+- completed-operation reconciliation for durable rename intents;
 - kernel-side binding of completed operations to durable file identity;
 - bounded concurrent pending-I/O workers;
 - crash/restart reconciliation for requests pending during user-mode failure;

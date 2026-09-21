@@ -380,8 +380,13 @@ static class GateDecision
         return Allow(ev.Sequence, RgGateDecision.SnapshotCommitted);
     }
 
-    private static async Task<RgGateReply> EvaluateCreateAsync(RgEvent ev, string path,
-        RollbackStore store, CreateRollbackStore createStore, FileIdentityStore identityStore,
+    private static async Task<RgGateReply> EvaluateCreateAsync(
+        RgEvent ev,
+        string path,
+        RollbackStore store,
+        CreateRollbackStore createStore,
+        CreateTransactionStore transactionStore,
+        FileIdentityStore identityStore,
         CancellationToken cancellationToken)
     {
         var rawDisposition = (ev.Flags >> 24) & 0xFF;
@@ -389,36 +394,86 @@ static class GateDecision
             return Deny(ev.Sequence, 7);
 
         var createOptions = ev.Flags & 0x00FFFFFF;
-
-        if (createStore.WasOriginallyAbsent(path))
-            return Allow(ev.Sequence, RgGateDecision.BaselineCommitted);
-
+        var trackCompletion = CreateGatePolicy.RequiresCompletionTracking(disposition, createOptions);
         var state = PathProbe.Get(path);
         var action = CreateGatePolicy.Decide(disposition, state, createOptions);
-        switch (action)
+        if (action == CreatePreservationAction.DenyUnsupported)
+            return Deny(ev.Sequence, 8);
+
+        var originallyAbsent = createStore.TryGetBaseline(path, out var absenceBaseline);
+        DurableFileIdentity? currentIdentity = null;
+
+        if (state == CreateTargetState.File && trackCompletion)
         {
-            case CreatePreservationAction.CaptureExistingPreimage:
-                var identityBaseline = await identityStore.CaptureOrVerifyAsync(path, cancellationToken)
-                    .ConfigureAwait(false);
-                _ = await store.CapturePreimageAsync(path, RollbackMutationKind.Create,
-                        identityBaseline.Identity, cancellationToken)
-                    .ConfigureAwait(false);
-                return Allow(ev.Sequence, RgGateDecision.SnapshotCommitted);
-
-            case CreatePreservationAction.RecordOriginallyAbsent:
-                _ = await createStore.CaptureAbsentAsync(path, cancellationToken).ConfigureAwait(false);
-                return Allow(ev.Sequence, RgGateDecision.BaselineCommitted);
-
-            case CreatePreservationAction.DenyUnsupported:
-                // Directory delete-on-close/topology rollback is not modeled yet.
-                return Deny(ev.Sequence, 8);
-
-            default:
-                // FILE_OPEN/OPEN_IF on an existing file are non-destructive at CREATE time unless
-                // FILE_DELETE_ON_CLOSE is present. FILE_CREATE on an existing file and
-                // FILE_OPEN/OVERWRITE on a missing file fail naturally.
-                return Allow(ev.Sequence, RgGateDecision.NoPreservationRequired);
+            var identityBaseline = await identityStore.CaptureOrVerifyAsync(path, cancellationToken)
+                .ConfigureAwait(false);
+            currentIdentity = identityBaseline.Identity;
         }
+
+        var effectiveAction = action;
+        var preservationHash = string.Empty;
+        RgGateDecision decision;
+
+        if (originallyAbsent)
+        {
+            // Pre-incident truth wins over the current incident-created bytes. Never manufacture
+            // a pre-image from a file that did not exist before this incident.
+            effectiveAction = CreatePreservationAction.RecordOriginallyAbsent;
+            preservationHash = absenceBaseline?.RecordSha256
+                ?? throw new InvalidDataException("Originally-absent CREATE baseline disappeared.");
+            decision = RgGateDecision.BaselineCommitted;
+        }
+        else
+        {
+            switch (action)
+            {
+                case CreatePreservationAction.CaptureExistingPreimage:
+                    if (currentIdentity is null)
+                    {
+                        var identityBaseline = await identityStore.CaptureOrVerifyAsync(path, cancellationToken)
+                            .ConfigureAwait(false);
+                        currentIdentity = identityBaseline.Identity;
+                    }
+
+                    var capture = await store.CapturePreimageAsync(
+                            path, RollbackMutationKind.Create, currentIdentity, cancellationToken)
+                        .ConfigureAwait(false);
+                    preservationHash = capture.RecordSha256;
+                    decision = RgGateDecision.SnapshotCommitted;
+                    break;
+
+                case CreatePreservationAction.RecordOriginallyAbsent:
+                    var baseline = await createStore.CaptureAbsentAsync(path, cancellationToken)
+                        .ConfigureAwait(false);
+                    originallyAbsent = true;
+                    preservationHash = baseline.RecordSha256;
+                    decision = RgGateDecision.BaselineCommitted;
+                    break;
+
+                default:
+                    decision = RgGateDecision.NoPreservationRequired;
+                    break;
+            }
+        }
+
+        if (trackCompletion)
+        {
+            _ = await transactionStore.CaptureIntentAsync(
+                    ev.Sequence,
+                    path,
+                    disposition,
+                    createOptions,
+                    ev.Length,
+                    state,
+                    originallyAbsent,
+                    effectiveAction,
+                    currentIdentity,
+                    preservationHash,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        return Allow(ev.Sequence, decision);
     }
 
     private static RgGateReply Allow(ulong sequence, RgGateDecision decision) => new()

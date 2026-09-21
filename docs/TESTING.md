@@ -160,6 +160,22 @@ Crash-resume coverage writes PurgeStarted, moves the session into Retired and si
 
 The source gate additionally requires manual-only maintenance CLI packaging, lifecycle hash chains, no automatic retention invocation in GateClient, no direct Sessions deletion, no force/ignore-hold commands and reparse-safe quarantine cleanup.
 
+## 0.7.19 crash reconciliation recovery coverage
+
+Rollback tests now bind restart assessment to the exact operation kind, kernel request sequence and intent-record SHA-256. A single decisive observation must produce a consistent assessment with the latest restart-record hash, while conflicting observations for the same intent must collapse to Unresolved. A lookup using another request/hash must return NoEvidence rather than borrowing nearby evidence.
+
+The mixed recovery-plan test includes a pending CREATE and pending RENAME with consistent SupportsNotCompleted restart evidence plus a second pending RENAME with Ambiguous evidence. The expected plan requires:
+
+- the consistent pending CREATE to be Review, bound to its restart-record SHA-256;
+- the consistent pending RENAME to be Review, bound to its restart-record SHA-256;
+- the ambiguous pending RENAME to remain Blocked;
+- Ready actions to remain limited to verified full-preimage/range-COW copy-out;
+- the executor to skip every Review/Blocked topology action and perform no automatic topology mutation.
+
+After plan creation, an authoritative CREATE completion is appended. Execution with the old plan must still fail stale-plan validation before any output directory is created.
+
+Static source gates require exact operation/request/intent binding, all-observations agreement for a decisive assessment, Review-or-Blocked planner behavior, and an explicit absence of authoritative completion writers in restart reconciliation code.
+
 ## Manual disposable-VM minifilter runtime gate
 
 0.7.15 uses `.github/workflows/minifilter-runtime-vm.yml`, a manual workflow that is intentionally excluded from push/pull-request CI. It requires a self-hosted Windows VM runner labeled `ransomguard-lab-vm`, Administrator execution, installed WDK/VS tooling, preconfigured lab signing, and an already trusted certificate/private key referenced by the environment secret `RANSOMGUARD_LAB_CERT_THUMBPRINT`.

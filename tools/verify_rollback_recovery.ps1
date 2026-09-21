@@ -2,12 +2,13 @@ $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
 $planner=Join-Path $root 'src\RansomGuard.Rollback\RollbackRecoveryPlan.cs'
 $executor=Join-Path $root 'src\RansomGuard.Rollback\RollbackRecoveryExecutor.cs'
+$restart=Join-Path $root 'src\RansomGuard.Rollback\RestartReconciliationStore.cs'
 $cli=Join-Path $root 'src\RansomGuard.RollbackRecoveryCli\Program.cs'
 $project=Join-Path $root 'src\RansomGuard.RollbackRecoveryCli\RansomGuard.RollbackRecoveryCli.csproj'
 $build=Join-Path $root 'build_windows.ps1'
 $launcher=Join-Path $root 'rollback_recovery.cmd'
 
-foreach($path in @($planner,$executor,$cli,$project,$build,$launcher)){
+foreach($path in @($planner,$executor,$restart,$cli,$project,$build,$launcher)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Verified rollback recovery source missing: $path"}
 }
 
@@ -29,6 +30,9 @@ foreach($required in @(
     'ComputePlanId',
     'CREATE intent has no authoritative kernel completion',
     'RENAME intent has no authoritative kernel completion',
+    'restartEvidence?.Assess(',
+    'reviewable ? RecoveryActionState.Review : RecoveryActionState.Blocked',
+    'restart evidence never becomes a kernel completion',
     'Automatic deletion is forbidden',
     'live topology is never renamed automatically'
 )){
@@ -36,6 +40,24 @@ foreach($required in @(
 }
 if($plannerText -match '\b(File\.Delete|Directory\.Delete|File\.Move|Directory\.Move)\s*\('){
     throw 'Recovery planner must remain read-only and must not contain delete/move primitives.'
+}
+
+$restartText=Get-Content -LiteralPath $restart -Raw
+foreach($required in @(
+    'RestartEvidenceAssessmentState.NoEvidence',
+    'RestartEvidenceAssessmentState.ConsistentSupportsCompleted',
+    'RestartEvidenceAssessmentState.ConsistentSupportsNotCompleted',
+    'RestartEvidenceAssessmentState.Unresolved',
+    'x.OperationKind == operationKind',
+    'x.RequestSequence == requestSequence',
+    'x.IntentRecordSha256.Equals(intentRecordSha256',
+    'matches.All(x => x.Evidence == first)',
+    'matches[^1].RecordSha256'
+)){
+    if($restartText -notmatch [regex]::Escape($required)){throw "Restart recovery invariant missing: $required"}
+}
+if($restartText -match 'RecordCompletionAsync|RecordCompletion\s*\('){
+    throw 'Restart evidence must never expose an authoritative completion writer.'
 }
 
 $executorText=Get-Content -LiteralPath $executor -Raw
@@ -121,4 +143,4 @@ if($launcherText -notmatch [regex]::Escape('RollbackRecovery\RansomGuard.Rollbac
     throw 'Rollback recovery launcher must target the LAB-only executable.'
 }
 
-Write-Host 'Verified rollback recovery source gate PASSED: revalidated deterministic plan, copy-out-only Ready actions, stale-plan refusal, reparse refusal, LAB-only CLI, no automatic delete/rename/overwrite.' -ForegroundColor Green
+Write-Host 'Verified rollback recovery source gate PASSED: deterministic plans, consistent restart-evidence review, copy-out-only Ready actions, stale-plan refusal, no manufactured completion, no automatic delete/rename/overwrite.' -ForegroundColor Green

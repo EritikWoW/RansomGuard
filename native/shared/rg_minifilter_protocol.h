@@ -1,10 +1,10 @@
 #pragma once
 
 // Wire protocol between the RansomGuard lab minifilter and user-mode clients.
-// v5 retains CREATE semantics and adds an explicit normalized destination path for rename events.
+// v6 retains CREATE/RENAME preservation semantics and adds post-rename completion reconciliation.
 // The production bundle still does not install or enable the driver.
 
-#define RG_PROTOCOL_VERSION 5u
+#define RG_PROTOCOL_VERSION 6u
 #define RG_PATH_CHARS 512u
 #define RG_GATE_ROOT_CHARS 260u
 #define RG_PORT_NAME L"\\RansomGuardMinifilterPort"
@@ -19,7 +19,8 @@ typedef enum _RG_EVENT_TYPE {
     RgEventRename = 2,
     RgEventDeleteDisposition = 3,
     RgEventTruncate = 4,
-    RgEventCreate = 5
+    RgEventCreate = 5,
+    RgEventRenameResult = 6
 } RG_EVENT_TYPE;
 
 typedef enum _RG_PATH_STATUS {
@@ -66,6 +67,9 @@ typedef struct _RG_EVENT {
     unsigned long FileInformationClass;
     unsigned long DroppedBeforeThis;
     unsigned long DestinationPathStatus;
+    unsigned long long RelatedSequence;
+    unsigned long CompletionStatus;
+    unsigned long long CompletionInformation;
     wchar_t Path[RG_PATH_CHARS];
     wchar_t DestinationPath[RG_PATH_CHARS];
 } RG_EVENT, *PRG_EVENT;

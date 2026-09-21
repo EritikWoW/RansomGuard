@@ -1,3 +1,20 @@
+# RansomGuard 0.7.18.0
+
+- Added durable rollback session lifecycle evidence: new LAB sessions commit `Opened` before activation preflight and `ClosedCleanly` only after all gate workers finish.
+- Legacy sessions without lifecycle evidence and sessions missing `ClosedCleanly` are never purge-eligible.
+- Added repository-level SHA-256 hash-chained retention release journal outside `Sessions`; release is bound to the exact current recovery `PlanId`.
+- Release is refused for unclean sessions, pending CREATE/RENAME transactions, blocked recovery actions or stale recovery plans.
+- Added deterministic retention planning with decisions `Eligible`, `LegacyUnmarked`, `NotClosedCleanly`, `PendingTransactions`, `RecoveryBlocked`, `NotReleased`, `ReleaseStale` and `TooYoung`.
+- Added LAB-only retention CLI: `plan`, `release`, `purge`. Default minimum age is 168 hours; CLI purge plans cannot use less than 24 hours.
+- Release/purge require exact typed confirmation tokens `RELEASE:<session>` and `PURGE:<session>`; no force/all/wildcard purge switch exists.
+- Purge revalidates the full retention `PlanId` and current `Eligible` state instead of trusting caller-supplied session entries.
+- Added quarantine-first purge ordering: durable `Intent`, atomic move to `Retention/PurgeQuarantine`, durable `Quarantined`, recursive delete, durable `Completed`.
+- Added a write-through SHA-256 hash-chained retention purge journal. Interrupted purge after the move leaves rollback evidence in quarantine rather than partially deleting the original session tree.
+- Added reparse-point checks for retention planning and purge paths.
+- Added tests for lifecycle idempotence/corruption, legacy/unclosed/pending/not-released/too-young/stale-release classification, release idempotence, stale-plan purge refusal, quarantine-first purge and purge-journal corruption.
+- Added mandatory retention source gate and LAB-only packaging. Normal Audit bundle explicitly rejects RollbackRetention artifacts.
+- Added `docs/ROLLBACK_RETENTION.md`.
+
 # RansomGuard 0.7.17.0
 
 - Added fail-closed rollback storage admission for Engineering LAB gate sessions.

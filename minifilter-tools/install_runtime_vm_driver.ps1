@@ -46,12 +46,15 @@ $cert=Get-ChildItem Cert:\CurrentUser\My,Cert:\LocalMachine\My -ErrorAction Sile
     Where-Object { $_.Thumbprint -eq $thumb -and $_.HasPrivateKey } |
     Select-Object -First 1
 if(-not $cert){throw 'Test-signing certificate with private key was not found in CurrentUser/My or LocalMachine/My.'}
+$machineStore=$cert.PSParentPath -match 'LocalMachine'
+$storeArgs=@()
+if($machineStore){$storeArgs+='/sm'}
 
 $signtool=Find-WdkTool 'signtool.exe'
 $inf2cat=Find-WdkTool 'Inf2Cat.exe'
 
 Write-Host "Signing current SYS with lab certificate $($cert.Subject)"
-& $signtool sign /v /fd SHA256 /sha1 $thumb $sys
+& $signtool sign /v /fd SHA256 @storeArgs /sha1 $thumb $sys
 if($LASTEXITCODE -ne 0){throw "signtool SYS failed: $LASTEXITCODE"}
 
 if(Test-Path -LiteralPath $cat){Remove-Item -LiteralPath $cat -Force}
@@ -59,13 +62,17 @@ if(Test-Path -LiteralPath $cat){Remove-Item -LiteralPath $cat -Force}
 if($LASTEXITCODE -ne 0){throw "Inf2Cat failed: $LASTEXITCODE"}
 if(-not (Test-Path -LiteralPath $cat -PathType Leaf)){throw 'Inf2Cat did not produce RansomGuardMinifilter.cat.'}
 
-& $signtool sign /v /fd SHA256 /sha1 $thumb $cat
+& $signtool sign /v /fd SHA256 @storeArgs /sha1 $thumb $cat
 if($LASTEXITCODE -ne 0){throw "signtool CAT failed: $LASTEXITCODE"}
 
 foreach($file in @($sys,$cat)){
     $sig=Get-AuthenticodeSignature -LiteralPath $file
     if($sig.Status -ne 'Valid'){throw "Signature validation failed for $file : $($sig.Status)"}
 }
+
+Get-ChildItem -LiteralPath $PackageDirectory -File |
+    ForEach-Object { '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash,$_.Name } |
+    Set-Content -LiteralPath (Join-Path $PackageDirectory 'SHA256SUMS.txt') -Encoding ascii
 
 $infText=Get-Content -LiteralPath $inf -Raw
 if($infText -notmatch 'Instance1\.Flags\s*=\s*0x1'){throw 'INF must continue suppressing automatic attachment.'}

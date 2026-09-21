@@ -4,10 +4,10 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 
 const string PortName = @"\RansomGuardMinifilterPort";
-const int ProtocolVersion = 4;
+const int ProtocolVersion = 5;
 
 var options = Options.Parse(args);
-Console.WriteLine("RansomGuard Minifilter AUDIT client v0.7.3.0");
+Console.WriteLine("RansomGuard Minifilter AUDIT client v0.7.4.0");
 Console.WriteLine("READ-ONLY: this client cannot block, suspend, kill, rename, delete, or modify files.");
 Console.WriteLine("It only receives metadata emitted by the lab minifilter.");
 Console.WriteLine();
@@ -33,7 +33,7 @@ using var writer = new StreamWriter(new FileStream(logPath, FileMode.CreateNew, 
 var headerSize = Marshal.SizeOf<FilterMessageHeader>();
 var eventSize = Marshal.SizeOf<RgEvent>();
 if (headerSize != 16) throw new InvalidOperationException($"Unexpected FILTER_MESSAGE_HEADER size: {headerSize}");
-if (eventSize != 1096) throw new InvalidOperationException($"Protocol struct size mismatch: {eventSize}, expected 1096");
+if (eventSize != 2120) throw new InvalidOperationException($"Protocol struct size mismatch: {eventSize}, expected 2120");
 var bufferSize = checked(headerSize + eventSize);
 var buffer = Marshal.AllocHGlobal(bufferSize);
 var lastFlush = Stopwatch.StartNew();
@@ -61,6 +61,8 @@ try
         var lag = Math.Max(0, (received - occurred).TotalMilliseconds);
         var ntPath = ev.Path ?? string.Empty;
         var dosPath = resolver.Resolve(ntPath);
+        var destinationNtPath = ev.DestinationPath ?? string.Empty;
+        var destinationPath = ev.EventType == (uint)RgEventType.Rename ? resolver.Resolve(destinationNtPath) : null;
         var inScope = options.AllLocal || options.Roots.Any(r => PathPolicy.Under(dosPath, r));
         stats.Observe(ev, lag, inScope, dosPath is not null);
 
@@ -80,6 +82,11 @@ try
                 NtPath = ntPath,
                 Path = dosPath,
                 PathStatus = ((RgPathStatus)ev.PathStatus).ToString(),
+                DestinationNtPath = ev.EventType == (uint)RgEventType.Rename ? destinationNtPath : null,
+                DestinationPath = destinationPath,
+                DestinationPathStatus = ev.EventType == (uint)RgEventType.Rename
+                    ? ((RgPathStatus)ev.DestinationPathStatus).ToString()
+                    : null,
                 ev.ByteOffset,
                 ev.Length,
                 ev.FileInformationClass,
@@ -283,8 +290,9 @@ struct RgEvent
     public long SystemTime100ns;
     public ulong ProcessId, ThreadId;
     public long ByteOffset;
-    public uint Length, FileInformationClass, DroppedBeforeThis, Reserved;
+    public uint Length, FileInformationClass, DroppedBeforeThis, DestinationPathStatus;
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 512)] public string? Path;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 512)] public string? DestinationPath;
 }
 
 static class Native
@@ -304,7 +312,7 @@ static class Native
         const uint FLT_PORT_FLAG_SYNC_HANDLE = 0x00000001;
         var context = new RgConnectContext
         {
-            ProtocolVersion = 4,
+            ProtocolVersion = 5,
             ClientMode = 1,
             ClientProcessId = processId,
             GateRootLengthBytes = 0,

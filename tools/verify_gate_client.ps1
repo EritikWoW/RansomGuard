@@ -66,7 +66,12 @@ foreach($required in @(
   'Task.Run(() => ProcessMessageAsync(header, ev))',
   'DefaultGateWorkers = 4',
   'MaxGateWorkers = 8',
-  '--gate-workers'
+  '--gate-workers',
+  '--inspect-pending',
+  'PendingSessions()',
+  'LAB gate startup quarantined',
+  'Do not infer their outcome from current files',
+  'Inspection made no changes'
 )){
   if($text -notmatch [regex]::Escape($required)){throw "Gate client invariant missing: $required"}
 }
@@ -150,4 +155,20 @@ if($text -notmatch 'GateWorkers\s*<\s*1' -or $text -notmatch 'GateWorkers\s*>\s*
   throw 'Gate worker argument must remain explicitly bounded.'
 }
 
-Write-Host 'LAB gate client source check PASSED: explicit disposable root, protocol-v8 CREATE/RENAME semantics with post-rename kernel identity, bounded concurrent gate workers, durable FILE_ID_INFO identity binding, range COW for writes, durable CREATE/RENAME intents and completions, originally-absent baselines, no destructive/process-control APIs.'
+$inspectBranch=$text.IndexOf('if (options.InspectPending)')
+$rootValidation=$text.IndexOf('LabRootPolicy.Validate(options.Root)')
+$connect=$text.IndexOf('using var port = Native.Connect')
+$pendingCheck=$text.IndexOf('var unresolvedSessions = repository.PendingSessions()')
+$createSession=$text.IndexOf('var sessionId = options.SessionId')
+if($inspectBranch -lt 0 -or $rootValidation -lt 0 -or $connect -lt 0 -or
+   $inspectBranch -gt $rootValidation -or $inspectBranch -gt $connect){
+  throw '--inspect-pending must exit before LAB-root validation and driver connection.'
+}
+if($pendingCheck -lt 0 -or $createSession -lt 0 -or $pendingCheck -gt $createSession){
+  throw 'Pending old-session intents must be checked before a new LAB gate session is created.'
+}
+if($text -match '(?i)--(force|ignore-pending|bypass-pending|allow-pending)'){
+  throw 'Gate client must not expose a bypass for unresolved prior operation intents.'
+}
+
+Write-Host 'LAB gate client source check PASSED: explicit disposable root, protocol-v8 CREATE/RENAME semantics with post-rename kernel identity, bounded concurrent gate workers, fail-closed pending-intent quarantine with read-only inspection, durable FILE_ID_INFO identity binding, range COW for writes, durable CREATE/RENAME intents and completions, originally-absent baselines, no destructive/process-control APIs.'

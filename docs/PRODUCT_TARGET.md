@@ -53,6 +53,8 @@ Protocol v11 adds non-blocking visibility for paging writes associated with stre
 
 0.7.15 extends startup protection to directory topology. GateClient holds the protected root and every ordinary non-reparse directory with read-only sharing through the explicit ActivateGate handshake, binds each directory to FILE_ID_INFO, and persists the set in a hash-chained activation-topology journal. Pre-existing directory handles carrying write/delete/delete-on-close access therefore prevent activation through Windows share-access enforcement; new external topology opens/mutations remain blocked by the kernel NotActivated barrier.
 
+0.7.16 adds deterministic verified rollback recovery planning for Engineering LAB sessions. Repository and session journals are revalidated, all session JSONL evidence is bound into a SHA-256 digest, and a stable PlanId classifies actions as Ready/Review/Blocked/Informational. Only full-preimage and range-COW copy-out actions can be executed. The executor rebuilds the current plan before execution, rejects stale evidence, writes into a new output tree, records recovered SHA-256 values, and never performs automatic delete/rename/overwrite of live topology.
+
 The next core milestones are broader NTFS/ReFS runtime/fault-injection coverage, directory-topology rollback semantics beyond startup handle exclusion, deeper crash recovery for requests interrupted before authoritative kernel completion delivery,
 containment, process-state capture,
-adaptive crypto analysis, and verified recovery orchestration.
+adaptive crypto analysis, and production recovery UI/orchestration across rollback plus crypto evidence.

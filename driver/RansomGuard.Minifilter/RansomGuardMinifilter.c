@@ -195,6 +195,7 @@ FLT_POSTOP_CALLBACK_STATUS RgPostCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_O
     NTSTATUS identityStatus = STATUS_UNSUCCESSFUL;
     ULONG returned = 0;
     ULONG gateError = 0;
+    LARGE_INTEGER systemTime;
 
     if (createContext == NULL) {
         return FLT_POSTOP_FINISHED_PROCESSING;
@@ -218,7 +219,8 @@ FLT_POSTOP_CALLBACK_STATUS RgPostCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_O
     result.FileIdPart0 = 0;
     result.FileIdPart1 = 0;
     result.Reserved2 = 0;
-    KeQuerySystemTimePrecise((PLARGE_INTEGER)&result.SystemTime100ns);
+    KeQuerySystemTimePrecise(&systemTime);
+    result.SystemTime100ns = systemTime.QuadPart;
 
     if (NT_SUCCESS(Data->IoStatus.Status) && FltObjects->FileObject != NULL &&
         KeGetCurrentIrql() == PASSIVE_LEVEL) {
@@ -622,6 +624,7 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
         gClientPort = ClientPort;
         gClientMode = (LONG)context->ClientMode;
         InterlockedExchange64(&gClientProcessId, (LONG64)context->ClientProcessId);
+        InterlockedExchange(&gReconciliationFaulted, 0);
 
         if (context->ClientMode == RgClientLabGate) {
             RtlCopyMemory(gGateRoot, context->GateRoot, rootBytes);

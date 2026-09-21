@@ -1,11 +1,11 @@
 #pragma once
 
 // Wire protocol between the RansomGuard lab minifilter and user-mode clients.
-// v11 adds an explicit activation preflight and user->kernel activation handshake.
-// The LAB gate starts fail-closed until existing files are checked for pre-existing writable mappings.
+// v12 adds LAB-only process-object containment after a clean activation handshake.
+// Containment is bound in kernel mode to a referenced PEPROCESS, so PID reuse does not inherit the latch.
 // The production bundle still does not install or enable the driver.
 
-#define RG_PROTOCOL_VERSION 11u
+#define RG_PROTOCOL_VERSION 12u
 #define RG_PATH_CHARS 512u
 #define RG_GATE_ROOT_CHARS 260u
 #define RG_PORT_NAME L"\\RansomGuardMinifilterPort"
@@ -60,7 +60,9 @@ typedef enum _RG_CONTROL_COMMAND {
     RgControlInvalid = 0,
     RgControlActivateGate = 1,
     RgControlQueryActivation = 2,
-    RgControlArmPreflight = 3
+    RgControlArmPreflight = 3,
+    RgControlContainProcess = 4,
+    RgControlQueryContainment = 5
 } RG_CONTROL_COMMAND;
 
 #pragma pack(push, 1)
@@ -109,8 +111,7 @@ typedef struct _RG_GATE_REPLY {
 typedef struct _RG_CONTROL_REQUEST {
     unsigned long ProtocolVersion;
     unsigned long Command;
-    unsigned long Reserved0;
-    unsigned long Reserved1;
+    unsigned long long TargetProcessId;
 } RG_CONTROL_REQUEST, *PRG_CONTROL_REQUEST;
 
 typedef struct _RG_CONTROL_REPLY {
@@ -118,5 +119,8 @@ typedef struct _RG_CONTROL_REPLY {
     unsigned long Command;
     unsigned long Status;
     unsigned long GateActivated;
+    unsigned long ContainmentActive;
+    unsigned long Reserved;
+    unsigned long long ContainedProcessId;
 } RG_CONTROL_REPLY, *PRG_CONTROL_REPLY;
 #pragma pack(pop)

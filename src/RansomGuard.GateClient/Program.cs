@@ -115,6 +115,10 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
                     ev.FileIdLow.ToString("X16") + ev.FileIdHigh.ToString("X16"));
             }
 
+            await using var sectionReservation = await storageBudget.ReserveAsync(
+                RollbackStorageBudget.MetadataReservationBytes,
+                "writable-section-evidence",
+                cts.Token).ConfigureAwait(false);
             var evidence = await sectionStore.RecordAsync(
                 ev.Sequence,
                 ev.RelatedSequence,
@@ -151,6 +155,10 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
                     ev.FileIdLow.ToString("X16") + ev.FileIdHigh.ToString("X16"));
             }
 
+            await using var pagingReservation = await storageBudget.ReserveAsync(
+                RollbackStorageBudget.MetadataReservationBytes,
+                "paging-write-evidence",
+                cts.Token).ConfigureAwait(false);
             var evidence = await pagingStore.RecordAsync(
                 ev.Sequence,
                 trackedPath,
@@ -166,6 +174,10 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
 
         if ((RgEventType)ev.EventType == RgEventType.CreateResult)
         {
+            await using var createResultReservation = await storageBudget.ReserveAsync(
+                RollbackStorageBudget.MetadataReservationBytes,
+                "create-completion-evidence",
+                cts.Token).ConfigureAwait(false);
             var completion = await CreateReconciliation.HandleAsync(
                 ev, resolver, options.Root, createOperationStore, cts.Token).ConfigureAwait(false);
             Console.WriteLine(
@@ -175,6 +187,10 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
 
         if ((RgEventType)ev.EventType == RgEventType.RenameResult)
         {
+            await using var renameResultReservation = await storageBudget.ReserveAsync(
+                RollbackStorageBudget.MetadataReservationBytes,
+                "rename-completion-evidence",
+                cts.Token).ConfigureAwait(false);
             var completion = await RenameReconciliation.HandleAsync(
                 ev, resolver, options.Root, renameStore, cts.Token).ConfigureAwait(false);
             Console.WriteLine(

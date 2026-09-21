@@ -67,7 +67,12 @@ static BOOLEAN RgEventIsInsideGateRoot(_In_ const RG_EVENT *Event);
 static BOOLEAN RgIsContainedRequestor(_In_ PFLT_CALLBACK_DATA Data);
 static BOOLEAN RgCreateMayMutate(_In_ const RG_EVENT *Event);
 static VOID RgClearContainedProcess(VOID);
-static BOOLEAN RgGateEvent(_In_ const RG_EVENT *Event, _Out_opt_ PULONG ErrorCode,
+static BOOLEAN RgBindContainedRequestor(_In_ PFLT_CALLBACK_DATA Data,
+                                        _In_ const RG_EVENT *Event,
+                                        _Out_opt_ PULONG ErrorCode);
+static BOOLEAN RgGateEvent(_In_ PFLT_CALLBACK_DATA Data,
+                           _In_ const RG_EVENT *Event,
+                           _Out_opt_ PULONG ErrorCode,
                            _Out_opt_ PULONG Decision);
 static BOOLEAN RgAcquireClientPort(_In_ LONG ExpectedMode);
 static VOID RgReleaseClientPort(VOID);
@@ -242,7 +247,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
         return RgCompleteDenied(Data);
     }
 
-    if (!RgGateEvent(&event, &gateError, &gateDecision)) {
+    if (!RgGateEvent(Data, &event, &gateError, &gateDecision)) {
         UNREFERENCED_PARAMETER(gateError);
         RgFreePostContext(postContext);
         return RgCompleteDenied(Data);
@@ -325,7 +330,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJE
         return RgCompleteDenied(Data);
     }
 
-    if (!RgGateEvent(&event, &gateError, NULL)) {
+    if (!RgGateEvent(Data, &event, &gateError, NULL)) {
         UNREFERENCED_PARAMETER(gateError);
         return RgCompleteDenied(Data);
     }
@@ -383,7 +388,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
         }
     }
 
-    if (!RgGateEvent(&event, &gateError, NULL)) {
+    if (!RgGateEvent(Data, &event, &gateError, NULL)) {
         UNREFERENCED_PARAMETER(gateError);
         RgFreePostContext(postContext);
         return RgCompleteDenied(Data);
@@ -1125,7 +1130,52 @@ static VOID RgClearContainedProcess(VOID)
     }
 }
 
-static BOOLEAN RgGateEvent(const RG_EVENT *Event, PULONG ErrorCode, PULONG Decision)
+static BOOLEAN RgBindContainedRequestor(PFLT_CALLBACK_DATA Data,
+                                        const RG_EVENT *Event,
+                                        PULONG ErrorCode)
+{
+    PEPROCESS requestor;
+    BOOLEAN bound = FALSE;
+    ULONG failure = (ULONG)STATUS_DEVICE_BUSY;
+
+    requestor = FltGetRequestorProcess(Data);
+    if (requestor == NULL ||
+        Event->ProcessId <= 4 ||
+        Event->ProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId, 0, 0)) {
+        if (ErrorCode != NULL) {
+            *ErrorCode = (ULONG)STATUS_INVALID_PARAMETER;
+        }
+        return FALSE;
+    }
+
+    ObReferenceObject(requestor);
+
+    ExAcquireFastMutex(&gPortMutex);
+    if (gClientPort == NULL) {
+        failure = (ULONG)STATUS_PORT_DISCONNECTED;
+    } else if (gContainedProcess == NULL) {
+        gContainedProcess = requestor;
+        InterlockedExchange64(&gContainedProcessId, (LONG64)Event->ProcessId);
+        requestor = NULL;
+        bound = TRUE;
+    } else if (gContainedProcess == requestor) {
+        bound = TRUE;
+    }
+    ExReleaseFastMutex(&gPortMutex);
+
+    if (requestor != NULL) {
+        ObDereferenceObject(requestor);
+    }
+    if (!bound && ErrorCode != NULL) {
+        *ErrorCode = failure;
+    }
+    return bound;
+}
+
+static BOOLEAN RgGateEvent(PFLT_CALLBACK_DATA Data,
+                           const RG_EVENT *Event,
+                           PULONG ErrorCode,
+                           PULONG Decision)
 {
     LARGE_INTEGER timeout;
     RG_GATE_REPLY reply;
@@ -1168,10 +1218,23 @@ static BOOLEAN RgGateEvent(const RG_EVENT *Event, PULONG ErrorCode, PULONG Decis
     if (reply.ProtocolVersion != RG_PROTOCOL_VERSION || reply.RequestSequence != Event->Sequence) {
         return FALSE;
     }
+    if ((reply.Flags & ~RG_GATE_REPLY_FLAG_CONTAIN_REQUESTOR) != 0) {
+        return FALSE;
+    }
 
     allow = (reply.Decision == RgGateSnapshotCommitted ||
              reply.Decision == RgGateBaselineCommitted ||
              reply.Decision == RgGateNoPreservationRequired);
+    if (!allow && reply.Flags != 0) {
+        return FALSE;
+    }
+
+    if (allow && FlagOn(reply.Flags, RG_GATE_REPLY_FLAG_CONTAIN_REQUESTOR)) {
+        if (!RgBindContainedRequestor(Data, Event, ErrorCode)) {
+            return FALSE;
+        }
+    }
+
     if (allow && Decision != NULL) {
         *Decision = reply.Decision;
     }

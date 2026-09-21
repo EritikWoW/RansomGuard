@@ -4,8 +4,10 @@ $store=Join-Path $root 'src\RansomGuard.Rollback\RollbackStore.cs'
 $program=Join-Path $root 'src\RansomGuard.Service\Program.cs'
 $rangeStore=Join-Path $root 'src\RansomGuard.Rollback\RangeRollbackStore.cs'
 $createStore=Join-Path $root 'src\RansomGuard.Rollback\CreateRollbackStore.cs'
+$createPolicy=Join-Path $root 'src\RansomGuard.Rollback\CreateGatePolicy.cs'
 if(-not(Test-Path -LiteralPath $rangeStore)){throw 'RangeRollbackStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $createStore)){throw 'CreateRollbackStore.cs missing.'}
+if(-not(Test-Path -LiteralPath $createPolicy)){throw 'CreateGatePolicy.cs missing.'}
 $rangeText=Get-Content -LiteralPath $rangeStore -Raw
 foreach($required in @(
     'CaptureWritePreimageAsync',
@@ -41,6 +43,17 @@ foreach($required in @(
 }
 if($createText -match 'File\.Delete\(' -or $createText -match 'Directory\.Delete\('){
     throw 'Create rollback source gate FAILED: absence baseline store must not delete created data.'
+}
+$policyText=Get-Content -LiteralPath $createPolicy -Raw
+foreach($required in @(
+    'CreatePreservationAction.CaptureExistingPreimage',
+    'CreatePreservationAction.RecordOriginallyAbsent',
+    'CreateDisposition.Supersede',
+    'CreateDisposition.Overwrite',
+    'CreateDisposition.OverwriteIf',
+    'CreateDisposition.OpenIf'
+)){
+    if($policyText -notmatch [regex]::Escape($required)){throw "Create gate policy missing invariant: $required"}
 }
 
 if(-not(Test-Path -LiteralPath $store)){throw 'RollbackStore.cs missing.'}

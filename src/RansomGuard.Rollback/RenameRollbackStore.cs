@@ -140,39 +140,16 @@ public sealed class RenameRollbackStore
         uint completionStatus,
         ulong completionInformation,
         string? finalDestinationPath,
+        DurableFileIdentity? finalIdentity,
         CancellationToken cancellationToken = default)
     {
         if (requestSequence == 0) throw new ArgumentOutOfRangeException(nameof(requestSequence));
 
-        string finalPath;
-        switch (state)
-        {
-            case RenameCompletionState.Succeeded:
-                if (!NtSuccess(completionStatus))
-                    throw new InvalidDataException("Successful rename completion requires a successful NTSTATUS.");
-                finalPath = NormalizePath(finalDestinationPath
-                    ?? throw new InvalidDataException("Successful rename completion requires a final destination path."));
-                break;
-
-            case RenameCompletionState.SucceededNameUnresolved:
-                if (!NtSuccess(completionStatus))
-                    throw new InvalidDataException("Unresolved rename completion requires a successful NTSTATUS.");
-                if (!string.IsNullOrWhiteSpace(finalDestinationPath))
-                    throw new InvalidDataException("Unresolved rename completion must not claim a final destination path.");
-                finalPath = string.Empty;
-                break;
-
-            case RenameCompletionState.Failed:
-                if (NtSuccess(completionStatus))
-                    throw new InvalidDataException("Failed rename completion requires a failing NTSTATUS.");
-                if (!string.IsNullOrWhiteSpace(finalDestinationPath))
-                    throw new InvalidDataException("Failed rename completion must not claim a final destination path.");
-                finalPath = string.Empty;
-                break;
-
-            default:
-                throw new InvalidDataException("Unknown rename completion state.");
-        }
+        var finalPath = NormalizeCompletion(
+            state,
+            completionStatus,
+            finalDestinationPath,
+            finalIdentity);
 
         await _appendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -188,7 +165,8 @@ public sealed class RenameRollbackStore
                     if (existing.State == state &&
                         existing.CompletionStatus == completionStatus &&
                         existing.CompletionInformation == completionInformation &&
-                        existing.FinalDestinationPath.Equals(finalPath, StringComparison.OrdinalIgnoreCase))
+                        existing.FinalDestinationPath.Equals(finalPath, StringComparison.OrdinalIgnoreCase) &&
+                        Nullable.Equals(existing.FinalIdentity, finalIdentity))
                         return existing;
 
                     throw new InvalidDataException("Conflicting duplicate rename completion.");
@@ -204,6 +182,8 @@ public sealed class RenameRollbackStore
                 completionStatus,
                 completionInformation,
                 finalPath,
+                finalIdentity?.VolumeSerialHex ?? string.Empty,
+                finalIdentity?.FileIdHex ?? string.Empty,
                 intent.RecordSha256,
                 _lastCompletionRecordHash);
             var recordHash = HashCompletionPayload(payload);
@@ -215,6 +195,8 @@ public sealed class RenameRollbackStore
                 payload.CompletionStatus,
                 payload.CompletionInformation,
                 payload.FinalDestinationPath,
+                payload.FinalVolumeSerialHex,
+                payload.FinalFileIdHex,
                 payload.IntentRecordSha256,
                 payload.PreviousRecordSha256,
                 recordHash);
@@ -366,7 +348,11 @@ public sealed class RenameRollbackStore
             if (!HashCompletionPayload(line.Payload).Equals(line.RecordSha256, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Rename completion journal record hash mismatch.");
 
-            ValidateCompletion(line.State, line.CompletionStatus, line.FinalDestinationPath);
+            ValidateCompletion(
+                line.State,
+                line.CompletionStatus,
+                line.FinalDestinationPath,
+                ReadIdentity(line.FinalVolumeSerialHex, line.FinalFileIdHex));
             if (!rebuilt.TryAdd(line.RequestSequence, line.ToCompletion()))
                 throw new InvalidDataException("Duplicate rename completion for request sequence.");
 
@@ -386,32 +372,66 @@ public sealed class RenameRollbackStore
         }
     }
 
-    private static void ValidateCompletion(
+    private static string NormalizeCompletion(
         RenameCompletionState state,
         uint completionStatus,
-        string finalDestinationPath)
+        string? finalDestinationPath,
+        DurableFileIdentity? finalIdentity)
     {
         switch (state)
         {
             case RenameCompletionState.Succeeded:
-                if (!NtSuccess(completionStatus) || string.IsNullOrWhiteSpace(finalDestinationPath))
-                    throw new InvalidDataException("Invalid successful rename completion.");
-                _ = NormalizePath(finalDestinationPath);
-                break;
+                if (!NtSuccess(completionStatus) || finalIdentity is null)
+                    throw new InvalidDataException("Authoritative rename success requires successful NTSTATUS and durable identity.");
+                ValidateIdentity(finalIdentity, "final");
+                return NormalizePath(finalDestinationPath
+                    ?? throw new InvalidDataException("Authoritative rename success requires final destination path."));
 
             case RenameCompletionState.SucceededNameUnresolved:
-                if (!NtSuccess(completionStatus) || !string.IsNullOrEmpty(finalDestinationPath))
-                    throw new InvalidDataException("Invalid unresolved rename completion.");
-                break;
+                if (!NtSuccess(completionStatus) || finalIdentity is null || !string.IsNullOrWhiteSpace(finalDestinationPath))
+                    throw new InvalidDataException("Name-unresolved rename success requires identity and no final path.");
+                ValidateIdentity(finalIdentity, "final");
+                return string.Empty;
+
+            case RenameCompletionState.SucceededIdentityUnresolved:
+                if (!NtSuccess(completionStatus) || finalIdentity is not null)
+                    throw new InvalidDataException("Identity-unresolved rename success must not claim durable identity.");
+                return NormalizePath(finalDestinationPath
+                    ?? throw new InvalidDataException("Identity-unresolved rename success requires final destination path."));
+
+            case RenameCompletionState.SucceededNameAndIdentityUnresolved:
+                if (!NtSuccess(completionStatus) || finalIdentity is not null || !string.IsNullOrWhiteSpace(finalDestinationPath))
+                    throw new InvalidDataException("Fully unresolved rename success must not claim name or identity.");
+                return string.Empty;
 
             case RenameCompletionState.Failed:
-                if (NtSuccess(completionStatus) || !string.IsNullOrEmpty(finalDestinationPath))
-                    throw new InvalidDataException("Invalid failed rename completion.");
-                break;
+                if (NtSuccess(completionStatus) || finalIdentity is not null || !string.IsNullOrWhiteSpace(finalDestinationPath))
+                    throw new InvalidDataException("Failed rename completion must not claim final name or identity.");
+                return string.Empty;
 
             default:
                 throw new InvalidDataException("Unknown rename completion state.");
         }
+    }
+
+    private static void ValidateCompletion(
+        RenameCompletionState state,
+        uint completionStatus,
+        string finalDestinationPath,
+        DurableFileIdentity? finalIdentity)
+    {
+        _ = NormalizeCompletion(state, completionStatus, finalDestinationPath, finalIdentity);
+    }
+
+    private static DurableFileIdentity? ReadIdentity(string volumeSerialHex, string fileIdHex)
+    {
+        if (string.IsNullOrEmpty(volumeSerialHex) && string.IsNullOrEmpty(fileIdHex))
+            return null;
+        if (string.IsNullOrEmpty(volumeSerialHex) || string.IsNullOrEmpty(fileIdHex))
+            throw new InvalidDataException("Rename completion contains a partial durable identity.");
+        var identity = new DurableFileIdentity(volumeSerialHex, fileIdHex);
+        ValidateIdentity(identity, "final");
+        return identity;
     }
 
     private static void ValidateState(
@@ -500,7 +520,9 @@ public enum RenameCompletionState
 {
     Succeeded = 1,
     SucceededNameUnresolved = 2,
-    Failed = 3
+    SucceededIdentityUnresolved = 3,
+    SucceededNameAndIdentityUnresolved = 4,
+    Failed = 5
 }
 
 public sealed record RenameRollbackIntent(
@@ -538,9 +560,18 @@ public sealed record RenameRollbackCompletion(
     uint CompletionStatus,
     ulong CompletionInformation,
     string FinalDestinationPath,
+    string FinalVolumeSerialHex,
+    string FinalFileIdHex,
     string IntentRecordSha256,
     string PreviousRecordSha256,
-    string RecordSha256);
+    string RecordSha256)
+{
+    [JsonIgnore]
+    public DurableFileIdentity? FinalIdentity =>
+        string.IsNullOrEmpty(FinalVolumeSerialHex)
+            ? null
+            : new DurableFileIdentity(FinalVolumeSerialHex, FinalFileIdHex);
+}
 
 internal sealed record RenameJournalPayload(
     long Sequence,
@@ -597,6 +628,8 @@ internal sealed record RenameCompletionJournalPayload(
     uint CompletionStatus,
     ulong CompletionInformation,
     string FinalDestinationPath,
+    string FinalVolumeSerialHex,
+    string FinalFileIdHex,
     string IntentRecordSha256,
     string PreviousRecordSha256);
 
@@ -608,6 +641,8 @@ internal sealed record RenameCompletionJournalLine(
     uint CompletionStatus,
     ulong CompletionInformation,
     string FinalDestinationPath,
+    string FinalVolumeSerialHex,
+    string FinalFileIdHex,
     string IntentRecordSha256,
     string PreviousRecordSha256,
     string RecordSha256)
@@ -615,10 +650,11 @@ internal sealed record RenameCompletionJournalLine(
     [JsonIgnore]
     public RenameCompletionJournalPayload Payload => new(
         Sequence, CompletedUtc, RequestSequence, State, CompletionStatus,
-        CompletionInformation, FinalDestinationPath, IntentRecordSha256, PreviousRecordSha256);
+        CompletionInformation, FinalDestinationPath, FinalVolumeSerialHex, FinalFileIdHex,
+        IntentRecordSha256, PreviousRecordSha256);
 
     public RenameRollbackCompletion ToCompletion() => new(
         Sequence, CompletedUtc, RequestSequence, State, CompletionStatus,
-        CompletionInformation, FinalDestinationPath, IntentRecordSha256,
-        PreviousRecordSha256, RecordSha256);
+        CompletionInformation, FinalDestinationPath, FinalVolumeSerialHex, FinalFileIdHex,
+        IntentRecordSha256, PreviousRecordSha256, RecordSha256);
 }

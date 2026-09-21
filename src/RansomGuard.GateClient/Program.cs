@@ -34,6 +34,10 @@ var pagingStore = new PagingWriteEvidenceStore(Path.Combine(store.Root, "paging-
 var sectionStore = new WritableSectionEvidenceStore(Path.Combine(store.Root, "section-state"));
 var activationStore = new ActivationPreflightStore(Path.Combine(store.Root, "activation-state"));
 var topologyStore = new ActivationTopologyStore(Path.Combine(store.Root, "activation-topology-state"));
+var storageBudget = new RollbackStorageBudget(
+    store.Root,
+    checked(options.MaxStoreMiB * RollbackStorageBudget.MiB),
+    checked(options.MinFreeMiB * RollbackStorageBudget.MiB));
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
 Console.WriteLine("RansomGuard LAB pre-write gate v0.7.16.0");
@@ -45,6 +49,7 @@ Console.WriteLine($"Rollback store     : {store.Root}");
 Console.WriteLine($"Restart evidence   : observed={restartSummary.Observed}, completed-evidence={restartSummary.SupportsCompleted}, not-completed-evidence={restartSummary.SupportsNotCompleted}, ambiguous={restartSummary.Ambiguous}");
 Console.WriteLine("CREATE/write/rename/delete/truncate in this root are gated by durable preservation semantics.");
 Console.WriteLine($"Bounded gate workers : {options.GateWorkers}");
+Console.WriteLine($"Rollback budget      : max-session={options.MaxStoreMiB} MiB; min-free={options.MinFreeMiB} MiB");
 Console.WriteLine("Press Ctrl+C to disconnect. The driver then stops gating because no client is connected.");
 
 var context = new RgConnectContext
@@ -70,7 +75,7 @@ if (headerSize != 16 || eventSize != 2168 || replyHeaderSize != 16 || gateReplyS
 
 var resolver = new DevicePathResolver();
 var activationSummary = await ActivationPreflight.RunAsync(
-    port, options.Root, resolver, activationStore, topologyStore, cts.Token).ConfigureAwait(false);
+    port, options.Root, resolver, activationStore, topologyStore, storageBudget, cts.Token).ConfigureAwait(false);
 Console.WriteLine($"Activation preflight: directories={activationSummary.DirectoriesHeld}, files={activationSummary.FilesChecked}, writable-views=0, kernel gate ACTIVE.");
 
 
@@ -179,7 +184,7 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
 
         var reply = await GateDecision.EvaluateAsync(
             ev, resolver, options.Root, store, writeStore, createStore, createOperationStore,
-            identityStore, renameStore, cts.Token).ConfigureAwait(false);
+            identityStore, renameStore, storageBudget, cts.Token).ConfigureAwait(false);
 
         lock (replySync)
         {
@@ -936,10 +941,20 @@ static class PathProbe
     }
 }
 
-sealed record Options(string Root, string StoreRoot, string? SessionId, bool PrepareOnly, int GateWorkers)
+sealed record Options(
+    string Root,
+    string StoreRoot,
+    string? SessionId,
+    bool PrepareOnly,
+    int GateWorkers,
+    long MaxStoreMiB,
+    long MinFreeMiB)
 {
     public const int DefaultGateWorkers = 4;
     public const int MaxGateWorkers = 8;
+    public const long DefaultMaxStoreMiB = 8192;
+    public const long DefaultMinFreeMiB = 2048;
+    public const long MaxConfigMiB = 1048576;
 
     public static Options Parse(string[] args)
     {
@@ -948,6 +963,8 @@ sealed record Options(string Root, string StoreRoot, string? SessionId, bool Pre
         string? session = null;
         var prepare = false;
         var gateWorkers = DefaultGateWorkers;
+        long maxStoreMiB = DefaultMaxStoreMiB;
+        long minFreeMiB = DefaultMinFreeMiB;
         for (var i = 0; i < args.Length; i++)
         {
             switch (args[i].ToLowerInvariant())
@@ -960,13 +977,23 @@ sealed record Options(string Root, string StoreRoot, string? SessionId, bool Pre
                         throw new ArgumentOutOfRangeException(nameof(args),
                             $"--gate-workers must be between 1 and {MaxGateWorkers}.");
                     break;
+                case "--max-store-mib" when i + 1 < args.Length:
+                    if (!long.TryParse(args[++i], out maxStoreMiB) || maxStoreMiB < 64 || maxStoreMiB > MaxConfigMiB)
+                        throw new ArgumentOutOfRangeException(nameof(args),
+                            $"--max-store-mib must be between 64 and {MaxConfigMiB}.");
+                    break;
+                case "--min-free-mib" when i + 1 < args.Length:
+                    if (!long.TryParse(args[++i], out minFreeMiB) || minFreeMiB < 0 || minFreeMiB > MaxConfigMiB)
+                        throw new ArgumentOutOfRangeException(nameof(args),
+                            $"--min-free-mib must be between 0 and {MaxConfigMiB}.");
+                    break;
                 case "--prepare-root": prepare = true; break;
                 default: throw new ArgumentException($"Unknown/incomplete argument: {args[i]}");
             }
         }
         if (string.IsNullOrWhiteSpace(root)) throw new ArgumentException("Pass --root <disposable-test-directory>.");
         store ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RansomGuardV072", "GateRollback");
-        return new Options(root, store, session, prepare, gateWorkers);
+        return new Options(root, store, session, prepare, gateWorkers, maxStoreMiB, minFreeMiB);
     }
 }
 

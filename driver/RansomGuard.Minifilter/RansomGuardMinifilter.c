@@ -1136,7 +1136,9 @@ static BOOLEAN RgBindContainedRequestor(PFLT_CALLBACK_DATA Data,
 {
     PEPROCESS requestor;
     BOOLEAN bound = FALSE;
+    BOOLEAN newlyBound = FALSE;
     ULONG failure = (ULONG)STATUS_DEVICE_BUSY;
+    RG_EVENT activationEvent;
 
     requestor = FltGetRequestorProcess(Data);
     if (requestor == NULL ||
@@ -1158,6 +1160,7 @@ static BOOLEAN RgBindContainedRequestor(PFLT_CALLBACK_DATA Data,
         InterlockedExchange64(&gContainedProcessId, (LONG64)Event->ProcessId);
         requestor = NULL;
         bound = TRUE;
+        newlyBound = TRUE;
     } else if (gContainedProcess == requestor) {
         bound = TRUE;
     }
@@ -1166,10 +1169,27 @@ static BOOLEAN RgBindContainedRequestor(PFLT_CALLBACK_DATA Data,
     if (requestor != NULL) {
         ObDereferenceObject(requestor);
     }
-    if (!bound && ErrorCode != NULL) {
-        *ErrorCode = failure;
+    if (!bound) {
+        if (ErrorCode != NULL) {
+            *ErrorCode = failure;
+        }
+        return FALSE;
     }
-    return bound;
+
+    if (newlyBound) {
+        RtlCopyMemory(&activationEvent, Event, sizeof(activationEvent));
+        activationEvent.ProtocolVersion = RG_PROTOCOL_VERSION;
+        activationEvent.EventType = RgEventContainmentActivated;
+        activationEvent.Sequence = (ULONGLONG)InterlockedIncrement64(&gSequence);
+        activationEvent.RelatedSequence = Event->Sequence;
+        activationEvent.CompletionStatus = (ULONG)STATUS_SUCCESS;
+        activationEvent.CompletionInformation = 0;
+        activationEvent.DroppedBeforeThis = 0;
+        RgQueueRawEvent(&activationEvent, RgClientLabGate);
+        RtlSecureZeroMemory(&activationEvent, sizeof(activationEvent));
+    }
+
+    return TRUE;
 }
 
 static BOOLEAN RgGateEvent(PFLT_CALLBACK_DATA Data,

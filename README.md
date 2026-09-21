@@ -76,7 +76,11 @@ Engineering LAB build:
 
     .\build_lab.cmd
 
-Use only output from a run that ends with `BUILD PASSED`.
+Compile-only minifilter CI additionally builds Release x64 against the pinned Microsoft WDK,
+runs x64 Universal DDI API validation, and publishes an intentionally unsigned driver artifact.
+It does not install, load or attach the driver.
+
+Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 

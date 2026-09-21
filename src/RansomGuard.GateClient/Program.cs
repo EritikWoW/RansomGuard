@@ -1085,9 +1085,9 @@ sealed record Options(
                             $"--max-store-mib must be between 64 and {MaxConfigMiB}.");
                     break;
                 case "--min-free-mib" when i + 1 < args.Length:
-                    if (!long.TryParse(args[++i], out minFreeMiB) || minFreeMiB < 0 || minFreeMiB > MaxConfigMiB)
+                    if (!long.TryParse(args[++i], out minFreeMiB) || minFreeMiB < 64 || minFreeMiB > MaxConfigMiB)
                         throw new ArgumentOutOfRangeException(nameof(args),
-                            $"--min-free-mib must be between 0 and {MaxConfigMiB}.");
+                            $"--min-free-mib must be between 64 and {MaxConfigMiB}.");
                     break;
                 case "--prepare-root": prepare = true; break;
                 default: throw new ArgumentException($"Unknown/incomplete argument: {args[i]}");

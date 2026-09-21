@@ -70,18 +70,22 @@ if($text -match '\b(File\.Delete|Directory\.Delete|RestoreToNewCopyAsync|Process
 
 $existingCase=$text.IndexOf('case CreatePreservationAction.CaptureExistingPreimage:')
 if($existingCase -lt 0){throw 'Existing-file CREATE preservation case missing.'}
-$existingCapture=$text.IndexOf('CapturePreimageAsync(path, RollbackMutationKind.Create',$existingCase)
-$existingAllow=$text.IndexOf('RgGateDecision.SnapshotCommitted',$existingCapture)
-if($existingCapture -lt 0 -or $existingAllow -lt 0 -or $existingAllow -lt $existingCapture){
-  throw 'CREATE SnapshotCommitted must be returned only after durable existing-file pre-image capture.'
+$existingCapture=$text.IndexOf('RollbackMutationKind.Create',$existingCase)
+$createIntentAfterExisting=$text.IndexOf('createOperationStore.RecordIntentAsync(',$existingCapture)
+$existingAllow=$text.IndexOf('CreatePreservationAction.CaptureExistingPreimage => Allow',$createIntentAfterExisting)
+if($existingCapture -lt 0 -or $createIntentAfterExisting -lt 0 -or $existingAllow -lt 0 -or
+   $existingCapture -gt $createIntentAfterExisting -or $createIntentAfterExisting -gt $existingAllow){
+  throw 'CREATE SnapshotCommitted must follow durable pre-image capture and durable CREATE intent commit.'
 }
 
 $absentCase=$text.IndexOf('case CreatePreservationAction.RecordOriginallyAbsent:')
 if($absentCase -lt 0){throw 'Originally-absent CREATE preservation case missing.'}
 $absentCapture=$text.IndexOf('CaptureAbsentAsync(path',$absentCase)
-$absentAllow=$text.IndexOf('RgGateDecision.BaselineCommitted',$absentCapture)
-if($absentCapture -lt 0 -or $absentAllow -lt 0 -or $absentAllow -lt $absentCapture){
-  throw 'CREATE BaselineCommitted must be returned only after durable absence-baseline capture.'
+$createIntentAfterAbsent=$text.IndexOf('createOperationStore.RecordIntentAsync(',$absentCapture)
+$absentAllow=$text.IndexOf('CreatePreservationAction.RecordOriginallyAbsent => Allow',$createIntentAfterAbsent)
+if($absentCapture -lt 0 -or $createIntentAfterAbsent -lt 0 -or $absentAllow -lt 0 -or
+   $absentCapture -gt $createIntentAfterAbsent -or $createIntentAfterAbsent -gt $absentAllow){
+  throw 'CREATE BaselineCommitted must follow durable absence-baseline capture and durable CREATE intent commit.'
 }
 
 $identityCapture=$text.IndexOf('identityStore.CaptureOrVerifyAsync(path')

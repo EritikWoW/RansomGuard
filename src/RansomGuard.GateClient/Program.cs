@@ -24,11 +24,12 @@ var sessionId = options.SessionId ?? $"gate-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{G
 var store = repository.CreateSession(sessionId);
 var writeStore = new RangeRollbackStore(Path.Combine(store.Root, "write-cow"));
 var createStore = new CreateRollbackStore(Path.Combine(store.Root, "create-state"));
+var createOperationStore = new CreateOperationStore(Path.Combine(store.Root, "create-state"));
 var identityStore = new FileIdentityStore(Path.Combine(store.Root, "identity-state"));
 var renameStore = new RenameRollbackStore(Path.Combine(store.Root, "rename-state"));
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
-Console.WriteLine("RansomGuard LAB pre-write gate v0.7.5.0");
+Console.WriteLine("RansomGuard LAB pre-write gate v0.7.6.0");
 Console.WriteLine("LAB ONLY: use only inside a disposable test directory on a test machine/VM.");
 Console.WriteLine($"Protected LAB root : {options.Root}");
 Console.WriteLine($"Kernel NT root     : {ntRoot}");
@@ -39,7 +40,7 @@ Console.WriteLine("Press Ctrl+C to disconnect. The driver then stops gating beca
 
 var context = new RgConnectContext
 {
-    ProtocolVersion = 6,
+    ProtocolVersion = 7,
     ClientMode = (uint)RgClientMode.LabGate,
     ClientProcessId = (ulong)Environment.ProcessId,
     GateRootLengthBytes = checked((uint)(ntRoot.Length * 2)),
@@ -54,7 +55,7 @@ var headerSize = Marshal.SizeOf<FilterMessageHeader>();
 var eventSize = Marshal.SizeOf<RgEvent>();
 var replyHeaderSize = Marshal.SizeOf<FilterReplyHeader>();
 var gateReplySize = Marshal.SizeOf<RgGateReply>();
-if (headerSize != 16 || eventSize != 2140 || replyHeaderSize != 16 || gateReplySize != 24)
+if (headerSize != 16 || eventSize != 2168 || replyHeaderSize != 16 || gateReplySize != 24)
     throw new InvalidOperationException($"Unexpected protocol sizes: message={headerSize}, event={eventSize}, replyHeader={replyHeaderSize}, gateReply={gateReplySize}");
 
 var resolver = new DevicePathResolver();
@@ -73,6 +74,15 @@ try
         var header = Marshal.PtrToStructure<FilterMessageHeader>(buffer);
         var ev = Marshal.PtrToStructure<RgEvent>(IntPtr.Add(buffer, headerSize));
 
+        if ((RgEventType)ev.EventType == RgEventType.CreateResult)
+        {
+            var completion = await CreateReconciliation.HandleAsync(
+                ev, resolver, options.Root, createOperationStore, cts.Token).ConfigureAwait(false);
+            Console.WriteLine(
+                $"{DateTime.Now:HH:mm:ss.fff} {RgEventType.CreateResult,-20} request={ev.RelatedSequence,-7} {completion.State,-34} status=0x{completion.CompletionStatus:X8} {completion.FinalPath}");
+            continue;
+        }
+
         if ((RgEventType)ev.EventType == RgEventType.RenameResult)
         {
             var completion = await RenameReconciliation.HandleAsync(
@@ -82,7 +92,7 @@ try
             continue;
         }
 
-        var reply = await GateDecision.EvaluateAsync(ev, resolver, options.Root, store, writeStore, createStore, identityStore, renameStore, cts.Token);
+        var reply = await GateDecision.EvaluateAsync(ev, resolver, options.Root, store, writeStore, createStore, createOperationStore, identityStore, renameStore, cts.Token);
         Native.Reply(port, header.MessageId, reply);
 
         var path = resolver.Resolve(ev.Path) ?? ev.Path ?? "<unresolved>";
@@ -103,7 +113,7 @@ static class RenameReconciliation
         RenameRollbackStore renameStore,
         CancellationToken cancellationToken)
     {
-        if (ev.ProtocolVersion != 6 || ev.RelatedSequence == 0)
+        if (ev.ProtocolVersion != 7 || ev.RelatedSequence == 0)
             throw new InvalidDataException("Invalid rename completion correlation.");
 
         if (!NtSuccess(ev.CompletionStatus))
@@ -151,13 +161,14 @@ static class GateDecision
 {
     public static async Task<RgGateReply> EvaluateAsync(RgEvent ev, DevicePathResolver resolver, string root,
         RollbackStore store, RangeRollbackStore writeStore, CreateRollbackStore createStore,
-        FileIdentityStore identityStore, RenameRollbackStore renameStore, CancellationToken cancellationToken)
+        CreateOperationStore createOperationStore, FileIdentityStore identityStore,
+        RenameRollbackStore renameStore, CancellationToken cancellationToken)
     {
         try
         {
             // Never preserve or authorize against a truncated path. The kernel only sends a truncated
             // gate event when its known prefix is already inside the explicit LAB root, so deny it here.
-            if (ev.ProtocolVersion != 6 || ev.PathStatus != (uint)RgPathStatus.Resolved)
+            if (ev.ProtocolVersion != 7 || ev.PathStatus != (uint)RgPathStatus.Resolved)
                 return Deny(ev.Sequence, 1);
 
             var path = resolver.Resolve(ev.Path);
@@ -166,7 +177,7 @@ static class GateDecision
 
             var eventType = (RgEventType)ev.EventType;
             if (eventType == RgEventType.Create)
-                return await EvaluateCreateAsync(ev, path, store, createStore, identityStore, cancellationToken).ConfigureAwait(false);
+                return await EvaluateCreateAsync(ev, path, store, createStore, createOperationStore, identityStore, cancellationToken).ConfigureAwait(false);
 
             var state = PathProbe.Get(path);
             if (state != CreateTargetState.File)

@@ -123,7 +123,7 @@ After an allowed rename returns from the filesystem, the minifilter executes a p
 2. `FltDoCompletionProcessingWhenSafe` moves reconciliation to a safe post-operation context when required;
 3. a failed rename emits a correlated result carrying the final NTSTATUS and no successful topology claim;
 4. on success, `FltGetTunneledName` reconciles the retained pre-operation destination against Windows file-name tunneling;
-5. the driver emits a no-reply protocol-v6 `RenameResult` correlated by the original kernel request sequence;
+5. the driver emits a no-reply protocol-v7 `RenameResult` correlated by the original kernel request sequence;
 6. `RenameRollbackStore` appends a separate write-through SHA-256 hash-chained completion record linked to the exact intent hash.
 
 A completion may be `Succeeded`, `SucceededNameUnresolved`, or `Failed`. If the safe post path cannot run,

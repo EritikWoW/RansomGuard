@@ -38,6 +38,8 @@ Required VM image prerequisites:
 
 The workflow and scripts deliberately **do not** enable TESTSIGNING, alter Secure Boot, add certificates to trust stores, or change Defender settings.
 
+Runtime scenario 0 holds an ordinary subdirectory open with DELETE access before GateClient starts. Activation must fail because the topology preflight can no longer acquire its FILE_SHARE_READ-only directory handle.
+
 Runtime scenario A creates a PAGE_READWRITE view, closes both original file/mapping handles while keeping the view alive, then starts GateClient. Activation must fail and `activation-preflight-journal.jsonl` must contain `writableViewPresent=true`.
 
 Runtime scenario B activates cleanly, opens the test file for content-write access, creates a writable mapping, changes/flushed bytes, and requires all of the following in the same session:

@@ -294,6 +294,15 @@ try
     identityStore.VerifyAll();
     Check(true, "file identity hash-chain journal verifies");
 
+    var malformedIdentityRoot = Path.Combine(root, "malformed-identity-state");
+    Directory.CreateDirectory(malformedIdentityRoot);
+    await File.WriteAllTextAsync(Path.Combine(malformedIdentityRoot, "identity-journal.jsonl"),
+        "{\"sequence\":1,\"capturedUtc\":\"2026-09-21T00:00:00Z\",\"originalPath\":null,\"volumeSerialHex\":null,\"fileIdHex\":null,\"previousRecordSha256\":null,\"recordSha256\":null}\n");
+    var malformedIdentityRejected = false;
+    try { _ = new FileIdentityStore(malformedIdentityRoot); }
+    catch (InvalidDataException) { malformedIdentityRejected = true; }
+    Check(malformedIdentityRejected, "malformed/null file identity journal fields are rejected deterministically");
+
     var nestedIdentityRepo = new RollbackRepository(Path.Combine(root, "nested-identity-repo"));
     var nestedIdentitySession = nestedIdentityRepo.CreateSession("nested_identity");
     var nestedIdentityState = new FileIdentityStore(Path.Combine(nestedIdentitySession.Root, "identity-state"));

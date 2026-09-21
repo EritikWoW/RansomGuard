@@ -104,6 +104,70 @@ finally
     Marshal.FreeHGlobal(buffer);
 }
 
+static class CreateReconciliation
+{
+    public static async Task<CreateOperationCompletion> HandleAsync(
+        RgEvent ev,
+        DevicePathResolver resolver,
+        string root,
+        CreateOperationStore operationStore,
+        CancellationToken cancellationToken)
+    {
+        if (ev.ProtocolVersion != 7 || ev.RelatedSequence == 0)
+            throw new InvalidDataException("Invalid CREATE completion correlation.");
+
+        if (!NtSuccess(ev.CompletionStatus))
+        {
+            return await operationStore.RecordCompletionAsync(
+                    ev.RelatedSequence,
+                    CreateCompletionState.Failed,
+                    ev.CompletionStatus,
+                    ev.CompletionInformation,
+                    null,
+                    null,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        string? finalPath = null;
+        if (ev.PathStatus == (uint)RgPathStatus.Resolved)
+        {
+            var resolved = resolver.Resolve(ev.Path);
+            if (!string.IsNullOrWhiteSpace(resolved) && PathPolicy.Under(resolved, root))
+                finalPath = resolved;
+        }
+
+        DurableFileIdentity? finalIdentity = null;
+        if (ev.IdentityStatus == (uint)RgIdentityStatus.Resolved &&
+            (ev.VolumeSerialNumber != 0 || ev.FileIdLow != 0 || ev.FileIdHigh != 0))
+        {
+            finalIdentity = new DurableFileIdentity(
+                ev.VolumeSerialNumber.ToString("X16"),
+                ev.FileIdLow.ToString("X16") + ev.FileIdHigh.ToString("X16"));
+        }
+
+        var state = (finalPath is not null, finalIdentity is not null) switch
+        {
+            (true, true) => CreateCompletionState.Succeeded,
+            (false, true) => CreateCompletionState.SucceededNameUnresolved,
+            (true, false) => CreateCompletionState.SucceededIdentityUnresolved,
+            _ => CreateCompletionState.SucceededNameAndIdentityUnresolved
+        };
+
+        return await operationStore.RecordCompletionAsync(
+                ev.RelatedSequence,
+                state,
+                ev.CompletionStatus,
+                ev.CompletionInformation,
+                finalPath,
+                finalIdentity,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static bool NtSuccess(uint status) => (status & 0x80000000u) == 0;
+}
+
 static class RenameReconciliation
 {
     public static async Task<RenameRollbackCompletion> HandleAsync(

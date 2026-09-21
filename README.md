@@ -1,4 +1,4 @@
-# RansomGuard 0.7.18.0
+# RansomGuard 0.7.19.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
@@ -6,7 +6,7 @@ and recover data through rollback plus adaptive crypto analysis.
 
 ## Core preservation milestone
 
-0.7.18.0 retains the 0.7.2 range-aware COW gate and adds explicit CREATE preservation semantics.
+0.7.19.0 retains the range-aware COW, crash-safe retention and verified copy-out recovery foundations while adding conservative crash-reconciliation recovery review.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 
@@ -73,6 +73,8 @@ Protocol v11 also removes the previous blind skip of paging-write callbacks. Aft
 
 0.7.18 adds explicit rollback session lifecycle and manual retention/cleanup. New sessions are hash-chain tracked as Created, Completed, Faulted and Hold-protected; only clean Completed, unheld, transaction-complete sessions may be selected. The default retention policy expires completed sessions after 30 days and caps managed completed storage at 32 GiB, with capacity-pressure purge limited to sessions at least 24 hours old. Cleanup is stale-plan resistant and crash-resumable: PurgeStarted is written before atomically moving Sessions/<id> to Retired/<id>, then Quarantined is committed, only the quarantined tree is deleted with reparse-safe traversal, and PurgeCompleted closes the audit chain. GateClient never runs retention automatically.
 
+0.7.19 integrates durable restart reconciliation into verified recovery planning without fabricating missing kernel results. Restart observations are assessed only for the exact operation kind, kernel request sequence and intent hash. A pending CREATE/RENAME may move from `Blocked` to `Review` only when every matching durable observation consistently supports completion or consistently supports non-completion. Any absent, ambiguous, indeterminate or conflicting observation set remains `Blocked`. These crash-reconciliation actions are never `Ready`; the executor still runs only full-preimage/range-COW copy-out actions and never performs automatic delete, rename or in-place restore.
+
 ## Recovery safety
 
 Range recovery:
@@ -124,7 +126,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.7.18.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.7.19.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 Manual disposable-VM runtime workflow:
 
@@ -144,9 +146,9 @@ It is not yet production ransomware blocking.
 
 Bounded concurrent gate admission/workers are now implemented with a kernel cap of 8 and a configurable user-mode worker pool (default 4). The port mutex is no longer held across blocking FltSendMessage waits.
 
-Restart evidence for pending/missing CREATE/RENAME completion events is durable and conservative; authoritative completion is never inferred from a restart probe. Paging writes on streams opened through the LAB gate are now visible as durable evidence without synchronously blocking the paging path.
+Restart evidence for pending/missing CREATE/RENAME completion events is durable and conservative; authoritative completion is never inferred from a restart probe. The recovery planner may expose exact, fully consistent restart evidence as `Review` only, while ambiguous/indeterminate/conflicting evidence stays `Blocked`. Paging writes on streams opened through the LAB gate are visible as durable evidence without synchronously blocking the paging path.
 
-Remaining core work includes deeper crash recovery for in-flight kernel requests,
-broader live NTFS/ReFS/fault-injection coverage beyond the automated disposable-VM mapping harness,
+Remaining core work includes stronger live crash/fault-injection coverage for operations whose kernel post-operation result is lost before user-mode delivery,
+broader live NTFS/ReFS coverage beyond the automated disposable-VM mapping harness,
 production retention UI/policy integration, containment policy, process-state capture, adaptive crypto reconstruction, production recovery UI/topology orchestration,
 driver signing and Microsoft-assigned production altitude.

@@ -68,6 +68,14 @@ public static class RollbackRecoveryPlanner
             }
         }
 
+        var restartRoot = Path.Combine(sessionRoot, "restart-state");
+        RestartReconciliationStore? restartEvidence = null;
+        if (Directory.Exists(restartRoot))
+        {
+            restartEvidence = new RestartReconciliationStore(restartRoot);
+            restartEvidence.VerifyAll();
+        }
+
         var createRoot = Path.Combine(sessionRoot, "create-state");
         if (Directory.Exists(createRoot))
         {
@@ -94,16 +102,38 @@ public static class RollbackRecoveryPlanner
             {
                 if (!operations.TryGetCompletion(intent.RequestSequence, out var completion) || completion is null)
                 {
+                    var assessment = restartEvidence?.Assess(
+                        RestartOperationKind.Create,
+                        intent.RequestSequence,
+                        intent.RecordSha256)
+                        ?? new RestartEvidenceAssessment(
+                            RestartEvidenceAssessmentState.NoEvidence,
+                            0,
+                            string.Empty);
+                    var reviewable = assessment.State is
+                        RestartEvidenceAssessmentState.ConsistentSupportsCompleted or
+                        RestartEvidenceAssessmentState.ConsistentSupportsNotCompleted;
+                    var crashReason = assessment.State switch
+                    {
+                        RestartEvidenceAssessmentState.ConsistentSupportsCompleted =>
+                            "CREATE intent has no authoritative kernel completion, but all durable restart observations consistently support completion. Manual review is allowed; restart evidence never becomes a kernel completion.",
+                        RestartEvidenceAssessmentState.ConsistentSupportsNotCompleted =>
+                            "CREATE intent has no authoritative kernel completion, but all durable restart observations consistently support non-completion. Manual review is allowed; restart evidence never becomes a kernel completion.",
+                        RestartEvidenceAssessmentState.Unresolved =>
+                            "CREATE intent has no authoritative kernel completion and restart evidence is ambiguous, indeterminate, or conflicting.",
+                        _ =>
+                            "CREATE intent has no authoritative kernel completion."
+                    };
                     actions.Add(NewAction(
                         actions.Count + 1,
                         RecoveryActionKind.ReviewCreateTransaction,
-                        RecoveryActionState.Blocked,
+                        reviewable ? RecoveryActionState.Review : RecoveryActionState.Blocked,
                         intent.OriginalPath,
                         null,
-                        intent.RecordSha256,
+                        reviewable ? assessment.LatestRecordSha256 : intent.RecordSha256,
                         intent.RequestSequence,
                         false,
-                        "CREATE intent has no authoritative kernel completion."));
+                        crashReason));
                     continue;
                 }
 
@@ -149,16 +179,38 @@ public static class RollbackRecoveryPlanner
             {
                 if (!renames.TryGetCompletion(intent.RequestSequence, out var completion) || completion is null)
                 {
+                    var assessment = restartEvidence?.Assess(
+                        RestartOperationKind.Rename,
+                        intent.RequestSequence,
+                        intent.RecordSha256)
+                        ?? new RestartEvidenceAssessment(
+                            RestartEvidenceAssessmentState.NoEvidence,
+                            0,
+                            string.Empty);
+                    var reviewable = assessment.State is
+                        RestartEvidenceAssessmentState.ConsistentSupportsCompleted or
+                        RestartEvidenceAssessmentState.ConsistentSupportsNotCompleted;
+                    var crashReason = assessment.State switch
+                    {
+                        RestartEvidenceAssessmentState.ConsistentSupportsCompleted =>
+                            "RENAME intent has no authoritative kernel completion, but all durable restart observations consistently support completion. Manual topology review is allowed; restart evidence never becomes a kernel completion.",
+                        RestartEvidenceAssessmentState.ConsistentSupportsNotCompleted =>
+                            "RENAME intent has no authoritative kernel completion, but all durable restart observations consistently support non-completion. Manual topology review is allowed; restart evidence never becomes a kernel completion.",
+                        RestartEvidenceAssessmentState.Unresolved =>
+                            "RENAME intent has no authoritative kernel completion and restart evidence is ambiguous, indeterminate, or conflicting.",
+                        _ =>
+                            "RENAME intent has no authoritative kernel completion."
+                    };
                     actions.Add(NewAction(
                         actions.Count + 1,
                         RecoveryActionKind.ReviewRenameTopology,
-                        RecoveryActionState.Blocked,
+                        reviewable ? RecoveryActionState.Review : RecoveryActionState.Blocked,
                         intent.SourcePath,
                         intent.DestinationPath,
-                        intent.RecordSha256,
+                        reviewable ? assessment.LatestRecordSha256 : intent.RecordSha256,
                         intent.RequestSequence,
                         false,
-                        "RENAME intent has no authoritative kernel completion."));
+                        crashReason));
                     continue;
                 }
 

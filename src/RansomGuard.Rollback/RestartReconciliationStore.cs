@@ -135,6 +135,65 @@ public sealed class RestartReconciliationStore
         }
     }
 
+    public RestartEvidenceAssessment Assess(
+        RestartOperationKind operationKind,
+        ulong requestSequence,
+        string intentRecordSha256)
+    {
+        if (!Enum.IsDefined(operationKind))
+            throw new InvalidDataException("Invalid restart reconciliation operation kind.");
+        if (requestSequence == 0)
+            throw new ArgumentOutOfRangeException(nameof(requestSequence));
+        if (!IsSha256(intentRecordSha256))
+            throw new InvalidDataException("Restart assessment requires a valid intent record hash.");
+
+        var matches = Observations
+            .Where(x =>
+                x.OperationKind == operationKind &&
+                x.RequestSequence == requestSequence &&
+                x.IntentRecordSha256.Equals(intentRecordSha256, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(x => x.Sequence)
+            .ToArray();
+
+        if (matches.Length == 0)
+            return new RestartEvidenceAssessment(
+                RestartEvidenceAssessmentState.NoEvidence,
+                0,
+                string.Empty);
+
+        var firstObservation = matches[0];
+        var first = firstObservation.Evidence;
+        var firstIsDecisive =
+            first is RestartEvidenceState.SupportsCompleted or RestartEvidenceState.SupportsNotCompleted;
+        var decisive = firstIsDecisive &&
+            matches.All(x =>
+                x.Evidence == first &&
+                SameObservedTopology(x, firstObservation));
+
+        var state = decisive
+            ? first == RestartEvidenceState.SupportsCompleted
+                ? RestartEvidenceAssessmentState.ConsistentSupportsCompleted
+                : RestartEvidenceAssessmentState.ConsistentSupportsNotCompleted
+            : RestartEvidenceAssessmentState.Unresolved;
+
+        return new RestartEvidenceAssessment(
+            state,
+            matches.Length,
+            matches[^1].RecordSha256);
+    }
+
+    private static bool SameObservedTopology(
+        RestartOperationObservation left,
+        RestartOperationObservation right) =>
+        left.SourcePath.Equals(right.SourcePath, StringComparison.OrdinalIgnoreCase) &&
+        left.SourceState == right.SourceState &&
+        left.SourceVolumeSerialHex.Equals(right.SourceVolumeSerialHex, StringComparison.OrdinalIgnoreCase) &&
+        left.SourceFileIdHex.Equals(right.SourceFileIdHex, StringComparison.OrdinalIgnoreCase) &&
+        left.DestinationPath.Equals(right.DestinationPath, StringComparison.OrdinalIgnoreCase) &&
+        left.DestinationState == right.DestinationState &&
+        left.DestinationVolumeSerialHex.Equals(right.DestinationVolumeSerialHex, StringComparison.OrdinalIgnoreCase) &&
+        left.DestinationFileIdHex.Equals(right.DestinationFileIdHex, StringComparison.OrdinalIgnoreCase);
+
     public void VerifyAll() => LoadAndValidateJournal(rebuildState: false);
 
     private void LoadAndValidateJournal(bool rebuildState = true)
@@ -391,6 +450,19 @@ public enum RestartEvidenceState
     Indeterminate = 3,
     Ambiguous = 4
 }
+
+public enum RestartEvidenceAssessmentState
+{
+    NoEvidence = 0,
+    ConsistentSupportsCompleted = 1,
+    ConsistentSupportsNotCompleted = 2,
+    Unresolved = 3
+}
+
+public sealed record RestartEvidenceAssessment(
+    RestartEvidenceAssessmentState State,
+    int ObservationCount,
+    string LatestRecordSha256);
 
 public enum RestartPathState
 {

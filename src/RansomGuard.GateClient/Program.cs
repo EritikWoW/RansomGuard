@@ -45,7 +45,7 @@ var storageBudget = new RollbackStorageBudget(
     checked(options.MinFreeMiB * RollbackStorageBudget.MiB));
 var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
 
-Console.WriteLine("RansomGuard LAB pre-write gate v0.7.18.0");
+Console.WriteLine("RansomGuard LAB pre-write gate v0.7.19.0");
 Console.WriteLine("LAB ONLY: use only inside a disposable test directory on a test machine/VM.");
 Console.WriteLine($"Protected LAB root : {options.Root}");
 Console.WriteLine($"Kernel NT root     : {ntRoot}");

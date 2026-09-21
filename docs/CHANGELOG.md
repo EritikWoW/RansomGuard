@@ -1,3 +1,16 @@
+# RansomGuard 0.7.19.0
+
+- Added conservative restart-evidence assessment for pending CREATE/RENAME operations, bound to exact operation kind, kernel request sequence and intent record SHA-256.
+- Recovery planning may move a pending CREATE/RENAME from Blocked to Review only when all matching durable restart observations consistently support completion or consistently support non-completion.
+- Consistency includes observed source/destination path state and durable file identity; same-decision evidence with topology or FILE_ID_INFO drift remains unresolved.
+- No evidence, ambiguous/indeterminate evidence, or conflicting observations remain Blocked.
+- Crash-reconciled topology actions are never Ready; automatic delete, rename, overwrite and in-place restore remain forbidden.
+- Restart reconciliation still never writes authoritative CREATE/RENAME completion records; correlated kernel post-operation completion journals remain the only authoritative source.
+- Recovery plan identity continues to bind all session JSONL evidence, so any later restart observation or completion invalidates an older plan before output creation.
+- Added rollback tests covering exact-match assessment, conflicting evidence, review-only CREATE/RENAME crash recovery, ambiguous fail-closed behavior and stale-plan rejection.
+- Extended rollback recovery source gates to require exact evidence binding and forbid restart code from exposing a completion writer.
+- Bumped userspace/LAB package version and driver INF version to 0.7.19.0; minifilter protocol remains v11.
+
 # RansomGuard 0.7.18.0
 
 - Added tamper-evident rollback session lifecycle journals with Created, Completed, Faulted, HoldSet and HoldReleased events.

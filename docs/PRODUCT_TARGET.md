@@ -59,6 +59,8 @@ Protocol v11 adds non-blocking visibility for paging writes associated with stre
 
 0.7.18 adds explicit lifecycle and retention for rollback evidence. New sessions are managed as Created/Completed/Faulted with optional Hold, and retention can only select verified Completed, unheld sessions with no pending CREATE/RENAME transactions. The default policy is 30 days / 32 GiB with a 24-hour floor for pressure cleanup. Purge is manual, stale-plan resistant and crash-resumable through a repository-level Started/Quarantined/Completed audit journal and a Sessions-to-Retired quarantine step before deletion.
 
-The next core milestones are broader NTFS/ReFS runtime/fault-injection coverage, production retention UI/policy integration, directory-topology rollback semantics beyond startup handle exclusion, deeper crash recovery for requests interrupted before authoritative kernel completion delivery,
+0.7.19 makes durable restart evidence actionable for recovery review without promoting it to authoritative completion. For a pending CREATE/RENAME, the recovery planner evaluates only observations bound to the exact operation kind, kernel request sequence and intent SHA-256. A transaction becomes Review-only when every matching observation consistently supports completion or consistently supports non-completion; missing, ambiguous, indeterminate or conflicting evidence remains Blocked. Ready execution is unchanged and still limited to verified full-preimage/range-COW copy-out.
+
+The next core milestones are broader NTFS/ReFS runtime/fault-injection coverage (including forced loss of post-operation delivery), production retention UI/policy integration, directory-topology rollback semantics beyond startup handle exclusion,
 containment, process-state capture,
 adaptive crypto analysis, and production recovery UI/orchestration across rollback plus crypto evidence.

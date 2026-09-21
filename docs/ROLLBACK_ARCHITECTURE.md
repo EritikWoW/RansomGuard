@@ -1,9 +1,7 @@
-# RansomGuard 0.7.13.0 - CREATE completion and identity reconciliation milestone
+# RansomGuard rollback architecture — current through 0.7.19.0
 
 RansomGuard is moving from detection-only telemetry to `preserve -> contain -> recover`.
-0.7.13.0 retains the deliberately constrained engineering minifilter gate, range-aware WRITE COW,
-CREATE/RENAME preservation and rename outcome reconciliation, and adds durable post-CREATE outcome,
-tunneled-name and kernel file-identity reconciliation.
+The current 0.7.19 engineering line retains the deliberately constrained protocol-v11 minifilter gate, range-aware WRITE COW, CREATE/RENAME preservation and kernel completion reconciliation, activation/mapping evidence, verified copy-out recovery, bounded storage and crash-resumable retention. It additionally makes exact, fully-consistent restart reconciliation evidence usable for Review-only crash recovery without converting that evidence into authoritative completion.
 
 ## WRITE ordering
 
@@ -203,6 +201,8 @@ For RENAME, source identity found at the destination while the source name is ab
 
 Restart evidence is deliberately **not** a CREATE/RENAME completion. The original completion journals remain authoritative only when populated by the correlated kernel post-operation event. Repeated identical restart observations are idempotent.
 
+0.7.19 adds a conservative assessment layer over those durable observations. Assessment is bound to the exact operation kind, kernel request sequence and intent-record SHA-256. A pending operation is considered reviewable only when every matching observation is decisive and all observations agree on `SupportsCompleted` or all agree on `SupportsNotCompleted`. Any absent, `Indeterminate`, `Ambiguous`, or conflicting set remains unresolved. The assessment stores no new completion and cannot populate CREATE/RENAME completion journals.
+
 ## Writable-open pre-preservation
 
 0.7.13.0 extends CREATE policy for existing files. If the requested DesiredAccess contains FILE_WRITE_DATA, FILE_APPEND_DATA or GENERIC_WRITE, the LAB gate treats the open as preservation-sensitive even when the CreateDisposition itself is non-destructive.
@@ -316,6 +316,8 @@ Every output is written under a new recovery root outside the rollback repositor
 
 No automatic delete, rename, overwrite-in-place, restore-in-place or originally-absent cleanup path exists. CREATE/RENAME topology remains Review/Blocked until explicit production recovery policy is designed and validated.
 
+Starting in 0.7.19, a pending CREATE/RENAME with exact, fully consistent restart assessment may be represented as `Review` rather than `Blocked`. The action is bound to the latest restart-record hash (whose journal chain covers earlier observations), while the overall recovery PlanId still binds all session JSONL evidence. Crash-reconciled actions never become `Ready`; only verified full-preimage/range-COW copy-out remains executable.
+
 ## Rollback storage admission and disk-pressure policy
 
 0.7.17 adds a session-level storage admission layer around Engineering LAB preservation.
@@ -349,8 +351,7 @@ No startup path invokes the retention executor and the normal Audit package does
 
 ## Still required before production
 
-- deeper crash recovery for requests interrupted before authoritative kernel completion delivery;
-- broader live NTFS/ReFS validation beyond the automated mapping harness: directory-handle startup cases, reboot, Driver Verifier and fault injection;
+- broader live NTFS/ReFS validation beyond the automated mapping harness: forced post-operation delivery loss, directory-handle startup cases, reboot, Driver Verifier and fault injection;
 - production retention UI/policy integration, incident-aware holds and long-running repository telemetry;
 - transition from protected-root health to containment/block policy;
 - process-state capture and adaptive crypto analysis;

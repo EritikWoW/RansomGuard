@@ -1,6 +1,6 @@
-# Verified rollback recovery — v0.7.16.0
+# Verified rollback recovery — current through v0.7.19.0
 
-RansomGuard 0.7.16 adds a deterministic recovery-planning layer for Engineering LAB rollback sessions.
+RansomGuard 0.7.16 introduced deterministic recovery planning for Engineering LAB rollback sessions. 0.7.19 extends that planner with conservative review-only use of durable restart reconciliation evidence.
 
 This is **copy-out recovery only**. It does not overwrite, rename or delete live source/evidence paths.
 
@@ -29,8 +29,8 @@ The output directory must not already exist and must remain outside the rollback
 The planner classifies every relevant durable record:
 
 - **Ready** — safe copy-out action can be executed.
-- **Review** — evidence is authoritative enough to describe the topology event, but RansomGuard will not mutate live topology automatically.
-- **Blocked** — authoritative completion/name/identity evidence is missing or unresolved.
+- **Review** — topology needs a human decision. This includes authoritative completion evidence and, starting in 0.7.19, exact fully-consistent restart evidence that supports one crash outcome without claiming authoritative completion.
+- **Blocked** — authoritative completion/name/identity evidence is missing or unresolved and restart evidence is absent, ambiguous, indeterminate, or conflicting.
 - **Informational** — no recovery action is necessary, or a stronger recovery source supersedes it.
 
 Only two action kinds may ever be `Ready`:
@@ -76,15 +76,15 @@ RansomGuard does **not** automatically delete the current file. A file created d
 
 ## CREATE and RENAME transactions
 
-Pending CREATE/RENAME intents are `Blocked`.
+Authoritative kernel completion remains the strongest evidence. Successful CREATE on an originally absent path remains `Review`, successful RENAME remains `Review`, unresolved final name/identity remains `Blocked`, and failed filesystem operations are `Informational`.
 
-Successful CREATE on an originally absent path remains `Review`.
+For a pending CREATE/RENAME with no authoritative completion, 0.7.19 checks `restart-reconciliation-journal.jsonl` only for records bound to the exact operation kind, kernel request sequence, and intent-record SHA-256.
 
-Successful RENAME remains `Review`: the plan records source/destination evidence, but the executor never renames live objects.
+- If every matching durable observation is decisive and all observations agree on `SupportsCompleted`, the pending topology action becomes `Review`.
+- If every matching durable observation is decisive and all observations agree on `SupportsNotCompleted`, the pending topology action becomes `Review`.
+- If there is no matching evidence, or any matching observation is `Indeterminate` / `Ambiguous`, or observations conflict, the action remains `Blocked`.
 
-Unresolved final name or identity remains `Blocked`.
-
-Failed filesystem operations are `Informational`.
+This assessment never writes a CREATE/RENAME completion journal entry and never turns a topology action into `Ready`. The executor therefore still cannot delete incident-created paths, reverse renames, overwrite live objects, or restore in place.
 
 ## Plan identity and stale-plan refusal
 
@@ -95,7 +95,7 @@ The planner computes:
 
 The executor does not trust actions from the supplied JSON file. It re-builds a fresh plan from the rollback repository and requires the supplied `PlanId` and evidence digest to match.
 
-If new evidence appears after the plan was generated, execution is refused before the output directory is created.
+If new evidence appears after the plan was generated—including another restart observation or a later authoritative completion—execution is refused before the output directory is created.
 
 ## Output
 
@@ -117,7 +117,7 @@ The executor contains no automatic topology mutation path and does not expose de
 
 ## Current limitations
 
-0.7.16 does not yet provide:
+0.7.19 still does not provide:
 
 - automatic directory-tree rollback;
 - automatic removal of incident-created paths;

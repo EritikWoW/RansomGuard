@@ -1,4 +1,4 @@
-# RansomGuard minifilter engineering lab — v0.7.8.0
+# RansomGuard minifilter engineering lab — v0.7.9.0
 
 The minifilter has two mutually exclusive user-mode connection modes:
 
@@ -8,6 +8,8 @@ The minifilter has two mutually exclusive user-mode connection modes:
 
 The LAB Gate exists to validate preservation ordering. It is **not** a production driver configuration.
 Do not load it on a primary workstation and do not point it at real documents.
+
+On startup, v0.7.9.0 also scans older pending CREATE/RENAME intents under the same LAB root and appends conservative restart evidence (path state + FILE_ID_INFO when available). This evidence is diagnostic/recovery input only and never substitutes for the original kernel completion event.
 
 ## Safety boundaries
 
@@ -34,7 +36,7 @@ Build the engineering package:
 .\build_lab.cmd
 ```
 
-Then, from the generated `RansomGuard-Lab-v0.7.8.0-*` directory, build/install the minifilter only in a
+Then, from the generated `RansomGuard-Lab-v0.7.9.0-*` directory, build/install the minifilter only in a
 Windows test VM using the existing lab scripts.
 
 ## Audit mode
@@ -92,7 +94,7 @@ prove production compatibility, crash safety, memory-mapped-write coverage, larg
 containment efficacy, or universal rollback.
 
 
-## Bounded gate concurrency (0.7.8.0)
+## Bounded gate concurrency (0.7.9.0)
 
 The LAB gate no longer serializes the full blocking FltSendMessage duration under the global port mutex. Up to 8 kernel gate requests may be in flight. Additional in-scope destructive I/O fails closed rather than creating an unbounded queue.
 

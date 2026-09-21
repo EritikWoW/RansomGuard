@@ -627,6 +627,74 @@ try
     Check(reopenedRename.PendingIntents.Count == 0,
         "reopened rename state preserves completion correlation");
 
+    var renameIdentityRoot = Path.Combine(root, "rename-identity-state");
+    var renameIdentityStore = new RenameIdentityStore(renameIdentityRoot, renameStore);
+    Check(renameIdentityStore.PendingSuccessfulCompletions.Count == 2,
+        "successful rename completions remain identity-pending until kernel FILE_ID_INFO is persisted");
+
+    var renameIdentityResolved = await renameIdentityStore.RecordAsync(
+        101, RenameIdentityState.Resolved, sourceIdentity);
+    Check(renameIdentityResolved.State == RenameIdentityState.Resolved &&
+          renameIdentityResolved.FinalIdentity == sourceIdentity,
+        "post-rename kernel identity binds completed rename to original source file");
+    Check(renameIdentityStore.PendingSuccessfulCompletions.Single().RequestSequence == 103,
+        "identity reconciliation tracks only still-unresolved successful rename completions");
+
+    var renameIdentityQueryFailed = await renameIdentityStore.RecordAsync(
+        103, RenameIdentityState.QueryFailed, null);
+    Check(renameIdentityQueryFailed.State == RenameIdentityState.QueryFailed,
+        "post-rename identity query failure is explicit rather than inferred as success");
+    Check(renameIdentityStore.PendingSuccessfulCompletions.Count == 0,
+        "explicit rename identity outcomes clear identity-pending completions");
+
+    var reopenedRenameIdentity = new RenameIdentityStore(
+        renameIdentityRoot, new RenameRollbackStore(renameRoot));
+    Check(reopenedRenameIdentity.Records.Count == 2,
+        "rename identity reconciliation journal rebuilds after reopen");
+
+    var exactRenameIdentity = await renameIdentityStore.RecordAsync(
+        101, RenameIdentityState.Resolved, sourceIdentity);
+    Check(exactRenameIdentity.RecordSha256 == renameIdentityResolved.RecordSha256,
+        "exact duplicate rename identity reconciliation is idempotent");
+
+    _ = await renameStore.CaptureIntentAsync(
+        105, renameSource, renameDestination, sourceIdentity, false,
+        RenameDestinationState.OriginallyAbsent, null, 0, 10);
+    _ = await renameStore.RecordCompletionAsync(
+        105, RenameCompletionState.Succeeded, 0, 0, renameDestination);
+    var renameMismatch = await renameIdentityStore.RecordAsync(
+        105, RenameIdentityState.Mismatch, destinationIdentity);
+    Check(renameMismatch.State == RenameIdentityState.Mismatch &&
+          renameMismatch.FinalIdentity == destinationIdentity,
+        "post-rename file identity mismatch is durably recorded as non-authoritative");
+
+    _ = await renameStore.CaptureIntentAsync(
+        106, renameSource, renameDestination, sourceIdentity, false,
+        RenameDestinationState.OriginallyAbsent, null, 0, 10);
+    _ = await renameStore.RecordCompletionAsync(
+        106, RenameCompletionState.Succeeded, 0, 0, renameDestination);
+    var falseResolvedRejected = false;
+    try
+    {
+        _ = await renameIdentityStore.RecordAsync(
+            106, RenameIdentityState.Resolved, destinationIdentity);
+    }
+    catch (InvalidDataException) { falseResolvedRejected = true; }
+    Check(falseResolvedRejected,
+        "rename identity cannot be marked resolved when kernel FILE_ID_INFO differs from source intent");
+    _ = await renameIdentityStore.RecordAsync(
+        106, RenameIdentityState.QueryFailed, null);
+
+    var failedRenameIdentityRejected = false;
+    try
+    {
+        _ = await renameIdentityStore.RecordAsync(
+            102, RenameIdentityState.QueryFailed, null);
+    }
+    catch (InvalidDataException) { failedRenameIdentityRejected = true; }
+    Check(failedRenameIdentityRejected,
+        "failed rename completion cannot claim post-operation identity reconciliation");
+
     var conflictingRenameCompletionRejected = false;
     try
     {
@@ -685,6 +753,29 @@ try
     try { nestedRenameRepo.VerifyAll(); }
     catch (InvalidDataException) { nestedRenameRejected = true; }
     Check(nestedRenameRejected, "repository verification includes nested rename-state journal");
+
+    var nestedRenameIdentityRepo = new RollbackRepository(Path.Combine(root, "nested-rename-identity-repo"));
+    var nestedRenameIdentitySession = nestedRenameIdentityRepo.CreateSession("nested_rename_identity");
+    var nestedRenameTransactions = new RenameRollbackStore(
+        Path.Combine(nestedRenameIdentitySession.Root, "rename-state"));
+    _ = await nestedRenameTransactions.CaptureIntentAsync(
+        250, renameSource, renameDestination, sourceIdentity, false,
+        RenameDestinationState.OriginallyAbsent, null, 0, 10);
+    _ = await nestedRenameTransactions.RecordCompletionAsync(
+        250, RenameCompletionState.Succeeded, 0, 0, renameDestination);
+    var nestedRenameIdentityState = new RenameIdentityStore(
+        Path.Combine(nestedRenameIdentitySession.Root, "rename-identity-state"),
+        nestedRenameTransactions);
+    _ = await nestedRenameIdentityState.RecordAsync(
+        250, RenameIdentityState.Resolved, sourceIdentity);
+    var nestedRenameIdentityJournal = await File.ReadAllBytesAsync(nestedRenameIdentityState.JournalPath);
+    nestedRenameIdentityJournal[^2] ^= 1;
+    await File.WriteAllBytesAsync(nestedRenameIdentityState.JournalPath, nestedRenameIdentityJournal);
+    var nestedRenameIdentityRejected = false;
+    try { nestedRenameIdentityRepo.VerifyAll(); }
+    catch (InvalidDataException) { nestedRenameIdentityRejected = true; }
+    Check(nestedRenameIdentityRejected,
+        "repository verification includes nested rename identity reconciliation journal");
 
     Console.WriteLine($"All {passed} rollback tests passed. These are file-store tests, not minifilter integration tests.");
     return 0;

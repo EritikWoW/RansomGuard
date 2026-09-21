@@ -1,3 +1,17 @@
+# RansomGuard 0.7.16.0
+
+- Added deterministic verified rollback recovery planning for Engineering LAB sessions.
+- Planner revalidates the rollback repository/session, hashes all session JSONL journals, and derives a stable SHA-256 PlanId.
+- Recovery actions are classified as Ready, Review, Blocked or Informational; only full-preimage and range-COW copy-out actions can be Ready.
+- Added stale-plan refusal: executor rebuilds the current plan and requires PlanId/evidence digest equality before creating the recovery output root.
+- Added copy-out executor that writes only to a new output tree, records recovered length/SHA-256, and never deletes, renames or overwrites live source/evidence paths.
+- Originally-absent paths and successful CREATE/RENAME topology changes remain review-only; pending or unresolved CREATE/RENAME operations remain blocked.
+- Added LAB-only RansomGuard.RollbackRecovery CLI with plan/execute commands and rollback_recovery.cmd convenience launcher.
+- Added reparse/junction ancestor refusal for plan and recovery output paths.
+- Added tests for deterministic plan identity, full-preimage vs range-COW precedence, successful byte-identical copy-out, untouched damaged sources, and stale-plan rejection before output creation.
+- Added static source gates ensuring the executor never consumes caller-supplied actions or exposes destructive topology verbs.
+- Normal Audit bundle remains unchanged; rollback recovery CLI is Engineering-LAB-only.
+
 # RansomGuard 0.7.15.0
 
 - Extended activation preflight from ordinary files to the protected directory topology without changing protocol v11.

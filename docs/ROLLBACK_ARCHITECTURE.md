@@ -297,6 +297,25 @@ The LAB GateClient receives messages continuously and dispatches preservation/re
 
 Bounded concurrency and conservative restart evidence are implemented. A worker/process crash can still leave an intent without authoritative kernel completion; restart evidence preserves what can be observed without guessing.
 
+## Verified rollback recovery planning
+
+0.7.16 adds a recovery orchestration layer on top of the validated rollback stores without adding an in-place restore path.
+
+For one session, the planner first runs repository/session validation, then hashes every session JSONL journal into an aggregate evidence digest. A deterministic PlanId binds that digest to the canonical recovery actions.
+
+Actions are classified as:
+
+- Ready: full-preimage or range-COW copy-out only;
+- Review: authoritative topology evidence that still requires a human decision;
+- Blocked: missing/unresolved authoritative completion evidence;
+- Informational: no action required or superseded recovery evidence.
+
+The executor treats the supplied plan file only as a freshness token. It rebuilds the current plan from repository evidence and requires PlanId plus evidence digest equality. It then executes the freshly rebuilt Ready list, never the caller-supplied action list.
+
+Every output is written under a new recovery root outside the rollback repository. Full-preimage recovery uses the existing verified snapshot path. Range-COW recovery uses the current damaged source only as a base and overlays committed original blocks. The executor records recovered length and SHA-256 in recovery-execution.json.
+
+No automatic delete, rename, overwrite-in-place, restore-in-place or originally-absent cleanup path exists. CREATE/RENAME topology remains Review/Blocked until explicit production recovery policy is designed and validated.
+
 ## Still required before production
 
 - deeper crash recovery for requests interrupted before authoritative kernel completion delivery;
@@ -304,7 +323,7 @@ Bounded concurrency and conservative restart evidence are implemented. A worker/
 - storage quotas, retention and pressure policy;
 - transition from protected-root health to containment/block policy;
 - process-state capture and adaptive crypto analysis;
-- verified recovery orchestration across rollback and crypto recovery;
+- production recovery UI/orchestration across rollback and crypto recovery;
 - signed driver distribution and Microsoft-assigned altitude.
 
 ## Windows LAB test target

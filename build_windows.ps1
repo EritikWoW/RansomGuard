@@ -24,6 +24,7 @@ try {
     $runtimeHarness = 'tests\RansomGuard.Minifilter.RuntimeHarness\RansomGuard.Minifilter.RuntimeHarness.csproj'
     $ui = 'src\RansomGuard.Ui\RansomGuard.Ui.csproj'
     $recovery = 'src\RansomGuard.RecoveryCli\RansomGuard.RecoveryCli.csproj'
+    $rollbackRecovery = 'src\RansomGuard.RollbackRecoveryCli\RansomGuard.RollbackRecoveryCli.csproj'
     $recoveryTests = 'tests\RansomGuard.Recovery.Tests\RansomGuard.Recovery.Tests.csproj'
     $tests = 'tests\RansomGuard.Tests\RansomGuard.Tests.csproj'
     $scopedTests = 'tests\RansomGuard.ScopedTrust.Tests\RansomGuard.ScopedTrust.Tests.csproj'
@@ -97,6 +98,7 @@ try {
     & (Join-Path $PSScriptRoot 'tools\verify_administration.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_localization.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_rollback.ps1')
+    & (Join-Path $PSScriptRoot 'tools\verify_rollback_recovery.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_gate_client.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_runtime_vm_harness.ps1')
     Write-Host '[1/6] Restore and execute policy/recovery/rollback tests (no process suspension in these tests).'
@@ -116,7 +118,7 @@ try {
     & (Join-Path $PSScriptRoot 'tools\verify_recovery_boundary.ps1')
     Write-Host '[2/6] Restore Windows projects. Known package vulnerabilities/audit failures block this build.'
     $projects=@($svc,$ui,$recovery)
-    if($IncludeLab){$projects+=@($sim,$filterClient,$gateClient,$runtimeHarness)}
+    if($IncludeLab){$projects+=@($sim,$filterClient,$gateClient,$runtimeHarness,$rollbackRecovery)}
     foreach ($project in $projects) {
         Run-Dotnet -Arguments @('restore',$project,'-r','win-x64','-p:SelfContained=true',$auditErrors)
     }
@@ -176,14 +178,16 @@ try {
         $clientDir=Join-Path $labRelease 'MinifilterLab\Client'
         $gateClientDir=Join-Path $labRelease 'MinifilterLab\GateClient'
         $runtimeHarnessDir=Join-Path $labRelease 'MinifilterLab\RuntimeHarness'
-        New-Item -ItemType Directory -Path $simDir,$clientDir,$gateClientDir,$runtimeHarnessDir -Force | Out-Null
+        $rollbackRecoveryDir=Join-Path $labRelease 'RollbackRecovery'
+        New-Item -ItemType Directory -Path $simDir,$clientDir,$gateClientDir,$runtimeHarnessDir,$rollbackRecoveryDir -Force | Out-Null
         Run-Dotnet -Arguments (@('publish',$sim)+$publishFlags+@('-o',$simDir))
         Run-Dotnet -Arguments (@('publish',$filterClient)+$publishFlags+@('-o',$clientDir))
         Run-Dotnet -Arguments (@('publish',$gateClient)+$publishFlags+@('-o',$gateClientDir))
         Run-Dotnet -Arguments (@('publish',$runtimeHarness)+$publishFlags+@('-o',$runtimeHarnessDir))
+        Run-Dotnet -Arguments (@('publish',$rollbackRecovery)+$publishFlags+@('-o',$rollbackRecoveryDir))
         $simHash=(Get-FileHash -LiteralPath (Join-Path $simDir 'RansomGuard.Simulator.exe') -Algorithm SHA256).Hash
         [IO.File]::WriteAllText((Join-Path $simDir 'simulator.sha256'),$simHash,[Text.Encoding]::ASCII)
-        foreach($file in @('test_lab.cmd','test_lab_full_dump.cmd','native_selftest.cmd','install_service.cmd','uninstall_service.cmd','summarize_last_lab.cmd','inspect_state_acl.cmd','repair_state_store.cmd','build_minifilter.cmd','verify_minifilter_source.cmd','install_minifilter_lab.cmd','unload_minifilter_lab.cmd','minifilter_status.cmd','run_minifilter_audit.cmd','run_minifilter_gate_lab.cmd','preview_ui.cmd','ui_smoketest.cmd')) {
+        foreach($file in @('test_lab.cmd','test_lab_full_dump.cmd','native_selftest.cmd','install_service.cmd','uninstall_service.cmd','summarize_last_lab.cmd','inspect_state_acl.cmd','repair_state_store.cmd','build_minifilter.cmd','verify_minifilter_source.cmd','install_minifilter_lab.cmd','unload_minifilter_lab.cmd','minifilter_status.cmd','run_minifilter_audit.cmd','run_minifilter_gate_lab.cmd','rollback_recovery.cmd','preview_ui.cmd','ui_smoketest.cmd')) {
             Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $labRelease
         }
         # Copy only tools with a corresponding command; no build/design scripts in runtime packages.
@@ -198,7 +202,7 @@ try {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'docs\LAB_QUICKSTART.txt') -Destination (Join-Path $labRelease 'START_HERE.txt') -Force
         $labDocs=Join-Path $labRelease 'docs'
         New-Item -ItemType Directory -Path $labDocs -Force | Out-Null
-        foreach($file in @('MINIFILTER_LAB.md','ROLLBACK_ARCHITECTURE.md','PRODUCT_TARGET.md','SECURITY.md','TESTING.md')){
+        foreach($file in @('MINIFILTER_LAB.md','ROLLBACK_ARCHITECTURE.md','ROLLBACK_RECOVERY.md','PRODUCT_TARGET.md','SECURITY.md','TESTING.md')){
             Copy-Item -LiteralPath (Join-Path $PSScriptRoot ('docs\'+$file)) -Destination $labDocs
         }
     }
@@ -217,7 +221,7 @@ try {
     $unexpected=@(Get-ChildItem -LiteralPath $release -File -Recurse | Where-Object {
         $_.Extension -in @('.sys','.cat','.inf','.dmp','.pdb','.cs','.xaml','.svg') -or
         $_.Name -like '*Simulator*' -or $_.Name -like '*FilterClient*' -or $_.Name -like '*GateClient*' -or
-        $_.Name -like '*RuntimeHarness*'
+        $_.Name -like '*RuntimeHarness*' -or $_.Name -like '*RollbackRecovery*'
     })
     if($unexpected.Count -gt 0){throw 'Audit bundle contains engineering-only files.'}
     Write-Host '[5/6] Run synthetic WPF rendering test, including all four activity icons.'
@@ -228,7 +232,7 @@ try {
     foreach($bundle in @($release,$labRelease)){
         if([string]::IsNullOrWhiteSpace($bundle)){continue}
         $isLab=$bundle -eq $labRelease
-        $state=[ordered]@{schema=1;version=$productVersion;profile=$(if($isLab){'EngineeringLab'}else{'AuditConsole'});ordinaryApps='AuditOnly';uiTransport='PushFramedPipeV2';recovery='OfflineRGTEST03';rollback='DurableRangeCowLabFoundation';scopedTrust='ExactHashContextAuditOnly';uiAdministration='SameExeUacOwnServiceAndReviewedRules';driverInstalledByBuild=$false;kernelWriteGateActive=$false;labKernelGateAvailable=$isLab;labKernelGate='ExplicitSingleRootRangeCowAndFullMetadataPreimage';uiTestPassed=$true}
+        $state=[ordered]@{schema=1;version=$productVersion;profile=$(if($isLab){'EngineeringLab'}else{'AuditConsole'});ordinaryApps='AuditOnly';uiTransport='PushFramedPipeV2';recovery='OfflineRGTEST03';rollback='VerifiedCopyOutRecoveryPlanLab';scopedTrust='ExactHashContextAuditOnly';uiAdministration='SameExeUacOwnServiceAndReviewedRules';driverInstalledByBuild=$false;kernelWriteGateActive=$false;labKernelGateAvailable=$isLab;labKernelGate='ExplicitSingleRootRangeCowAndFullMetadataPreimage';uiTestPassed=$true}
         $state | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $bundle 'BUILD_STATUS.json') -Encoding UTF8
         $hashes=Get-ChildItem -LiteralPath $bundle -File -Recurse | Sort-Object FullName | ForEach-Object {
             '{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash,$_.FullName.Substring($bundle.Length+1)

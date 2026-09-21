@@ -1,7 +1,7 @@
-# RansomGuard rollback architecture — current through 0.7.20.0
+# RansomGuard rollback architecture — current through 0.7.21.0
 
 RansomGuard is moving from detection-only telemetry to `preserve -> contain -> recover`.
-The current 0.7.20 engineering line retains the deliberately constrained protocol-v12 minifilter gate, range-aware WRITE COW, CREATE/RENAME preservation and kernel completion reconciliation, activation/mapping evidence, verified copy-out recovery, bounded storage and crash-resumable retention. It additionally makes exact, fully-consistent restart reconciliation evidence usable for Review-only crash recovery without converting that evidence into authoritative completion.
+The current 0.7.21 engineering line retains the deliberately constrained protocol-v13 minifilter gate, range-aware WRITE COW, CREATE/RENAME preservation and kernel completion reconciliation, activation/mapping evidence, verified copy-out recovery, bounded storage and crash-resumable retention. It additionally makes exact, fully-consistent restart reconciliation evidence usable for Review-only crash recovery without converting that evidence into authoritative completion.
 
 ## WRITE ordering
 
@@ -383,3 +383,15 @@ Containment is deliberately separate from rollback evidence. GateClient may requ
 For that process, mutating CREATE requests are classified from disposition/options/desired access and denied before a user-mode preservation message. Non-paging WRITE and interesting set-information operations (RENAME, delete-disposition and truncate/allocation changes) are likewise denied before `RgGateEvent`. Read-only CREATE/open remains possible. Paging-write and section callbacks remain evidence-only/non-blocking; activation preflight is expected to prevent pre-existing writable mapping hazards.
 
 No release command exists in protocol v12. Disconnect or unload clears the referenced process object. This first containment milestone is intentionally explicit and LAB-only; the ordinary service's heuristic detector is not permitted to arm it yet.
+
+## Event-bound containment transition — 0.7.21
+
+Protocol v13 adds `RG_GATE_REPLY_FLAG_CONTAIN_REQUESTOR`. The flag is valid only on a reply whose preservation decision already allows the exact operation. Unknown flags, or a containment flag attached to a denied/unpreserved operation, cause the gate operation to fail closed.
+
+Before sending the flagged reply, GateClient writes a Requested record containing the kernel gate sequence, authorized process creation time, mutation type/path, preservation decision, event count and distinct-path count. The authorization object keeps the original process handle open and refuses transition if it has exited.
+
+The minifilter handles the reply while the original callback data still identifies the requestor. It calls `FltGetRequestorProcess(Data)`, references that exact `PEPROCESS`, and installs it as the containment latch. A conflict with another contained process or inability to retain the requestor denies the current operation instead of allowing an unconfirmed transition.
+
+After a new latch is installed, the driver queues a no-reply `ContainmentActivated` event whose `RelatedSequence` is the original preserved gate event. GateClient accepts it only when an exact Requested record exists, then writes the KernelActive record into the same SHA-256 chain. Requested-without-KernelActive makes clean session completion impossible.
+
+This provides an event-to-containment transport primitive, not a production verdict policy. The normal service remains AuditOnly until authorization, false-positive handling, scope policy and production runtime validation are separately completed.

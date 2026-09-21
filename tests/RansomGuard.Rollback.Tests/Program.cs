@@ -118,6 +118,70 @@ try
     catch (ArgumentException) { unsafeIdRejected = true; }
     Check(unsafeIdRejected, "unsafe session id is rejected");
 
+    // Crash ambiguity is rejected: durable objects without a journal commit must not be silently trusted.
+    var orphanRoot = Path.Combine(root, "orphan-full");
+    var orphanStore = new RollbackStore(orphanRoot);
+    var orphanObjects = Path.Combine(orphanRoot, "objects");
+    await File.WriteAllBytesAsync(Path.Combine(orphanObjects, "orphan.preimage"), new byte[] { 1, 2, 3 });
+    var orphanRejected = false;
+    try { orphanStore.VerifyAll(); }
+    catch (InvalidDataException) { orphanRejected = true; }
+    Check(orphanRejected, "unjournaled full pre-image object is rejected");
+
+    var tempRoot = Path.Combine(root, "temp-full");
+    var tempStore = new RollbackStore(tempRoot);
+    await File.WriteAllBytesAsync(Path.Combine(tempRoot, "objects", "capture.tmp"), new byte[] { 9 });
+    var tempRejected = false;
+    try { tempStore.VerifyAll(); }
+    catch (InvalidDataException) { tempRejected = true; }
+    Check(tempRejected, "incomplete full pre-image temp artifact is rejected");
+
+    // Same-length corruption must be caught by SHA-256, not only by object length.
+    var hashSource = Path.Combine(sourceDir, "hash.bin");
+    await File.WriteAllBytesAsync(hashSource, Encoding.UTF8.GetBytes("HASH-ORIGINAL-CONTENT"));
+    var hashStore = new RollbackStore(Path.Combine(root, "hash-session"));
+    var hashCapture = await hashStore.CapturePreimageAsync(hashSource, RollbackMutationKind.Write);
+    var hashObject = Path.Combine(hashStore.Root, hashCapture.SnapshotRelativePath);
+    var hashBytes = await File.ReadAllBytesAsync(hashObject);
+    hashBytes[0] ^= 0x5A;
+    await File.WriteAllBytesAsync(hashObject, hashBytes);
+    var hashRejected = false;
+    try { hashStore.VerifyAll(); }
+    catch (InvalidDataException) { hashRejected = true; }
+    Check(hashRejected, "same-length full pre-image corruption is rejected by SHA-256");
+
+    var rangeOrphanRoot = Path.Combine(root, "orphan-range");
+    var rangeOrphan = new RangeRollbackStore(rangeOrphanRoot);
+    await File.WriteAllBytesAsync(Path.Combine(rangeOrphanRoot, "objects", "orphan.block"), new byte[] { 1 });
+    var rangeOrphanRejected = false;
+    try { rangeOrphan.VerifyAll(); }
+    catch (InvalidDataException) { rangeOrphanRejected = true; }
+    Check(rangeOrphanRejected, "unjournaled range block is rejected");
+
+    var rangeTempRoot = Path.Combine(root, "temp-range");
+    var rangeTemp = new RangeRollbackStore(rangeTempRoot);
+    await File.WriteAllBytesAsync(Path.Combine(rangeTempRoot, "objects", "block.tmp"), new byte[] { 1 });
+    var rangeTempRejected = false;
+    try { rangeTemp.VerifyAll(); }
+    catch (InvalidDataException) { rangeTempRejected = true; }
+    Check(rangeTempRejected, "incomplete range temp artifact is rejected");
+
+    // Repository-wide verification must include nested write-cow stores.
+    var nestedRepo = new RollbackRepository(Path.Combine(root, "nested-repo"));
+    var nestedSession = nestedRepo.CreateSession("nested");
+    var nestedSource = Path.Combine(sourceDir, "nested.bin");
+    await File.WriteAllBytesAsync(nestedSource, new byte[2 * 1024 * 1024]);
+    var nestedCow = new RangeRollbackStore(Path.Combine(nestedSession.Root, "write-cow"));
+    await nestedCow.CaptureWritePreimageAsync(nestedSource, 0, 4096);
+    var nestedBlock = Directory.EnumerateFiles(Path.Combine(nestedCow.Root, "objects"), "*.block").Single();
+    var nestedBytes = await File.ReadAllBytesAsync(nestedBlock);
+    nestedBytes[0] ^= 0x7F;
+    await File.WriteAllBytesAsync(nestedBlock, nestedBytes);
+    var nestedRejected = false;
+    try { nestedRepo.VerifyAll(); }
+    catch (InvalidDataException) { nestedRejected = true; }
+    Check(nestedRejected, "repository verification includes nested range COW hashes");
+
     Console.WriteLine($"All {passed} rollback tests passed. These are file-store tests, not minifilter integration tests.");
     return 0;
 }

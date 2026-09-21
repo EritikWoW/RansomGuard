@@ -15,7 +15,9 @@ foreach($required in @(
     'RestoreToNewCopyAsync',
     'output.SetLength(baseline.OriginalLength)',
     'Range rollback block SHA-256 mismatch',
-    'Unjournaled range rollback object found'
+    'Unjournaled range rollback object found',
+    'Incomplete range rollback temp artifact found',
+    'Range rollback block does not match the original file geometry'
 )){
     if($rangeText -notmatch [regex]::Escape($required)){throw "Range rollback source gate missing invariant: $required"}
 }
@@ -34,7 +36,10 @@ foreach($required in @(
     'RecordSha256',
     'RestoreToNewCopyAsync',
     'Rollback pre-image hash mismatch',
-    'Recovery output already exists'
+    'Recovery output already exists',
+    'Committed rollback object SHA-256 mismatch',
+    'Unjournaled rollback object found',
+    'Incomplete rollback temp artifact found'
 )){
     if($text -notmatch [regex]::Escape($required)){throw "Rollback source gate missing invariant: $required"}
 }
@@ -44,5 +49,9 @@ if($text -match 'File\.Move\(temp,\s*capture\.OriginalPath' -or $text -match 'Fi
 $service=Get-Content -LiteralPath $program -Raw
 if($service -notmatch 'rollbackRepository\.VerifyAll\(\)'){throw 'Service must validate the rollback repository before monitoring starts.'}
 if($service -match 'CapturePreimageAsync\('){throw 'Normal service must not claim automatic pre-image capture before the minifilter write gate is validated.'}
-Write-Host 'Rollback source gate PASSED: full-file and range-aware COW journals, write-through commits, first-preimage semantics, copy-only restore.'
+$gate=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.GateClient\Program.cs') -Raw
+if($gate -notmatch 'repository\.VerifyAll\(\)'){throw 'LAB gate must validate all existing rollback sessions before starting a new session.'}
+$repository=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Rollback\RollbackRepository.cs') -Raw
+if($repository -notmatch 'new RangeRollbackStore\(rangeRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested write-cow stores.'}
+Write-Host 'Rollback source gate PASSED: full-file and range-aware COW journals, hashes, crash-artifact rejection, write-through commits, first-preimage semantics, copy-only restore.'
 Write-Host 'Normal service capture remains disabled; v0.7.2 keeps blocking COW inside the explicit LAB gate only.'

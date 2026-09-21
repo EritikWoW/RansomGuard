@@ -232,6 +232,9 @@ public sealed class RangeRollbackStore
         foreach (var file in Directory.EnumerateFiles(_objects, "*.block", SearchOption.TopDirectoryOnly))
             if (!referenced.Contains(Path.GetFullPath(file)))
                 throw new InvalidDataException("Unjournaled range rollback object found: " + file);
+
+        foreach (var file in Directory.EnumerateFiles(_objects, "*.tmp", SearchOption.TopDirectoryOnly))
+            throw new InvalidDataException("Incomplete range rollback temp artifact found: " + file);
     }
 
     private RangeRollbackBaseline EnsureBaselineCommitted(string full, long currentLength)
@@ -320,6 +323,9 @@ public sealed class RangeRollbackStore
                     throw new InvalidDataException("Invalid range rollback block record.");
                 if ((line.BlockOffset % _blockSize) != 0)
                     throw new InvalidDataException("Range rollback block offset is not aligned.");
+                if (line.BlockOffset >= baseline.OriginalLength ||
+                    line.BlockLength != Math.Min(_blockSize, baseline.OriginalLength - line.BlockOffset))
+                    throw new InvalidDataException("Range rollback block does not match the original file geometry.");
                 var snapshot = SafeSnapshotPath(line.SnapshotRelativePath);
                 if (!File.Exists(snapshot) || new FileInfo(snapshot).Length != line.BlockLength)
                     throw new InvalidDataException("Range rollback journal references a missing/truncated block.");

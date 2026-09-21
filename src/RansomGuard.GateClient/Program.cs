@@ -19,6 +19,7 @@ if (PathPolicy.Under(options.StoreRoot, options.Root))
     throw new InvalidOperationException("Rollback store must be outside the protected LAB root.");
 Directory.CreateDirectory(options.StoreRoot);
 var repository = new RollbackRepository(options.StoreRoot);
+repository.VerifyAll(); // Refuse to start a new gate session on top of ambiguous/crash-damaged rollback state.
 var sessionId = options.SessionId ?? $"gate-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}";
 var store = repository.CreateSession(sessionId);
 var writeStore = new RangeRollbackStore(Path.Combine(store.Root, "write-cow"));

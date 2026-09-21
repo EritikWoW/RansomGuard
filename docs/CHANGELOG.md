@@ -10,6 +10,7 @@
 - Rename, delete and truncate-class operations continue to use conservative full-file pre-images.
 - Added rollback tests for multi-block writes, repeated writes to one block, append rollback and range-journal verification.
 - Normal product remains AuditOnly; the blocking minifilter path remains engineering LAB-only.
+- Hardened rollback restart validation: committed full pre-images are SHA-256 verified, orphaned pre-image/range objects and leftover temp artifacts are rejected, nested `write-cow` stores are included in repository verification, and the LAB gate refuses to start on ambiguous existing rollback state.
 
 # RansomGuard 0.7.1.0
 

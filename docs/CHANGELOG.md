@@ -6,7 +6,8 @@
 - Preflight opens are recognized only for the connected GateClient process while activation is pending.
 - Post-CREATE preflight checks `MmDoesFileHaveUserWritableReferences` on the real stream section pointers and binds `FILE_ID_INFO`.
 - Added no-reply `ActivationPreflight` events and a write-through SHA-256 hash-chained `activation-preflight-journal.jsonl`.
-- Paging writes or writable-section creation during preflight latch a kernel activation hazard.
+- GateClient holds every successful probe handle with read-only sharing through activation, exposing pre-existing write/delete handles as sharing failures and preventing new write/delete handles from racing the scan.
+- Handle-less pre-existing writable mappings are detected by `MmDoesFileHaveUserWritableReferences`; failed/unresolved probes or detected writable views latch the kernel activation hazard.
 - GateClient uses `FilterSendMessage` / `RgControlActivateGate`; the kernel refuses activation while any hazard is latched.
 - Added repository verification, corruption/idempotency tests and kernel/userspace source gates for activation ordering.
 - Normal product remains AuditOnly; activation preflight remains Engineering-LAB-only pending live disposable-VM validation.

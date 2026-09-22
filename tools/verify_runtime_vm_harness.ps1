@@ -240,6 +240,14 @@ if($install -notmatch [regex]::Escape("ValidateSet('','LAB-MINIFILTER')") -or
     throw 'Install script must support explicit VM-only noninteractive confirmation for the runtime workflow.'
 }
 foreach($required in @(
+    'ImagePath',
+    'packageSysHash',
+    'installedSysHash',
+    'registered minifilter image is stale or mismatched'
+)){
+    if($install -notmatch [regex]::Escape($required)){throw "Install script missing exact-package image verification invariant: $required"}
+}
+foreach($required in @(
     'fltmc instances -f RansomGuardMinifilter -v $Volume',
     '$instancesExit=$LASTEXITCODE'
 )){

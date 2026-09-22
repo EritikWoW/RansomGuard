@@ -184,7 +184,7 @@ $containStart=$helper.IndexOf('static void ContainmentProbe')
 $containEnd=$helper.IndexOf('static void MapAndWrite',$containStart)
 if($containStart -lt 0 -or $containEnd -lt 0){throw 'ContainmentProbe source block missing.'}
 $containBlock=$helper.Substring($containStart,$containEnd-$containStart)
-foreach($required in @('readyMarker','goMarker','resultMarker','File.AppendAllText','UnauthorizedAccessException','Environment.ExitCode = 9')){
+foreach($required in @('readyMarker','goMarker','resultMarker','File.AppendAllText','UnauthorizedAccessException','(ex.HResult & 0xFFFF) == 5','Environment.ExitCode = 9')){
     if($containBlock -notmatch [regex]::Escape($required)){throw "Containment runtime helper missing invariant: $required"}
 }
 if($runtime -notmatch [regex]::Escape("'LAB containment\s+: ACTIVE'") -or

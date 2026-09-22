@@ -21,7 +21,7 @@ foreach($scriptPath in @($runtimeScript,$packageScript,$readinessScript,$install
     [void][System.Management.Automation.Language.Parser]::ParseFile($scriptPath,[ref]$tokens,[ref]$parseErrors)
     if(@($parseErrors).Count -gt 0){
         $details=(@($parseErrors) | ForEach-Object { "$($_.Extent.StartLineNumber): $($_.Message)" }) -join '; '
-        throw "Runtime VM PowerShell syntax check failed for $scriptPath: $details"
+        throw "Runtime VM PowerShell syntax check failed for ${scriptPath}: $details"
     }
 }
 

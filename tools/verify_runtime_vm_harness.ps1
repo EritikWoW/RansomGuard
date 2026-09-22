@@ -239,6 +239,12 @@ if($install -notmatch [regex]::Escape("ValidateSet('','LAB-MINIFILTER')") -or
    $install -notmatch [regex]::Escape('$Confirmation')){
     throw 'Install script must support explicit VM-only noninteractive confirmation for the runtime workflow.'
 }
+foreach($required in @(
+    'fltmc instances -f RansomGuardMinifilter -v $Volume',
+    '$instancesExit=$LASTEXITCODE'
+)){
+    if($install -notmatch [regex]::Escape($required)){throw "Install script missing attach-verification invariant: $required"}
+}
 
 $unload=Get-Content -LiteralPath $unloadScript -Raw
 foreach($required in @(

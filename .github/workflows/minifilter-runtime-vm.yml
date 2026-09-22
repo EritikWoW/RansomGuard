@@ -42,6 +42,19 @@ jobs:
         shell: pwsh
         run: .\tools\verify_powershell_automation.ps1
 
+      - name: Clear stale LAB minifilter from prior failed run
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $root=[IO.Path]::GetFullPath('${{ inputs.root_base }}')
+          $volume=[IO.Path]::GetPathRoot($root).TrimEnd('\')
+          $filters=(& fltmc filters 2>$null | Out-String)
+          if($LASTEXITCODE -ne 0){throw "Unable to query Filter Manager before runtime lab, exit=$LASTEXITCODE"}
+          if($filters -match '(?m)^\s*RansomGuardMinifilter\b'){
+            Write-Warning 'Removing RansomGuardMinifilter left loaded by a prior failed LAB run.'
+            .\minifilter-tools\unload_minifilter_lab.ps1 -Volume $volume
+          }
+
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
         with:

@@ -159,7 +159,7 @@ if($helperVersion -ne $gateVersion){
 
 $driverProvenance=Get-Content -LiteralPath $driverProvenancePath -Raw | ConvertFrom-Json
 if([int]$driverProvenance.schema -ne 2){
-    throw "Runtime package provenance schema '$($driverProvenance.schema)' is not supported."
+    throw "Runtime package provenance schema must be 2. Found: '$($driverProvenance.schema)'"
 }
 if([string]$driverProvenance.commit -notmatch '^[A-Fa-f0-9]{40}$'){
     throw "Runtime package provenance commit is invalid: '$($driverProvenance.commit)'"
@@ -167,7 +167,6 @@ if([string]$driverProvenance.commit -notmatch '^[A-Fa-f0-9]{40}$'){
 if([string]$driverProvenance.productVersion -ne $gateVersion){
     throw "Runtime package product version '$($driverProvenance.productVersion)' does not match GateClient '$gateVersion'."
 }
-
 $actualSysSha256=(Get-FileHash -LiteralPath $driverSys -Algorithm SHA256).Hash
 $actualInfSha256=(Get-FileHash -LiteralPath $driverInf -Algorithm SHA256).Hash
 $actualCatSha256=(Get-FileHash -LiteralPath $driverCat -Algorithm SHA256).Hash
@@ -176,7 +175,7 @@ foreach($pair in @(
     @('INF',[string]$driverProvenance.infSha256,$actualInfSha256),
     @('CAT',[string]$driverProvenance.catSha256,$actualCatSha256)
 )){
-    if(-not [string]::Equals([string]$pair[1],[string]$pair[2],[StringComparison]::OrdinalIgnoreCase)){
+    if(-not [string]::Equals($pair[1],$pair[2],[StringComparison]::OrdinalIgnoreCase)){
         throw "Runtime package $($pair[0]) hash does not match provenance. expected=$($pair[1]) actual=$($pair[2])"
     }
 }

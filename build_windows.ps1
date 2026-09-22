@@ -104,6 +104,7 @@ try {
     & (Join-Path $PSScriptRoot 'tools\verify_rollback_retention.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_gate_client.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_runtime_vm_harness.ps1')
+    & (Join-Path $PSScriptRoot 'tools\verify_version_provenance.ps1')
     Write-Host '[1/6] Restore and execute policy/recovery/rollback tests (no process suspension in these tests).'
     Run-Dotnet -Arguments @('restore',$tests,$auditErrors)
     Run-Dotnet -Arguments @('run','--project',$tests,'-c','Release','--no-restore')

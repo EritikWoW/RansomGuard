@@ -57,6 +57,8 @@ Console.WriteLine($"Restart evidence   : observed={restartSummary.Observed}, com
 Console.WriteLine("CREATE/write/rename/delete/truncate in this root are gated by durable preservation semantics.");
 Console.WriteLine($"Bounded gate workers : {options.GateWorkers}");
 Console.WriteLine($"Rollback budget      : max-session={options.MaxStoreMiB} MiB; min-free={options.MinFreeMiB} MiB");
+if (options.FaultAfterCreateIntent)
+    Console.WriteLine("LAB fault injection : ARMED after durable CREATE intent, before kernel reply.");
 Console.WriteLine("Press Ctrl+C to disconnect. The driver then stops gating because no client is connected.");
 
 var context = new RgConnectContext
@@ -259,6 +261,15 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
         var reply = await GateDecision.EvaluateAsync(
             ev, resolver, options.Root, store, writeStore, createStore, createOperationStore,
             identityStore, renameStore, storageBudget, cts.Token).ConfigureAwait(false);
+
+        if (options.FaultAfterCreateIntent &&
+            (RgEventType)ev.EventType == RgEventType.Create &&
+            reply.Decision is RgGateDecision.SnapshotCommitted or RgGateDecision.BaselineCommitted)
+        {
+            Console.Error.WriteLine(
+                $"LAB FAULT INJECTION: terminating after durable CREATE intent sequence={ev.Sequence}, before FilterReplyMessage.");
+            Environment.FailFast("RansomGuard LAB fault injection: after durable CREATE intent, before kernel reply.");
+        }
 
         var path = resolver.Resolve(ev.Path) ?? ev.Path ?? "<unresolved>";
         ContainmentTriggerEvidence? containmentRequest = null;
@@ -1309,7 +1320,8 @@ sealed record Options(
     ulong? ContainPid,
     int? ContainAfterPid,
     int ContainAfterEvents,
-    int ContainAfterPaths)
+    int ContainAfterPaths,
+    bool FaultAfterCreateIntent)
 {
     public const int DefaultGateWorkers = 4;
     public const int MaxGateWorkers = 8;
@@ -1333,6 +1345,7 @@ sealed record Options(
         var containAfterEvents = DefaultContainAfterEvents;
         var containAfterPaths = DefaultContainAfterPaths;
         var containThresholdSpecified = false;
+        var faultAfterCreateIntent = false;
         for (var i = 0; i < args.Length; i++)
         {
             switch (args[i].ToLowerInvariant())
@@ -1379,13 +1392,14 @@ sealed record Options(
                             "--contain-after-paths must be between 1 and 16.");
                     containThresholdSpecified = true;
                     break;
+                case "--fault-after-create-intent": faultAfterCreateIntent = true; break;
                 case "--prepare-root": prepare = true; break;
                 default: throw new ArgumentException($"Unknown/incomplete argument: {args[i]}");
             }
         }
         if (string.IsNullOrWhiteSpace(root)) throw new ArgumentException("Pass --root <disposable-test-directory>.");
-        if (prepare && (containPid.HasValue || containAfterPid.HasValue))
-            throw new ArgumentException("Containment options cannot be combined with --prepare-root.");
+        if (prepare && (containPid.HasValue || containAfterPid.HasValue || faultAfterCreateIntent))
+            throw new ArgumentException("Containment/fault-injection options cannot be combined with --prepare-root.");
         if (containPid.HasValue && containAfterPid.HasValue)
             throw new ArgumentException("--contain-pid and --contain-after-pid are mutually exclusive.");
         if (containThresholdSpecified && !containAfterPid.HasValue)
@@ -1395,7 +1409,7 @@ sealed record Options(
         store ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RansomGuardV072", "GateRollback");
         return new Options(
             root, store, session, prepare, gateWorkers, maxStoreMiB, minFreeMiB,
-            containPid, containAfterPid, containAfterEvents, containAfterPaths);
+            containPid, containAfterPid, containAfterEvents, containAfterPaths, faultAfterCreateIntent);
     }
 }
 

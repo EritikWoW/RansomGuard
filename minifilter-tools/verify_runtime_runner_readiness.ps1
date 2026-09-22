@@ -122,6 +122,7 @@ foreach($entry in $tools.GetEnumerator()){
 }
 
 $commands=[ordered]@{
+    pwsh=Require-Command 'pwsh.exe'
     git=Require-Command 'git.exe'
     fltmc=Require-Command 'fltmc.exe'
     pnputil=Require-Command 'pnputil.exe'

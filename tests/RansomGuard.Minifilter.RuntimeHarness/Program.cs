@@ -164,6 +164,10 @@ static void ContainmentProbe(string filePath, string readyMarker, string goMarke
     {
         File.WriteAllText(resultMarker, "denied");
     }
+    catch (IOException ex) when ((ex.HResult & 0xFFFF) == 5)
+    {
+        File.WriteAllText(resultMarker, "denied");
+    }
     catch (IOException ex)
     {
         File.WriteAllText(resultMarker, "io-error:" + ex.HResult.ToString("X8"));

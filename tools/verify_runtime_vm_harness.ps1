@@ -55,6 +55,10 @@ if($workflow -match 'ransomguard-runtime-driver/\*\*'){
 }
 
 $runtime=Get-Content -LiteralPath $runtimeScript -Raw
+if($runtime -match [regex]::Escape("version='0.7.21.0'")){
+    throw 'Runtime evidence must not hard-code the product version.'
+}
+
 foreach($required in @(
     'RANSOMGUARD_LAB_VM',
     'I_UNDERSTAND',
@@ -83,7 +87,9 @@ foreach($required in @(
     'transitionDeniedNextWrite',
     'containment-journal.jsonl',
     'Stop-LabProcess $gatePost',
-    'Stop-LabProcess $gateContain'
+    'Stop-LabProcess $gateContain',
+    '.VersionInfo.FileVersion',
+    'version=$gateVersion'
 )){
     if($runtime -notmatch [regex]::Escape($required)){throw "Runtime integration script missing invariant: $required"}
 }

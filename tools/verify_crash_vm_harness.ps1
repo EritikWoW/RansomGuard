@@ -7,23 +7,30 @@ $workflow=Get-Content -LiteralPath (Join-Path $root '.github\workflows\minifilte
 $unload=Get-Content -LiteralPath (Join-Path $root 'minifilter-tools\unload_minifilter_lab.ps1') -Raw
 
 foreach($required in @(
-  '--fault-after-create-intent',
-  'Environment.FailFast("RansomGuard LAB fault injection: after durable CREATE intent, before kernel reply.")',
+  '--drop-first-create-completion',
+  'LAB COMPLETION LOSS: intentionally dropping authoritative CREATE result',
+  'Interlocked.CompareExchange(ref droppedCreateCompletion, 1, 0) == 0',
+  'cts.Cancel();',
+  'Native.Cancel(port);',
   '--reconcile-only',
   'RECONCILE ONLY: observed=',
   'if (options.ReconcileOnly)',
   'RestartReconciliation.ObservePendingAsync('
 )){
-  if($gate -notmatch [regex]::Escape($required)){throw "GateClient crash/restart invariant missing: $required"}
+  if($gate -notmatch [regex]::Escape($required)){throw "GateClient completion-loss/restart invariant missing: $required"}
 }
 
-$eval=$gate.IndexOf('var reply = await GateDecision.EvaluateAsync(')
-$fault=$gate.IndexOf('if (options.FaultAfterCreateIntent',$eval)
-$failFast=$gate.IndexOf('Environment.FailFast("RansomGuard LAB fault injection: after durable CREATE intent, before kernel reply.")',$fault)
-$reply=$gate.IndexOf('Native.Reply(port, header.MessageId, reply)',$failFast)
-if($eval -lt 0 -or $fault -lt 0 -or $failFast -lt 0 -or $reply -lt 0 -or
-   $eval -gt $fault -or $fault -gt $failFast -or $failFast -gt $reply){
-  throw 'CREATE intent crash point must remain after preservation decision/intent commit and before FilterReplyMessage.'
+if($gate -match [regex]::Escape('Environment.FailFast("RansomGuard LAB fault injection: after durable CREATE intent, before kernel reply.")')){
+  throw 'Completion-loss test must not hard-crash GateClient while the kernel is waiting for FilterReplyMessage.'
+}
+
+$createResult=$gate.IndexOf('if ((RgEventType)ev.EventType == RgEventType.CreateResult)')
+$drop=$gate.IndexOf('if (options.DropFirstCreateCompletion',$createResult)
+$cancel=$gate.IndexOf('cts.Cancel();',$drop)
+$persist=$gate.IndexOf('CreateReconciliation.HandleAsync(',$createResult)
+if($createResult -lt 0 -or $drop -lt 0 -or $cancel -lt 0 -or $persist -lt 0 -or
+   $createResult -gt $drop -or $drop -gt $cancel -or $cancel -gt $persist){
+  throw 'CREATE completion-loss injection must run after receiving CreateResult but before authoritative completion persistence.'
 }
 
 $restart=$gate.IndexOf('RestartReconciliation.ObservePendingAsync(')
@@ -41,30 +48,33 @@ foreach($required in @(
   'CreateFileW(CREATE_NEW)',
   'Native.WriteFile'
 )){
-  if($helper -notmatch [regex]::Escape($required)){throw "RuntimeHarness crash trigger invariant missing: $required"}
+  if($helper -notmatch [regex]::Escape($required)){throw "RuntimeHarness completion-loss trigger invariant missing: $required"}
 }
 
 foreach($required in @(
   'Assert-DisposableVm',
   'LAB-MINIFILTER',
-  "'--fault-after-create-intent'",
+  "'--drop-first-create-completion'",
   "'create-new'",
-  'GateClient did not prove the intended crash point',
-  'CREATE target exists even though crash occurred before kernel reply',
+  'CREATE_NEW must complete before completion evidence is intentionally dropped',
+  'CREATE target must exist because the filesystem operation completed before result loss',
   'create-intent-journal.jsonl',
   'create-completion-journal.jsonl',
   "'--reconcile-only'",
-  'not-completed-evidence=1',
+  'completed-evidence=1',
   'restart-reconciliation-journal.jsonl',
-  '[int]$restartRecord.evidence -ne 2',
+  '[int]$restartRecord.evidence -ne 1',
   '[int]$_.kind -eq 4',
   '[int]$transaction[0].state -eq 1',
   '[int]$transaction[0].state -ne 2',
   '[int]$plan.readyCount -ne 0',
+  'completionLossObserved',
+  'targetCreated',
+  'restartSupportsCompleted',
   'unload_minifilter_lab.ps1',
   'crash-runtime-result.json'
 )){
-  if($harness -notmatch [regex]::Escape($required)){throw "Crash runtime harness invariant missing: $required"}
+  if($harness -notmatch [regex]::Escape($required)){throw "Completion-loss runtime harness invariant missing: $required"}
 }
 
 foreach($required in @(
@@ -76,20 +86,23 @@ foreach($required in @(
   'build_lab.cmd',
   'prepare_runtime_driver_package.ps1',
   'run_crash_reconciliation_lab.ps1',
-  'gateCrashObserved',
+  'completionLossObserved',
   'createIntentDurable',
   'createCompletionAbsent',
-  'targetRemainedAbsent',
+  'targetCreated',
   'restartObserved',
-  'restartSupportsNotCompleted',
+  'restartSupportsCompleted',
   'recoveryTransactionNotReady',
   'cleanupPassed',
   'Upload crash evidence',
   'Ensure LAB minifilter is unloaded after run'
 )){
-  if($workflow -notmatch [regex]::Escape($required)){throw "Crash VM workflow invariant missing: $required"}
+  if($workflow -notmatch [regex]::Escape($required)){throw "Completion-loss VM workflow invariant missing: $required"}
 }
 
+if($workflow -match '(?m)^\s*push\s*:'){
+  throw 'Completion-loss VM workflow must remain manual-only; do not consume the reusable self-hosted VM on every branch push.'
+}
 
 foreach($required in @(
   'Invoke-FltmcBounded',
@@ -101,10 +114,7 @@ foreach($required in @(
 }
 
 if($workflow -notmatch [regex]::Escape('STALE KERNEL STATE: RansomGuardMinifilter is still loaded from an earlier crash/fault run.')){
-  throw 'Crash VM startup must fail fast on an already-loaded stale LAB minifilter instead of attempting an unbounded cleanup.'
-}
-if($workflow -match [regex]::Escape("Write-Warning 'Removing RansomGuardMinifilter left loaded by a prior failed LAB run.'")){
-  throw 'Crash VM startup must not attempt to unload an unknown stale driver generation.'
+  throw 'VM startup must fail fast on an already-loaded stale LAB minifilter.'
 }
 
-Write-Host 'Crash/fault VM harness source check PASSED: durable CREATE intent crash, exact absent-path restart evidence, recovery transaction remains non-Ready.'
+Write-Host 'Completion-loss VM harness source check PASSED: CREATE completed, authoritative result intentionally omitted, restart evidence supports completion, recovery transaction remains non-Ready.'

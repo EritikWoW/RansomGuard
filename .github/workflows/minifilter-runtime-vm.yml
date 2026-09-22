@@ -38,6 +38,10 @@ jobs:
           if([string]::IsNullOrWhiteSpace($env:RANSOMGUARD_LAB_CERT_THUMBPRINT)){throw 'Environment secret RANSOMGUARD_LAB_CERT_THUMBPRINT is required.'}
           .\minifilter-tools\verify_runtime_runner_readiness.ps1 -CertificateThumbprint $env:RANSOMGUARD_LAB_CERT_THUMBPRINT
 
+      - name: Audit PowerShell automation
+        shell: pwsh
+        run: .\tools\verify_powershell_automation.ps1
+
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
         with:

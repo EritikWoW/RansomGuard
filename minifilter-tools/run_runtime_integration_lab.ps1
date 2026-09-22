@@ -198,11 +198,13 @@ try{
         throw 'REFUSED: RansomGuardMinifilter is already loaded. Revert/clean the VM before running the integration harness.'
     }
 
+    # Arm cleanup before invoking the installer because staging/load/attach can partially
+    # succeed before a later verification throws. A failed attempt must still detach/unload.
+    $installed=$true
     & $installScript -Volume $volume -PackageDirectory $DriverPackageDirectory -Confirmation 'LAB-MINIFILTER'
     # install_minifilter_lab.ps1 throws on failure. Do not inspect $LASTEXITCODE here:
     # it belongs to the last native command executed inside the child script and may remain
     # nonzero even after the script has independently verified a successful load/attach.
-    $installed=$true
 
     # Scenario 0: a directory handle that already owns DELETE access must prevent activation.
     Prepare-GateRoot $gateExe $dirRoot

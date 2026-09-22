@@ -238,7 +238,15 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
         return RgCompleteDenied(Data);
     }
 
-    if (RgIsContainedRequestor(Data) && RgCreateMayMutate(&event)) {
+    // Read-only opens do not require preservation and must not enter the synchronous
+    // user-mode gate. Besides avoiding needless latency, this prevents metadata probes
+    // such as File.Exists/GetAttributes from being converted into 30-second gate waits.
+    // Mutation-capable CREATEs remain fail-closed and receive post-create reconciliation.
+    if (!RgCreateMayMutate(&event)) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    if (RgIsContainedRequestor(Data)) {
         return RgCompleteDenied(Data);
     }
 

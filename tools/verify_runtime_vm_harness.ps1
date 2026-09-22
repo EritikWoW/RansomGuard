@@ -96,7 +96,13 @@ foreach($required in @(
     'cleanupPassed=$false',
     'cleanupError=$null',
     '$runtimeFailure=$null',
-    '$cleanupFailure=$null'
+    '$cleanupFailure=$null',
+    'runtime-package.json',
+    'driverProvenance.schema',
+    'driverProvenance.productVersion',
+    'driverSysSha256',
+    'driverInfSha256',
+    'driverCatSha256'
 )){
     if($runtime -notmatch [regex]::Escape($required)){throw "Runtime integration script missing invariant: $required"}
 }
@@ -131,6 +137,9 @@ foreach($required in @(
     'RANSOMGUARD_LAB_VM',
     'runtime-package.json',
     'git -C $root rev-parse HEAD',
+    'schema=2',
+    'productVersion=$productVersion',
+    'infSha256=',
     'Get-AuthenticodeSignature',
     'RansomGuardMinifilter.cat'
 )){

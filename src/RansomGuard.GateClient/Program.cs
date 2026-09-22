@@ -113,9 +113,13 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
             var request = containmentStore.Records.SingleOrDefault(x =>
                 x.Phase == ContainmentEvidencePhase.Requested &&
                 x.KernelSequence == ev.RelatedSequence);
+            var activationPath = resolver.Resolve(ev.Path);
             if (request is null ||
-                request.ProcessId != ev.ProcessId)
-                throw new InvalidDataException("Containment activation evidence has no exact durable request.");
+                request.ProcessId != ev.ProcessId ||
+                string.IsNullOrWhiteSpace(activationPath) ||
+                !PathPolicy.Under(activationPath, options.Root) ||
+                !Path.GetFullPath(activationPath).Equals(request.Path, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Containment activation evidence has no exact durable request/path binding.");
 
             await using (var reservation = await storageBudget.ReserveAsync(
                              RollbackStorageBudget.MetadataReservationBytes,

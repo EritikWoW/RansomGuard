@@ -9,8 +9,9 @@ $installScript=Join-Path $root 'minifilter-tools\install_minifilter_lab.ps1'
 $helperSource=Join-Path $root 'tests\RansomGuard.Minifilter.RuntimeHarness\Program.cs'
 $helperProject=Join-Path $root 'tests\RansomGuard.Minifilter.RuntimeHarness\RansomGuard.Minifilter.RuntimeHarness.csproj'
 $build=Join-Path $root 'build_windows.ps1'
+$buildWrapper=Join-Path $root 'build_windows.cmd'
 
-foreach($path in @($workflowPath,$runtimeScript,$packageScript,$readinessScript,$installScript,$helperSource,$helperProject,$build)){
+foreach($path in @($workflowPath,$runtimeScript,$packageScript,$readinessScript,$installScript,$helperSource,$helperProject,$build,$buildWrapper)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Runtime VM harness required file missing: $path"}
 }
 
@@ -214,6 +215,11 @@ foreach($required in @(
     'verify_runtime_vm_harness.ps1'
 )){
     if($buildText -notmatch [regex]::Escape($required)){throw "Engineering LAB build missing runtime harness packaging invariant: $required"}
+}
+
+$buildWrapperText=Get-Content -LiteralPath $buildWrapper -Raw
+foreach($required in @('where.exe pwsh.exe','set "PS_EXE=pwsh.exe"','powershell.exe')){
+    if($buildWrapperText -notmatch [regex]::Escape($required)){throw "Windows build wrapper missing PowerShell host invariant: $required"}
 }
 
 Write-Host 'Runtime VM harness source gate PASSED: manual self-hosted VM only, exact-commit signed driver provenance, mapping coverage, pre-armed containment and event-bound containment transition, no boot/trust/Defender mutation.' -ForegroundColor Green

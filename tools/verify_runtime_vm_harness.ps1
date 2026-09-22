@@ -6,19 +6,20 @@ $runtimeScript=Join-Path $root 'minifilter-tools\run_runtime_integration_lab.ps1
 $packageScript=Join-Path $root 'minifilter-tools\prepare_runtime_driver_package.ps1'
 $readinessScript=Join-Path $root 'minifilter-tools\verify_runtime_runner_readiness.ps1'
 $installScript=Join-Path $root 'minifilter-tools\install_minifilter_lab.ps1'
+$unloadScript=Join-Path $root 'minifilter-tools\unload_minifilter_lab.ps1'
 $helperSource=Join-Path $root 'tests\RansomGuard.Minifilter.RuntimeHarness\Program.cs'
 $helperProject=Join-Path $root 'tests\RansomGuard.Minifilter.RuntimeHarness\RansomGuard.Minifilter.RuntimeHarness.csproj'
 $build=Join-Path $root 'build_windows.ps1'
 $buildWrapper=Join-Path $root 'build_windows.cmd'
 $automationAudit=Join-Path $root 'tools\verify_powershell_automation.ps1'
 
-foreach($path in @($workflowPath,$runtimeScript,$packageScript,$readinessScript,$installScript,$helperSource,$helperProject,$build,$buildWrapper,$automationAudit)){
+foreach($path in @($workflowPath,$runtimeScript,$packageScript,$readinessScript,$installScript,$unloadScript,$helperSource,$helperProject,$build,$buildWrapper,$automationAudit)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Runtime VM harness required file missing: $path"}
 }
 
 & $automationAudit -RepositoryRoot $root
 
-foreach($scriptPath in @($runtimeScript,$packageScript,$readinessScript,$installScript)){
+foreach($scriptPath in @($runtimeScript,$packageScript,$readinessScript,$installScript,$unloadScript)){
     $tokens=$null
     $parseErrors=$null
     [void][System.Management.Automation.Language.Parser]::ParseFile($scriptPath,[ref]$tokens,[ref]$parseErrors)
@@ -39,6 +40,7 @@ foreach($required in @(
     'verify_runtime_runner_readiness.ps1',
     'run_runtime_integration_lab.ps1',
     'runtime-package.json',
+    'Remove-Item -LiteralPath $results -Recurse -Force',
     'github.sha'
 )){
     if($workflow -notmatch [regex]::Escape($required)){throw "Runtime VM workflow missing invariant: $required"}
@@ -219,6 +221,19 @@ $install=Get-Content -LiteralPath $installScript -Raw
 if($install -notmatch [regex]::Escape("ValidateSet('','LAB-MINIFILTER')") -or
    $install -notmatch [regex]::Escape('$Confirmation')){
     throw 'Install script must support explicit VM-only noninteractive confirmation for the runtime workflow.'
+}
+
+$unload=Get-Content -LiteralPath $unloadScript -Raw
+foreach($required in @(
+    'fltmc detach RansomGuardMinifilter',
+    'fltmc unload RansomGuardMinifilter',
+    'fltmc filters',
+    'RansomGuardMinifilter is still loaded after cleanup'
+)){
+    if($unload -notmatch [regex]::Escape($required)){throw "Runtime cleanup script missing final-state invariant: $required"}
+}
+if($runtime.IndexOf('$installed=$true') -gt $runtime.IndexOf('& $installScript')){
+    throw 'Runtime harness must arm minifilter cleanup before invoking the installer.'
 }
 
 $buildText=Get-Content -LiteralPath $build -Raw

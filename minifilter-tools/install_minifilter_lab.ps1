@@ -214,14 +214,14 @@ if($attachExit -ne 0){
     throw "Explicit attach to $Volume failed. exit=$attachExit. Output: $attachOutput"
 }
 
-$instances=(& fltmc instances -f RansomGuardMinifilter -v $Volume 2>&1 | Out-String)
+$instances=(& fltmc instances -f RansomGuardMinifilter 2>&1 | Out-String)
 $instancesExit=$LASTEXITCODE
 if($instancesExit -ne 0){
-    throw "Could not query the attached RansomGuardMinifilter instance on $Volume, exit=$instancesExit. Output: $instances"
+    throw "Could not query RansomGuardMinifilter instances, exit=$instancesExit. Output: $instances"
 }
 if($instances -notmatch [regex]::Escape('RansomGuardMinifilter') -or
    $instances -notmatch [regex]::Escape($Volume)){
-    throw "RansomGuardMinifilter is loaded but the expected $Volume instance was not confirmed."
+    throw "RansomGuardMinifilter is loaded but the expected $Volume instance was not confirmed. Output: $instances"
 }
 
 Write-Host 'Minifilter is loaded and attached only to the requested disposable VM volume.' -ForegroundColor Green

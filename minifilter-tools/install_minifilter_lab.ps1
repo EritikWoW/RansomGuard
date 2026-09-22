@@ -71,7 +71,7 @@ if($loadedBefore -match '(?m)^\s*RansomGuardMinifilter\b'){
     throw 'REFUSED: RansomGuardMinifilter is already loaded before install. Unload it or revert the disposable VM snapshot before continuing.'
 }
 
-$serviceKey='HKLM:\\SYSTEM\\CurrentControlSet\\Services\\RansomGuardMinifilter'
+$serviceKey='HKLM:\SYSTEM\CurrentControlSet\Services\RansomGuardMinifilter'
 
 function Get-RansomGuardPublishedInfNames {
     $windowsInf=Join-Path $env:SystemRoot 'INF'
@@ -82,194 +82,8 @@ function Get-RansomGuardPublishedInfNames {
             Where-Object {
                 try{
                     $text=Get-Content -LiteralPath $_.FullName -Raw -ErrorAction Stop
-                    $text -match '(?im)^\\s*ServiceName\\s*=\\s*"RansomGuardMinifilter"\\s*& pnputil.exe /add-driver $inf
-if($LASTEXITCODE -ne 0){
-    throw "pnputil package staging failed: $LASTEXITCODE"
-}
-
-$defaultInstallOutput=(& rundll32.exe setupapi.dll,InstallHinfSection DefaultInstall 132 $inf 2>&1 | Out-String)
-$defaultInstallExit=$LASTEXITCODE
-if($defaultInstallExit -ne 0){
-    throw "rundll32 DefaultInstall failed: exit=$defaultInstallExit. Output: $defaultInstallOutput"
-}
-Start-Sleep -Milliseconds 750
-
-$serviceKey='HKLM:\SYSTEM\CurrentControlSet\Services\RansomGuardMinifilter'
-if(-not (Test-Path -LiteralPath $serviceKey)){
-    throw 'DefaultInstall did not register RansomGuardMinifilter service.'
-}
-
-# Prove the registered service/instance contract and exact image bytes match this signed package.
-$service=Get-ItemProperty -LiteralPath $serviceKey
-if([int]$service.Start -ne 3){
-    throw "Registered minifilter service StartType is '$($service.Start)', expected demand-start (3)."
-}
-if([int]$service.Type -ne 2){
-    throw "Registered minifilter service Type is '$($service.Type)', expected filesystem driver (2)."
-}
-$instanceName='RansomGuard ReadOnly LAB Instance'
-$instancesKey=Join-Path $serviceKey 'Parameters\Instances'
-$instanceKey=Join-Path $instancesKey $instanceName
-if(-not (Test-Path -LiteralPath $instanceKey)){
-    throw "Registered minifilter instance key is missing: $instanceKey"
-}
-$instancesConfig=Get-ItemProperty -LiteralPath $instancesKey
-$instanceConfig=Get-ItemProperty -LiteralPath $instanceKey
-if([string]$instancesConfig.DefaultInstance -ne $instanceName){
-    throw "Registered minifilter DefaultInstance is '$($instancesConfig.DefaultInstance)', expected '$instanceName'."
-}
-if([string]$instanceConfig.Altitude -ne '370099.4242' -or [int]$instanceConfig.Flags -ne 1){
-    throw "Registered minifilter instance contract is invalid. Altitude='$($instanceConfig.Altitude)' Flags='$($instanceConfig.Flags)'."
-}
-
-$imagePath=[string]$service.ImagePath
-if([string]::IsNullOrWhiteSpace($imagePath)){
-    throw 'RansomGuardMinifilter service ImagePath is missing.'
-}
-$imagePath=[Environment]::ExpandEnvironmentVariables($imagePath.Trim([char]'"'))
-if($imagePath -match '^\\\?\?\\(?<absolute>[A-Za-z]:\\.*)$'){
-    $imagePath=$Matches['absolute']
-}
-elseif($imagePath -match '^\\SystemRoot\\'){
-    $imagePath=Join-Path $env:SystemRoot $imagePath.Substring(12)
-}
-elseif(-not [IO.Path]::IsPathRooted($imagePath)){
-    $imagePath=Join-Path $env:SystemRoot $imagePath
-}
-$imagePath=[IO.Path]::GetFullPath($imagePath)
-if(-not (Test-Path -LiteralPath $imagePath -PathType Leaf)){
-    throw "Registered minifilter image does not exist: $imagePath"
-}
-$packageSysHash=(Get-FileHash -LiteralPath $sys -Algorithm SHA256).Hash
-$installedSysHash=(Get-FileHash -LiteralPath $imagePath -Algorithm SHA256).Hash
-if(-not [string]::Equals($packageSysHash,$installedSysHash,[StringComparison]::OrdinalIgnoreCase)){
-    throw "REFUSED: registered minifilter image is stale or mismatched. package=$packageSysHash installed=$installedSysHash path=$imagePath"
-}
-
-$loadOutput=(& fltmc load RansomGuardMinifilter 2>&1 | Out-String)
-$loadExit=$LASTEXITCODE
-if($loadExit -ne 0){
-    throw "Driver load failed. fltmc exit=$loadExit. Output: $loadOutput"
-}
-$loadedAfter=(& fltmc filters 2>&1 | Out-String)
-$loadedAfterExit=$LASTEXITCODE
-if($loadedAfterExit -ne 0 -or $loadedAfter -notmatch '(?m)^\s*RansomGuardMinifilter\b'){
-    throw "Driver load could not be verified. fltmc filters exit=$loadedAfterExit. Output: $loadedAfter"
-}
-
-# INF suppresses automatic attachments. Attach exactly one explicitly requested local volume.
-$attachOutput=(& fltmc attach RansomGuardMinifilter $Volume 2>&1 | Out-String)
-$attachExit=$LASTEXITCODE
-if($attachExit -ne 0){
-    throw "Explicit attach to $Volume failed. exit=$attachExit. Output: $attachOutput"
-}
-
-$instances=(& fltmc instances -f RansomGuardMinifilter -v $Volume 2>&1 | Out-String)
-$instancesExit=$LASTEXITCODE
-if($instancesExit -ne 0){
-    throw "Could not query the attached RansomGuardMinifilter instance on $Volume, exit=$instancesExit. Output: $instances"
-}
-if($instances -notmatch [regex]::Escape('RansomGuardMinifilter') -or
-   $instances -notmatch [regex]::Escape($Volume)){
-    throw "RansomGuardMinifilter is loaded but the expected $Volume instance was not confirmed."
-}
-
-Write-Host 'Minifilter is loaded and attached only to the requested disposable VM volume.' -ForegroundColor Green
- -and
-                    $text -match '(?im)^\\s*CatalogFile\\s*=\\s*RansomGuardMinifilter\\.cat\\s*& pnputil.exe /add-driver $inf
-if($LASTEXITCODE -ne 0){
-    throw "pnputil package staging failed: $LASTEXITCODE"
-}
-
-$defaultInstallOutput=(& rundll32.exe setupapi.dll,InstallHinfSection DefaultInstall 132 $inf 2>&1 | Out-String)
-$defaultInstallExit=$LASTEXITCODE
-if($defaultInstallExit -ne 0){
-    throw "rundll32 DefaultInstall failed: exit=$defaultInstallExit. Output: $defaultInstallOutput"
-}
-Start-Sleep -Milliseconds 750
-
-$serviceKey='HKLM:\SYSTEM\CurrentControlSet\Services\RansomGuardMinifilter'
-if(-not (Test-Path -LiteralPath $serviceKey)){
-    throw 'DefaultInstall did not register RansomGuardMinifilter service.'
-}
-
-# Prove the registered service/instance contract and exact image bytes match this signed package.
-$service=Get-ItemProperty -LiteralPath $serviceKey
-if([int]$service.Start -ne 3){
-    throw "Registered minifilter service StartType is '$($service.Start)', expected demand-start (3)."
-}
-if([int]$service.Type -ne 2){
-    throw "Registered minifilter service Type is '$($service.Type)', expected filesystem driver (2)."
-}
-$instanceName='RansomGuard ReadOnly LAB Instance'
-$instancesKey=Join-Path $serviceKey 'Parameters\Instances'
-$instanceKey=Join-Path $instancesKey $instanceName
-if(-not (Test-Path -LiteralPath $instanceKey)){
-    throw "Registered minifilter instance key is missing: $instanceKey"
-}
-$instancesConfig=Get-ItemProperty -LiteralPath $instancesKey
-$instanceConfig=Get-ItemProperty -LiteralPath $instanceKey
-if([string]$instancesConfig.DefaultInstance -ne $instanceName){
-    throw "Registered minifilter DefaultInstance is '$($instancesConfig.DefaultInstance)', expected '$instanceName'."
-}
-if([string]$instanceConfig.Altitude -ne '370099.4242' -or [int]$instanceConfig.Flags -ne 1){
-    throw "Registered minifilter instance contract is invalid. Altitude='$($instanceConfig.Altitude)' Flags='$($instanceConfig.Flags)'."
-}
-
-$imagePath=[string]$service.ImagePath
-if([string]::IsNullOrWhiteSpace($imagePath)){
-    throw 'RansomGuardMinifilter service ImagePath is missing.'
-}
-$imagePath=[Environment]::ExpandEnvironmentVariables($imagePath.Trim([char]'"'))
-if($imagePath -match '^\\\?\?\\(?<absolute>[A-Za-z]:\\.*)$'){
-    $imagePath=$Matches['absolute']
-}
-elseif($imagePath -match '^\\SystemRoot\\'){
-    $imagePath=Join-Path $env:SystemRoot $imagePath.Substring(12)
-}
-elseif(-not [IO.Path]::IsPathRooted($imagePath)){
-    $imagePath=Join-Path $env:SystemRoot $imagePath
-}
-$imagePath=[IO.Path]::GetFullPath($imagePath)
-if(-not (Test-Path -LiteralPath $imagePath -PathType Leaf)){
-    throw "Registered minifilter image does not exist: $imagePath"
-}
-$packageSysHash=(Get-FileHash -LiteralPath $sys -Algorithm SHA256).Hash
-$installedSysHash=(Get-FileHash -LiteralPath $imagePath -Algorithm SHA256).Hash
-if(-not [string]::Equals($packageSysHash,$installedSysHash,[StringComparison]::OrdinalIgnoreCase)){
-    throw "REFUSED: registered minifilter image is stale or mismatched. package=$packageSysHash installed=$installedSysHash path=$imagePath"
-}
-
-$loadOutput=(& fltmc load RansomGuardMinifilter 2>&1 | Out-String)
-$loadExit=$LASTEXITCODE
-if($loadExit -ne 0){
-    throw "Driver load failed. fltmc exit=$loadExit. Output: $loadOutput"
-}
-$loadedAfter=(& fltmc filters 2>&1 | Out-String)
-$loadedAfterExit=$LASTEXITCODE
-if($loadedAfterExit -ne 0 -or $loadedAfter -notmatch '(?m)^\s*RansomGuardMinifilter\b'){
-    throw "Driver load could not be verified. fltmc filters exit=$loadedAfterExit. Output: $loadedAfter"
-}
-
-# INF suppresses automatic attachments. Attach exactly one explicitly requested local volume.
-$attachOutput=(& fltmc attach RansomGuardMinifilter $Volume 2>&1 | Out-String)
-$attachExit=$LASTEXITCODE
-if($attachExit -ne 0){
-    throw "Explicit attach to $Volume failed. exit=$attachExit. Output: $attachOutput"
-}
-
-$instances=(& fltmc instances -f RansomGuardMinifilter -v $Volume 2>&1 | Out-String)
-$instancesExit=$LASTEXITCODE
-if($instancesExit -ne 0){
-    throw "Could not query the attached RansomGuardMinifilter instance on $Volume, exit=$instancesExit. Output: $instances"
-}
-if($instances -notmatch [regex]::Escape('RansomGuardMinifilter') -or
-   $instances -notmatch [regex]::Escape($Volume)){
-    throw "RansomGuardMinifilter is loaded but the expected $Volume instance was not confirmed."
-}
-
-Write-Host 'Minifilter is loaded and attached only to the requested disposable VM volume.' -ForegroundColor Green
-
+                    $text -match '(?im)^\s*ServiceName\s*=\s*"RansomGuardMinifilter"\s*$' -and
+                    $text -match '(?im)^\s*CatalogFile\s*=\s*RansomGuardMinifilter\.cat\s*$'
                 }catch{
                     $false
                 }
@@ -331,7 +145,6 @@ if($defaultInstallExit -ne 0){
 }
 Start-Sleep -Milliseconds 750
 
-$serviceKey='HKLM:\SYSTEM\CurrentControlSet\Services\RansomGuardMinifilter'
 if(-not (Test-Path -LiteralPath $serviceKey)){
     throw 'DefaultInstall did not register RansomGuardMinifilter service.'
 }

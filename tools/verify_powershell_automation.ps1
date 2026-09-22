@@ -15,6 +15,9 @@ $excluded='(?i)[\\/](?:\.git|bin|obj|release|build-logs|minifilter-build|runtime
 $scripts=@(Get-ChildItem -LiteralPath $RepositoryRoot -Filter '*.ps1' -File -Recurse -ErrorAction Stop |
     Where-Object { $_.FullName -notmatch $excluded } |
     Sort-Object FullName)
+$cmdFiles=@(Get-ChildItem -LiteralPath $RepositoryRoot -Filter '*.cmd' -File -Recurse -ErrorAction Stop |
+    Where-Object { $_.FullName -notmatch $excluded } |
+    Sort-Object FullName)
 $workflows=@()
 $workflowRoot=Join-Path $RepositoryRoot '.github\workflows'
 if(Test-Path -LiteralPath $workflowRoot -PathType Container){
@@ -61,6 +64,26 @@ foreach($script in $scripts){
     }
 }
 
+foreach($cmd in $cmdFiles){
+    $lines=@(Get-Content -LiteralPath $cmd.FullName)
+    $text=$lines -join [Environment]::NewLine
+
+    # Interactive -NoExit launchers deliberately transfer control to a PowerShell window.
+    # Other wrappers that pause must preserve the child exit code before PAUSE overwrites it.
+    if($text -match '(?i)\b(?:powershell(?:\.exe)?|pwsh(?:\.exe)?)\b[^\r\n]*\s-File\s' -and
+       $text -notmatch '(?i)\s-NoExit(?:\s|$)' -and
+       $text -match '(?im)^\s*pause\s*$'){
+        $pauseIndex=[Array]::FindIndex([string[]]$lines,[Predicate[string]]{param($line) $line -match '(?i)^\s*pause\s*$'})
+        $captureIndex=[Array]::FindIndex([string[]]$lines,[Predicate[string]]{param($line) $line -match '(?i)^\s*set\s+"?[A-Za-z_][A-Za-z0-9_]*=%ERRORLEVEL%"?\s*$'})
+        $exitIndex=[Array]::FindIndex([string[]]$lines,[Predicate[string]]{param($line) $line -match '(?i)^\s*exit\s+/b\s+%[A-Za-z_][A-Za-z0-9_]*%\s*$'})
+        if($captureIndex -lt 0 -or $pauseIndex -lt 0 -or $exitIndex -lt 0 -or
+           $captureIndex -gt $pauseIndex -or $exitIndex -lt $pauseIndex){
+            $relative=$cmd.FullName.Substring($RepositoryRoot.Length).TrimStart([char[]]@('\','/'))
+            $findings.Add(('{0}: command wrapper pauses without reliably preserving the child exit status.' -f $relative))
+        }
+    }
+}
+
 foreach($workflow in $workflows){
     $lines=@(Get-Content -LiteralPath $workflow.FullName)
     for($i=0;$i -lt $lines.Count;$i++){
@@ -82,5 +105,5 @@ if($findings.Count -gt 0){
     throw "PowerShell automation audit failed:$([Environment]::NewLine)$details"
 }
 
-Write-Host ("PowerShell automation audit PASSED: {0} scripts parsed; {1} workflows checked; no script/LASTEXITCODE handoff hazards found." -f
-    $scripts.Count,$workflows.Count) -ForegroundColor Green
+Write-Host ("Automation audit PASSED: {0} PowerShell scripts parsed; {1} command wrappers checked; {2} workflows checked; no parser, script/LASTEXITCODE, or wrapper exit-propagation hazards found." -f
+    $scripts.Count,$cmdFiles.Count,$workflows.Count) -ForegroundColor Green

@@ -13,7 +13,6 @@ static FAST_MUTEX gPortMutex;
 static EX_RUNDOWN_REF gRundown;
 static EX_RUNDOWN_REF gPortRundown;
 static volatile LONG gPortRundownCompleted = 0;
-static volatile LONG gPortDrainRequired = 0;
 static volatile LONG gGateInFlight = 0;
 static volatile LONG gUnloading = 0;
 static volatile LONG gClientConnected = 0;
@@ -1461,22 +1460,8 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
         InterlockedCompareExchange(&gUnloading, 0, 0) != 0) {
         status = STATUS_DEVICE_BUSY;
     } else {
-        /*
-         * A user-mode crash can disconnect while an older FltSendMessage still owns
-         * gPortRundown. DisconnectNotify must return promptly so Filter Manager can
-         * finish tearing down that connection and wake the sender. Drain the previous
-         * port generation only here, before publishing a replacement client port.
-         *
-         * gPortMutex serializes reconnect attempts. Outstanding senders do not need
-         * this mutex to call RgReleaseClientPort(), so waiting here cannot block the
-         * rundown releases we are waiting for.
-         */
-        if (InterlockedCompareExchange(&gPortDrainRequired, 0, 0) != 0) {
-            RgWaitForPortUsers();
-            if (InterlockedExchange(&gPortRundownCompleted, 0) != 0) {
-                ExReInitializeRundownProtection(&gPortRundown);
-            }
-            InterlockedExchange(&gPortDrainRequired, 0);
+        if (InterlockedExchange(&gPortRundownCompleted, 0) != 0) {
+            ExReInitializeRundownProtection(&gPortRundown);
         }
         RtlZeroMemory(gGateRoot, sizeof(gGateRoot));
         gGateRootLengthBytes = 0;
@@ -1624,16 +1609,9 @@ static VOID RgDisconnect(PVOID ConnectionCookie)
     if (gClientPort != NULL) {
         FltCloseClientPort(gFilter, &gClientPort);
     }
-    InterlockedExchange(&gPortDrainRequired, 1);
     ExReleaseFastMutex(&gPortMutex);
 
-    /*
-     * Do not wait for gPortRundown here. DisconnectNotify is part of Filter
-     * Manager's endpoint teardown; an outstanding FltSendMessage may need that
-     * teardown to complete before it can return and release its rundown lease.
-     * The next RgConnect drains/reinitializes the old generation, while unload
-     * performs the final drain after the port has been closed.
-     */
+    RgWaitForPortUsers();
 }
 
 NTSTATUS RgInstanceSetup(PCFLT_RELATED_OBJECTS FltObjects, FLT_INSTANCE_SETUP_FLAGS Flags,

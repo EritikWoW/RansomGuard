@@ -83,6 +83,7 @@ foreach($required in @(
     'infverif.exe',
     'ApiValidator.exe',
     'Aitstatic.exe',
+    'pwsh.exe',
     'fltmc.exe',
     'pnputil.exe'
 )){

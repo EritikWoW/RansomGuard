@@ -216,36 +216,28 @@ static void ContainmentTransitionProbe(
 
     try
     {
-        using var a = new FileStream(
-            fileA, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete,
-            4096, FileOptions.WriteThrough);
-        using var b = new FileStream(
-            fileB, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete,
-            4096, FileOptions.WriteThrough);
+        using var a = OpenTransitionWriteHandle(fileA);
+        using var b = OpenTransitionWriteHandle(fileB);
 
-        a.Position = 0;
-        a.Write(new byte[] { 0xA1 });
-        a.Flush(true);
+        // Keep this scenario kernel-deterministic: the two CREATEs above are mutation events 1/2,
+        // and these two direct synchronous WriteFile calls are events 3/4. The fourth event is the
+        // authorized trigger event that installs the containment latch. The next WriteFile must fail.
+        WriteTransitionByte(a, 0, 0xA1, "transition-a trigger write");
+        WriteTransitionByte(b, 0, 0xB2, "transition-b trigger write");
 
-        b.Position = 0;
-        b.Write(new byte[] { 0xB2 });
-        b.Flush(true);
-
-        try
+        if (TryWriteTransitionByte(a, 1, 0xC3, out var error))
         {
-            a.Position = 1;
-            a.Write(new byte[] { 0xC3 });
-            a.Flush(true);
             File.WriteAllText(resultMarker, "allowed-after-threshold");
             Environment.ExitCode = 11;
         }
-        catch (UnauthorizedAccessException)
+        else if (error == 5)
         {
             File.WriteAllText(resultMarker, "denied-after-threshold");
         }
-        catch (IOException ex) when ((ex.HResult & 0xFFFF) == 5)
+        else
         {
-            File.WriteAllText(resultMarker, "denied-after-threshold");
+            throw new System.ComponentModel.Win32Exception(
+                error, "Post-threshold WriteFile failed with an unexpected Win32 error.");
         }
     }
     catch (Exception ex)
@@ -253,6 +245,62 @@ static void ContainmentTransitionProbe(
         File.WriteAllText(resultMarker, "unexpected:" + ex.GetType().Name + ":" + ex.HResult.ToString("X8"));
         Environment.ExitCode = 12;
     }
+}
+
+static SafeFileHandle OpenTransitionWriteHandle(string path)
+{
+    const uint GenericWrite = 0x40000000;
+    const uint ShareRead = 0x00000001;
+    const uint ShareWrite = 0x00000002;
+    const uint ShareDelete = 0x00000004;
+    const uint OpenExisting = 3;
+    const uint FileAttributeNormal = 0x00000080;
+    const uint FileFlagWriteThrough = 0x80000000;
+
+    var handle = Native.CreateFileW(
+        path,
+        GenericWrite,
+        ShareRead | ShareWrite | ShareDelete,
+        IntPtr.Zero,
+        OpenExisting,
+        FileAttributeNormal | FileFlagWriteThrough,
+        IntPtr.Zero);
+    if (handle.IsInvalid)
+    {
+        var error = Marshal.GetLastWin32Error();
+        handle.Dispose();
+        throw new System.ComponentModel.Win32Exception(
+            error, $"Containment transition CreateFileW failed for '{path}'.");
+    }
+    return handle;
+}
+
+static void WriteTransitionByte(SafeFileHandle handle, long offset, byte value, string stage)
+{
+    if (!TryWriteTransitionByte(handle, offset, value, out var error))
+        throw new System.ComponentModel.Win32Exception(error, $"WriteFile failed during {stage}.");
+}
+
+static bool TryWriteTransitionByte(SafeFileHandle handle, long offset, byte value, out int error)
+{
+    const uint FileBegin = 0;
+    if (!Native.SetFilePointerEx(handle, offset, out _, FileBegin))
+    {
+        error = Marshal.GetLastWin32Error();
+        return false;
+    }
+
+    var payload = new[] { value };
+    if (!Native.WriteFile(handle, payload, 1, out var written, IntPtr.Zero))
+    {
+        error = Marshal.GetLastWin32Error();
+        return false;
+    }
+    if (written != 1)
+        throw new IOException($"WriteFile completed a partial transition write: {written} byte(s).");
+
+    error = 0;
+    return true;
 }
 
 static void MapAndWrite(string filePath)
@@ -375,6 +423,23 @@ static class Native
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool FlushFileBuffers(SafeFileHandle hFile);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetFilePointerEx(
+        SafeFileHandle hFile,
+        long liDistanceToMove,
+        out long lpNewFilePointer,
+        uint dwMoveMethod);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool WriteFile(
+        SafeFileHandle hFile,
+        byte[] lpBuffer,
+        uint nNumberOfBytesToWrite,
+        out uint lpNumberOfBytesWritten,
+        IntPtr lpOverlapped);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

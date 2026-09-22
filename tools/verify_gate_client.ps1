@@ -308,10 +308,16 @@ if($requestPersist -lt 0 -or $replyFlag -lt 0 -or $replySend -lt 0 -or
   throw 'Containment request evidence must be durable before the event-bound reply flag is sent.'
 }
 $activationBranch=$processBlock.IndexOf('RgEventType.ContainmentActivated')
-$activationPersist=$processBlock.IndexOf('containmentStore.RecordKernelActiveAsync(',$activationBranch)
+$activationPath=$processBlock.IndexOf('resolver.Resolve(ev.Path)',$activationBranch)
+$activationRootScope=$processBlock.IndexOf('PathPolicy.Under(activationPath, options.Root)',$activationPath)
+$activationPathBinding=$processBlock.IndexOf('Path.GetFullPath(activationPath).Equals(request.Path',$activationRootScope)
+$activationPersist=$processBlock.IndexOf('containmentStore.RecordKernelActiveAsync(',$activationPathBinding)
 $activationReturn=$processBlock.IndexOf('return;',$activationPersist)
 $activationReply=$processBlock.IndexOf('Native.Reply(',$activationBranch)
-if($activationBranch -lt 0 -or $activationPersist -lt 0 -or $activationReturn -lt 0 -or
+if($activationBranch -lt 0 -or $activationPath -lt 0 -or $activationRootScope -lt 0 -or
+   $activationPathBinding -lt 0 -or $activationPersist -lt 0 -or $activationReturn -lt 0 -or
+   $activationBranch -gt $activationPath -or $activationPath -gt $activationRootScope -or
+   $activationRootScope -gt $activationPathBinding -or $activationPathBinding -gt $activationPersist -or
    ($activationReply -ge 0 -and $activationReply -lt $activationReturn)){
   throw 'ContainmentActivated must persist as no-reply kernel evidence.'
 }

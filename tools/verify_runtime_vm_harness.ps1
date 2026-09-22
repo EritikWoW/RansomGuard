@@ -254,14 +254,21 @@ $transitionEnd=$helper.IndexOf('static void MapAndWrite',$transitionStart)
 if($transitionStart -lt 0 -or $transitionEnd -lt 0){throw 'ContainmentTransitionProbe source block missing.'}
 $transitionBlock=$helper.Substring($transitionStart,$transitionEnd-$transitionStart)
 foreach($required in @(
-    'FileMode.Open',
-    'FileAccess.Write',
-    'FileOptions.WriteThrough',
-    'a.Write(new byte[] { 0xA1 })',
-    'b.Write(new byte[] { 0xB2 })',
+    'OpenTransitionWriteHandle(fileA)',
+    'OpenTransitionWriteHandle(fileB)',
+    'WriteTransitionByte(a, 0, 0xA1',
+    'WriteTransitionByte(b, 0, 0xB2',
+    'TryWriteTransitionByte(a, 1, 0xC3',
+    'FileFlagWriteThrough',
+    'Native.SetFilePointerEx',
+    'Native.WriteFile',
+    'error == 5',
     'denied-after-threshold'
 )){
     if($transitionBlock -notmatch [regex]::Escape($required)){throw "Event-bound containment runtime helper missing invariant: $required"}
+}
+if($transitionBlock -match 'FileStream\(' -or $transitionBlock -match '\.Flush\(true\)'){
+    throw 'Event-bound containment runtime helper must use direct WriteFile operations; buffered FileStream/Flush can split one logical step into multiple gated writes.'
 }
 foreach($required in @(
     "'--contain-after-pid'",

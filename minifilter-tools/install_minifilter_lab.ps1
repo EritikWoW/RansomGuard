@@ -78,6 +78,31 @@ if(-not (Test-Path -LiteralPath $serviceKey)){
     throw 'DefaultInstall did not register RansomGuardMinifilter service.'
 }
 
+# Prove that the service image on disk is the exact SYS from this signed package.
+# Repeated LAB installs often reuse the same DriverVer, and Windows SetupAPI may otherwise
+# leave an older System32\drivers image in place. Runtime evidence must never test stale bytes.
+$service=Get-ItemProperty -LiteralPath $serviceKey
+$imagePath=[string]$service.ImagePath
+if([string]::IsNullOrWhiteSpace($imagePath)){
+    throw 'RansomGuardMinifilter service ImagePath is missing.'
+}
+$imagePath=[Environment]::ExpandEnvironmentVariables($imagePath.Trim('"'))
+if($imagePath -match '^\\SystemRoot\\'){
+    $imagePath=Join-Path $env:SystemRoot $imagePath.Substring(12)
+}
+elseif(-not [IO.Path]::IsPathRooted($imagePath)){
+    $imagePath=Join-Path $env:SystemRoot $imagePath
+}
+$imagePath=[IO.Path]::GetFullPath($imagePath)
+if(-not (Test-Path -LiteralPath $imagePath -PathType Leaf)){
+    throw "Registered minifilter image does not exist: $imagePath"
+}
+$packageSysHash=(Get-FileHash -LiteralPath $sys -Algorithm SHA256).Hash
+$installedSysHash=(Get-FileHash -LiteralPath $imagePath -Algorithm SHA256).Hash
+if(-not [string]::Equals($packageSysHash,$installedSysHash,[StringComparison]::OrdinalIgnoreCase)){
+    throw "REFUSED: registered minifilter image is stale or mismatched. package=$packageSysHash installed=$installedSysHash path=$imagePath"
+}
+
 & fltmc load RansomGuardMinifilter
 if($LASTEXITCODE -ne 0){
     Write-Warning 'fltmc load returned nonzero. It may already be loaded; checking filter list.'

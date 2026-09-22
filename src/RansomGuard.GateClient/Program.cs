@@ -338,7 +338,7 @@ try
         // FilterReplyMessage and starve the kernel waiter until RG_GATE_TIMEOUT_MS expires.
         // Therefore every request that requires a reply is completed before this receive loop
         // issues the next FilterGetMessage. No-reply evidence may remain concurrently bounded.
-        if (RequiresGateReply((RgEventType)ev.EventType))
+        if (GateMessagePolicy.RequiresReply((RgEventType)ev.EventType))
         {
             await worker.ConfigureAwait(false);
         }
@@ -752,12 +752,15 @@ static class RenameReconciliation
     private static bool NtSuccess(uint status) => (status & 0x80000000u) == 0;
 }
 
-static bool RequiresGateReply(RgEventType type) =>
-    type is RgEventType.Write or
-        RgEventType.Rename or
-        RgEventType.DeleteDisposition or
-        RgEventType.Truncate or
-        RgEventType.Create;
+static class GateMessagePolicy
+{
+    public static bool RequiresReply(RgEventType type) =>
+        type is RgEventType.Write or
+            RgEventType.Rename or
+            RgEventType.DeleteDisposition or
+            RgEventType.Truncate or
+            RgEventType.Create;
+}
 
 static class GateDecision
 {

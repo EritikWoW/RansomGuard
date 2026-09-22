@@ -1,9 +1,6 @@
-name: Minifilter crash recovery VM lab
+name: Minifilter completion-loss recovery VM lab
 
 on:
-  push:
-    branches:
-      - feature/runtime-crash-fault-evidence
   workflow_dispatch:
     inputs:
       root_base:
@@ -17,7 +14,7 @@ permissions:
 
 concurrency:
   group: ransomguard-crash-vm-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   crash-runtime:
@@ -101,7 +98,7 @@ jobs:
           }
           "RG_DRIVER_PACKAGE=$package" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Run CREATE intent crash and restart reconciliation
+      - name: Run CREATE completion-loss and restart reconciliation
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
@@ -113,12 +110,12 @@ jobs:
           .\minifilter-tools\run_crash_reconciliation_lab.ps1 -LabReleaseDirectory $env:RG_LAB_RELEASE -DriverPackageDirectory $env:RG_DRIVER_PACKAGE -RootBase $env:RG_CRASH_ROOT_BASE -ResultsDirectory $results
           $summary=Get-Content -LiteralPath (Join-Path $results 'crash-runtime-result.json') -Raw | ConvertFrom-Json
           foreach($name in @(
-            'gateCrashObserved',
+            'completionLossObserved',
             'createIntentDurable',
             'createCompletionAbsent',
-            'targetRemainedAbsent',
+            'targetCreated',
             'restartObserved',
-            'restartSupportsNotCompleted',
+            'restartSupportsCompleted',
             'recoveryTransactionNotReady',
             'cleanupPassed',
             'passed'

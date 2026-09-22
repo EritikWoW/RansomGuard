@@ -331,7 +331,21 @@ try
 
         await workerSlots.WaitAsync().ConfigureAwait(false);
         activeWorkers.RemoveAll(static task => task.IsCompleted);
-        activeWorkers.Add(Task.Run(() => ProcessMessageAsync(header, ev)));
+        var worker = Task.Run(() => ProcessMessageAsync(header, ev));
+
+        // The communication port is opened with FLT_PORT_FLAG_SYNC_HANDLE. A second blocking
+        // FilterGetMessage on that same synchronous handle can serialize ahead of a worker's
+        // FilterReplyMessage and starve the kernel waiter until RG_GATE_TIMEOUT_MS expires.
+        // Therefore every request that requires a reply is completed before this receive loop
+        // issues the next FilterGetMessage. No-reply evidence may remain concurrently bounded.
+        if (RequiresGateReply((RgEventType)ev.EventType))
+        {
+            await worker.ConfigureAwait(false);
+        }
+        else
+        {
+            activeWorkers.Add(worker);
+        }
     }
 }
 catch (OperationCanceledException) when (cts.IsCancellationRequested)
@@ -737,6 +751,13 @@ static class RenameReconciliation
 
     private static bool NtSuccess(uint status) => (status & 0x80000000u) == 0;
 }
+
+static bool RequiresGateReply(RgEventType type) =>
+    type is RgEventType.Write or
+        RgEventType.Rename or
+        RgEventType.DeleteDisposition or
+        RgEventType.Truncate or
+        RgEventType.Create;
 
 static class GateDecision
 {

@@ -27,6 +27,12 @@ var restartSummary = await RestartReconciliation.ObservePendingAsync(
     checked(options.MaxStoreMiB * RollbackStorageBudget.MiB),
     checked(options.MinFreeMiB * RollbackStorageBudget.MiB),
     CancellationToken.None).ConfigureAwait(false);
+if (options.ReconcileOnly)
+{
+    Console.WriteLine(
+        $"RECONCILE ONLY: observed={restartSummary.Observed}; completed-evidence={restartSummary.SupportsCompleted}; not-completed-evidence={restartSummary.SupportsNotCompleted}; ambiguous={restartSummary.Ambiguous}");
+    return;
+}
 var sessionId = options.SessionId ?? $"gate-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}";
 var store = repository.CreateSession(sessionId);
 var lifecycleStore = new RollbackSessionLifecycleStore(store.Root);
@@ -1321,7 +1327,8 @@ sealed record Options(
     int? ContainAfterPid,
     int ContainAfterEvents,
     int ContainAfterPaths,
-    bool FaultAfterCreateIntent)
+    bool FaultAfterCreateIntent,
+    bool ReconcileOnly)
 {
     public const int DefaultGateWorkers = 4;
     public const int MaxGateWorkers = 8;
@@ -1346,6 +1353,7 @@ sealed record Options(
         var containAfterPaths = DefaultContainAfterPaths;
         var containThresholdSpecified = false;
         var faultAfterCreateIntent = false;
+        var reconcileOnly = false;
         for (var i = 0; i < args.Length; i++)
         {
             switch (args[i].ToLowerInvariant())
@@ -1393,13 +1401,16 @@ sealed record Options(
                     containThresholdSpecified = true;
                     break;
                 case "--fault-after-create-intent": faultAfterCreateIntent = true; break;
+                case "--reconcile-only": reconcileOnly = true; break;
                 case "--prepare-root": prepare = true; break;
                 default: throw new ArgumentException($"Unknown/incomplete argument: {args[i]}");
             }
         }
         if (string.IsNullOrWhiteSpace(root)) throw new ArgumentException("Pass --root <disposable-test-directory>.");
-        if (prepare && (containPid.HasValue || containAfterPid.HasValue || faultAfterCreateIntent))
-            throw new ArgumentException("Containment/fault-injection options cannot be combined with --prepare-root.");
+        if (prepare && (containPid.HasValue || containAfterPid.HasValue || faultAfterCreateIntent || reconcileOnly))
+            throw new ArgumentException("Containment/fault/reconciliation options cannot be combined with --prepare-root.");
+        if (reconcileOnly && (containPid.HasValue || containAfterPid.HasValue || faultAfterCreateIntent || containThresholdSpecified))
+            throw new ArgumentException("--reconcile-only cannot be combined with containment or fault injection.");
         if (containPid.HasValue && containAfterPid.HasValue)
             throw new ArgumentException("--contain-pid and --contain-after-pid are mutually exclusive.");
         if (containThresholdSpecified && !containAfterPid.HasValue)
@@ -1409,7 +1420,7 @@ sealed record Options(
         store ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RansomGuardV072", "GateRollback");
         return new Options(
             root, store, session, prepare, gateWorkers, maxStoreMiB, minFreeMiB,
-            containPid, containAfterPid, containAfterEvents, containAfterPaths, faultAfterCreateIntent);
+            containPid, containAfterPid, containAfterEvents, containAfterPaths, faultAfterCreateIntent, reconcileOnly);
     }
 }
 

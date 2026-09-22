@@ -219,18 +219,30 @@ $preflightStart=$text.IndexOf('static class ActivationPreflight')
 $preflightEnd=$text.IndexOf('readonly record struct ActivationPreflightSummary',$preflightStart)
 if($preflightStart -lt 0 -or $preflightEnd -lt 0){throw 'ActivationPreflight implementation missing.'}
 $preflightBlock=$text.Substring($preflightStart,$preflightEnd-$preflightStart)
-foreach($required in @('Directory.EnumerateFiles','Directory.EnumerateDirectories','FileAttributes.ReparsePoint','Native.OpenPreflight','Native.OpenPreflightDirectory','ActivationPreflightStore','ActivationTopologyStore','FileIdentityStore.QueryHandleIdentity','RgEventType.ActivationPreflight','RgEventType.PagingWrite','RgEventType.WritableSection','heldHandles','RgControlCommand.ArmPreflight','RgControlCommand.ActivateGate','RgControlCommand.ActivateAndContainProcess','TargetProcessId = containPid ?? 0','Native.Control')){
+foreach($required in @('Directory.EnumerateFiles','Directory.EnumerateDirectories','FileAttributes.ReparsePoint','Native.OpenPreflightProbe','Native.OpenPreflightHold','Native.OpenPreflightDirectory','ActivationPreflightStore','ActivationTopologyStore','FileIdentityStore.QueryHandleIdentity','RgEventType.ActivationPreflight','RgEventType.PagingWrite','RgEventType.WritableSection','heldHandles','RgControlCommand.ArmPreflight','RgControlCommand.ActivateGate','RgControlCommand.ActivateAndContainProcess','TargetProcessId = containPid ?? 0','Native.Control')){
   if($preflightBlock -notmatch [regex]::Escape($required)){throw "Activation preflight missing invariant: $required"}
 }
 $armInPreflight=$preflightBlock.IndexOf('RgControlCommand.ArmPreflight')
-$openInPreflight=$preflightBlock.IndexOf('Native.OpenPreflight(path)')
+$probeInPreflight=$preflightBlock.IndexOf('Native.OpenPreflightProbe(path)')
+$receiveInPreflight=$preflightBlock.IndexOf('ReceivePreflightEventAsync(port, path',$probeInPreflight)
+$writableReject=$preflightBlock.IndexOf('if (writableView)',$receiveInPreflight)
+$holdInPreflight=$preflightBlock.IndexOf('Native.OpenPreflightHold(path)',$writableReject)
+$holdIdentity=$preflightBlock.IndexOf('FileIdentityStore.QueryHandleIdentity(hold)',$holdInPreflight)
+$identityCompare=$preflightBlock.IndexOf('if (!identity.Equals(holdIdentity))',$holdIdentity)
 $activateInPreflight=$preflightBlock.IndexOf('RgControlCommand.ActivateGate')
 $disposeInPreflight=$preflightBlock.IndexOf('foreach (var handle in heldHandles) handle.Dispose()')
-if($armInPreflight -lt 0 -or $openInPreflight -lt 0 -or $armInPreflight -gt $openInPreflight){
-  throw 'Every intentional preflight file open must be armed in kernel first.'
+if($armInPreflight -lt 0 -or $probeInPreflight -lt 0 -or $receiveInPreflight -lt 0 -or
+   $armInPreflight -gt $probeInPreflight -or $probeInPreflight -gt $receiveInPreflight){
+  throw 'Every intentional kernel preflight probe must be armed before its file open.'
 }
-if($activateInPreflight -lt 0 -or $disposeInPreflight -lt 0 -or $activateInPreflight -gt $disposeInPreflight){
-  throw 'Activation must occur while share-read preflight handles are still held.'
+if($writableReject -lt 0 -or $holdInPreflight -lt 0 -or $writableReject -gt $holdInPreflight){
+  throw 'Writable-section attestation must be evaluated before acquiring the share-sensitive file hold.'
+}
+if($holdIdentity -lt 0 -or $identityCompare -lt 0 -or $holdInPreflight -gt $holdIdentity -or $holdIdentity -gt $identityCompare){
+  throw 'Activation must bind the share-sensitive hold to the exact kernel-attested FILE_ID_INFO.'
+}
+if($activateInPreflight -lt 0 -or $disposeInPreflight -lt 0 -or $holdInPreflight -gt $activateInPreflight -or $activateInPreflight -gt $disposeInPreflight){
+  throw 'Activation must occur while share-sensitive file/directory handles are still held.'
 }
 
 $containActivation=$preflightBlock.IndexOf('RgControlCommand.ActivateAndContainProcess')
@@ -244,21 +256,28 @@ if($preflightBlock -match '(?i)ReleaseContainment|ClearContainment'){
   throw 'GateClient must not expose a runtime containment release/bypass command.'
 }
 
-$fileOpenStart=$text.IndexOf('public static SafeFileHandle OpenPreflight(string path)')
-$fileOpenEnd=$text.IndexOf('public static SafeFileHandle OpenPreflightDirectory(string path)',$fileOpenStart)
-if($fileOpenStart -lt 0 -or $fileOpenEnd -lt 0){throw 'OpenPreflight source block missing.'}
-$fileOpenBlock=$text.Substring($fileOpenStart,$fileOpenEnd-$fileOpenStart)
-foreach($required in @('FileReadData','FileReadAttributes','FileReadData | FileReadAttributes','ShareRead','CreateFileW')){
-  if($fileOpenBlock -notmatch [regex]::Escape($required)){throw "File activation open missing invariant: $required"}
+$fileProbeStart=$text.IndexOf('public static SafeFileHandle OpenPreflightProbe(string path)')
+$fileHoldStart=$text.IndexOf('public static SafeFileHandle OpenPreflightHold(string path)',$fileProbeStart)
+$directoryOpenStart=$text.IndexOf('public static SafeFileHandle OpenPreflightDirectory(string path)',$fileHoldStart)
+if($fileProbeStart -lt 0 -or $fileHoldStart -lt 0 -or $directoryOpenStart -lt 0){
+  throw 'Split activation file probe/hold source blocks are missing.'
 }
-if($fileOpenBlock -match 'CreateFileW\(path, FileReadAttributes, ShareRead'){
-  throw 'Activation file open must be share-sensitive; FILE_READ_ATTRIBUTES alone does not enforce the hold.'
+$fileProbeBlock=$text.Substring($fileProbeStart,$fileHoldStart-$fileProbeStart)
+foreach($required in @('FileReadAttributes','ShareRead','ShareWrite','ShareDelete','ShareRead | ShareWrite | ShareDelete','CreateFileW')){
+  if($fileProbeBlock -notmatch [regex]::Escape($required)){throw "File activation probe missing invariant: $required"}
 }
-if($fileOpenBlock -match 'ShareWrite|ShareDelete'){
-  throw 'Activation file handles must not share WRITE or DELETE access.'
+if($fileProbeBlock -match [regex]::Escape('FileReadData')){
+  throw 'Kernel activation probe must remain attribute-only so existing write-capable mappings are observable instead of rejected by sharing.'
 }
 
-$directoryOpenStart=$text.IndexOf('public static SafeFileHandle OpenPreflightDirectory(string path)')
+$fileHoldBlock=$text.Substring($fileHoldStart,$directoryOpenStart-$fileHoldStart)
+foreach($required in @('FileReadData','FileReadAttributes','FileReadData | FileReadAttributes','ShareRead','CreateFileW')){
+  if($fileHoldBlock -notmatch [regex]::Escape($required)){throw "File activation hold missing invariant: $required"}
+}
+if($fileHoldBlock -match 'ShareWrite|ShareDelete'){
+  throw 'Activation file hold must not share WRITE or DELETE access.'
+}
+
 $directoryOpenEnd=$text.IndexOf('public static void Cancel',$directoryOpenStart)
 if($directoryOpenStart -lt 0 -or $directoryOpenEnd -lt 0){throw 'OpenPreflightDirectory source block missing.'}
 $directoryOpenBlock=$text.Substring($directoryOpenStart,$directoryOpenEnd-$directoryOpenStart)

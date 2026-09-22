@@ -81,7 +81,9 @@ foreach($required in @(
     'transitionRequested',
     'transitionKernelActive',
     'transitionDeniedNextWrite',
-    'containment-journal.jsonl'
+    'containment-journal.jsonl',
+    'Stop-LabProcess $gatePost',
+    'Stop-LabProcess $gateContain'
 )){
     if($runtime -notmatch [regex]::Escape($required)){throw "Runtime integration script missing invariant: $required"}
 }

@@ -93,10 +93,11 @@ foreach($required in @(
   'RgControlCommand.ActivateGate',
   'RgControlCommand.ActivateAndContainProcess',
   '--contain-pid',
-  '--fault-after-create-intent',
+  '--drop-first-create-completion',
   '--reconcile-only',
   'RECONCILE ONLY: observed=',
-  'Environment.FailFast("RansomGuard LAB fault injection: after durable CREATE intent, before kernel reply.")',
+  'LAB COMPLETION LOSS: intentionally dropping authoritative CREATE result',
+  'Interlocked.CompareExchange(ref droppedCreateCompletion, 1, 0) == 0',
   'TargetProcessId = containPid ?? 0',
   'ContainmentActive',
   'ContainedProcessId',
@@ -203,17 +204,17 @@ if($createEvaluate -lt 0 -or $createIntent -lt 0 -or $createReturn -lt 0 -or $cr
   throw 'CREATE intent must be durably committed before any allow decision is returned.'
 }
 
-$faultOption=$text.IndexOf('case "--fault-after-create-intent"')
-$faultEvaluate=$text.IndexOf('var reply = await GateDecision.EvaluateAsync(')
-$faultCheck=$text.IndexOf('if (options.FaultAfterCreateIntent',$faultEvaluate)
-$faultCrash=$text.IndexOf('Environment.FailFast("RansomGuard LAB fault injection: after durable CREATE intent, before kernel reply.")',$faultCheck)
-$faultReply=$text.IndexOf('Native.Reply(port, header.MessageId, reply)',$faultCrash)
-if($faultOption -lt 0 -or $faultEvaluate -lt 0 -or $faultCheck -lt 0 -or $faultCrash -lt 0 -or $faultReply -lt 0 -or
-   $faultEvaluate -gt $faultCheck -or $faultCheck -gt $faultCrash -or $faultCrash -gt $faultReply){
-  throw 'LAB CREATE fault injection must execute only after GateDecision has durably committed the intent and before FilterReplyMessage.'
+$lossOption=$text.IndexOf('case "--drop-first-create-completion"')
+$lossBranch=$text.IndexOf('if ((RgEventType)ev.EventType == RgEventType.CreateResult)')
+$lossCheck=$text.IndexOf('if (options.DropFirstCreateCompletion',$lossBranch)
+$lossCancel=$text.IndexOf('cts.Cancel();',$lossCheck)
+$lossPersist=$text.IndexOf('CreateReconciliation.HandleAsync(',$lossBranch)
+if($lossOption -lt 0 -or $lossBranch -lt 0 -or $lossCheck -lt 0 -or $lossCancel -lt 0 -or $lossPersist -lt 0 -or
+   $lossBranch -gt $lossCheck -or $lossCheck -gt $lossCancel -or $lossCancel -gt $lossPersist){
+  throw 'LAB CREATE completion-loss injection must drop the received CreateResult before authoritative completion persistence.'
 }
-if($text -notmatch 'reply\.Decision is RgGateDecision\.SnapshotCommitted or RgGateDecision\.BaselineCommitted'){
-  throw 'LAB CREATE fault injection must only arm on preservation-backed CREATE decisions.'
+if($text -match [regex]::Escape('Environment.FailFast("RansomGuard LAB fault injection: after durable CREATE intent, before kernel reply.")')){
+  throw 'GateClient must not hard-crash while the kernel is waiting for a blocking gate reply.'
 }
 
 $renameBranch=$text.IndexOf('if (eventType == RgEventType.Rename)')

@@ -93,6 +93,8 @@ foreach($required in @(
   'RgControlCommand.ActivateGate',
   'RgControlCommand.ActivateAndContainProcess',
   '--contain-pid',
+  '--fault-after-create-intent',
+  'Environment.FailFast("RansomGuard LAB fault injection: after durable CREATE intent, before kernel reply.")',
   'TargetProcessId = containPid ?? 0',
   'ContainmentActive',
   'ContainedProcessId',
@@ -199,6 +201,19 @@ if($createEvaluate -lt 0 -or $createIntent -lt 0 -or $createReturn -lt 0 -or $cr
   throw 'CREATE intent must be durably committed before any allow decision is returned.'
 }
 
+$faultOption=$text.IndexOf('case "--fault-after-create-intent"')
+$faultEvaluate=$text.IndexOf('var reply = await GateDecision.EvaluateAsync(')
+$faultCheck=$text.IndexOf('if (options.FaultAfterCreateIntent',$faultEvaluate)
+$faultCrash=$text.IndexOf('Environment.FailFast("RansomGuard LAB fault injection: after durable CREATE intent, before kernel reply.")',$faultCheck)
+$faultReply=$text.IndexOf('Native.Reply(port, header.MessageId, reply)',$faultCrash)
+if($faultOption -lt 0 -or $faultEvaluate -lt 0 -or $faultCheck -lt 0 -or $faultCrash -lt 0 -or $faultReply -lt 0 -or
+   $faultEvaluate -gt $faultCheck -or $faultCheck -gt $faultCrash -or $faultCrash -gt $faultReply){
+  throw 'LAB CREATE fault injection must execute only after GateDecision has durably committed the intent and before FilterReplyMessage.'
+}
+if($text -notmatch 'reply\.Decision is RgGateDecision\.SnapshotCommitted or RgGateDecision\.BaselineCommitted'){
+  throw 'LAB CREATE fault injection must only arm on preservation-backed CREATE decisions.'
+}
+
 $renameBranch=$text.IndexOf('if (eventType == RgEventType.Rename)')
 $renameSourceCapture=$text.IndexOf('CapturePreimageAsync(sourcePath, RollbackMutationKind.Rename',$renameBranch)
 $renameIntent=$text.IndexOf('renameStore.CaptureIntentAsync(',$renameSourceCapture)
@@ -302,7 +317,7 @@ if($preflightBlock -match 'Native\.Reply\('){throw 'Activation preflight events 
 $containOption=$text.IndexOf('case "--contain-pid"')
 $containRejectSystem=$text.IndexOf('parsedPid <= 4',$containOption)
 $containRejectSelf=$text.IndexOf('parsedPid == Environment.ProcessId',$containOption)
-$containPrepareReject=$text.IndexOf('Containment options cannot be combined with --prepare-root')
+$containPrepareReject=$text.IndexOf('Containment/fault-injection options cannot be combined with --prepare-root')
 if($containOption -lt 0 -or $containRejectSystem -lt 0 -or $containRejectSelf -lt 0 -or $containPrepareReject -lt 0){
   throw 'LAB containment CLI must reject system/self PID and prepare-only combinations.'
 }

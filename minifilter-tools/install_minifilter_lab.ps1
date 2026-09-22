@@ -93,8 +93,13 @@ if($LASTEXITCODE -ne 0){
     throw "Explicit attach to $Volume failed."
 }
 
-$instances=(& fltmc instances RansomGuardMinifilter | Out-String)
-if($instances -notmatch [regex]::Escape($Volume)){
+$instances=(& fltmc instances -f RansomGuardMinifilter -v $Volume 2>&1 | Out-String)
+$instancesExit=$LASTEXITCODE
+if($instancesExit -ne 0){
+    throw "Could not query the attached RansomGuardMinifilter instance on $Volume, exit=$instancesExit. Output: $instances"
+}
+if($instances -notmatch [regex]::Escape('RansomGuardMinifilter') -or
+   $instances -notmatch [regex]::Escape($Volume)){
     throw "RansomGuardMinifilter is loaded but the expected $Volume instance was not confirmed."
 }
 

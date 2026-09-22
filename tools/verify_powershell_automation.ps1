@@ -34,7 +34,7 @@ foreach($script in $scripts){
         [ref]$parseErrors
     )
     foreach($parseError in @($parseErrors)){
-        $relative=$script.FullName.Substring($RepositoryRoot.Length).TrimStart('\','/')
+        $relative=$script.FullName.Substring($RepositoryRoot.Length).TrimStart([char[]]@('\','/'))
         $findings.Add(('{0}:{1}:{2}: PowerShell parser: {3}' -f
             $relative,
             $parseError.Extent.StartLineNumber,
@@ -54,7 +54,7 @@ foreach($script in $scripts){
             $j++
         }
         if($j -lt $lines.Count -and $lines[$j] -match '\$LASTEXITCODE\b'){
-            $relative=$script.FullName.Substring($RepositoryRoot.Length).TrimStart('\','/')
+            $relative=$script.FullName.Substring($RepositoryRoot.Length).TrimStart([char[]]@('\','/'))
             $findings.Add(('{0}:{1}: PowerShell script invocation is followed by stale-prone $LASTEXITCODE inspection.' -f
                 $relative,($i+1)))
         }
@@ -70,7 +70,7 @@ foreach($workflow in $workflows){
         while($j -lt $lines.Count -and
               ([string]::IsNullOrWhiteSpace($lines[$j]) -or $lines[$j] -match '^\s*#')){$j++}
         if($j -lt $lines.Count -and $lines[$j] -match '\$LASTEXITCODE\b'){
-            $relative=$workflow.FullName.Substring($RepositoryRoot.Length).TrimStart('\','/')
+            $relative=$workflow.FullName.Substring($RepositoryRoot.Length).TrimStart([char[]]@('\','/'))
             $findings.Add(('{0}:{1}: workflow invokes a PowerShell script and then inspects stale-prone $LASTEXITCODE.' -f
                 $relative,($i+1)))
         }

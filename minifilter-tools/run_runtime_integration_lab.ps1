@@ -47,6 +47,14 @@ function Start-LoggedProcess(
     return Start-Process -FilePath $FilePath -ArgumentList $Arguments -PassThru -WindowStyle Hidden -RedirectStandardOutput $StdOut -RedirectStandardError $StdErr
 }
 
+function Stop-LabProcess([System.Diagnostics.Process]$Process,[string]$Description){
+    if($null -eq $Process -or $Process.HasExited){return}
+    Stop-Process -Id $Process.Id -Force -ErrorAction Stop
+    if(-not $Process.WaitForExit(10000)){
+        throw "Timed out stopping ${Description} process pid=$($Process.Id)."
+    }
+}
+
 function Wait-Path([string]$Path,[int]$Seconds,[string]$Description){
     $deadline=(Get-Date).AddSeconds($Seconds)
     while((Get-Date) -lt $deadline){
@@ -338,6 +346,12 @@ try{
     }
     $summary.preimageHashMatched=$true
 
+    # The filter communication port allows one gate client. End this successful
+    # session before activating the next root so the disconnect callback clears
+    # gate/containment state and the next client can connect deterministically.
+    Stop-LabProcess $gatePost 'post-activation gate'
+    $gatePost=$null
+
     # Scenario 3: activation-bound containment is scoped to one kernel process identity.
     Prepare-GateRoot $gateExe $containRoot
     $containedFile=Join-Path $containRoot 'contained-target.bin'
@@ -398,6 +412,9 @@ try{
         throw 'Ordinary peer was unexpectedly prevented from mutating under single-process containment.'
     }
     $summary.containmentAllowedPeer=$true
+
+    Stop-LabProcess $gateContain 'pre-armed containment gate'
+    $gateContain=$null
 
     # Scenario 4: a preserved gate reply can atomically transition the exact requestor into containment.
     Prepare-GateRoot $gateExe $transitionRoot

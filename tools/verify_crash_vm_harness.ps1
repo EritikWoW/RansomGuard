@@ -4,6 +4,7 @@ $gate=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.GateClient\Prog
 $helper=Get-Content -LiteralPath (Join-Path $root 'tests\RansomGuard.Minifilter.RuntimeHarness\Program.cs') -Raw
 $harness=Get-Content -LiteralPath (Join-Path $root 'minifilter-tools\run_crash_reconciliation_lab.ps1') -Raw
 $workflow=Get-Content -LiteralPath (Join-Path $root '.github\workflows\minifilter-crash-vm.yml') -Raw
+$unload=Get-Content -LiteralPath (Join-Path $root 'minifilter-tools\unload_minifilter_lab.ps1') -Raw
 
 foreach($required in @(
   '--fault-after-create-intent',
@@ -87,6 +88,23 @@ foreach($required in @(
   'Ensure LAB minifilter is unloaded after run'
 )){
   if($workflow -notmatch [regex]::Escape($required)){throw "Crash VM workflow invariant missing: $required"}
+}
+
+
+foreach($required in @(
+  'Invoke-FltmcBounded',
+  'WaitForExit($NativeTimeoutSeconds*1000)',
+  'TIMEOUT: $Description did not return within $NativeTimeoutSeconds seconds',
+  'revert the disposable VM checkpoint'
+)){
+  if($unload -notmatch [regex]::Escape($required)){throw "Bounded unload invariant missing: $required"}
+}
+
+if($workflow -notmatch [regex]::Escape('STALE KERNEL STATE: RansomGuardMinifilter is still loaded from an earlier crash/fault run.')){
+  throw 'Crash VM startup must fail fast on an already-loaded stale LAB minifilter instead of attempting an unbounded cleanup.'
+}
+if($workflow -match [regex]::Escape("Write-Warning 'Removing RansomGuardMinifilter left loaded by a prior failed LAB run.'")){
+  throw 'Crash VM startup must not attempt to unload an unknown stale driver generation.'
 }
 
 Write-Host 'Crash/fault VM harness source check PASSED: durable CREATE intent crash, exact absent-path restart evidence, recovery transaction remains non-Ready.'

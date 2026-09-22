@@ -43,11 +43,17 @@ foreach($script in $scripts){
     }
 
     $lines=@(Get-Content -LiteralPath $script.FullName)
-    for($i=0;$i -lt ($lines.Count-1);$i++){
+    for($i=0;$i -lt $lines.Count;$i++){
         # LASTEXITCODE belongs to the most recent native process. It is not a reliable
         # success result for another PowerShell script invoked with the call operator.
-        if($lines[$i] -match '&\s+\$[A-Za-z_][A-Za-z0-9_]*Script\b' -and
-           $lines[$i+1] -match '\$LASTEXITCODE\b'){
+        if($lines[$i] -notmatch '&\s+\$[A-Za-z_][A-Za-z0-9_]*Script\b'){continue}
+
+        $j=$i+1
+        while($j -lt $lines.Count -and
+              ([string]::IsNullOrWhiteSpace($lines[$j]) -or $lines[$j] -match '^\s*#')){
+            $j++
+        }
+        if($j -lt $lines.Count -and $lines[$j] -match '\$LASTEXITCODE\b'){
             $relative=$script.FullName.Substring($RepositoryRoot.Length).TrimStart('\','/')
             $findings.Add(('{0}:{1}: PowerShell script invocation is followed by stale-prone $LASTEXITCODE inspection.' -f
                 $relative,($i+1)))
@@ -61,7 +67,8 @@ foreach($workflow in $workflows){
         if($lines[$i] -notmatch '^\s*\.\\[^\r\n]*\.ps1(?:\s|$)'){continue}
 
         $j=$i+1
-        while($j -lt $lines.Count -and [string]::IsNullOrWhiteSpace($lines[$j])){$j++}
+        while($j -lt $lines.Count -and
+              ([string]::IsNullOrWhiteSpace($lines[$j]) -or $lines[$j] -match '^\s*#')){$j++}
         if($j -lt $lines.Count -and $lines[$j] -match '\$LASTEXITCODE\b'){
             $relative=$workflow.FullName.Substring($RepositoryRoot.Length).TrimStart('\','/')
             $findings.Add(('{0}:{1}: workflow invokes a PowerShell script and then inspects stale-prone $LASTEXITCODE.' -f

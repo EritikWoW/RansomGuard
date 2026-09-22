@@ -4,12 +4,13 @@ $root=Split-Path -Parent $PSScriptRoot
 $workflowPath=Join-Path $root '.github\workflows\minifilter-runtime-vm.yml'
 $runtimeScript=Join-Path $root 'minifilter-tools\run_runtime_integration_lab.ps1'
 $packageScript=Join-Path $root 'minifilter-tools\prepare_runtime_driver_package.ps1'
+$readinessScript=Join-Path $root 'minifilter-tools\verify_runtime_runner_readiness.ps1'
 $installScript=Join-Path $root 'minifilter-tools\install_minifilter_lab.ps1'
 $helperSource=Join-Path $root 'tests\RansomGuard.Minifilter.RuntimeHarness\Program.cs'
 $helperProject=Join-Path $root 'tests\RansomGuard.Minifilter.RuntimeHarness\RansomGuard.Minifilter.RuntimeHarness.csproj'
 $build=Join-Path $root 'build_windows.ps1'
 
-foreach($path in @($workflowPath,$runtimeScript,$packageScript,$installScript,$helperSource,$helperProject,$build)){
+foreach($path in @($workflowPath,$runtimeScript,$packageScript,$readinessScript,$installScript,$helperSource,$helperProject,$build)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Runtime VM harness required file missing: $path"}
 }
 
@@ -21,6 +22,7 @@ foreach($required in @(
     'RANSOMGUARD_LAB_VM: I_UNDERSTAND',
     'RANSOMGUARD_LAB_CERT_THUMBPRINT',
     'prepare_runtime_driver_package.ps1',
+    'verify_runtime_runner_readiness.ps1',
     'run_runtime_integration_lab.ps1',
     'runtime-package.json',
     'github.sha'
@@ -66,6 +68,27 @@ foreach($required in @(
     if($runtime -notmatch [regex]::Escape($required)){throw "Runtime integration script missing invariant: $required"}
 }
 
+$readiness=Get-Content -LiteralPath $readinessScript -Raw
+foreach($required in @(
+    'WindowsBuiltInRole]::Administrator',
+    'RANSOMGUARD_LAB_VM',
+    'Win32_ComputerSystem',
+    'Cert:\CurrentUser\My',
+    'Cert:\LocalMachine\My',
+    'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
+    'fltKernel.h',
+    'FltMgr.lib',
+    'signtool.exe',
+    'Inf2Cat.exe',
+    'infverif.exe',
+    'ApiValidator.exe',
+    'Aitstatic.exe',
+    'fltmc.exe',
+    'pnputil.exe'
+)){
+    if($readiness -notmatch [regex]::Escape($required)){throw "Runtime runner readiness check missing invariant: $required"}
+}
+
 $package=Get-Content -LiteralPath $packageScript -Raw
 foreach($required in @(
     'build_minifilter.ps1',
@@ -90,7 +113,7 @@ $forbidden=@(
     'Set-SecureBootUEFI',
     'Disable-WindowsOptionalFeature'
 )
-foreach($path in @($runtimeScript,$packageScript,$workflowPath)){
+foreach($path in @($runtimeScript,$packageScript,$readinessScript,$workflowPath)){
     $text=Get-Content -LiteralPath $path -Raw
     foreach($token in $forbidden){
         if($text -match [regex]::Escape($token)){throw "Runtime VM harness must not modify boot/security/trust policy: $token in $path"}

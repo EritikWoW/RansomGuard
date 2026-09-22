@@ -311,6 +311,41 @@ if($src -notmatch 'static VOID RgDisconnect[\s\S]*RgClearContainedProcess\(\)' -
     throw 'Disconnect and unload must release the referenced containment process object.'
 }
 
+$disconnectStart=$src.IndexOf('static VOID RgDisconnect(PVOID ConnectionCookie)')
+$disconnectEnd=$src.IndexOf('NTSTATUS RgInstanceSetup',$disconnectStart)
+$connectStart=$src.IndexOf('static NTSTATUS RgConnect(PFLT_PORT ClientPort')
+$connectEnd=$src.IndexOf('static NTSTATUS RgMessage',$connectStart)
+if($disconnectStart -lt 0 -or $disconnectEnd -lt 0 -or $connectStart -lt 0 -or $connectEnd -lt 0){
+    throw 'Port connect/disconnect source boundaries are missing.'
+}
+$disconnectBlock=$src.Substring($disconnectStart,$disconnectEnd-$disconnectStart)
+$connectBlock=$src.Substring($connectStart,$connectEnd-$connectStart)
+foreach($required in @(
+    'FltCloseClientPort(gFilter, &gClientPort)',
+    'InterlockedExchange(&gPortDrainRequired, 1)'
+)){
+    if($disconnectBlock -notmatch [regex]::Escape($required)){throw "Disconnect port lifecycle invariant missing: $required"}
+}
+if($disconnectBlock -match [regex]::Escape('RgWaitForPortUsers()')){
+    throw 'DisconnectNotify must never wait for outstanding FltSendMessage rundown leases; drain belongs to reconnect/unload.'
+}
+foreach($required in @(
+    'InterlockedCompareExchange(&gPortDrainRequired, 0, 0)',
+    'RgWaitForPortUsers()',
+    'ExReInitializeRundownProtection(&gPortRundown)',
+    'InterlockedExchange(&gPortDrainRequired, 0)'
+)){
+    if($connectBlock -notmatch [regex]::Escape($required)){throw "Reconnect port-generation drain invariant missing: $required"}
+}
+$connectMutex=$connectBlock.IndexOf('ExAcquireFastMutex(&gPortMutex)')
+$connectDrain=$connectBlock.IndexOf('RgWaitForPortUsers()',$connectMutex)
+$connectReinit=$connectBlock.IndexOf('ExReInitializeRundownProtection(&gPortRundown)',$connectDrain)
+$connectPublish=$connectBlock.IndexOf('gClientPort = ClientPort',$connectReinit)
+if($connectMutex -lt 0 -or $connectDrain -lt 0 -or $connectReinit -lt 0 -or $connectPublish -lt 0 -or
+   $connectMutex -gt $connectDrain -or $connectDrain -gt $connectReinit -or $connectReinit -gt $connectPublish){
+    throw 'Reconnect must drain and reinitialize the previous port generation before publishing the replacement client port.'
+}
+
 if($src -notmatch 'FltCreateCommunicationPort\([^;]*RgConnect,\s*RgDisconnect,\s*RgMessage,\s*1\)' -and
    $src -notmatch 'RgConnect, RgDisconnect, RgMessage, 1'){
     throw 'Communication port must register RgMessage for activation handshake.'

@@ -469,38 +469,53 @@ static class ActivationPreflight
                     throw new InvalidOperationException(
                         $"Kernel refused to arm activation preflight for '{path}'. NTSTATUS=0x{arm.Status:X8}.");
 
-                var file = Native.OpenPreflight(path);
-                heldHandles.Add(file);
+                // First issue an attribute-only probe that deliberately shares READ/WRITE/DELETE.
+                // This lets the minifilter inspect the existing section object even when a writable
+                // mapping already keeps a write-capable file object alive.
+                using var probe = Native.OpenPreflightProbe(path);
                 var ev = await ReceivePreflightEventAsync(port, path, resolver, cancellationToken).ConfigureAwait(false);
 
-            DurableFileIdentity? identity = null;
-            if (ev.IdentityStatus == (uint)RgIdentityStatus.Resolved &&
-                (ev.VolumeSerialNumber != 0 || ev.FileIdLow != 0 || ev.FileIdHigh != 0))
-            {
-                identity = new DurableFileIdentity(
-                    ev.VolumeSerialNumber.ToString("X16"),
-                    ev.FileIdLow.ToString("X16") + ev.FileIdHigh.ToString("X16"));
-            }
+                DurableFileIdentity? identity = null;
+                if (ev.IdentityStatus == (uint)RgIdentityStatus.Resolved &&
+                    (ev.VolumeSerialNumber != 0 || ev.FileIdLow != 0 || ev.FileIdHigh != 0))
+                {
+                    identity = new DurableFileIdentity(
+                        ev.VolumeSerialNumber.ToString("X16"),
+                        ev.FileIdLow.ToString("X16") + ev.FileIdHigh.ToString("X16"));
+                }
 
-            var writableView = (ev.Flags & WritableViewFlag) != 0;
-            await using (var fileReservation = await storageBudget.ReserveAsync(
-                             RollbackStorageBudget.MetadataReservationBytes,
-                             "activation-file-evidence",
-                             cancellationToken).ConfigureAwait(false))
-            {
-                _ = await evidenceStore.RecordAsync(
-                    ev.Sequence, path, ev.CompletionStatus, writableView, identity, cancellationToken)
-                    .ConfigureAwait(false);
-            }
+                var writableView = (ev.Flags & WritableViewFlag) != 0;
+                await using (var fileReservation = await storageBudget.ReserveAsync(
+                                 RollbackStorageBudget.MetadataReservationBytes,
+                                 "activation-file-evidence",
+                                 cancellationToken).ConfigureAwait(false))
+                {
+                    _ = await evidenceStore.RecordAsync(
+                        ev.Sequence, path, ev.CompletionStatus, writableView, identity, cancellationToken)
+                        .ConfigureAwait(false);
+                }
 
-            if (!NtSuccess(ev.CompletionStatus))
-                throw new InvalidOperationException(
-                    $"Activation preflight kernel open failed for '{path}', NTSTATUS=0x{ev.CompletionStatus:X8}.");
-            if (identity is null)
-                throw new InvalidOperationException($"Activation preflight could not bind FILE_ID_INFO for '{path}'.");
-            if (writableView)
-                throw new InvalidOperationException(
-                    $"Activation refused: '{path}' already has a user-writable mapped view.");
+                if (!NtSuccess(ev.CompletionStatus))
+                    throw new InvalidOperationException(
+                        $"Activation preflight kernel open failed for '{path}', NTSTATUS=0x{ev.CompletionStatus:X8}.");
+                if (identity is null)
+                    throw new InvalidOperationException($"Activation preflight could not bind FILE_ID_INFO for '{path}'.");
+                if (writableView)
+                    throw new InvalidOperationException(
+                        $"Activation refused: '{path}' already has a user-writable mapped view.");
+
+                // Only after kernel attestation is clean do we acquire the share-sensitive hold.
+                // Keep the probe open until the hold exists, then verify the held object is the same
+                // FILE_ID_INFO so a rename/replace race cannot silently swap the file between phases.
+                var hold = Native.OpenPreflightHold(path);
+                var holdIdentity = FileIdentityStore.QueryHandleIdentity(hold);
+                if (!identity.Equals(holdIdentity))
+                {
+                    hold.Dispose();
+                    throw new InvalidOperationException(
+                        $"Activation refused: file identity changed while freezing '{path}'.");
+                }
+                heldHandles.Add(hold);
 
                 checkedFiles++;
             }
@@ -1609,7 +1624,31 @@ static class Native
         }
     }
 
-    public static SafeFileHandle OpenPreflight(string path)
+    public static SafeFileHandle OpenPreflightProbe(string path)
+    {
+        const uint FileReadAttributes = 0x00000080;
+        const uint ShareRead = 0x00000001;
+        const uint ShareWrite = 0x00000002;
+        const uint ShareDelete = 0x00000004;
+        const uint OpenExisting = 3;
+        const uint FileAttributeNormal = 0x00000080;
+
+        // This handle exists only to trigger the armed kernel preflight callback and inspect
+        // SectionObjectPointer. Sharing all mutation modes is intentional here: a pre-existing
+        // writable mapping must be observable by MmDoesFileHaveUserWritableReferences rather
+        // than being hidden behind an early Win32 sharing violation.
+        var handle = CreateFileW(path, FileReadAttributes, ShareRead | ShareWrite | ShareDelete,
+            IntPtr.Zero, OpenExisting, FileAttributeNormal, IntPtr.Zero);
+        if (handle.IsInvalid)
+        {
+            var error = Marshal.GetLastWin32Error();
+            handle.Dispose();
+            throw new Win32Exception(error, $"Activation kernel probe could not open '{path}'.");
+        }
+        return handle;
+    }
+
+    public static SafeFileHandle OpenPreflightHold(string path)
     {
         const uint FileReadData = 0x00000001;
         const uint FileReadAttributes = 0x00000080;
@@ -1617,16 +1656,17 @@ static class Native
         const uint OpenExisting = 3;
         const uint FileAttributeNormal = 0x00000080;
 
-        // FILE_READ_ATTRIBUTES alone is not a share-sensitive hold. Include FILE_READ_DATA so
-        // the preflight handle conflicts with pre-existing/racing WRITE or DELETE handles while
-        // still permitting concurrent readers until kernel activation completes.
+        // After kernel attestation reports no writable mapping, acquire the actual topology hold.
+        // FILE_READ_DATA makes this handle share-sensitive; ShareRead alone rejects pre-existing
+        // or racing WRITE/DELETE handles and keeps them out until kernel activation completes.
         var handle = CreateFileW(path, FileReadData | FileReadAttributes, ShareRead,
             IntPtr.Zero, OpenExisting, FileAttributeNormal, IntPtr.Zero);
         if (handle.IsInvalid)
         {
             var error = Marshal.GetLastWin32Error();
             handle.Dispose();
-            throw new Win32Exception(error, $"Activation preflight could not open '{path}'.");
+            throw new Win32Exception(error,
+                $"Activation topology preflight could not hold file '{path}' with read-only sharing.");
         }
         return handle;
     }

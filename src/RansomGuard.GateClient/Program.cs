@@ -1631,12 +1631,17 @@ static class Native
 
     public static SafeFileHandle OpenPreflightDirectory(string path)
     {
+        const uint FileListDirectory = 0x00000001;
         const uint FileReadAttributes = 0x00000080;
         const uint ShareRead = 0x00000001;
         const uint OpenExisting = 3;
         const uint FileFlagBackupSemantics = 0x02000000;
 
-        var handle = CreateFileW(path, FileReadAttributes, ShareRead,
+        // FILE_READ_ATTRIBUTES alone does not participate in normal CreateFile share checks.
+        // Request FILE_LIST_DIRECTORY as well so this read-shared handle conflicts with any
+        // pre-existing or racing WRITE/DELETE directory handle and freezes directory topology
+        // until kernel activation completes.
+        var handle = CreateFileW(path, FileListDirectory | FileReadAttributes, ShareRead,
             IntPtr.Zero, OpenExisting, FileFlagBackupSemantics, IntPtr.Zero);
         if (handle.IsInvalid)
         {

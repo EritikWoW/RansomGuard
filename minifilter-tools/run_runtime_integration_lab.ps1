@@ -199,7 +199,9 @@ try{
     }
 
     & $installScript -Volume $volume -PackageDirectory $DriverPackageDirectory -Confirmation 'LAB-MINIFILTER'
-    if($LASTEXITCODE -ne 0){throw "Minifilter install/attach failed, exit=$LASTEXITCODE"}
+    # install_minifilter_lab.ps1 throws on failure. Do not inspect $LASTEXITCODE here:
+    # it belongs to the last native command executed inside the child script and may remain
+    # nonzero even after the script has independently verified a successful load/attach.
     $installed=$true
 
     # Scenario 0: a directory handle that already owns DELETE access must prevent activation.

@@ -61,10 +61,22 @@ function Find-X64Tool([string]$Name){
     return $null
 }
 
+function Find-Inf2CatTool {
+    $x64=Find-X64Tool 'Inf2Cat.exe'
+    if($x64){return $x64}
+
+    $match=Get-ChildItem -LiteralPath $kits -Filter 'Inf2Cat.exe' -File -Recurse -ErrorAction SilentlyContinue |
+        Where-Object {$_.FullName -match '(?i)\\x86\\'} |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+    if($match){return $match.FullName}
+    return $null
+}
+
 $signtool=Find-X64Tool 'signtool.exe'
-$inf2cat=Find-X64Tool 'Inf2Cat.exe'
+$inf2cat=Find-Inf2CatTool
 if(-not $signtool){throw 'x64 signtool.exe not found under Windows Kits.'}
-if(-not $inf2cat){throw 'x64 Inf2Cat.exe not found under Windows Kits.'}
+if(-not $inf2cat){throw 'Inf2Cat.exe not found under Windows Kits (x64/x86 checked).'}
 
 $sys=Join-Path $OutputDirectory 'RansomGuardMinifilter.sys'
 $inf=Join-Path $OutputDirectory 'RansomGuardMinifilter.inf'

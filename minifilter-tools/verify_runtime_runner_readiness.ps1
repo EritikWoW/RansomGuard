@@ -90,16 +90,34 @@ function Find-X64KitTool([string]$Name,[string]$Version){
     return $null
 }
 
+function Find-Inf2CatTool([string]$Version){
+    $x64=Find-X64KitTool 'Inf2Cat.exe' $Version
+    if($x64){return $x64}
+
+    $preferred=@(
+        (Join-Path $kits "bin\$Version\x86\Inf2Cat.exe"),
+        (Join-Path $kits "Tools\$Version\x86\Inf2Cat.exe"),
+        (Join-Path $kits "Tools\x86\Inf2Cat.exe")
+    )
+    foreach($path in $preferred){if(Test-Path -LiteralPath $path -PathType Leaf){return $path}}
+    $match=Get-ChildItem -LiteralPath $kits -Filter 'Inf2Cat.exe' -File -Recurse -ErrorAction SilentlyContinue |
+        Where-Object {$_.FullName -match '(?i)\\x86\\'} |
+        Sort-Object @{Expression={if($_.FullName -like "*$Version*"){0}else{1}}},FullName |
+        Select-Object -First 1
+    if($match){return $match.FullName}
+    return $null
+}
+
 $tools=[ordered]@{
     signtool=Find-X64KitTool 'signtool.exe' $wdk.Name
-    inf2cat=Find-X64KitTool 'Inf2Cat.exe' $wdk.Name
+    inf2cat=Find-Inf2CatTool $wdk.Name
     infverif=Find-X64KitTool 'infverif.exe' $wdk.Name
     apiValidator=Find-X64KitTool 'ApiValidator.exe' $wdk.Name
     aitstatic=Find-X64KitTool 'Aitstatic.exe' $wdk.Name
 }
 foreach($entry in $tools.GetEnumerator()){
     if([string]::IsNullOrWhiteSpace([string]$entry.Value)){
-        throw "Required x64 WDK tool not found: $($entry.Key)"
+        throw "Required WDK tool not found: $($entry.Key)"
     }
 }
 

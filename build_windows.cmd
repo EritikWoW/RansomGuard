@@ -8,5 +8,5 @@ if not errorlevel 1 set "PS_EXE=pwsh.exe"
 set "BUILD_RESULT=%ERRORLEVEL%"
 echo.
 if not "%BUILD_RESULT%"=="0" echo BUILD FAILED. Do not use a partially built release. See build-logs.
-pause
+if /I not "%GITHUB_ACTIONS%"=="true" pause
 exit /b %BUILD_RESULT%

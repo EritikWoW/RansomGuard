@@ -153,6 +153,12 @@ Write-Host ("Automation audit PASSED: {0} PowerShell scripts parsed; {1} command
             if($_.Length -ge $minIndent){$_.Substring($minIndent)}else{''}
         }) -join [Environment]::NewLine
 
+        if($normalized -match '\$\{\{\s*(?:inputs|github\.event)\.'){
+            $relative=$workflow.FullName.Substring($RepositoryRoot.Length).TrimStart([char[]]@('\','/'))
+            $findings.Add(('{0}:{1}: inline PowerShell embeds user/event workflow expressions directly. Pass them through env instead.' -f
+                $relative,$blockStart))
+        }
+
         $tokens=$null
         $parseErrors=$null
         [void][System.Management.Automation.Language.Parser]::ParseInput(

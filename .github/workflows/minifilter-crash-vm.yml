@@ -17,13 +17,13 @@ permissions:
 
 concurrency:
   group: ransomguard-crash-vm-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   crash-runtime:
     environment: ransomguard-lab-vm
     runs-on: [self-hosted, Windows, X64, ransomguard-lab-vm]
-    timeout-minutes: 60
+    timeout-minutes: 15
     env:
       RANSOMGUARD_LAB_VM: I_UNDERSTAND
       RANSOMGUARD_LAB_CERT_THUMBPRINT: ${{ secrets.RANSOMGUARD_LAB_CERT_THUMBPRINT }}

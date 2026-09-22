@@ -286,10 +286,14 @@ foreach($required in @(
     if($install -notmatch [regex]::Escape($required)){throw "Install script missing exact-package image verification invariant: $required"}
 }
 foreach($required in @(
-    'fltmc instances -f RansomGuardMinifilter -v $Volume',
-    '$instancesExit=$LASTEXITCODE'
+    'fltmc instances -f RansomGuardMinifilter',
+    '$instancesExit=$LASTEXITCODE',
+    '$instances -notmatch [regex]::Escape($Volume)'
 )){
     if($install -notmatch [regex]::Escape($required)){throw "Install script missing attach-verification invariant: $required"}
+}
+if($install -match [regex]::Escape('fltmc instances -f RansomGuardMinifilter -v $Volume')){
+    throw 'Install script uses an invalid fltmc instances syntax: -f and -v are mutually exclusive.'
 }
 
 $unload=Get-Content -LiteralPath $unloadScript -Raw

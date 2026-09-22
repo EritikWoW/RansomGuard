@@ -62,6 +62,15 @@ if($confirm -cne 'LAB-MINIFILTER'){
     throw 'Cancelled.'
 }
 
+$loadedBefore=(& fltmc filters 2>&1 | Out-String)
+$loadedBeforeExit=$LASTEXITCODE
+if($loadedBeforeExit -ne 0){
+    throw "Could not query Filter Manager before install. exit=$loadedBeforeExit. Output: $loadedBefore"
+}
+if($loadedBefore -match '(?m)^\s*RansomGuardMinifilter\b'){
+    throw 'REFUSED: RansomGuardMinifilter is already loaded before install. Unload it or revert the disposable VM snapshot before continuing.'
+}
+
 # Stage the signed package in Driver Store, then execute the INF DefaultInstall section.
 # A filesystem minifilter is not a normal PnP device, so /add-driver /install alone is not
 # treated as proof that the service was registered.
@@ -70,7 +79,11 @@ if($LASTEXITCODE -ne 0){
     throw "pnputil package staging failed: $LASTEXITCODE"
 }
 
-& rundll32.exe setupapi.dll,InstallHinfSection DefaultInstall 132 $inf
+$defaultInstallOutput=(& rundll32.exe setupapi.dll,InstallHinfSection DefaultInstall 132 $inf 2>&1 | Out-String)
+$defaultInstallExit=$LASTEXITCODE
+if($defaultInstallExit -ne 0){
+    throw "rundll32 DefaultInstall failed: exit=$defaultInstallExit. Output: $defaultInstallOutput"
+}
 Start-Sleep -Milliseconds 750
 
 $serviceKey='HKLM:\SYSTEM\CurrentControlSet\Services\RansomGuardMinifilter'
@@ -78,8 +91,29 @@ if(-not (Test-Path -LiteralPath $serviceKey)){
     throw 'DefaultInstall did not register RansomGuardMinifilter service.'
 }
 
-# Prove the service image on disk is the exact SYS from this signed package.
+# Prove the registered service/instance contract and exact image bytes match this signed package.
 $service=Get-ItemProperty -LiteralPath $serviceKey
+if([int]$service.Start -ne 3){
+    throw "Registered minifilter service StartType is '$($service.Start)', expected demand-start (3)."
+}
+if([int]$service.Type -ne 2){
+    throw "Registered minifilter service Type is '$($service.Type)', expected filesystem driver (2)."
+}
+$instanceName='RansomGuard ReadOnly LAB Instance'
+$instancesKey=Join-Path $serviceKey 'Parameters\Instances'
+$instanceKey=Join-Path $instancesKey $instanceName
+if(-not (Test-Path -LiteralPath $instanceKey)){
+    throw "Registered minifilter instance key is missing: $instanceKey"
+}
+$instancesConfig=Get-ItemProperty -LiteralPath $instancesKey
+$instanceConfig=Get-ItemProperty -LiteralPath $instanceKey
+if([string]$instancesConfig.DefaultInstance -ne $instanceName){
+    throw "Registered minifilter DefaultInstance is '$($instancesConfig.DefaultInstance)', expected '$instanceName'."
+}
+if([string]$instanceConfig.Altitude -ne '370099.4242' -or [int]$instanceConfig.Flags -ne 1){
+    throw "Registered minifilter instance contract is invalid. Altitude='$($instanceConfig.Altitude)' Flags='$($instanceConfig.Flags)'."
+}
+
 $imagePath=[string]$service.ImagePath
 if([string]::IsNullOrWhiteSpace($imagePath)){
     throw 'RansomGuardMinifilter service ImagePath is missing.'
@@ -104,19 +138,22 @@ if(-not [string]::Equals($packageSysHash,$installedSysHash,[StringComparison]::O
     throw "REFUSED: registered minifilter image is stale or mismatched. package=$packageSysHash installed=$installedSysHash path=$imagePath"
 }
 
-& fltmc load RansomGuardMinifilter
-if($LASTEXITCODE -ne 0){
-    Write-Warning 'fltmc load returned nonzero. It may already be loaded; checking filter list.'
-    $filters=(& fltmc filters | Out-String)
-    if($filters -notmatch 'RansomGuardMinifilter'){
-        throw 'Driver did not load.'
-    }
+$loadOutput=(& fltmc load RansomGuardMinifilter 2>&1 | Out-String)
+$loadExit=$LASTEXITCODE
+if($loadExit -ne 0){
+    throw "Driver load failed. fltmc exit=$loadExit. Output: $loadOutput"
+}
+$loadedAfter=(& fltmc filters 2>&1 | Out-String)
+$loadedAfterExit=$LASTEXITCODE
+if($loadedAfterExit -ne 0 -or $loadedAfter -notmatch '(?m)^\s*RansomGuardMinifilter\b'){
+    throw "Driver load could not be verified. fltmc filters exit=$loadedAfterExit. Output: $loadedAfter"
 }
 
 # INF suppresses automatic attachments. Attach exactly one explicitly requested local volume.
-& fltmc attach RansomGuardMinifilter $Volume
-if($LASTEXITCODE -ne 0){
-    throw "Explicit attach to $Volume failed."
+$attachOutput=(& fltmc attach RansomGuardMinifilter $Volume 2>&1 | Out-String)
+$attachExit=$LASTEXITCODE
+if($attachExit -ne 0){
+    throw "Explicit attach to $Volume failed. exit=$attachExit. Output: $attachOutput"
 }
 
 $instances=(& fltmc instances -f RansomGuardMinifilter -v $Volume 2>&1 | Out-String)

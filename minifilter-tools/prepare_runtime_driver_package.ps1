@@ -103,6 +103,10 @@ foreach($signed in @($sys,$cat)){
     if($sig.Status -ne 'Valid'){
         throw "Signed runtime artifact is not trusted in this VM: $signed status=$($sig.Status)"
     }
+    $signerThumb=[string]$sig.SignerCertificate.Thumbprint
+    if(-not [string]::Equals($signerThumb,$thumb,[StringComparison]::OrdinalIgnoreCase)){
+        throw "Signed runtime artifact signer thumbprint does not match requested lab certificate: $signed expected=$thumb actual=$signerThumb"
+    }
 }
 
 $commit=''

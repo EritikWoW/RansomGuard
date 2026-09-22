@@ -32,7 +32,7 @@ jobs:
           dotnet-version: 10.0.x
 
       - name: Build and test normal + LAB userspace bundle
-        shell: powershell
+        shell: pwsh
         run: |
           Set-ExecutionPolicy -Scope Process Bypass -Force
           .\build_windows.ps1 -IncludeLab

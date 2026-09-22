@@ -11,8 +11,10 @@ Use a disposable/snapshotted Windows x64 VM with:
 - Visual Studio / Build Tools with the x64 C++ toolchain;
 - a complete Windows SDK + WDK containing `fltKernel.h`, `FltMgr.lib`, `signtool.exe`, `Inf2Cat.exe`, `infverif.exe`, `ApiValidator.exe` and `Aitstatic.exe`;
 - Windows filter/driver tools available through `fltmc.exe`, `pnputil.exe` and `rundll32.exe`;
-- a lab driver-signing certificate with an accessible private key in `CurrentUser\My` or `LocalMachine\My`;
-- whatever trust/test-signing state the disposable image requires for that certificate.
+- PowerShell 7 (`pwsh.exe`);
+- a Code Signing certificate with an accessible private key in `CurrentUser\My` or `LocalMachine\My`;
+- that certificate trusted in `LocalMachine\Root` and `LocalMachine\TrustedPublisher`;
+- TESTSIGNING enabled for the current boot and Secure Boot disabled for this disposable lab image.
 
 RansomGuard does not enable TESTSIGNING, disable Secure Boot, install a trust root, or weaken Defender. Those VM-image prerequisites are deliberately outside repository automation.
 
@@ -45,7 +47,7 @@ $env:RANSOMGUARD_LAB_VM='I_UNDERSTAND'
 .\minifilter-tools\verify_runtime_runner_readiness.ps1 -CertificateThumbprint '<40-HEX-THUMBPRINT>'
 ```
 
-The readiness check is read-only with respect to boot/security policy. It verifies the VM marker/model, elevation, certificate/private key, Visual Studio C++ toolchain, WDK files/tools and required Windows commands.
+The readiness check is read-only with respect to boot/security policy. It verifies the VM marker/model, elevation, PowerShell 7, the Code Signing EKU, machine Root/TrustedPublisher trust, actual private-key signing access, Secure Boot state, TESTSIGNING in the current BCD entry, Filter Manager access, Visual Studio C++ toolchain, WDK files/tools and required Windows commands. It never changes those settings.
 
 Do not dispatch the runtime workflow until this check passes.
 
@@ -61,7 +63,7 @@ Dispatch `Minifilter runtime VM lab` manually. The job:
 6. installs/loads/attaches the minifilter only inside the disposable VM;
 7. executes activation, mapping, preservation, pre-armed containment and event-bound containment scenarios;
 8. writes `runtime-result.json` and uploads runtime evidence;
-9. unloads the filter and removes the temporary signed package.
+9. unloads the filter in the harness, performs an independent always-run unload verification/cleanup, and removes the temporary signed package.
 
 A green compile workflow is not a substitute for this runtime workflow.
 

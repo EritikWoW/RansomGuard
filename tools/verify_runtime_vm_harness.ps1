@@ -36,6 +36,7 @@ foreach($required in @(
     'environment: ransomguard-lab-vm',
     'RANSOMGUARD_LAB_VM: I_UNDERSTAND',
     'RANSOMGUARD_LAB_CERT_THUMBPRINT',
+    'RG_WORKFLOW_SHA',
     'prepare_runtime_driver_package.ps1',
     'verify_runtime_runner_readiness.ps1',
     'run_runtime_integration_lab.ps1',
@@ -49,6 +50,8 @@ foreach($required in @(
     "'cleanupPassed'",
     'Runtime result invariant',
     'Runtime cleanup reported an error',
+    'certificateThumbprint',
+    'Ensure LAB minifilter is unloaded after run',
     'github.sha'
 )){
     if($workflow -notmatch [regex]::Escape($required)){throw "Runtime VM workflow missing invariant: $required"}
@@ -126,6 +129,11 @@ foreach($required in @(
     'ApiValidator.exe',
     'Aitstatic.exe',
     'pwsh.exe',
+    'Confirm-SecureBootUEFI',
+    'Set-AuthenticodeSignature',
+    'TrustedPublisher',
+    'testsigning',
+    'fltmc filters',
     'fltmc.exe',
     'pnputil.exe'
 )){
@@ -144,13 +152,14 @@ foreach($required in @(
     'productVersion=$productVersion',
     'infSha256=',
     'Get-AuthenticodeSignature',
+    'SignerCertificate',
+    'signer thumbprint does not match requested lab certificate',
     'RansomGuardMinifilter.cat'
 )){
     if($package -notmatch [regex]::Escape($required)){throw "Runtime package script missing invariant: $required"}
 }
 
 $forbidden=@(
-    'bcdedit',
     'Set-MpPreference',
     'Add-MpPreference',
     'Remove-MpPreference',
@@ -163,6 +172,9 @@ foreach($path in @($runtimeScript,$packageScript,$readinessScript,$workflowPath)
     $text=Get-Content -LiteralPath $path -Raw
     foreach($token in $forbidden){
         if($text -match [regex]::Escape($token)){throw "Runtime VM harness must not modify boot/security/trust policy: $token in $path"}
+    }
+    if($text -match '(?im)\bbcdedit(?:\.exe)?\b[^\r\n]*(?:/set|/deletevalue|/create|/copy|/delete|/import)\b'){
+        throw "Runtime VM harness may query BCD state but must never mutate it: $path"
     }
 }
 
@@ -255,7 +267,11 @@ foreach($required in @(
     'ImagePath',
     'packageSysHash',
     'installedSysHash',
-    'registered minifilter image is stale or mismatched'
+    'registered minifilter image is stale or mismatched',
+    'already loaded before install',
+    'rundll32 DefaultInstall failed',
+    'Registered minifilter service StartType',
+    'Registered minifilter instance contract is invalid'
 )){
     if($install -notmatch [regex]::Escape($required)){throw "Install script missing exact-package image verification invariant: $required"}
 }

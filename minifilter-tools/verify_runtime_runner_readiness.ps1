@@ -127,6 +127,74 @@ $commands=[ordered]@{
     fltmc=Require-Command 'fltmc.exe'
     pnputil=Require-Command 'pnputil.exe'
     rundll32=Require-Command 'rundll32.exe'
+    bcdedit=Require-Command 'bcdedit.exe'
+}
+
+if($PSVersionTable.PSVersion.Major -lt 7){
+    throw "Runtime VM workflow requires PowerShell 7+. Current host: $($PSVersionTable.PSVersion)"
+}
+foreach($cmdletName in @('Get-FileHash','Get-AuthenticodeSignature','Set-AuthenticodeSignature','Confirm-SecureBootUEFI')){
+    if(-not (Get-Command $cmdletName -ErrorAction SilentlyContinue)){
+        throw "Required PowerShell command not found in the current pwsh host: $cmdletName"
+    }
+}
+
+$codeSigningOid='1.3.6.1.5.5.7.3.3'
+$ekuOids=@($cert.EnhancedKeyUsageList | ForEach-Object {$_.ObjectId.Value})
+if($ekuOids -notcontains $codeSigningOid){
+    throw 'Lab signing certificate does not contain the Code Signing EKU.'
+}
+
+$rootTrusted=Get-ChildItem Cert:\LocalMachine\Root -ErrorAction SilentlyContinue |
+    Where-Object {$_.Thumbprint -eq $thumb} | Select-Object -First 1
+$publisherTrusted=Get-ChildItem Cert:\LocalMachine\TrustedPublisher -ErrorAction SilentlyContinue |
+    Where-Object {$_.Thumbprint -eq $thumb} | Select-Object -First 1
+if(-not $rootTrusted){
+    throw "Lab signing certificate is not trusted in LocalMachine/Root: $thumb"
+}
+if(-not $publisherTrusted){
+    throw "Lab signing certificate is not trusted in LocalMachine/TrustedPublisher: $thumb"
+}
+
+try{
+    $secureBootEnabled=[bool](Confirm-SecureBootUEFI -ErrorAction Stop)
+}catch{
+    throw "Secure Boot state could not be verified on the runtime VM: $($_.Exception.Message)"
+}
+if($secureBootEnabled){
+    throw 'Secure Boot is enabled. This disposable TESTSIGNING lab image requires Secure Boot disabled.'
+}
+
+$bcdedit=[string]$commands['bcdedit']
+$bcdOutput=(& $bcdedit /enum '{current}' 2>&1 | Out-String)
+$bcdExit=$LASTEXITCODE
+if($bcdExit -ne 0){
+    throw "Could not query current BCD boot entry. bcdedit exit=$bcdExit. Output: $bcdOutput"
+}
+if($bcdOutput -notmatch '(?im)^\s*testsigning\s+(?:Yes|On|True|1|Да)\s*$'){
+    throw "TESTSIGNING is not enabled in the current boot entry. bcdedit output did not report testsigning=Yes/On."
+}
+
+$probePath=Join-Path ([IO.Path]::GetTempPath()) ("ransomguard-signing-probe-{0}.ps1" -f [Guid]::NewGuid().ToString('N'))
+try{
+    Set-Content -LiteralPath $probePath -Value '# RansomGuard signing-key access probe' -Encoding utf8
+    $probeSignature=Set-AuthenticodeSignature -LiteralPath $probePath -Certificate $cert -HashAlgorithm SHA256
+    if($probeSignature.Status -ne 'Valid'){
+        throw "Signing-key probe did not produce a trusted signature. Status=$($probeSignature.Status)"
+    }
+    $probeThumb=[string]$probeSignature.SignerCertificate.Thumbprint
+    if(-not [string]::Equals($probeThumb,$thumb,[StringComparison]::OrdinalIgnoreCase)){
+        throw "Signing-key probe used the wrong certificate. expected=$thumb actual=$probeThumb"
+    }
+}finally{
+    Remove-Item -LiteralPath $probePath -Force -ErrorAction SilentlyContinue
+}
+
+$fltmc=[string]$commands['fltmc']
+$filterState=(& $fltmc filters 2>&1 | Out-String)
+$filterStateExit=$LASTEXITCODE
+if($filterStateExit -ne 0){
+    throw "Filter Manager query failed under the runner identity. fltmc exit=$filterStateExit. Output: $filterState"
 }
 
 $result=[ordered]@{
@@ -142,6 +210,14 @@ $result=[ordered]@{
     certificateThumbprint=$thumb
     certificateStore=$(if($current){'CurrentUser/My'}else{'LocalMachine/My'})
     certificateNotAfterUtc=$cert.NotAfter.ToUniversalTime().ToString('o')
+    powershellVersion=$PSVersionTable.PSVersion.ToString()
+    testSigningEnabled=$true
+    secureBootEnabled=$secureBootEnabled
+    certificateCodeSigningEku=$true
+    certificateTrustedRoot=$true
+    certificateTrustedPublisher=$true
+    signingProbePassed=$true
+    filterManagerQueryPassed=$true
     tools=$tools
     commands=$commands
 }

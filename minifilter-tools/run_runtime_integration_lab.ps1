@@ -17,6 +17,30 @@ function Assert-Administrator {
     }
 }
 
+function Assert-NoReparsePath {
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [Parameter(Mandatory=$true)][string]$Label
+    )
+
+    $full=[IO.Path]::GetFullPath($Path)
+    $root=[IO.Path]::GetPathRoot($full)
+    if([string]::IsNullOrWhiteSpace($root)){
+        throw "$Label has no filesystem root: $full"
+    }
+
+    $cursor=$root.TrimEnd('\')
+    $relative=$full.Substring($root.Length)
+    foreach($segment in $relative.Split([char[]]@('\','/'),[StringSplitOptions]::RemoveEmptyEntries)){
+        $cursor=Join-Path $cursor $segment
+        if(-not (Test-Path -LiteralPath $cursor)){break}
+        $item=Get-Item -LiteralPath $cursor -Force
+        if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){
+            throw "$Label must not traverse a reparse point/junction: $cursor"
+        }
+    }
+}
+
 function Assert-DisposableVm {
     $cs=Get-CimInstance Win32_ComputerSystem
     $vmText="$($cs.Manufacturer) $($cs.Model)"
@@ -126,6 +150,7 @@ $vm=Assert-DisposableVm
 $LabReleaseDirectory=[IO.Path]::GetFullPath($LabReleaseDirectory)
 $DriverPackageDirectory=[IO.Path]::GetFullPath($DriverPackageDirectory)
 $RootBase=[IO.Path]::GetFullPath($RootBase).TrimEnd('\')
+Assert-NoReparsePath -Path $RootBase -Label 'RootBase'
 if($RootBase -notmatch '(?i)RansomGuard'){
     throw 'RootBase must contain RansomGuard so an accidental broad/system path is not accepted.'
 }
@@ -185,7 +210,12 @@ if(-not $ResultsDirectory){
     $ResultsDirectory=Join-Path ([IO.Path]::GetTempPath()) "RansomGuard-Runtime-Lab-$stamp"
 }
 $ResultsDirectory=[IO.Path]::GetFullPath($ResultsDirectory)
+Assert-NoReparsePath -Path $ResultsDirectory -Label 'ResultsDirectory'
 New-Item -ItemType Directory -Path $ResultsDirectory -Force | Out-Null
+Assert-NoReparsePath -Path $ResultsDirectory -Label 'ResultsDirectory'
+
+New-Item -ItemType Directory -Path $RootBase -Force | Out-Null
+Assert-NoReparsePath -Path $RootBase -Label 'RootBase'
 
 $dirRoot=Join-Path $RootBase "predirectory-$stamp"
 $preRoot=Join-Path $RootBase "preexisting-$stamp"

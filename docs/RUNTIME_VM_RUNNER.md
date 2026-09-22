@@ -71,4 +71,6 @@ A green compile workflow is not a substitute for this runtime workflow.
 
 Treat each runtime campaign as destructive to the VM image even if cleanup succeeds. Prefer reverting to a known snapshot between campaigns, especially before Driver Verifier, power-loss, forced-crash or filesystem fault-injection work.
 
+The runtime harness refuses a RootBase or ResultsDirectory that traverses a filesystem reparse point/junction, so destructive LAB operations and evidence remain bound to the reviewed local paths.
+
 Do not reuse this runner for ordinary development, credentials, personal files or production workloads.

@@ -89,7 +89,11 @@ foreach($required in @(
     'Stop-LabProcess $gatePost',
     'Stop-LabProcess $gateContain',
     '.VersionInfo.FileVersion',
-    'version=$gateVersion'
+    'version=$gateVersion',
+    'cleanupPassed=$false',
+    'cleanupError=$null',
+    '$runtimeFailure=$null',
+    '$cleanupFailure=$null'
 )){
     if($runtime -notmatch [regex]::Escape($required)){throw "Runtime integration script missing invariant: $required"}
 }
@@ -242,7 +246,9 @@ foreach($required in @(
 )){
     if($unload -notmatch [regex]::Escape($required)){throw "Runtime cleanup script missing final-state invariant: $required"}
 }
-if($runtime.IndexOf('$installed=$true') -gt $runtime.IndexOf('& $installScript')){
+$cleanupArmIndex=$runtime.IndexOf('$installed=$true')
+$installInvokeIndex=$runtime.IndexOf('& $installScript')
+if($cleanupArmIndex -lt 0 -or $installInvokeIndex -lt 0 -or $cleanupArmIndex -gt $installInvokeIndex){
     throw 'Runtime harness must arm minifilter cleanup before invoking the installer.'
 }
 

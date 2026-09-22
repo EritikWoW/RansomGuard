@@ -1611,14 +1611,16 @@ static class Native
 
     public static SafeFileHandle OpenPreflight(string path)
     {
+        const uint FileReadData = 0x00000001;
         const uint FileReadAttributes = 0x00000080;
         const uint ShareRead = 0x00000001;
         const uint OpenExisting = 3;
         const uint FileAttributeNormal = 0x00000080;
 
-        // Hold a read-shared handle through activation. This deliberately denies coexistence with
-        // pre-existing write/delete handles and prevents new write/delete handles from racing the scan.
-        var handle = CreateFileW(path, FileReadAttributes, ShareRead,
+        // FILE_READ_ATTRIBUTES alone is not a share-sensitive hold. Include FILE_READ_DATA so
+        // the preflight handle conflicts with pre-existing/racing WRITE or DELETE handles while
+        // still permitting concurrent readers until kernel activation completes.
+        var handle = CreateFileW(path, FileReadData | FileReadAttributes, ShareRead,
             IntPtr.Zero, OpenExisting, FileAttributeNormal, IntPtr.Zero);
         if (handle.IsInvalid)
         {

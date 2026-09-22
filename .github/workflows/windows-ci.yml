@@ -22,6 +22,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Audit PowerShell automation
+        shell: pwsh
+        run: .\tools\verify_powershell_automation.ps1
+
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
         with:

@@ -248,8 +248,11 @@ $directoryOpenStart=$text.IndexOf('public static SafeFileHandle OpenPreflightDir
 $directoryOpenEnd=$text.IndexOf('public static void Cancel',$directoryOpenStart)
 if($directoryOpenStart -lt 0 -or $directoryOpenEnd -lt 0){throw 'OpenPreflightDirectory source block missing.'}
 $directoryOpenBlock=$text.Substring($directoryOpenStart,$directoryOpenEnd-$directoryOpenStart)
-foreach($required in @('FileReadAttributes','ShareRead','FileFlagBackupSemantics','CreateFileW')){
+foreach($required in @('FileListDirectory','FileReadAttributes','FileListDirectory | FileReadAttributes','ShareRead','FileFlagBackupSemantics','CreateFileW')){
   if($directoryOpenBlock -notmatch [regex]::Escape($required)){throw "Directory topology open missing invariant: $required"}
+}
+if($directoryOpenBlock -match 'CreateFileW\(path, FileReadAttributes, ShareRead'){
+  throw 'Activation topology directory open must be share-sensitive; FILE_READ_ATTRIBUTES alone does not enforce the hold.'
 }
 if($directoryOpenBlock -match 'ShareWrite|ShareDelete'){
   throw 'Activation topology directory handles must not share WRITE or DELETE access.'

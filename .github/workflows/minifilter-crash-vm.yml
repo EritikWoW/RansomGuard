@@ -1,6 +1,9 @@
 name: Minifilter crash recovery VM lab
 
 on:
+  push:
+    branches:
+      - feature/runtime-crash-fault-evidence
   workflow_dispatch:
     inputs:
       root_base:
@@ -24,7 +27,7 @@ jobs:
     env:
       RANSOMGUARD_LAB_VM: I_UNDERSTAND
       RANSOMGUARD_LAB_CERT_THUMBPRINT: ${{ secrets.RANSOMGUARD_LAB_CERT_THUMBPRINT }}
-      RG_CRASH_ROOT_BASE: ${{ inputs.root_base }}
+      RG_CRASH_ROOT_BASE: ${{ inputs.root_base || 'C:\\RansomGuard-VM-Crash' }}
       RG_WORKFLOW_SHA: ${{ github.sha }}
 
     steps:

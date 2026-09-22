@@ -91,7 +91,27 @@ jobs:
           New-Item -ItemType Directory -Path $results -Force | Out-Null
           .\minifilter-tools\run_runtime_integration_lab.ps1 -LabReleaseDirectory $env:RG_LAB_RELEASE -DriverPackageDirectory $env:RG_DRIVER_PACKAGE -RootBase '${{ inputs.root_base }}' -ResultsDirectory $results
           $summary=Get-Content -LiteralPath (Join-Path $results 'runtime-result.json') -Raw | ConvertFrom-Json
-          if(-not $summary.passed){throw 'Runtime result did not report passed=true.'}
+          $requiredTrue=@(
+            'preexistingDirectoryHandleRejected',
+            'preexistingMappingRejected',
+            'postActivationBaselineVerified',
+            'postActivationPagingObserved',
+            'preimageHashMatched',
+            'containmentDeniedTarget',
+            'containmentPreservedTargetHash',
+            'containmentAllowedPeer',
+            'transitionRequested',
+            'transitionKernelActive',
+            'transitionDeniedNextWrite',
+            'cleanupPassed',
+            'passed'
+          )
+          foreach($name in $requiredTrue){
+            if($summary.$name -ne $true){throw "Runtime result invariant '$name' was not true."}
+          }
+          if(-not [string]::IsNullOrWhiteSpace([string]$summary.cleanupError)){
+            throw "Runtime cleanup reported an error: $($summary.cleanupError)"
+          }
           "RG_RUNTIME_RESULTS=$results" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Upload runtime evidence

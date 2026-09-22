@@ -151,7 +151,6 @@ foreach($required in @($gateExe,$helperExe,$driverSys,$driverInf,$driverCat,$dri
 $gateVersion=(Get-Item -LiteralPath $gateExe).VersionInfo.FileVersion
 $helperVersion=(Get-Item -LiteralPath $helperExe).VersionInfo.FileVersion
 if($gateVersion -notmatch '^\d+\.\d+\.\d+\.\d+
-
 $stamp=Get-Date -Format 'yyyyMMdd-HHmmss'
 if(-not $ResultsDirectory){
     $ResultsDirectory=Join-Path ([IO.Path]::GetTempPath()) "RansomGuard-Runtime-Lab-$stamp"
@@ -574,10 +573,9 @@ if($helperVersion -ne $gateVersion){
 
 $driverProvenance=Get-Content -LiteralPath $driverProvenancePath -Raw | ConvertFrom-Json
 if([int]$driverProvenance.schema -ne 2){
-    throw "Runtime package provenance schema must be 2. Found: '$($driverProvenance.schema)'"
+    throw "Runtime package provenance schema '$($driverProvenance.schema)' is not supported."
 }
 if([string]$driverProvenance.commit -notmatch '^[A-Fa-f0-9]{40}
-
 $stamp=Get-Date -Format 'yyyyMMdd-HHmmss'
 if(-not $ResultsDirectory){
     $ResultsDirectory=Join-Path ([IO.Path]::GetTempPath()) "RansomGuard-Runtime-Lab-$stamp"
@@ -993,6 +991,7 @@ Write-Host "RUNTIME MINIFILTER LAB PASSED: $ResultsDirectory" -ForegroundColor G
 if([string]$driverProvenance.productVersion -ne $gateVersion){
     throw "Runtime package product version '$($driverProvenance.productVersion)' does not match GateClient '$gateVersion'."
 }
+
 $actualSysSha256=(Get-FileHash -LiteralPath $driverSys -Algorithm SHA256).Hash
 $actualInfSha256=(Get-FileHash -LiteralPath $driverInf -Algorithm SHA256).Hash
 $actualCatSha256=(Get-FileHash -LiteralPath $driverCat -Algorithm SHA256).Hash
@@ -1001,7 +1000,7 @@ foreach($pair in @(
     @('INF',[string]$driverProvenance.infSha256,$actualInfSha256),
     @('CAT',[string]$driverProvenance.catSha256,$actualCatSha256)
 )){
-    if(-not [string]::Equals($pair[1],$pair[2],[StringComparison]::OrdinalIgnoreCase)){
+    if(-not [string]::Equals([string]$pair[1],[string]$pair[2],[StringComparison]::OrdinalIgnoreCase)){
         throw "Runtime package $($pair[0]) hash does not match provenance. expected=$($pair[1]) actual=$($pair[2])"
     }
 }

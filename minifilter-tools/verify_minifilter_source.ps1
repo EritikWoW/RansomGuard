@@ -236,6 +236,8 @@ foreach($required in @(
     'RgBindContainedRequestor',
     'ObReferenceObject(requestor)',
     'RgEventContainmentActivated',
+    'newlyBound = TRUE',
+    'if (newlyBound)',
     'activationEvent.RelatedSequence = Event->Sequence',
     'RgQueueRawEvent(&activationEvent, RgClientLabGate)'
 )){

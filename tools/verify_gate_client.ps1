@@ -366,6 +366,19 @@ if($workerDispatch -lt 0 -or $workerEvaluate -lt 0){
 if($text -notmatch 'GateWorkers\s*<\s*1' -or $text -notmatch 'GateWorkers\s*>\s*MaxGateWorkers'){
   throw 'Gate worker argument must remain explicitly bounded.'
 }
+foreach($required in @(
+  'static bool RequiresGateReply(RgEventType type)',
+  'if (RequiresGateReply((RgEventType)ev.EventType))',
+  'await worker.ConfigureAwait(false);',
+  'FLT_PORT_FLAG_SYNC_HANDLE'
+)){
+  if($text -notmatch [regex]::Escape($required)){throw "Synchronous filter-port reply ordering invariant missing: $required"}
+}
+$replyAwait=$text.IndexOf('await worker.ConfigureAwait(false);',$workerDispatch)
+$nextReceive=$text.IndexOf('Native.FilterGetMessage(port, buffer',$workerDispatch + 1)
+if($replyAwait -lt 0 -or $nextReceive -lt 0 -or $replyAwait -gt $nextReceive){
+  throw 'Reply-required worker must complete before the synchronous receive loop issues its next FilterGetMessage.'
+}
 $verifyBeforeRestart=$text.IndexOf('repository.VerifyAll()')
 $restartObserve=$text.IndexOf('RestartReconciliation.ObservePendingAsync(',$verifyBeforeRestart)
 $createSession=$text.IndexOf('repository.CreateSession(',$restartObserve)

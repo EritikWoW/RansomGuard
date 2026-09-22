@@ -15,6 +15,16 @@ foreach($path in @($workflowPath,$runtimeScript,$packageScript,$readinessScript,
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Runtime VM harness required file missing: $path"}
 }
 
+foreach($scriptPath in @($runtimeScript,$packageScript,$readinessScript,$installScript)){
+    $tokens=$null
+    $parseErrors=$null
+    [void][System.Management.Automation.Language.Parser]::ParseFile($scriptPath,[ref]$tokens,[ref]$parseErrors)
+    if(@($parseErrors).Count -gt 0){
+        $details=(@($parseErrors) | ForEach-Object { "$($_.Extent.StartLineNumber): $($_.Message)" }) -join '; '
+        throw "Runtime VM PowerShell syntax check failed for $scriptPath: $details"
+    }
+}
+
 $workflow=Get-Content -LiteralPath $workflowPath -Raw
 foreach($required in @(
     'workflow_dispatch:',

@@ -374,10 +374,21 @@ foreach($required in @(
 )){
   if($text -notmatch [regex]::Escape($required)){throw "Synchronous filter-port reply ordering invariant missing: $required"}
 }
-$replyAwait=$text.IndexOf('await worker.ConfigureAwait(false);',$workerDispatch)
-$nextReceive=$text.IndexOf('Native.FilterGetMessage(port, buffer',$workerDispatch + 1)
-if($replyAwait -lt 0 -or $nextReceive -lt 0 -or $replyAwait -gt $nextReceive){
-  throw 'Reply-required worker must complete before the synchronous receive loop issues its next FilterGetMessage.'
+$receiveLoopStart=$text.LastIndexOf('while (!cts.IsCancellationRequested)',$workerDispatch)
+$receiveLoopEnd=$text.IndexOf('catch (OperationCanceledException)',$workerDispatch)
+if($receiveLoopStart -lt 0 -or $receiveLoopEnd -lt 0){
+  throw 'Runtime synchronous receive-loop source boundary missing.'
+}
+$receiveLoopBlock=$text.Substring($receiveLoopStart,$receiveLoopEnd-$receiveLoopStart)
+if(([regex]::Matches($receiveLoopBlock,[regex]::Escape('Native.FilterGetMessage(port, buffer'))).Count -ne 1){
+  throw 'Runtime synchronous receive loop must issue exactly one FilterGetMessage per iteration.'
+}
+$loopDispatch=$receiveLoopBlock.IndexOf('Task.Run(() => ProcessMessageAsync(header, ev))')
+$replyRequired=$receiveLoopBlock.IndexOf('if (RequiresGateReply((RgEventType)ev.EventType))',$loopDispatch)
+$replyAwait=$receiveLoopBlock.IndexOf('await worker.ConfigureAwait(false);',$replyRequired)
+if($loopDispatch -lt 0 -or $replyRequired -lt 0 -or $replyAwait -lt 0 -or
+   $loopDispatch -gt $replyRequired -or $replyRequired -gt $replyAwait){
+  throw 'Reply-required worker must complete before the synchronous receive loop advances to its next iteration.'
 }
 $verifyBeforeRestart=$text.IndexOf('repository.VerifyAll()')
 $restartObserve=$text.IndexOf('RestartReconciliation.ObservePendingAsync(',$verifyBeforeRestart)

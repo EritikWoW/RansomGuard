@@ -43,6 +43,9 @@ foreach($required in @(
     'Clear stale LAB minifilter from prior failed run',
     'runtime-package.json',
     'Remove-Item -LiteralPath $results -Recurse -Force',
+    "'cleanupPassed'",
+    'Runtime result invariant',
+    'Runtime cleanup reported an error',
     'github.sha'
 )){
     if($workflow -notmatch [regex]::Escape($required)){throw "Runtime VM workflow missing invariant: $required"}

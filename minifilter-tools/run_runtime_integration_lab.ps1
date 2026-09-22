@@ -192,6 +192,8 @@ $summary=[ordered]@{
     transitionRequested=$false
     transitionKernelActive=$false
     transitionDeniedNextWrite=$false
+    cleanupPassed=$false
+    cleanupError=$null
     passed=$false
 }
 
@@ -209,6 +211,8 @@ $dirRelease=$null
 $release=$null
 $containGo=$null
 $transitionGo=$null
+$runtimeFailure=$null
+$cleanupFailure=$null
 try{
     $existing=(& fltmc filters 2>$null | Out-String)
     $filterQueryExit=$LASTEXITCODE
@@ -503,9 +507,9 @@ try{
     $transitionProbe=$null
 
     $summary.passed=$true
-    $summary.completedUtc=(Get-Date).ToUniversalTime().ToString('o')
-    $summary | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'runtime-result.json') -Encoding utf8
-    Write-Host "RUNTIME MINIFILTER LAB PASSED: $ResultsDirectory" -ForegroundColor Green
+}
+catch{
+    $runtimeFailure=$_
 }
 finally{
     if($dirHolder -and -not $dirHolder.HasExited){
@@ -527,11 +531,34 @@ finally{
     foreach($p in @($gateDir,$gatePre,$gatePost,$gateContain,$gateTransition)){
         if($p -and -not $p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}
     }
+
     if($installed){
-        & $unloadScript -Volume $volume
+        try{
+            & $unloadScript -Volume $volume
+            $summary.cleanupPassed=$true
+        }
+        catch{
+            $cleanupFailure=$_
+            $summary.cleanupError=$_.Exception.Message
+            $summary.passed=$false
+        }
     }
-    if(-not $summary.passed){
-        $summary.completedUtc=(Get-Date).ToUniversalTime().ToString('o')
-        $summary | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'runtime-result.json') -Encoding utf8
+    else{
+        $summary.cleanupPassed=$true
     }
+
+    $summary.completedUtc=(Get-Date).ToUniversalTime().ToString('o')
+    $summary | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'runtime-result.json') -Encoding utf8
 }
+
+if($runtimeFailure){
+    if($cleanupFailure){
+        throw "Runtime scenario failed: $($runtimeFailure.Exception.Message) Cleanup also failed: $($cleanupFailure.Exception.Message)"
+    }
+    throw $runtimeFailure
+}
+if($cleanupFailure){
+    throw $cleanupFailure
+}
+
+Write-Host "RUNTIME MINIFILTER LAB PASSED: $ResultsDirectory" -ForegroundColor Green

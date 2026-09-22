@@ -11,6 +11,10 @@
 - A session with a containment request but no matching kernel-active receipt is marked Faulted rather than cleanly Completed.
 - Added rollback journal tests and a disposable-VM scenario proving preserved mutations reach the threshold, the exact requestor is latched, the next mutation is denied, and the request/activation evidence chain is durable.
 - Ordinary product service behavior remains AuditOnly; production detector-to-containment authorization is not enabled.
+- Fixed service/evidence version provenance: GuardWorker now derives the product version from assembly metadata through ProductInfo.Version instead of hard-coded runtime strings.
+- Added a build-time version provenance gate so startup logs, startup audit records and incident evidence cannot silently drift from Directory.Build.props.
+- Added a reusable self-hosted runtime VM readiness check for elevation, VM identity, signing certificate/private key, Visual Studio C++ tooling, complete x64 WDK tooling and required Windows driver commands.
+- The manual Minifilter runtime VM lab workflow now executes that readiness contract before building/signing/installing the exact-commit driver package.
 - Bumped userspace/LAB and driver package version to 0.7.21.0.
 
 # RansomGuard 0.7.20.0

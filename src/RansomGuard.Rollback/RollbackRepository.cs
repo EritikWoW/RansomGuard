@@ -90,6 +90,10 @@ public sealed class RollbackRepository
             var topologyRoot = Path.Combine(store.Root, "activation-topology-state");
             if (Directory.Exists(topologyRoot))
                 new ActivationTopologyStore(topologyRoot).VerifyAll();
+
+            var containmentRoot = Path.Combine(store.Root, "containment-state");
+            if (Directory.Exists(containmentRoot))
+                new ContainmentEvidenceStore(containmentRoot).VerifyAll();
         }
 
         var retentionRoot = Path.Combine(_root, "retention-state");

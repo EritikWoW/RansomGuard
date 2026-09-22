@@ -25,7 +25,8 @@ if($env:RANSOMGUARD_LAB_VM -cne 'I_UNDERSTAND'){
 $root=Split-Path -Parent $PSScriptRoot
 $buildScript=Join-Path $PSScriptRoot 'build_minifilter.ps1'
 & $buildScript -Configuration $Configuration
-if($LASTEXITCODE -ne 0){throw "Unsigned minifilter build failed, exit=$LASTEXITCODE"}
+# build_minifilter.ps1 throws on failure. $LASTEXITCODE here would describe whichever
+# native tool happened to run last inside that script, not the script invocation itself.
 
 $sourcePackage=Get-ChildItem -LiteralPath (Join-Path $root 'minifilter-build') -Directory |
     Sort-Object Name -Descending | Select-Object -First 1
@@ -61,10 +62,22 @@ function Find-X64Tool([string]$Name){
     return $null
 }
 
+function Find-Inf2CatTool {
+    $x64=Find-X64Tool 'Inf2Cat.exe'
+    if($x64){return $x64}
+
+    $match=Get-ChildItem -LiteralPath $kits -Filter 'Inf2Cat.exe' -File -Recurse -ErrorAction SilentlyContinue |
+        Where-Object {$_.FullName -match '(?i)\\x86\\'} |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+    if($match){return $match.FullName}
+    return $null
+}
+
 $signtool=Find-X64Tool 'signtool.exe'
-$inf2cat=Find-X64Tool 'Inf2Cat.exe'
+$inf2cat=Find-Inf2CatTool
 if(-not $signtool){throw 'x64 signtool.exe not found under Windows Kits.'}
-if(-not $inf2cat){throw 'x64 Inf2Cat.exe not found under Windows Kits.'}
+if(-not $inf2cat){throw 'Inf2Cat.exe not found under Windows Kits (x64/x86 checked).'}
 
 $sys=Join-Path $OutputDirectory 'RansomGuardMinifilter.sys'
 $inf=Join-Path $OutputDirectory 'RansomGuardMinifilter.inf'
@@ -90,18 +103,38 @@ foreach($signed in @($sys,$cat)){
     if($sig.Status -ne 'Valid'){
         throw "Signed runtime artifact is not trusted in this VM: $signed status=$($sig.Status)"
     }
+    $signerThumb=[string]$sig.SignerCertificate.Thumbprint
+    if(-not [string]::Equals($signerThumb,$thumb,[StringComparison]::OrdinalIgnoreCase)){
+        throw "Signed runtime artifact signer thumbprint does not match requested lab certificate: $signed expected=$thumb actual=$signerThumb"
+    }
 }
 
 $commit=''
 try{$commit=(& git -C $root rev-parse HEAD).Trim()}catch{}
+if($commit -notmatch '^[A-Fa-f0-9]{40}$'){
+    throw "Could not resolve an exact 40-character Git commit for runtime package provenance: '$commit'"
+}
+
+$propsPath=Join-Path $root 'Directory.Build.props'
+if(-not (Test-Path -LiteralPath $propsPath -PathType Leaf)){
+    throw 'Directory.Build.props is required for runtime package version provenance.'
+}
+[xml]$propsXml=Get-Content -LiteralPath $propsPath -Raw
+$productVersion=[string]$propsXml.Project.PropertyGroup.Version
+if($productVersion -notmatch '^\d+\.\d+\.\d+\.\d+$'){
+    throw "Invalid runtime package product version in Directory.Build.props: '$productVersion'"
+}
+
 $provenance=[ordered]@{
-    schema=1
+    schema=2
     commit=$commit
+    productVersion=$productVersion
     builtUtc=(Get-Date).ToUniversalTime().ToString('o')
     vm=$vmText
     configuration=$Configuration
     certificateThumbprint=$thumb
     sysSha256=(Get-FileHash -LiteralPath $sys -Algorithm SHA256).Hash
+    infSha256=(Get-FileHash -LiteralPath $inf -Algorithm SHA256).Hash
     catSha256=(Get-FileHash -LiteralPath $cat -Algorithm SHA256).Hash
 }
 $provenance | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'runtime-package.json') -Encoding utf8

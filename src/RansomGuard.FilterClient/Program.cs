@@ -4,10 +4,11 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 
 const string PortName = @"\RansomGuardMinifilterPort";
-const int ProtocolVersion = 12;
+const int ProtocolVersion = 13;
 
 var options = Options.Parse(args);
-Console.WriteLine("RansomGuard Minifilter AUDIT client v0.7.20.0");
+var productVersion = System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version?.ToString() ?? "unknown";
+Console.WriteLine($"RansomGuard Minifilter AUDIT client v{productVersion}");
 Console.WriteLine("READ-ONLY: this client cannot block, suspend, kill, rename, delete, or modify files.");
 Console.WriteLine("It only receives metadata emitted by the lab minifilter.");
 Console.WriteLine();
@@ -267,7 +268,7 @@ sealed class AuditStats
     };
 }
 
-enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, RenameResult = 6, CreateResult = 7, PagingWrite = 8, WritableSection = 9, ActivationPreflight = 10 }
+enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, RenameResult = 6, CreateResult = 7, PagingWrite = 8, WritableSection = 9, ActivationPreflight = 10, ContainmentActivated = 11 }
 enum RgPathStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2, Truncated = 3 }
 enum RgIdentityStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2 }
 
@@ -303,7 +304,7 @@ struct RgEvent
 
 static class Native
 {
-    private const uint WireProtocolVersion = 12;
+    private const uint WireProtocolVersion = 13;
 
     [DllImport("fltlib.dll", CharSet = CharSet.Unicode)]
     private static extern int FilterConnectCommunicationPort(string lpPortName, uint dwOptions, IntPtr lpContext,

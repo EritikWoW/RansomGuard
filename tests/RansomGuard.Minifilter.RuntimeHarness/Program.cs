@@ -5,37 +5,59 @@ if (!OperatingSystem.IsWindows())
     throw new PlatformNotSupportedException("RansomGuard minifilter runtime harness is Windows-only.");
 
 if (args.Length == 0)
-    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | map-write --file <path> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker>");
+    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | map-write --file <path> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker> | containment-transition --file-a <path> --file-b <path> --ready <marker> --go <marker> --result <marker>");
 
 var command = args[0].ToLowerInvariant();
 var options = Parse(args.Skip(1).ToArray());
 
-switch (command)
+try
 {
-    case "hold-map":
-        HoldMappedView(
-            Require(options, "--file"),
-            Require(options, "--ready"),
-            Require(options, "--release"));
-        break;
-    case "hold-dir-delete":
-        HoldDirectoryDeleteHandle(
-            Require(options, "--directory"),
-            Require(options, "--ready"),
-            Require(options, "--release"));
-        break;
-    case "map-write":
-        MapAndWrite(Require(options, "--file"));
-        break;
-    case "containment-probe":
-        ContainmentProbe(
-            Require(options, "--file"),
-            Require(options, "--ready"),
-            Require(options, "--go"),
-            Require(options, "--result"));
-        break;
-    default:
-        throw new ArgumentException($"Unknown command: {args[0]}");
+    switch (command)
+    {
+        case "hold-map":
+            HoldMappedView(
+                Require(options, "--file"),
+                Require(options, "--ready"),
+                Require(options, "--release"));
+            break;
+        case "hold-dir-delete":
+            HoldDirectoryDeleteHandle(
+                Require(options, "--directory"),
+                Require(options, "--ready"),
+                Require(options, "--release"));
+            break;
+        case "map-write":
+            MapAndWrite(Require(options, "--file"));
+            break;
+        case "containment-probe":
+            ContainmentProbe(
+                Require(options, "--file"),
+                Require(options, "--ready"),
+                Require(options, "--go"),
+                Require(options, "--result"));
+            break;
+        case "containment-transition":
+            ContainmentTransitionProbe(
+                Require(options, "--file-a"),
+                Require(options, "--file-b"),
+                Require(options, "--ready"),
+                Require(options, "--go"),
+                Require(options, "--result"));
+            break;
+        default:
+            throw new ArgumentException($"Unknown command: {args[0]}");
+    }
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine("RUNTIME HARNESS ERROR");
+    Console.Error.WriteLine($"Command: {command}");
+    Console.Error.WriteLine($"Type: {ex.GetType().FullName}");
+    Console.Error.WriteLine($"HResult: 0x{ex.HResult:X8}");
+    if (ex is System.ComponentModel.Win32Exception win32)
+        Console.Error.WriteLine($"Win32Error: {win32.NativeErrorCode}");
+    Console.Error.WriteLine(ex.ToString());
+    Environment.ExitCode = 20;
 }
 
 static Dictionary<string, string> Parse(string[] args)
@@ -156,11 +178,129 @@ static void ContainmentProbe(string filePath, string readyMarker, string goMarke
     {
         File.WriteAllText(resultMarker, "denied");
     }
+    catch (IOException ex) when ((ex.HResult & 0xFFFF) == 5)
+    {
+        File.WriteAllText(resultMarker, "denied");
+    }
     catch (IOException ex)
     {
         File.WriteAllText(resultMarker, "io-error:" + ex.HResult.ToString("X8"));
         Environment.ExitCode = 10;
     }
+}
+
+static void ContainmentTransitionProbe(
+    string fileA,
+    string fileB,
+    string readyMarker,
+    string goMarker,
+    string resultMarker)
+{
+    EnsureFile(fileA);
+    EnsureFile(fileB);
+    foreach (var marker in new[] { readyMarker, goMarker, resultMarker })
+    {
+        var parent = Path.GetDirectoryName(marker);
+        if (!string.IsNullOrWhiteSpace(parent)) Directory.CreateDirectory(parent);
+        if (File.Exists(marker)) File.Delete(marker);
+    }
+
+    File.WriteAllText(readyMarker, $"pid={Environment.ProcessId};fileA={fileA};fileB={fileB};utc={DateTime.UtcNow:O}");
+    var deadline = DateTime.UtcNow.AddMinutes(5);
+    while (!File.Exists(goMarker))
+    {
+        if (DateTime.UtcNow >= deadline)
+            throw new TimeoutException("Timed out waiting for event-bound containment transition trigger.");
+        Thread.Sleep(100);
+    }
+
+    try
+    {
+        using var a = OpenTransitionWriteHandle(fileA);
+        using var b = OpenTransitionWriteHandle(fileB);
+
+        // Keep this scenario kernel-deterministic: the two CREATEs above are mutation events 1/2,
+        // and these two direct synchronous WriteFile calls are events 3/4. The fourth event is the
+        // authorized trigger event that installs the containment latch. The next WriteFile must fail.
+        WriteTransitionByte(a, 0, 0xA1, "transition-a trigger write");
+        WriteTransitionByte(b, 0, 0xB2, "transition-b trigger write");
+
+        if (TryWriteTransitionByte(a, 1, 0xC3, out var error))
+        {
+            File.WriteAllText(resultMarker, "allowed-after-threshold");
+            Environment.ExitCode = 11;
+        }
+        else if (error == 5)
+        {
+            File.WriteAllText(resultMarker, "denied-after-threshold");
+        }
+        else
+        {
+            throw new System.ComponentModel.Win32Exception(
+                error, "Post-threshold WriteFile failed with an unexpected Win32 error.");
+        }
+    }
+    catch (Exception ex)
+    {
+        File.WriteAllText(resultMarker, "unexpected:" + ex.GetType().Name + ":" + ex.HResult.ToString("X8"));
+        Environment.ExitCode = 12;
+    }
+}
+
+static SafeFileHandle OpenTransitionWriteHandle(string path)
+{
+    const uint GenericWrite = 0x40000000;
+    const uint ShareRead = 0x00000001;
+    const uint ShareWrite = 0x00000002;
+    const uint ShareDelete = 0x00000004;
+    const uint OpenExisting = 3;
+    const uint FileAttributeNormal = 0x00000080;
+    const uint FileFlagWriteThrough = 0x80000000;
+
+    var handle = Native.CreateFileW(
+        path,
+        GenericWrite,
+        ShareRead | ShareWrite | ShareDelete,
+        IntPtr.Zero,
+        OpenExisting,
+        FileAttributeNormal | FileFlagWriteThrough,
+        IntPtr.Zero);
+    if (handle.IsInvalid)
+    {
+        var error = Marshal.GetLastWin32Error();
+        handle.Dispose();
+        throw new System.ComponentModel.Win32Exception(
+            error, $"Containment transition CreateFileW failed for '{path}'.");
+    }
+    return handle;
+}
+
+static void WriteTransitionByte(SafeFileHandle handle, long offset, byte value, string stage)
+{
+    if (!TryWriteTransitionByte(handle, offset, value, out var error))
+        throw new System.ComponentModel.Win32Exception(error, $"WriteFile failed during {stage}.");
+}
+
+static bool TryWriteTransitionByte(SafeFileHandle handle, long offset, byte value, out int error)
+{
+    const uint FileBegin = 0;
+    if (!Native.SetFilePointerEx(handle, offset, out _, FileBegin))
+    {
+        error = Marshal.GetLastWin32Error();
+        return false;
+    }
+
+    var payload = new[] { value };
+    if (!Native.WriteFile(handle, payload, 1, out var written, IntPtr.Zero))
+    {
+        error = Marshal.GetLastWin32Error();
+        return false;
+    }
+    if (written != 1)
+        throw new IOException($"WriteFile completed a partial transition write: {written} byte(s).");
+
+    error = 0;
+    return true;
 }
 
 static void MapAndWrite(string filePath)
@@ -283,6 +423,23 @@ static class Native
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool FlushFileBuffers(SafeFileHandle hFile);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetFilePointerEx(
+        SafeFileHandle hFile,
+        long liDistanceToMove,
+        out long lpNewFilePointer,
+        uint dwMoveMethod);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool WriteFile(
+        SafeFileHandle hFile,
+        byte[] lpBuffer,
+        uint nNumberOfBytesToWrite,
+        out uint lpNumberOfBytesWritten,
+        IntPtr lpOverlapped);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

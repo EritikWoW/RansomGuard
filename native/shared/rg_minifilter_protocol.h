@@ -1,11 +1,11 @@
 #pragma once
 
 // Wire protocol between the RansomGuard lab minifilter and user-mode clients.
-// v12 adds LAB-only process-object containment after a clean activation handshake.
-// Containment is bound in kernel mode to a referenced PEPROCESS, so PID reuse does not inherit the latch.
+// v13 adds event-bound containment transition on an already preserved gate reply.
+// The driver binds the exact requestor PEPROCESS for that IRP before allowing it to continue.
 // The production bundle still does not install or enable the driver.
 
-#define RG_PROTOCOL_VERSION 12u
+#define RG_PROTOCOL_VERSION 13u
 #define RG_PATH_CHARS 512u
 #define RG_GATE_ROOT_CHARS 260u
 #define RG_PORT_NAME L"\\RansomGuardMinifilterPort"
@@ -27,7 +27,8 @@ typedef enum _RG_EVENT_TYPE {
     RgEventCreateResult = 7,
     RgEventPagingWrite = 8,
     RgEventWritableSection = 9,
-    RgEventActivationPreflight = 10
+    RgEventActivationPreflight = 10,
+    RgEventContainmentActivated = 11
 } RG_EVENT_TYPE;
 
 typedef enum _RG_PATH_STATUS {
@@ -55,6 +56,8 @@ typedef enum _RG_GATE_DECISION {
     RgGateBaselineCommitted = 3,
     RgGateNoPreservationRequired = 4
 } RG_GATE_DECISION;
+
+#define RG_GATE_REPLY_FLAG_CONTAIN_REQUESTOR 0x00000001u
 
 typedef enum _RG_CONTROL_COMMAND {
     RgControlInvalid = 0,
@@ -105,7 +108,7 @@ typedef struct _RG_GATE_REPLY {
     unsigned long Decision;
     unsigned long long RequestSequence;
     unsigned long ErrorCode;
-    unsigned long Reserved;
+    unsigned long Flags;
 } RG_GATE_REPLY, *PRG_GATE_REPLY;
 
 typedef struct _RG_CONTROL_REQUEST {

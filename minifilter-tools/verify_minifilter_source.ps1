@@ -9,6 +9,22 @@ $src=Get-Content -LiteralPath $c -Raw
 $proto=Get-Content -LiteralPath $h -Raw
 $infText=Get-Content -LiteralPath $inf -Raw
 
+$props=Join-Path $sourceRoot 'Directory.Build.props'
+if(Test-Path -LiteralPath $props -PathType Leaf){
+    [xml]$propsXml=Get-Content -LiteralPath $props -Raw
+    $productVersion=[string]$propsXml.Project.PropertyGroup.Version
+    if([string]::IsNullOrWhiteSpace($productVersion) -or $productVersion -notmatch '^\d+\.\d+\.\d+\.\d+$'){
+        throw 'Directory.Build.props does not contain a canonical four-part product version.'
+    }
+    $driverVersionMatch=[regex]::Match($infText,'(?m)^\s*DriverVer\s*=\s*[^,]+,(?<version>\d+\.\d+\.\d+\.\d+)\s*$')
+    if(-not $driverVersionMatch.Success){
+        throw 'Minifilter INF must contain a four-part DriverVer version.'
+    }
+    if($driverVersionMatch.Groups['version'].Value -ne $productVersion){
+        throw "Minifilter INF DriverVer '$($driverVersionMatch.Groups['version'].Value)' does not match product version '$productVersion'."
+    }
+}
+
 $vcx=Join-Path $sourceRoot 'driver\RansomGuard.Minifilter\RansomGuard.Minifilter.vcxproj'
 $buildScript=Join-Path $PSScriptRoot 'build_minifilter.ps1'
 if(-not (Test-Path -LiteralPath $vcx) -or -not (Test-Path -LiteralPath $buildScript)){throw 'Minifilter project/build script missing.'}
@@ -103,7 +119,10 @@ foreach($required in @(
     'PsLookupProcessByProcessId',
     'ObDereferenceObject',
     'RgControlActivateAndContainProcess',
-    'RgControlQueryContainment'
+    'RgControlQueryContainment',
+    'RG_GATE_REPLY_FLAG_CONTAIN_REQUESTOR',
+    'RgEventContainmentActivated',
+    'RgBindContainedRequestor'
 )){
     if($src -notmatch [regex]::Escape($required)){throw "LAB write-gate invariant missing: $required"}
 }
@@ -112,7 +131,7 @@ if($src -notmatch 'InterlockedIncrement\(&gGateInFlight\)' -or
    $src -notmatch 'STATUS_DEVICE_BUSY'){
     throw 'Kernel gate must fail closed when the bounded in-flight admission limit is exceeded.'
 }
-$gateStart=$src.IndexOf('static BOOLEAN RgGateEvent(const RG_EVENT *Event, PULONG ErrorCode, PULONG Decision)')
+$gateStart=$src.IndexOf('static BOOLEAN RgGateEvent(PFLT_CALLBACK_DATA Data,')
 if($gateStart -lt 0){throw 'RgGateEvent source block missing or signature drifted.'}
 $gateEnd=$src.IndexOf('static VOID RgQueueEvent(PFLT_CALLBACK_DATA Data',$gateStart)
 if($gateEnd -lt 0){throw 'RgQueueEvent boundary after RgGateEvent is missing.'}
@@ -124,6 +143,22 @@ if($gateBlock -notmatch 'RgAcquireClientPort\(RgClientLabGate' -or
    $gateBlock -notmatch 'RgReleaseClientPort\(\)'){
     throw 'RgGateEvent must use the short-lived client-port lease around FltSendMessage.'
 }
+foreach($required in @(
+    'reply.Flags & ~RG_GATE_REPLY_FLAG_CONTAIN_REQUESTOR',
+    'FlagOn(reply.Flags, RG_GATE_REPLY_FLAG_CONTAIN_REQUESTOR)',
+    'RgBindContainedRequestor(Data, Event, ErrorCode)'
+)){
+    if($gateBlock -notmatch [regex]::Escape($required)){throw "Event-bound containment gate invariant missing: $required"}
+}
+if($gateBlock -notmatch [regex]::Escape('if (!allow && reply.Flags != 0)')){
+    throw 'Containment reply flags must never be accepted on a denied/unpreserved operation.'
+}
+
+if($gateBlock -notmatch [regex]::Escape('else if (allow && RgIsContainedRequestor(Data))') -or
+   $gateBlock -notmatch [regex]::Escape('*ErrorCode = (ULONG)STATUS_ACCESS_DENIED')){
+    throw 'Sibling in-flight mutations must be denied if containment becomes active while they wait for user mode.'
+}
+
 
 if($src -match 'IRP_MJ_WRITE\s*,\s*FLTFL_OPERATION_REGISTRATION_SKIP_PAGING_IO'){
     throw 'Paging-write visibility requires IRP_MJ_WRITE callbacks to receive paging I/O.'
@@ -204,6 +239,8 @@ if($containmentHelperStart -lt 0 -or $containmentHelperEnd -lt 0){throw 'Kernel 
 $containmentHelpers=$src.Substring($containmentHelperStart,$containmentHelperEnd-$containmentHelperStart)
 foreach($required in @(
     'FltGetRequestorProcess(Data)',
+    'PsGetProcessId(requestor)',
+    '!= Event->ProcessId',
     'gContainedProcess == requestor',
     'RgCreateMayMutate',
     'FILE_WRITE_DATA',
@@ -211,7 +248,14 @@ foreach($required in @(
     'FILE_DELETE_ON_CLOSE',
     'FILE_OVERWRITE_IF',
     'RgClearContainedProcess',
-    'ObDereferenceObject(previous)'
+    'ObDereferenceObject(previous)',
+    'RgBindContainedRequestor',
+    'ObReferenceObject(requestor)',
+    'RgEventContainmentActivated',
+    'newlyBound = TRUE',
+    'if (newlyBound)',
+    'activationEvent.RelatedSequence = Event->Sequence',
+    'RgQueueRawEvent(&activationEvent, RgClientLabGate)'
 )){
     if($containmentHelpers -notmatch [regex]::Escape($required)){throw "Kernel containment helper invariant missing: $required"}
 }
@@ -245,16 +289,21 @@ if($preCreateStart -lt 0 -or $preCreateEnd -lt 0 -or $preWriteStart -lt 0 -or $p
 $preCreateBlock=$src.Substring($preCreateStart,$preCreateEnd-$preCreateStart)
 $preWriteBlock=$src.Substring($preWriteStart,$preWriteEnd-$preWriteStart)
 $preSetBlock=$src.Substring($preSetStart,$preSetEnd-$preSetStart)
-if($preCreateBlock -notmatch [regex]::Escape('RgIsContainedRequestor(Data) && RgCreateMayMutate(&event)') -or
-   $preCreateBlock.IndexOf('RgIsContainedRequestor(Data) && RgCreateMayMutate(&event)') -gt $preCreateBlock.LastIndexOf('RgGateEvent(&event')){
+$readOnlyCreateBypass=$preCreateBlock.IndexOf('if (!RgCreateMayMutate(&event))')
+$createGateCall=$preCreateBlock.LastIndexOf('RgGateEvent(Data, &event')
+if($readOnlyCreateBypass -lt 0 -or $createGateCall -lt 0 -or $readOnlyCreateBypass -gt $createGateCall){
+    throw 'Read-only CREATE must bypass the synchronous user-mode gate before RgGateEvent.'
+}
+if($preCreateBlock -notmatch [regex]::Escape('if (RgIsContainedRequestor(Data))') -or
+   $preCreateBlock.IndexOf('if (RgIsContainedRequestor(Data))') -gt $createGateCall){
     throw 'Mutation-capable CREATE must fail in kernel for the contained process before the user-mode gate.'
 }
 if($preWriteBlock -notmatch [regex]::Escape('if (RgIsContainedRequestor(Data))') -or
-   $preWriteBlock.IndexOf('if (RgIsContainedRequestor(Data))') -gt $preWriteBlock.IndexOf('RgGateEvent(&event')){
+   $preWriteBlock.IndexOf('if (RgIsContainedRequestor(Data))') -gt $preWriteBlock.IndexOf('RgGateEvent(Data, &event')){
     throw 'Non-paging WRITE must fail in kernel for the contained process before the user-mode gate.'
 }
 if($preSetBlock -notmatch [regex]::Escape('if (RgIsContainedRequestor(Data))') -or
-   $preSetBlock.IndexOf('if (RgIsContainedRequestor(Data))') -gt $preSetBlock.IndexOf('RgGateEvent(&event')){
+   $preSetBlock.IndexOf('if (RgIsContainedRequestor(Data))') -gt $preSetBlock.IndexOf('RgGateEvent(Data, &event')){
     throw 'RENAME/DELETE/TRUNCATE must fail in kernel for the contained process before the user-mode gate.'
 }
 if($src -notmatch 'static VOID RgDisconnect[\s\S]*RgClearContainedProcess\(\)' -or
@@ -266,10 +315,10 @@ if($src -notmatch 'FltCreateCommunicationPort\([^;]*RgConnect,\s*RgDisconnect,\s
    $src -notmatch 'RgConnect, RgDisconnect, RgMessage, 1'){
     throw 'Communication port must register RgMessage for activation handshake.'
 }
-if($proto -notmatch '#define\s+RG_PROTOCOL_VERSION\s+12u'){throw 'Minifilter protocol must be v12 for activation preflight plus process-object containment.'}
+if($proto -notmatch '#define\s+RG_PROTOCOL_VERSION\s+13u'){throw 'Minifilter protocol must be v13 for event-bound process-object containment.'}
 if($proto -notmatch 'RG_GATE_ROOT_CHARS'){throw 'Protocol must carry an explicit bounded gate root.'}
-foreach($required in @('RgControlActivateAndContainProcess','RgControlQueryContainment','TargetProcessId','ContainmentActive','ContainedProcessId')){
-    if($proto -notmatch [regex]::Escape($required)){throw "Protocol v12 containment field missing: $required"}
+foreach($required in @('RgControlActivateAndContainProcess','RgControlQueryContainment','TargetProcessId','ContainmentActive','ContainedProcessId','RG_GATE_REPLY_FLAG_CONTAIN_REQUESTOR','RgEventContainmentActivated')){
+    if($proto -notmatch [regex]::Escape($required)){throw "Protocol v13 containment field missing: $required"}
 }
 if($src -notmatch 'Unresolved/out-of-root paths fail open'){throw 'LAB gate must document fail-open behavior outside the explicitly resolved gate root.'}
 if($src -notmatch 'requestorPid\s*==\s*\(ULONGLONG\)InterlockedCompareExchange64\(&gClientProcessId'){throw 'Gate client PID must be excluded to prevent rollback-store self-deadlock.'}
@@ -292,7 +341,7 @@ if($proto -notmatch 'RgGateBaselineCommitted' -or $proto -notmatch 'RgGateNoPres
 if($infText -notmatch 'StartType\s*=\s*3'){throw 'Driver must remain demand-start in the lab prototype.'}
 if($infText -notmatch 'Instance1\.Flags\s*=\s*0x1'){throw 'Automatic volume attachment must remain suppressed.'}
 if($infText -notmatch 'Instance1\.Altitude\s*=\s*"370099\.4242"'){throw 'Unexpected LAB altitude. Review altitude policy manually.'}
-Write-Host 'LAB pre-write gate source check PASSED, including protocol-v12 PEPROCESS containment, fail-closed activation preflight, bounded admission, paging visibility and no-reply writable-section attestation.' -ForegroundColor Green
+Write-Host 'LAB pre-write gate source check PASSED, including protocol-v13 event-bound PEPROCESS containment, fail-closed activation preflight, bounded admission, paging visibility and no-reply containment/section evidence.' -ForegroundColor Green
 Write-Host 'Gate scope: one explicit NT root negotiated by the single connected client.'
 Write-Host 'In-scope mutations normally require an explicit preservation decision; an activation-bound contained PEPROCESS is denied before the user-mode gate.'
 Write-Host 'Out-of-scope/unresolved I/O remains fail-open; no process-control or kernel file-writing APIs are present.'

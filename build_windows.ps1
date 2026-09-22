@@ -14,6 +14,9 @@ function Run-Dotnet([string[]]$Arguments) {
     if ($LASTEXITCODE -ne 0) { throw "dotnet failed, exit=${LASTEXITCODE}: $($Arguments -join ' ')" }
 }
 try {
+    Write-Host '[preflight] Parse and audit repository PowerShell automation.'
+    & (Join-Path $PSScriptRoot 'tools\verify_powershell_automation.ps1') -RepositoryRoot $PSScriptRoot
+
     if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { throw 'Install .NET 10 SDK on the BUILD PC. Target PCs do not need a runtime.' }
     $version = (& dotnet --version).Trim()
     if ([int]($version.Split('.')[0]) -lt 10) { throw "SDK 10+ required. Found: $version" }
@@ -104,6 +107,7 @@ try {
     & (Join-Path $PSScriptRoot 'tools\verify_rollback_retention.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_gate_client.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_runtime_vm_harness.ps1')
+    & (Join-Path $PSScriptRoot 'tools\verify_version_provenance.ps1')
     Write-Host '[1/6] Restore and execute policy/recovery/rollback tests (no process suspension in these tests).'
     Run-Dotnet -Arguments @('restore',$tests,$auditErrors)
     Run-Dotnet -Arguments @('run','--project',$tests,'-c','Release','--no-restore')
@@ -237,7 +241,7 @@ try {
     foreach($bundle in @($release,$labRelease)){
         if([string]::IsNullOrWhiteSpace($bundle)){continue}
         $isLab=$bundle -eq $labRelease
-        $state=[ordered]@{schema=1;version=$productVersion;profile=$(if($isLab){'EngineeringLab'}else{'AuditConsole'});ordinaryApps='AuditOnly';uiTransport='PushFramedPipeV2';recovery='OfflineRGTEST03';rollback='VerifiedCrashReconciliationRecoveryRetentionAndStorageBudgetLab';scopedTrust='ExactHashContextAuditOnly';uiAdministration='SameExeUacOwnServiceAndReviewedRules';driverInstalledByBuild=$false;kernelWriteGateActive=$false;labKernelGateAvailable=$isLab;labKernelGate='ExplicitSingleRootRangeCowFullMetadataPreimageAndProcessObjectContainment';uiTestPassed=$true}
+        $state=[ordered]@{schema=1;version=$productVersion;profile=$(if($isLab){'EngineeringLab'}else{'AuditConsole'});ordinaryApps='AuditOnly';uiTransport='PushFramedPipeV2';recovery='OfflineRGTEST03';rollback='VerifiedCrashReconciliationRecoveryRetentionAndStorageBudgetLab';scopedTrust='ExactHashContextAuditOnly';uiAdministration='SameExeUacOwnServiceAndReviewedRules';driverInstalledByBuild=$false;kernelWriteGateActive=$false;labKernelGateAvailable=$isLab;labKernelGate='ExplicitSingleRootRangeCowFullMetadataPreimageAndEventBoundProcessObjectContainment';uiTestPassed=$true}
         $state | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $bundle 'BUILD_STATUS.json') -Encoding UTF8
         $hashes=Get-ChildItem -LiteralPath $bundle -File -Recurse | Sort-Object FullName | ForEach-Object {
             '{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash,$_.FullName.Substring($bundle.Length+1)

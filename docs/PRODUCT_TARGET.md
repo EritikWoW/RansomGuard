@@ -14,7 +14,7 @@ pre-mutation preservation path.
 
 ## Current milestone
 
-The current engineering branch extends the range-aware write COW gate with protocol v11 CREATE completion, RENAME destination and rename-completion semantics:
+The current engineering branch uses protocol v13 and combines range-aware write COW, CREATE/RENAME completion reconciliation, verified recovery, bounded retention and event-bound LAB containment:
 
 `CREATE -> classify disposition -> durable existing-file pre-image OR originally-absent baseline -> allow`
 
@@ -27,7 +27,7 @@ from data that did not exist before the incident.
 The gate is intentionally not enabled in the normal bundle and is not production-safe yet. Existing-file
 preservation is now additionally bound to a durable Windows `FILE_ID_INFO` identity journal
 (volume serial + 128-bit file ID), so a path that changes to a different file during one incident is rejected.
-CREATE classification still begins with a path-based pre-operation probe, but protocol v11 now records a durable CREATE intent before allow and correlates it with a post-operation result containing the tunneled final name and kernel `FileIdInformation` identity when available. Missing or partial reconciliation stays explicit and pending/unknown rather than being inferred.
+CREATE classification still begins with a path-based pre-operation probe, while protocol v13 retains the durable CREATE intent-before-allow contract and correlates it with a post-operation result containing the tunneled final name and kernel `FileIdInformation` identity when available. Missing or partial reconciliation stays explicit and pending/unknown rather than being inferred.
 
 Protocol v11 retains the normalized pre-operation rename destination and correlated post-operation `RenameResult`.
 Before allowing a rename, the LAB gate preserves the source, preserves an existing destination or commits its absence,
@@ -59,10 +59,12 @@ Protocol v11 adds non-blocking visibility for paging writes associated with stre
 
 0.7.18 adds explicit lifecycle and retention for rollback evidence. New sessions are managed as Created/Completed/Faulted with optional Hold, and retention can only select verified Completed, unheld sessions with no pending CREATE/RENAME transactions. The default policy is 30 days / 32 GiB with a 24-hour floor for pressure cleanup. Purge is manual, stale-plan resistant and crash-resumable through a repository-level Started/Quarantined/Completed audit journal and a Sessions-to-Retired quarantine step before deletion.
 
-0.7.19 makes durable restart evidence actionable for recovery review without promoting it to authoritative completion.
+0.7.19 makes durable restart evidence actionable for recovery review without promoting it to authoritative completion. For a pending CREATE/RENAME, the recovery planner evaluates only observations bound to the exact operation kind, kernel request sequence and intent SHA-256. A transaction becomes Review-only when every matching observation consistently supports completion or consistently supports non-completion; missing, ambiguous, indeterminate or conflicting evidence remains Blocked. Ready execution is unchanged and still limited to verified full-preimage/range-COW copy-out.
 
-0.7.20 adds the first actual containment primitive to the Engineering LAB gate. After clean activation preflight, one explicitly supplied process can be bound to a referenced kernel process object and denied further destructive file mutations within the selected root, while unrelated processes retain the existing preserve-before-mutate path. The ordinary product service remains audit-only; automatic detector-to-containment orchestration is a later milestone. For a pending CREATE/RENAME, the recovery planner evaluates only observations bound to the exact operation kind, kernel request sequence and intent SHA-256. A transaction becomes Review-only when every matching observation consistently supports completion or consistently supports non-completion; missing, ambiguous, indeterminate or conflicting evidence remains Blocked. Ready execution is unchanged and still limited to verified full-preimage/range-COW copy-out.
+0.7.20 adds the first actual containment primitive to the Engineering LAB gate. After clean activation preflight, one explicitly supplied process can be bound to a referenced kernel process object and denied further destructive file mutations within the selected root, while unrelated processes retain the existing preserve-before-mutate path. The ordinary product service remains audit-only.
+
+0.7.21 adds the safe runtime bridge needed for later detector integration: an explicitly authorized LAB process can cross a bounded preserved-mutation threshold, after which the containment request is durably journaled and attached to the exact gate reply that produced the evidence. Kernel mode binds the requestor process object for that IRP and emits a correlated activation receipt. This removes the separate user-mode PID-lookup race from the transition path while leaving production detector policy disabled.
 
 The next core milestones are broader NTFS/ReFS runtime/fault-injection coverage (including forced loss of post-operation delivery), production retention UI/policy integration, directory-topology rollback semantics beyond startup handle exclusion,
-detector-to-containment orchestration, process-state capture,
+production detector-to-containment authorization/orchestration, process-state capture,
 adaptive crypto analysis, and production recovery UI/orchestration across rollback plus crypto evidence.

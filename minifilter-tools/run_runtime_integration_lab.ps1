@@ -17,6 +17,30 @@ function Assert-Administrator {
     }
 }
 
+function Assert-NoReparsePath {
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [Parameter(Mandatory=$true)][string]$Label
+    )
+
+    $full=[IO.Path]::GetFullPath($Path)
+    $root=[IO.Path]::GetPathRoot($full)
+    if([string]::IsNullOrWhiteSpace($root)){
+        throw "$Label has no filesystem root: $full"
+    }
+
+    $cursor=$root.TrimEnd('\')
+    $relative=$full.Substring($root.Length)
+    foreach($segment in $relative.Split([char[]]@('\','/'),[StringSplitOptions]::RemoveEmptyEntries)){
+        $cursor=Join-Path $cursor $segment
+        if(-not (Test-Path -LiteralPath $cursor)){break}
+        $item=Get-Item -LiteralPath $cursor -Force
+        if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){
+            throw "$Label must not traverse a reparse point/junction: $cursor"
+        }
+    }
+}
+
 function Assert-DisposableVm {
     $cs=Get-CimInstance Win32_ComputerSystem
     $vmText="$($cs.Manufacturer) $($cs.Model)"
@@ -47,13 +71,21 @@ function Start-LoggedProcess(
     return Start-Process -FilePath $FilePath -ArgumentList $Arguments -PassThru -WindowStyle Hidden -RedirectStandardOutput $StdOut -RedirectStandardError $StdErr
 }
 
+function Stop-LabProcess([System.Diagnostics.Process]$Process,[string]$Description){
+    if($null -eq $Process -or $Process.HasExited){return}
+    Stop-Process -Id $Process.Id -Force -ErrorAction Stop
+    if(-not $Process.WaitForExit(10000)){
+        throw "Timed out stopping ${Description} process pid=$($Process.Id)."
+    }
+}
+
 function Wait-Path([string]$Path,[int]$Seconds,[string]$Description){
     $deadline=(Get-Date).AddSeconds($Seconds)
     while((Get-Date) -lt $deadline){
         if(Test-Path -LiteralPath $Path){return}
         Start-Sleep -Milliseconds 100
     }
-    throw "Timed out waiting for $Description: $Path"
+    throw "Timed out waiting for ${Description}: $Path"
 }
 
 function Wait-LogPattern(
@@ -118,6 +150,7 @@ $vm=Assert-DisposableVm
 $LabReleaseDirectory=[IO.Path]::GetFullPath($LabReleaseDirectory)
 $DriverPackageDirectory=[IO.Path]::GetFullPath($DriverPackageDirectory)
 $RootBase=[IO.Path]::GetFullPath($RootBase).TrimEnd('\')
+Assert-NoReparsePath -Path $RootBase -Label 'RootBase'
 if($RootBase -notmatch '(?i)RansomGuard'){
     throw 'RootBase must contain RansomGuard so an accidental broad/system path is not accepted.'
 }
@@ -132,8 +165,44 @@ if(($windows -and $RootBase.StartsWith($windows,[StringComparison]::OrdinalIgnor
 
 $gateExe=Join-Path $LabReleaseDirectory 'MinifilterLab\GateClient\RansomGuard.GateClient.exe'
 $helperExe=Join-Path $LabReleaseDirectory 'MinifilterLab\RuntimeHarness\RansomGuard.Minifilter.RuntimeHarness.exe'
-foreach($required in @($gateExe,$helperExe,(Join-Path $DriverPackageDirectory 'RansomGuardMinifilter.sys'),(Join-Path $DriverPackageDirectory 'RansomGuardMinifilter.inf'))){
+$driverSys=Join-Path $DriverPackageDirectory 'RansomGuardMinifilter.sys'
+$driverInf=Join-Path $DriverPackageDirectory 'RansomGuardMinifilter.inf'
+$driverCat=Join-Path $DriverPackageDirectory 'RansomGuardMinifilter.cat'
+$driverProvenancePath=Join-Path $DriverPackageDirectory 'runtime-package.json'
+foreach($required in @($gateExe,$helperExe,$driverSys,$driverInf,$driverCat,$driverProvenancePath)){
     if(-not (Test-Path -LiteralPath $required -PathType Leaf)){throw "Required runtime artifact missing: $required"}
+}
+
+$gateVersion=(Get-Item -LiteralPath $gateExe).VersionInfo.FileVersion
+$helperVersion=(Get-Item -LiteralPath $helperExe).VersionInfo.FileVersion
+if($gateVersion -notmatch '^\d+\.\d+\.\d+\.\d+$'){
+    throw "GateClient runtime FileVersion is invalid: '$gateVersion'"
+}
+if($helperVersion -ne $gateVersion){
+    throw "Runtime harness FileVersion '$helperVersion' does not match GateClient '$gateVersion'."
+}
+
+$driverProvenance=Get-Content -LiteralPath $driverProvenancePath -Raw | ConvertFrom-Json
+if([int]$driverProvenance.schema -ne 2){
+    throw "Runtime package provenance schema must be 2. Found: '$($driverProvenance.schema)'"
+}
+if([string]$driverProvenance.commit -notmatch '^[A-Fa-f0-9]{40}$'){
+    throw "Runtime package provenance commit is invalid: '$($driverProvenance.commit)'"
+}
+if([string]$driverProvenance.productVersion -ne $gateVersion){
+    throw "Runtime package product version '$($driverProvenance.productVersion)' does not match GateClient '$gateVersion'."
+}
+$actualSysSha256=(Get-FileHash -LiteralPath $driverSys -Algorithm SHA256).Hash
+$actualInfSha256=(Get-FileHash -LiteralPath $driverInf -Algorithm SHA256).Hash
+$actualCatSha256=(Get-FileHash -LiteralPath $driverCat -Algorithm SHA256).Hash
+foreach($pair in @(
+    @('SYS',[string]$driverProvenance.sysSha256,$actualSysSha256),
+    @('INF',[string]$driverProvenance.infSha256,$actualInfSha256),
+    @('CAT',[string]$driverProvenance.catSha256,$actualCatSha256)
+)){
+    if(-not [string]::Equals($pair[1],$pair[2],[StringComparison]::OrdinalIgnoreCase)){
+        throw "Runtime package $($pair[0]) hash does not match provenance. expected=$($pair[1]) actual=$($pair[2])"
+    }
 }
 
 $stamp=Get-Date -Format 'yyyyMMdd-HHmmss'
@@ -141,27 +210,38 @@ if(-not $ResultsDirectory){
     $ResultsDirectory=Join-Path ([IO.Path]::GetTempPath()) "RansomGuard-Runtime-Lab-$stamp"
 }
 $ResultsDirectory=[IO.Path]::GetFullPath($ResultsDirectory)
+Assert-NoReparsePath -Path $ResultsDirectory -Label 'ResultsDirectory'
 New-Item -ItemType Directory -Path $ResultsDirectory -Force | Out-Null
+Assert-NoReparsePath -Path $ResultsDirectory -Label 'ResultsDirectory'
+
+New-Item -ItemType Directory -Path $RootBase -Force | Out-Null
+Assert-NoReparsePath -Path $RootBase -Label 'RootBase'
 
 $dirRoot=Join-Path $RootBase "predirectory-$stamp"
 $preRoot=Join-Path $RootBase "preexisting-$stamp"
 $postRoot=Join-Path $RootBase "postactivation-$stamp"
 $containRoot=Join-Path $RootBase "containment-$stamp"
+$transitionRoot=Join-Path $RootBase "containment-transition-$stamp"
 $dirStore=Join-Path $ResultsDirectory 'predirectory-store'
 $preStore=Join-Path $ResultsDirectory 'preexisting-store'
 $postStore=Join-Path $ResultsDirectory 'postactivation-store'
 $containStore=Join-Path $ResultsDirectory 'containment-store'
+$transitionStore=Join-Path $ResultsDirectory 'containment-transition-store'
 $volume=[IO.Path]::GetPathRoot($RootBase).TrimEnd('\')
 $installScript=Join-Path $PSScriptRoot 'install_minifilter_lab.ps1'
 $unloadScript=Join-Path $PSScriptRoot 'unload_minifilter_lab.ps1'
 
 $summary=[ordered]@{
     schema=1
-    version='0.7.20.0'
+    version=$gateVersion
     startedUtc=(Get-Date).ToUniversalTime().ToString('o')
     vm=$vm
     rootBase=$RootBase
     driverPackage=$DriverPackageDirectory
+    driverCommit=[string]$driverProvenance.commit
+    driverSysSha256=$actualSysSha256
+    driverInfSha256=$actualInfSha256
+    driverCatSha256=$actualCatSha256
     preexistingDirectoryHandleRejected=$false
     preexistingMappingRejected=$false
     postActivationBaselineVerified=$false
@@ -170,6 +250,11 @@ $summary=[ordered]@{
     containmentDeniedTarget=$false
     containmentPreservedTargetHash=$false
     containmentAllowedPeer=$false
+    transitionRequested=$false
+    transitionKernelActive=$false
+    transitionDeniedNextWrite=$false
+    cleanupPassed=$false
+    cleanupError=$null
     passed=$false
 }
 
@@ -180,19 +265,32 @@ $gateDir=$null
 $gatePre=$null
 $gatePost=$null
 $gateContain=$null
+$gateTransition=$null
 $containProbe=$null
+$transitionProbe=$null
 $dirRelease=$null
 $release=$null
 $containGo=$null
+$transitionGo=$null
+$runtimeFailure=$null
+$cleanupFailure=$null
 try{
     $existing=(& fltmc filters 2>$null | Out-String)
-    if($existing -match 'RansomGuardMinifilter'){
+    $filterQueryExit=$LASTEXITCODE
+    if($filterQueryExit -ne 0){
+        throw "Unable to query Filter Manager before runtime scenarios, exit=$filterQueryExit"
+    }
+    if($existing -match '(?m)^\s*RansomGuardMinifilter\b'){
         throw 'REFUSED: RansomGuardMinifilter is already loaded. Revert/clean the VM before running the integration harness.'
     }
 
-    & $installScript -Volume $volume -PackageDirectory $DriverPackageDirectory -Confirmation 'LAB-MINIFILTER'
-    if($LASTEXITCODE -ne 0){throw "Minifilter install/attach failed, exit=$LASTEXITCODE"}
+    # Arm cleanup before invoking the installer because staging/load/attach can partially
+    # succeed before a later verification throws. A failed attempt must still detach/unload.
     $installed=$true
+    & $installScript -Volume $volume -PackageDirectory $DriverPackageDirectory -Confirmation 'LAB-MINIFILTER'
+    # install_minifilter_lab.ps1 throws on failure. Do not inspect $LASTEXITCODE here:
+    # it belongs to the last native command executed inside the child script and may remain
+    # nonzero even after the script has independently verified a successful load/attach.
 
     # Scenario 0: a directory handle that already owns DELETE access must prevent activation.
     Prepare-GateRoot $gateExe $dirRoot
@@ -326,6 +424,12 @@ try{
     }
     $summary.preimageHashMatched=$true
 
+    # The filter communication port allows one gate client. End this successful
+    # session before activating the next root so the disconnect callback clears
+    # gate/containment state and the next client can connect deterministically.
+    Stop-LabProcess $gatePost 'post-activation gate'
+    $gatePost=$null
+
     # Scenario 3: activation-bound containment is scoped to one kernel process identity.
     Prepare-GateRoot $gateExe $containRoot
     $containedFile=Join-Path $containRoot 'contained-target.bin'
@@ -387,10 +491,86 @@ try{
     }
     $summary.containmentAllowedPeer=$true
 
+    Stop-LabProcess $gateContain 'pre-armed containment gate'
+    $gateContain=$null
+
+    # Scenario 4: a preserved gate reply can atomically transition the exact requestor into containment.
+    Prepare-GateRoot $gateExe $transitionRoot
+    $transitionFileA=Join-Path $transitionRoot 'transition-a.bin'
+    $transitionFileB=Join-Path $transitionRoot 'transition-b.bin'
+    New-TestFile $transitionFileA
+    New-TestFile $transitionFileB
+
+    $transitionReady=Join-Path $ResultsDirectory 'containment-transition.ready'
+    $transitionGo=Join-Path $ResultsDirectory 'containment-transition.go'
+    $transitionResult=Join-Path $ResultsDirectory 'containment-transition.result'
+    $transitionProbeOut=Join-Path $ResultsDirectory 'containment-transition-probe.out.log'
+    $transitionProbeErr=Join-Path $ResultsDirectory 'containment-transition-probe.err.log'
+    $transitionProbe=Start-LoggedProcess $helperExe @(
+        'containment-transition',
+        '--file-a',(Quote-Arg $transitionFileA),
+        '--file-b',(Quote-Arg $transitionFileB),
+        '--ready',(Quote-Arg $transitionReady),
+        '--go',(Quote-Arg $transitionGo),
+        '--result',(Quote-Arg $transitionResult)
+    ) $transitionProbeOut $transitionProbeErr
+    Wait-Path $transitionReady 15 'event-bound containment probe readiness'
+
+    $transitionOut=Join-Path $ResultsDirectory 'containment-transition-gate.out.log'
+    $transitionErr=$transitionOut + '.err'
+    $gateTransition=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $transitionRoot),
+        '--store',(Quote-Arg $transitionStore),
+        '--session','containment-transition',
+        '--contain-after-pid',([string]$transitionProbe.Id),
+        '--contain-after-events','4',
+        '--contain-after-paths','2'
+    ) $transitionOut $transitionErr
+    Wait-LogPattern $transitionOut 'LAB transition\s+: pid=' $gateTransition 45
+    Wait-LogPattern $transitionOut 'kernel gate ACTIVE' $gateTransition 45
+
+    New-Item -ItemType File -Path $transitionGo -Force | Out-Null
+    Wait-Path $transitionResult 30 'event-bound containment probe result'
+    if(-not $transitionProbe.WaitForExit(15000)){
+        Stop-Process -Id $transitionProbe.Id -Force -ErrorAction SilentlyContinue
+        throw 'Event-bound containment runtime probe did not exit.'
+    }
+    $transitionOutcome=(Get-Content -LiteralPath $transitionResult -Raw).Trim()
+    if($transitionOutcome -ne 'denied-after-threshold'){
+        throw "Event-bound containment did not deny the next mutation. outcome=$transitionOutcome exit=$($transitionProbe.ExitCode)"
+    }
+    if($transitionProbe.ExitCode -ne 0){
+        throw "Event-bound containment runtime probe returned unexpected exit=$($transitionProbe.ExitCode), outcome=$transitionOutcome"
+    }
+    $summary.transitionDeniedNextWrite=$true
+
+    $transitionJournal=Join-Path $transitionStore 'Sessions\containment-transition\containment-state\containment-journal.jsonl'
+    $transitionRequest=Wait-JournalMatch $transitionJournal {
+        param($x)
+        [int]$x.phase -eq 1 -and
+        [uint64]$x.processId -eq [uint64]$transitionProbe.Id -and
+        [int]$x.evidenceCount -eq 4 -and
+        [int]$x.distinctPathCount -eq 2 -and
+        $x.containmentActive -eq $false
+    } 30 'durable event-bound containment request'
+    $summary.transitionRequested=$true
+
+    $transitionActive=Wait-JournalMatch $transitionJournal {
+        param($x)
+        [int]$x.phase -eq 2 -and
+        [uint64]$x.kernelSequence -eq [uint64]$transitionRequest.kernelSequence -and
+        [uint64]$x.processId -eq [uint64]$transitionRequest.processId -and
+        $x.containmentActive -eq $true -and
+        [uint64]$x.containedProcessId -eq [uint64]$transitionRequest.processId
+    } 30 'kernel-active event-bound containment receipt'
+    $summary.transitionKernelActive=$true
+    Wait-LogPattern $transitionOut 'LAB CONTAINMENT ACTIVE' $gateTransition 30
+    $transitionProbe=$null
+
     $summary.passed=$true
-    $summary.completedUtc=(Get-Date).ToUniversalTime().ToString('o')
-    $summary | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'runtime-result.json') -Encoding utf8
-    Write-Host "RUNTIME MINIFILTER LAB PASSED: $ResultsDirectory" -ForegroundColor Green
+}
+catch{
+    $runtimeFailure=$_
 }
 finally{
     if($dirHolder -and -not $dirHolder.HasExited){
@@ -405,14 +585,41 @@ finally{
         if($containGo){New-Item -ItemType File -Path $containGo -Force -ErrorAction SilentlyContinue | Out-Null}
         Stop-Process -Id $containProbe.Id -Force -ErrorAction SilentlyContinue
     }
-    foreach($p in @($gateDir,$gatePre,$gatePost,$gateContain)){
+    if($transitionProbe -and -not $transitionProbe.HasExited){
+        if($transitionGo){New-Item -ItemType File -Path $transitionGo -Force -ErrorAction SilentlyContinue | Out-Null}
+        Stop-Process -Id $transitionProbe.Id -Force -ErrorAction SilentlyContinue
+    }
+    foreach($p in @($gateDir,$gatePre,$gatePost,$gateContain,$gateTransition)){
         if($p -and -not $p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}
     }
+
     if($installed){
-        & $unloadScript -Volume $volume
+        try{
+            & $unloadScript -Volume $volume
+            $summary.cleanupPassed=$true
+        }
+        catch{
+            $cleanupFailure=$_
+            $summary.cleanupError=$_.Exception.Message
+            $summary.passed=$false
+        }
     }
-    if(-not $summary.passed){
-        $summary.completedUtc=(Get-Date).ToUniversalTime().ToString('o')
-        $summary | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'runtime-result.json') -Encoding utf8
+    else{
+        $summary.cleanupPassed=$true
     }
+
+    $summary.completedUtc=(Get-Date).ToUniversalTime().ToString('o')
+    $summary | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'runtime-result.json') -Encoding utf8
 }
+
+if($runtimeFailure){
+    if($cleanupFailure){
+        throw "Runtime scenario failed: $($runtimeFailure.Exception.Message) Cleanup also failed: $($cleanupFailure.Exception.Message)"
+    }
+    throw $runtimeFailure
+}
+if($cleanupFailure){
+    throw $cleanupFailure
+}
+
+Write-Host "RUNTIME MINIFILTER LAB PASSED: $ResultsDirectory" -ForegroundColor Green

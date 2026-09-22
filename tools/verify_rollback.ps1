@@ -13,6 +13,7 @@ $pagingStore=Join-Path $root 'src\RansomGuard.Rollback\PagingWriteEvidenceStore.
 $sectionStore=Join-Path $root 'src\RansomGuard.Rollback\WritableSectionEvidenceStore.cs'
 $activationStore=Join-Path $root 'src\RansomGuard.Rollback\ActivationPreflightStore.cs'
 $topologyStore=Join-Path $root 'src\RansomGuard.Rollback\ActivationTopologyStore.cs'
+$containmentStore=Join-Path $root 'src\RansomGuard.Rollback\ContainmentEvidenceStore.cs'
 if(-not(Test-Path -LiteralPath $rangeStore)){throw 'RangeRollbackStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $createStore)){throw 'CreateRollbackStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $createOperationStore)){throw 'CreateOperationStore.cs missing.'}
@@ -24,6 +25,7 @@ if(-not(Test-Path -LiteralPath $pagingStore)){throw 'PagingWriteEvidenceStore.cs
 if(-not(Test-Path -LiteralPath $sectionStore)){throw 'WritableSectionEvidenceStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $activationStore)){throw 'ActivationPreflightStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $topologyStore)){throw 'ActivationTopologyStore.cs missing.'}
+if(-not(Test-Path -LiteralPath $containmentStore)){throw 'ContainmentEvidenceStore.cs missing.'}
 $rangeText=Get-Content -LiteralPath $rangeStore -Raw
 foreach($required in @(
     'CaptureWritePreimageAsync',
@@ -226,6 +228,26 @@ foreach($required in @(
     if($topologyText -notmatch [regex]::Escape($required)){throw "Activation topology source gate missing invariant: $required"}
 }
 
+$containmentText=Get-Content -LiteralPath $containmentStore -Raw
+foreach($required in @(
+    'containment-journal.jsonl',
+    'ContainmentEvidencePhase.Requested',
+    'ContainmentEvidencePhase.KernelActive',
+    'RecordRequestAsync',
+    'RecordKernelActiveAsync',
+    'ProcessCreationFileTimeUtc',
+    'EvidenceCount',
+    'DistinctPathCount',
+    'kernelStatus != 0',
+    'line.KernelStatus != 0',
+    'FileOptions.WriteThrough',
+    'Flush(true)',
+    'Containment evidence journal hash chain mismatch',
+    'Containment kernel-active evidence is not linked to the exact durable request'
+)){
+    if($containmentText -notmatch [regex]::Escape($required)){throw "Containment evidence source gate missing invariant: $required"}
+}
+
 if(-not(Test-Path -LiteralPath $store)){throw 'RollbackStore.cs missing.'}
 $text=Get-Content -LiteralPath $store -Raw
 foreach($required in @(
@@ -265,6 +287,7 @@ if($repository -notmatch 'new PagingWriteEvidenceStore\(pagingRoot\)\.VerifyAll\
 if($repository -notmatch 'new WritableSectionEvidenceStore\(sectionRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested section-state stores.'}
 if($repository -notmatch 'new ActivationPreflightStore\(activationRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested activation-state stores.'}
 if($repository -notmatch 'new ActivationTopologyStore\(topologyRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested activation-topology-state stores.'}
-Write-Host 'Rollback source gate PASSED: full-file/range COW, CREATE/RENAME transactions, identity, restart, paging, section, activation and topology journals, hashes, write-through commits and copy-only restore.'
-Write-Host 'Normal service capture remains disabled; v0.7.15 keeps blocking preservation inside the explicit LAB gate only. Paging/section callbacks remain evidence-only.'
+if($repository -notmatch 'new ContainmentEvidenceStore\(containmentRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested containment-state stores.'}
+Write-Host 'Rollback source gate PASSED: full-file/range COW, CREATE/RENAME transactions, identity, restart, paging, section, activation, topology and containment transition journals, hashes, write-through commits and copy-only restore.'
+Write-Host 'Normal service capture remains disabled; blocking preservation and containment remain inside the explicit Engineering LAB gate. Paging/section callbacks remain evidence-only.'
 

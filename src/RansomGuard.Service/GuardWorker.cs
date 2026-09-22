@@ -42,10 +42,10 @@ internal sealed class GuardWorker:BackgroundService
         }
 
         _runtime.UpdateMonitor(new("Running", DateTime.UtcNow, monitor.SessionName));
-        _log.LogInformation("RansomGuard v0.7.1.0. Mode=AUDIT for ALL ordinary applications. Lab enrolled={Lab}. No Kill or tree-freeze.", _lab is not null);
+        _log.LogInformation("RansomGuard v{Version}. Mode=AUDIT for ALL ordinary applications. Lab enrolled={Lab}. No Kill or tree-freeze.", ProductInfo.Version, _lab is not null);
         _log.LogInformation("Owned ETW session: {Session}. Clean Ctrl+C shutdown releases this session.", monitor.SessionName);
         foreach (var root in _settings.ProtectedRoots) _log.LogInformation("Monitored root: {Root}", root);
-        _store.Audit(new { Utc=DateTime.UtcNow, Event="Startup", Version="0.7.1.0", Mode="Audit",
+        _store.Audit(new { Utc=DateTime.UtcNow, Event="Startup", Version=ProductInfo.Version, Mode="Audit",
             Lab=_lab is not null, Roots=_settings.ProtectedRoots, monitor.SessionName });
 
         using var pipeline = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -233,7 +233,7 @@ internal sealed class GuardWorker:BackgroundService
         else _log.LogWarning("RISK pid={Pid} score={Score}: {Reason}; scoped review={Scoped}",risk.Process.Pid,risk.Score,string.Join("; ",risk.Reasons),scoped.Reason);
         var capturedUtc=DateTime.UtcNow;
         var caseId=Path.GetFileName(dir) ?? throw new IOException("Incident case id missing.");
-        _store.WriteJson(Path.Combine(dir,"incident.json"),new {SchemaVersion=3,Version="0.7.1.0",CapturedUtc=capturedUtc,Risk=risk,Image=image,
+        _store.WriteJson(Path.Combine(dir,"incident.json"),new {SchemaVersion=3,Version=ProductInfo.Version,CapturedUtc=capturedUtc,Risk=risk,Image=image,
             Priority=priority,Content=preliminaryChanges,ScopedTrust=scoped,Telemetry=new{Healthy=healthy,DeliveryLatency=latencyAtDecision,PathResolution=pathsAtDecision,
                 IncidentQueueDropped=Interlocked.Read(ref _incidentDrops),WindowEvictions=_engine.WindowEvictions,TruncatedWindows=_engine.TruncatedWindows},
             LabRunId=isLab?_lab!.RunId:null,Action="RecordedBeforeResponse",Note="No action success is implied by the existence of this file."});

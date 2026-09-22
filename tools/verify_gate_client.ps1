@@ -38,7 +38,7 @@ foreach($required in @(
   'CreateGatePolicy.TryParseDisposition',
   '(ev.Flags >> 24) & 0xFF',
   'ev.Flags & 0x00FFFFFF',
-  'ProtocolVersion = 12',
+  'ProtocolVersion = 13',
   'CreatePreservationAction.CaptureExistingPreimage',
   'CreatePreservationAction.RecordOriginallyAbsent',
   'CreatePreservationAction.DenyUnsupported',
@@ -96,6 +96,14 @@ foreach($required in @(
   'TargetProcessId = containPid ?? 0',
   'ContainmentActive',
   'ContainedProcessId',
+  'ContainmentEvidenceStore',
+  'RgEventType.ContainmentActivated',
+  'RgGateReplyFlags.ContainRequestor',
+  'LabContainmentTrigger',
+  '--contain-after-pid',
+  'RecordRequestAsync',
+  'RecordKernelActiveAsync',
+  'pendingContainmentAckCount',
   'FilterSendMessage',
   'RgEventType.ActivationPreflight',
   'Activation refused:'
@@ -211,18 +219,30 @@ $preflightStart=$text.IndexOf('static class ActivationPreflight')
 $preflightEnd=$text.IndexOf('readonly record struct ActivationPreflightSummary',$preflightStart)
 if($preflightStart -lt 0 -or $preflightEnd -lt 0){throw 'ActivationPreflight implementation missing.'}
 $preflightBlock=$text.Substring($preflightStart,$preflightEnd-$preflightStart)
-foreach($required in @('Directory.EnumerateFiles','Directory.EnumerateDirectories','FileAttributes.ReparsePoint','Native.OpenPreflight','Native.OpenPreflightDirectory','ActivationPreflightStore','ActivationTopologyStore','FileIdentityStore.QueryHandleIdentity','RgEventType.ActivationPreflight','RgEventType.PagingWrite','RgEventType.WritableSection','heldHandles','RgControlCommand.ArmPreflight','RgControlCommand.ActivateGate','RgControlCommand.ActivateAndContainProcess','TargetProcessId = containPid ?? 0','Native.Control')){
+foreach($required in @('Directory.EnumerateFiles','Directory.EnumerateDirectories','FileAttributes.ReparsePoint','Native.OpenPreflightProbe','Native.OpenPreflightHold','Native.OpenPreflightDirectory','ActivationPreflightStore','ActivationTopologyStore','FileIdentityStore.QueryHandleIdentity','RgEventType.ActivationPreflight','RgEventType.PagingWrite','RgEventType.WritableSection','heldHandles','RgControlCommand.ArmPreflight','RgControlCommand.ActivateGate','RgControlCommand.ActivateAndContainProcess','TargetProcessId = containPid ?? 0','Native.Control')){
   if($preflightBlock -notmatch [regex]::Escape($required)){throw "Activation preflight missing invariant: $required"}
 }
 $armInPreflight=$preflightBlock.IndexOf('RgControlCommand.ArmPreflight')
-$openInPreflight=$preflightBlock.IndexOf('Native.OpenPreflight(path)')
+$probeInPreflight=$preflightBlock.IndexOf('Native.OpenPreflightProbe(path)')
+$receiveInPreflight=$preflightBlock.IndexOf('ReceivePreflightEventAsync(port, path',$probeInPreflight)
+$writableReject=$preflightBlock.IndexOf('if (writableView)',$receiveInPreflight)
+$holdInPreflight=$preflightBlock.IndexOf('Native.OpenPreflightHold(path)',$writableReject)
+$holdIdentity=$preflightBlock.IndexOf('FileIdentityStore.QueryHandleIdentity(hold)',$holdInPreflight)
+$identityCompare=$preflightBlock.IndexOf('if (!identity.Equals(holdIdentity))',$holdIdentity)
 $activateInPreflight=$preflightBlock.IndexOf('RgControlCommand.ActivateGate')
 $disposeInPreflight=$preflightBlock.IndexOf('foreach (var handle in heldHandles) handle.Dispose()')
-if($armInPreflight -lt 0 -or $openInPreflight -lt 0 -or $armInPreflight -gt $openInPreflight){
-  throw 'Every intentional preflight file open must be armed in kernel first.'
+if($armInPreflight -lt 0 -or $probeInPreflight -lt 0 -or $receiveInPreflight -lt 0 -or
+   $armInPreflight -gt $probeInPreflight -or $probeInPreflight -gt $receiveInPreflight){
+  throw 'Every intentional kernel preflight probe must be armed before its file open.'
 }
-if($activateInPreflight -lt 0 -or $disposeInPreflight -lt 0 -or $activateInPreflight -gt $disposeInPreflight){
-  throw 'Activation must occur while share-read preflight handles are still held.'
+if($writableReject -lt 0 -or $holdInPreflight -lt 0 -or $writableReject -gt $holdInPreflight){
+  throw 'Writable-section attestation must be evaluated before acquiring the share-sensitive file hold.'
+}
+if($holdIdentity -lt 0 -or $identityCompare -lt 0 -or $holdInPreflight -gt $holdIdentity -or $holdIdentity -gt $identityCompare){
+  throw 'Activation must bind the share-sensitive hold to the exact kernel-attested FILE_ID_INFO.'
+}
+if($activateInPreflight -lt 0 -or $disposeInPreflight -lt 0 -or $holdInPreflight -gt $activateInPreflight -or $activateInPreflight -gt $disposeInPreflight){
+  throw 'Activation must occur while share-sensitive file/directory handles are still held.'
 }
 
 $containActivation=$preflightBlock.IndexOf('RgControlCommand.ActivateAndContainProcess')
@@ -236,12 +256,36 @@ if($preflightBlock -match '(?i)ReleaseContainment|ClearContainment'){
   throw 'GateClient must not expose a runtime containment release/bypass command.'
 }
 
-$directoryOpenStart=$text.IndexOf('public static SafeFileHandle OpenPreflightDirectory(string path)')
+$fileProbeStart=$text.IndexOf('public static SafeFileHandle OpenPreflightProbe(string path)')
+$fileHoldStart=$text.IndexOf('public static SafeFileHandle OpenPreflightHold(string path)',$fileProbeStart)
+$directoryOpenStart=$text.IndexOf('public static SafeFileHandle OpenPreflightDirectory(string path)',$fileHoldStart)
+if($fileProbeStart -lt 0 -or $fileHoldStart -lt 0 -or $directoryOpenStart -lt 0){
+  throw 'Split activation file probe/hold source blocks are missing.'
+}
+$fileProbeBlock=$text.Substring($fileProbeStart,$fileHoldStart-$fileProbeStart)
+foreach($required in @('FileReadAttributes','ShareRead','ShareWrite','ShareDelete','ShareRead | ShareWrite | ShareDelete','CreateFileW')){
+  if($fileProbeBlock -notmatch [regex]::Escape($required)){throw "File activation probe missing invariant: $required"}
+}
+if($fileProbeBlock -match [regex]::Escape('FileReadData')){
+  throw 'Kernel activation probe must remain attribute-only so existing write-capable mappings are observable instead of rejected by sharing.'
+}
+
+$fileHoldBlock=$text.Substring($fileHoldStart,$directoryOpenStart-$fileHoldStart)
+foreach($required in @('FileReadData','FileReadAttributes','FileReadData | FileReadAttributes','ShareRead','CreateFileW')){
+  if($fileHoldBlock -notmatch [regex]::Escape($required)){throw "File activation hold missing invariant: $required"}
+}
+if($fileHoldBlock -match 'ShareWrite|ShareDelete'){
+  throw 'Activation file hold must not share WRITE or DELETE access.'
+}
+
 $directoryOpenEnd=$text.IndexOf('public static void Cancel',$directoryOpenStart)
 if($directoryOpenStart -lt 0 -or $directoryOpenEnd -lt 0){throw 'OpenPreflightDirectory source block missing.'}
 $directoryOpenBlock=$text.Substring($directoryOpenStart,$directoryOpenEnd-$directoryOpenStart)
-foreach($required in @('FileReadAttributes','ShareRead','FileFlagBackupSemantics','CreateFileW')){
+foreach($required in @('FileListDirectory','FileReadAttributes','FileListDirectory | FileReadAttributes','ShareRead','FileFlagBackupSemantics','CreateFileW')){
   if($directoryOpenBlock -notmatch [regex]::Escape($required)){throw "Directory topology open missing invariant: $required"}
+}
+if($directoryOpenBlock -match 'CreateFileW\(path, FileReadAttributes, ShareRead'){
+  throw 'Activation topology directory open must be share-sensitive; FILE_READ_ATTRIBUTES alone does not enforce the hold.'
 }
 if($directoryOpenBlock -match 'ShareWrite|ShareDelete'){
   throw 'Activation topology directory handles must not share WRITE or DELETE access.'
@@ -258,9 +302,60 @@ if($preflightBlock -match 'Native\.Reply\('){throw 'Activation preflight events 
 $containOption=$text.IndexOf('case "--contain-pid"')
 $containRejectSystem=$text.IndexOf('parsedPid <= 4',$containOption)
 $containRejectSelf=$text.IndexOf('parsedPid == Environment.ProcessId',$containOption)
-$containPrepareReject=$text.IndexOf('--contain-pid cannot be combined with --prepare-root')
+$containPrepareReject=$text.IndexOf('Containment options cannot be combined with --prepare-root')
 if($containOption -lt 0 -or $containRejectSystem -lt 0 -or $containRejectSelf -lt 0 -or $containPrepareReject -lt 0){
   throw 'LAB containment CLI must reject system/self PID and prepare-only combinations.'
+}
+
+$transitionOption=$text.IndexOf('case "--contain-after-pid"')
+$transitionRejectSystem=$text.IndexOf('parsedTransitionPid <= 4',$transitionOption)
+$transitionRejectSelf=$text.IndexOf('parsedTransitionPid == Environment.ProcessId',$transitionOption)
+$transitionMutualExclusion=$text.IndexOf('--contain-pid and --contain-after-pid are mutually exclusive.')
+$transitionThresholdBinding=$text.IndexOf('Containment thresholds require --contain-after-pid.')
+if($transitionOption -lt 0 -or $transitionRejectSystem -lt 0 -or $transitionRejectSelf -lt 0 -or
+   $transitionMutualExclusion -lt 0 -or $transitionThresholdBinding -lt 0){
+  throw 'Event-bound containment CLI must be explicit, single-target and threshold-bounded.'
+}
+
+$triggerStart=$text.IndexOf('sealed class LabContainmentTrigger')
+$triggerEnd=$text.IndexOf('sealed record Options(',$triggerStart)
+if($triggerStart -lt 0 -or $triggerEnd -lt 0){throw 'LabContainmentTrigger implementation missing.'}
+$triggerBlock=$text.Substring($triggerStart,$triggerEnd-$triggerStart)
+foreach($required in @(
+  'Process.GetProcessById(processId)',
+  '_ = _process.Handle',
+  '_process.HasExited',
+  'SnapshotCommitted or RgGateDecision.BaselineCommitted',
+  '_events < _requiredEvents',
+  '_paths.Count < _requiredPaths'
+)){
+  if($triggerBlock -notmatch [regex]::Escape($required)){throw "Event-bound containment trigger invariant missing: $required"}
+}
+
+$processStart=$text.IndexOf('async Task ProcessMessageAsync')
+$processEnd=$text.IndexOf('repository.VerifyAll()',$processStart)
+if($processStart -lt 0 -or $processEnd -lt 0){throw 'ProcessMessageAsync source block missing.'}
+$processBlock=$text.Substring($processStart,$processEnd-$processStart)
+$requestPersist=$processBlock.IndexOf('containmentStore.RecordRequestAsync(')
+$replyFlag=$processBlock.IndexOf('reply.Flags |= (uint)RgGateReplyFlags.ContainRequestor',$requestPersist)
+$replySend=$processBlock.IndexOf('Native.Reply(port, header.MessageId, reply)',$replyFlag)
+if($requestPersist -lt 0 -or $replyFlag -lt 0 -or $replySend -lt 0 -or
+   $requestPersist -gt $replyFlag -or $replyFlag -gt $replySend){
+  throw 'Containment request evidence must be durable before the event-bound reply flag is sent.'
+}
+$activationBranch=$processBlock.IndexOf('RgEventType.ContainmentActivated')
+$activationPath=$processBlock.IndexOf('resolver.Resolve(ev.Path)',$activationBranch)
+$activationRootScope=$processBlock.IndexOf('PathPolicy.Under(activationPath, options.Root)',$activationPath)
+$activationPathBinding=$processBlock.IndexOf('Path.GetFullPath(activationPath).Equals(request.Path',$activationRootScope)
+$activationPersist=$processBlock.IndexOf('containmentStore.RecordKernelActiveAsync(',$activationPathBinding)
+$activationReturn=$processBlock.IndexOf('return;',$activationPersist)
+$activationReply=$processBlock.IndexOf('Native.Reply(',$activationBranch)
+if($activationBranch -lt 0 -or $activationPath -lt 0 -or $activationRootScope -lt 0 -or
+   $activationPathBinding -lt 0 -or $activationPersist -lt 0 -or $activationReturn -lt 0 -or
+   $activationBranch -gt $activationPath -or $activationPath -gt $activationRootScope -or
+   $activationRootScope -gt $activationPathBinding -or $activationPathBinding -gt $activationPersist -or
+   ($activationReply -ge 0 -and $activationReply -lt $activationReturn)){
+  throw 'ContainmentActivated must persist as no-reply kernel evidence.'
 }
 
 $workerDispatch=$text.IndexOf('Task.Run(() => ProcessMessageAsync(header, ev))')
@@ -270,6 +365,31 @@ if($workerDispatch -lt 0 -or $workerEvaluate -lt 0){
 }
 if($text -notmatch 'GateWorkers\s*<\s*1' -or $text -notmatch 'GateWorkers\s*>\s*MaxGateWorkers'){
   throw 'Gate worker argument must remain explicitly bounded.'
+}
+foreach($required in @(
+  'static class GateMessagePolicy',
+  'public static bool RequiresReply(RgEventType type)',
+  'if (GateMessagePolicy.RequiresReply((RgEventType)ev.EventType))',
+  'await worker.ConfigureAwait(false);',
+  'FLT_PORT_FLAG_SYNC_HANDLE'
+)){
+  if($text -notmatch [regex]::Escape($required)){throw "Synchronous filter-port reply ordering invariant missing: $required"}
+}
+$receiveLoopStart=$text.LastIndexOf('while (!cts.IsCancellationRequested)',$workerDispatch)
+$receiveLoopEnd=$text.IndexOf('catch (OperationCanceledException)',$workerDispatch)
+if($receiveLoopStart -lt 0 -or $receiveLoopEnd -lt 0){
+  throw 'Runtime synchronous receive-loop source boundary missing.'
+}
+$receiveLoopBlock=$text.Substring($receiveLoopStart,$receiveLoopEnd-$receiveLoopStart)
+if(([regex]::Matches($receiveLoopBlock,[regex]::Escape('Native.FilterGetMessage(port, buffer'))).Count -ne 1){
+  throw 'Runtime synchronous receive loop must issue exactly one FilterGetMessage per iteration.'
+}
+$loopDispatch=$receiveLoopBlock.IndexOf('Task.Run(() => ProcessMessageAsync(header, ev))')
+$replyRequired=$receiveLoopBlock.IndexOf('if (GateMessagePolicy.RequiresReply((RgEventType)ev.EventType))',$loopDispatch)
+$replyAwait=$receiveLoopBlock.IndexOf('await worker.ConfigureAwait(false);',$replyRequired)
+if($loopDispatch -lt 0 -or $replyRequired -lt 0 -or $replyAwait -lt 0 -or
+   $loopDispatch -gt $replyRequired -or $replyRequired -gt $replyAwait){
+  throw 'Reply-required worker must complete before the synchronous receive loop advances to its next iteration.'
 }
 $verifyBeforeRestart=$text.IndexOf('repository.VerifyAll()')
 $restartObserve=$text.IndexOf('RestartReconciliation.ObservePendingAsync(',$verifyBeforeRestart)
@@ -290,4 +410,4 @@ if($restartBlock -notmatch [regex]::Escape('PathPolicy.Under(intent.OriginalPath
   throw 'Restart reconciliation must remain scoped to the explicitly selected LAB root.'
 }
 
-Write-Host 'LAB gate client source check PASSED: protocol-v12 activation-bound containment, file+topology preflight, eager writable-open pre-image, no-reply section/paging evidence, bounded workers, durable identity/restart evidence, no destructive/process-control APIs.'
+Write-Host 'LAB gate client source check PASSED: protocol-v13 event-bound containment, activation preflight, durable request/activation evidence, bounded workers, identity/restart evidence, no destructive/process-control APIs.'

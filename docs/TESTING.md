@@ -62,6 +62,14 @@ These are userspace policy/store tests plus kernel source gates. They do not pro
 execution, tunneled-name handling, or file-ID race safety; those still require an isolated Windows VM.
 
 
+## Self-hosted runtime VM validation
+
+The compile workflow is not evidence of runtime correctness. Real Filter Manager behavior is validated only by the manually dispatched `Minifilter runtime VM lab` workflow on a disposable self-hosted Windows VM.
+
+Before registering or dispatching that runner, follow `docs/RUNTIME_VM_RUNNER.md`. The reusable `minifilter-tools/verify_runtime_runner_readiness.ps1` check must pass under the same Windows identity used by the Actions runner. It validates the administrator/VM boundary, signing certificate private key, Visual Studio C++ toolchain, complete x64 WDK surface and required driver-management commands without changing boot, trust, Secure Boot, TESTSIGNING or Defender settings.
+
+Runtime evidence from that workflow is required before treating minifilter preservation or containment semantics as experimentally validated.
+
 ## Automated x64 minifilter compile gate
 
 GitHub Actions restores pinned Microsoft WDK/SDK C++ 10.0.28000.2526 packages and builds
@@ -205,3 +213,13 @@ Static minifilter gates require protocol v12, atomic activation-and-containment,
 GateClient source checks require `--contain-pid` to be explicit, reject PID <= 4 and GateClient itself, forbid prepare-only use, send containment only as part of activation, and verify that the kernel reply reports the exact requested contained PID. No release/clear containment verb is permitted.
 
 The disposable-VM runtime harness adds a fourth scenario: a helper process exists before activation but holds no protected-root handle. GateClient activates with that helper's PID; after the kernel reports containment active, the helper attempts an append and must receive access denial while the target SHA-256 stays unchanged. A separate ordinary helper must still be able to mutate another file through the normal preservation gate, proving containment is single-process scoped rather than root-wide shutdown.
+
+## 0.7.21 event-bound containment transition coverage
+
+Rollback store tests require a containment Requested record to be durably committed before a KernelActive receipt can exist. The active receipt must match the exact request by kernel sequence, process ID and creation time, event type, path, preservation decision and trigger counters. Duplicate identical receipts are idempotent, orphan activation is rejected, reopen rebuilds both phases, and repository-wide verification rejects corruption in nested containment-state journals.
+
+Static minifilter gates require protocol v13, the single known reply flag, fail-closed rejection of unknown flags, rejection of containment flags on denied/unpreserved operations, and ordering from the flagged reply through `RgBindContainedRequestor(Data,...)`. The binding path must reference `FltGetRequestorProcess(Data)`, hold a `PEPROCESS`, correlate the no-reply `ContainmentActivated` event to the original gate sequence and retain the existing disconnect/unload cleanup boundary.
+
+GateClient source checks require an exact process handle for `--contain-after-pid`, bounded event/path thresholds, durable Requested evidence before the reply flag, no reply to the `ContainmentActivated` evidence event, a linked KernelActive receipt, and lifecycle faulting when the receipt is missing.
+
+The disposable-VM runtime harness adds an event-bound transition scenario. The target helper starts before GateClient but holds no protected-root handle during activation. After activation it opens two files for write and performs preserved mutations. With the explicit threshold set to four preserved events across two paths, the threshold event is allowed only after preservation and atomically latches its exact requestor; the helper's next write must receive access denial. The containment journal must contain matching Requested and KernelActive records for the same gate sequence and process.

@@ -1,4 +1,4 @@
-# RansomGuard minifilter engineering lab — v0.7.20.0
+# RansomGuard minifilter engineering lab — v0.7.21.0
 
 The minifilter has two mutually exclusive user-mode connection modes:
 
@@ -9,13 +9,13 @@ The minifilter has two mutually exclusive user-mode connection modes:
 The LAB Gate exists to validate preservation ordering. It is **not** a production driver configuration.
 Do not load it on a primary workstation and do not point it at real documents.
 
-On startup, v0.7.20.0 scans older pending CREATE/RENAME intents under the same LAB root and appends conservative restart evidence (path state + FILE_ID_INFO when available). This evidence never substitutes for the original kernel completion event. Verified recovery may expose an exact, fully consistent restart-evidence set as Review-only crash recovery; absent, ambiguous, indeterminate or conflicting evidence remains Blocked.
+On startup, v0.7.21.0 scans older pending CREATE/RENAME intents under the same LAB root and appends conservative restart evidence (path state + FILE_ID_INFO when available). This evidence never substitutes for the original kernel completion event. Verified recovery may expose an exact, fully consistent restart-evidence set as Review-only crash recovery; absent, ambiguous, indeterminate or conflicting evidence remains Blocked.
 
 Protocol v11 also observes paging writes on streams that were successfully opened inside the LAB root. The driver uses a pre-established nonpaged stream context and emits no-reply evidence only; it does not run a filesystem name query or synchronous preservation gate in the paging path. Treat these events as visibility, not as proof that memory-mapped writes are recoverable.
 
 ## Activation preflight
 
-A v0.7.20.0 LAB connection is not active immediately after `FilterConnectCommunicationPort`. GateClient first scans all existing non-reparse files under the disposable root. For every file, the kernel post-CREATE probe records final path/FILE_ID_INFO and tests `MmDoesFileHaveUserWritableReferences`.
+A v0.7.21.0 LAB connection is not active immediately after `FilterConnectCommunicationPort`. GateClient first scans all existing non-reparse files under the disposable root. For every file, the kernel post-CREATE probe records final path/FILE_ID_INFO and tests `MmDoesFileHaveUserWritableReferences`.
 
 If any file already has a user-writable mapped view, if a probe cannot be completed authoritatively, or if a pre-existing write/delete handle prevents the read-shared probe from opening the file, activation is refused. GateClient keeps every successful read-shared probe handle open until the explicit `ActivateGate` message succeeds, preventing a new write/delete handle from racing the rest of the scan.
 
@@ -120,7 +120,7 @@ Build the engineering package:
 .\build_lab.cmd
 ```
 
-Then, from the generated `RansomGuard-Lab-v0.7.20.0-*` directory, build/install the minifilter only in a
+Then, from the generated `RansomGuard-Lab-v0.7.21.0-*` directory, build/install the minifilter only in a
 Windows test VM using the existing lab scripts.
 
 ## Audit mode
@@ -214,3 +214,13 @@ Protocol v12 adds an optional `--contain-pid <pid>` GateClient mode for isolated
 Containment is armed atomically with successful activation preflight. For the contained process only, mutation-capable CREATE and non-paging WRITE/RENAME/DELETE/TRUNCATE inside the selected root are denied in kernel mode before the normal user-mode preservation gate. Read-only opens are not denied by the containment classifier. Other processes continue through the ordinary preservation workflow.
 
 The control protocol intentionally has no release/clear/bypass command. Disconnecting GateClient or unloading the LAB driver releases the process reference and clears containment. This is Engineering LAB functionality only; the ordinary service/detector does not invoke it.
+
+## Event-bound containment transition — 0.7.21
+
+Protocol v13 keeps the pre-armed `--contain-pid` path and adds an explicit transition test path with `--contain-after-pid <pid>`. GateClient opens and keeps a handle to that exact process; if it exits, the authorization is invalid and a later process reusing the same numeric PID is not accepted.
+
+The transition counter advances only for successful blocking gate replies that already committed a full pre-image or originally-absent baseline. The default LAB threshold is four preserved mutation events across two distinct paths, configurable only within bounded test ranges.
+
+When the threshold is met, GateClient reserves storage and durably appends a Requested record to `containment-state\containment-journal.jsonl` before setting the containment reply flag. The minifilter accepts that flag only on an allowed preservation decision, references the exact requestor process object from the current callback data, installs the latch, and queues a no-reply `ContainmentActivated` event related to the original gate sequence. GateClient then appends the linked KernelActive receipt.
+
+There is still no release/bypass command. A missing KernelActive receipt leaves the session faulted. This path is intentionally LAB-only and does not allow the ordinary service heuristic to contain arbitrary applications.

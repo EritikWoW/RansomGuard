@@ -10,40 +10,54 @@ if (args.Length == 0)
 var command = args[0].ToLowerInvariant();
 var options = Parse(args.Skip(1).ToArray());
 
-switch (command)
+try
 {
-    case "hold-map":
-        HoldMappedView(
-            Require(options, "--file"),
-            Require(options, "--ready"),
-            Require(options, "--release"));
-        break;
-    case "hold-dir-delete":
-        HoldDirectoryDeleteHandle(
-            Require(options, "--directory"),
-            Require(options, "--ready"),
-            Require(options, "--release"));
-        break;
-    case "map-write":
-        MapAndWrite(Require(options, "--file"));
-        break;
-    case "containment-probe":
-        ContainmentProbe(
-            Require(options, "--file"),
-            Require(options, "--ready"),
-            Require(options, "--go"),
-            Require(options, "--result"));
-        break;
-    case "containment-transition":
-        ContainmentTransitionProbe(
-            Require(options, "--file-a"),
-            Require(options, "--file-b"),
-            Require(options, "--ready"),
-            Require(options, "--go"),
-            Require(options, "--result"));
-        break;
-    default:
-        throw new ArgumentException($"Unknown command: {args[0]}");
+    switch (command)
+    {
+        case "hold-map":
+            HoldMappedView(
+                Require(options, "--file"),
+                Require(options, "--ready"),
+                Require(options, "--release"));
+            break;
+        case "hold-dir-delete":
+            HoldDirectoryDeleteHandle(
+                Require(options, "--directory"),
+                Require(options, "--ready"),
+                Require(options, "--release"));
+            break;
+        case "map-write":
+            MapAndWrite(Require(options, "--file"));
+            break;
+        case "containment-probe":
+            ContainmentProbe(
+                Require(options, "--file"),
+                Require(options, "--ready"),
+                Require(options, "--go"),
+                Require(options, "--result"));
+            break;
+        case "containment-transition":
+            ContainmentTransitionProbe(
+                Require(options, "--file-a"),
+                Require(options, "--file-b"),
+                Require(options, "--ready"),
+                Require(options, "--go"),
+                Require(options, "--result"));
+            break;
+        default:
+            throw new ArgumentException($"Unknown command: {args[0]}");
+    }
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine("RUNTIME HARNESS ERROR");
+    Console.Error.WriteLine($"Command: {command}");
+    Console.Error.WriteLine($"Type: {ex.GetType().FullName}");
+    Console.Error.WriteLine($"HResult: 0x{ex.HResult:X8}");
+    if (ex is System.ComponentModel.Win32Exception win32)
+        Console.Error.WriteLine($"Win32Error: {win32.NativeErrorCode}");
+    Console.Error.WriteLine(ex.ToString());
+    Environment.ExitCode = 20;
 }
 
 static Dictionary<string, string> Parse(string[] args)

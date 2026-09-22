@@ -146,10 +146,10 @@ Assert-NoReparsePath -Path $ResultsDirectory -Label 'ResultsDirectory'
 New-Item -ItemType Directory -Path $RootBase -Force | Out-Null
 Assert-NoReparsePath -Path $RootBase -Label 'RootBase'
 
-$root=Join-Path $RootBase "create-intent-crash-$stamp"
-$store=Join-Path $ResultsDirectory 'create-intent-store'
-$session='create-intent-crash'
-$target=Join-Path $root 'must-remain-absent.bin'
+$root=Join-Path $RootBase "create-result-loss-$stamp"
+$store=Join-Path $ResultsDirectory 'create-result-loss-store'
+$session='create-result-loss'
+$target=Join-Path $root 'created-before-completion-loss.bin'
 $gateOut=Join-Path $ResultsDirectory 'create-intent-gate.out.log'
 $gateErr=$gateOut + '.err'
 $triggerOut=Join-Path $ResultsDirectory 'create-intent-trigger.out.log'
@@ -168,12 +168,12 @@ $summary=[ordered]@{
     store=$store
     session=$session
     target=$target
-    gateCrashObserved=$false
+    completionLossObserved=$false
     createIntentDurable=$false
     createCompletionAbsent=$false
-    targetRemainedAbsent=$false
+    targetCreated=$false
     restartObserved=$false
-    restartSupportsNotCompleted=$false
+    restartSupportsCompleted=$false
     recoveryTransactionNotReady=$false
     cleanupPassed=$false
     cleanupError=$null
@@ -203,43 +203,44 @@ try{
         '--root',(Quote-Arg $root),
         '--store',(Quote-Arg $store),
         '--session',$session,
-        '--fault-after-create-intent'
+        '--drop-first-create-completion'
     ) $gateOut $gateErr
 
-    Wait-LogPattern $gateOut 'LAB fault injection\s+: ARMED' $gate 45
+    Wait-LogPattern $gateOut 'LAB completion-loss injection\s+: ARMED' $gate 45
     Wait-LogPattern $gateOut 'kernel gate ACTIVE' $gate 45
 
     $trigger=Start-LoggedProcess $helperExe @(
         'create-new','--file',(Quote-Arg $target)
     ) $triggerOut $triggerErr
 
-    if(-not $gate.WaitForExit(45000)){
-        Stop-Process -Id $gate.Id -Force -ErrorAction SilentlyContinue
-        throw 'GateClient did not terminate at the armed CREATE-intent fault point.'
-    }
-    if($gate.ExitCode -eq 0){
-        throw 'GateClient fault injection unexpectedly exited with code 0.'
-    }
-
     if(-not $trigger.WaitForExit(45000)){
         Stop-Process -Id $trigger.Id -Force -ErrorAction SilentlyContinue
-        throw 'CREATE crash trigger did not return after GateClient termination.'
+        throw 'CREATE completion-loss trigger did not return.'
     }
-    if($trigger.ExitCode -eq 0){
-        throw 'CREATE_NEW unexpectedly succeeded even though GateClient terminated before FilterReplyMessage.'
+    if($trigger.ExitCode -ne 0){
+        $err=Get-Content -LiteralPath $triggerErr -Raw -ErrorAction SilentlyContinue
+        throw "CREATE_NEW must complete before completion evidence is intentionally dropped. exit=$($trigger.ExitCode). $err"
+    }
+
+    if(-not $gate.WaitForExit(30000)){
+        Stop-Process -Id $gate.Id -Force -ErrorAction SilentlyContinue
+        throw 'GateClient did not exit cleanly after dropping the authoritative CREATE result.'
+    }
+    if($gate.ExitCode -ne 0){
+        throw "GateClient completion-loss injection should exit cleanly. exit=$($gate.ExitCode)"
     }
 
     $gateCombined=(Get-Content -LiteralPath $gateOut -Raw -ErrorAction SilentlyContinue)+[Environment]::NewLine+
         (Get-Content -LiteralPath $gateErr -Raw -ErrorAction SilentlyContinue)
-    if($gateCombined -notmatch 'LAB FAULT INJECTION: terminating after durable CREATE intent'){
-        throw "GateClient did not prove the intended crash point. Output: $gateCombined"
+    if($gateCombined -notmatch 'LAB COMPLETION LOSS: intentionally dropping authoritative CREATE result'){
+        throw "GateClient did not prove the intended completion-loss point. Output: $gateCombined"
     }
-    $summary.gateCrashObserved=$true
+    $summary.completionLossObserved=$true
 
-    if(Test-Path -LiteralPath $target){
-        throw "CREATE target exists even though crash occurred before kernel reply: $target"
+    if(-not (Test-Path -LiteralPath $target -PathType Leaf)){
+        throw "CREATE target must exist because the filesystem operation completed before result loss: $target"
     }
-    $summary.targetRemainedAbsent=$true
+    $summary.targetCreated=$true
 
     $sessionRoot=Join-Path $store "Sessions\$session"
     $intentJournal=Join-Path $sessionRoot 'create-state\create-intent-journal.jsonl'
@@ -259,7 +260,7 @@ try{
 
     $completions=Read-JsonLines $completionJournal
     if($completions.Count -ne 0){
-        throw "Authoritative CREATE completion must be absent after pre-reply crash. Found $($completions.Count)."
+        throw "Authoritative CREATE completion must be absent after intentional result loss. Found $($completions.Count)."
     }
     $summary.createCompletionAbsent=$true
 
@@ -278,7 +279,7 @@ try{
     }
 
     $reconcileText=(Get-Content -LiteralPath $reconcileOut -Raw)
-    if($reconcileText -notmatch 'RECONCILE ONLY: observed=1; completed-evidence=0; not-completed-evidence=1; ambiguous=0'){
+    if($reconcileText -notmatch 'RECONCILE ONLY: observed=1; completed-evidence=1; not-completed-evidence=0; ambiguous=0'){
         throw "Unexpected restart reconciliation summary: $reconcileText"
     }
     $summary.restartObserved=$true
@@ -291,10 +292,10 @@ try{
     $restartRecord=$restart[0]
     if([int]$restartRecord.operationKind -ne 1 -or
        [uint64]$restartRecord.requestSequence -ne [uint64]$intent.requestSequence -or
-       [int]$restartRecord.evidence -ne 2){
-        throw "Restart observation is not exact CREATE SupportsNotCompleted evidence: $($restartRecord | ConvertTo-Json -Compress -Depth 20)"
+       [int]$restartRecord.evidence -ne 1){
+        throw "Restart observation is not exact CREATE SupportsCompleted evidence: $($restartRecord | ConvertTo-Json -Compress -Depth 20)"
     }
-    $summary.restartSupportsNotCompleted=$true
+    $summary.restartSupportsCompleted=$true
 
     & $recoveryExe plan --repository $store --session $session --output $planPath
     if($LASTEXITCODE -ne 0){throw "Recovery planner failed, exit=$LASTEXITCODE"}
@@ -309,10 +310,10 @@ try{
         throw 'Crash-reconciled CREATE transaction was incorrectly promoted to Ready.'
     }
     if([int]$transaction[0].state -ne 2){
-        throw "Consistent SupportsNotCompleted CREATE transaction should be Review, found state=$($transaction[0].state)."
+        throw "Consistent SupportsCompleted CREATE transaction should be Review, found state=$($transaction[0].state)."
     }
     if([int]$plan.readyCount -ne 0){
-        throw "Originally-absent pre-reply crash plan must contain no Ready actions. readyCount=$($plan.readyCount)"
+        throw "Crash-reconciled CREATE transaction must contain no Ready actions. readyCount=$($plan.readyCount)"
     }
     $summary.recoveryTransactionNotReady=$true
     $summary.passed=$true
@@ -351,4 +352,4 @@ if($cleanupFailure){throw $cleanupFailure}
 if($runtimeFailure){throw $runtimeFailure}
 if(-not $summary.passed){throw 'Crash/fault runtime harness did not pass all invariants.'}
 
-Write-Host "Crash/fault runtime LAB PASSED. Evidence: $ResultsDirectory"
+Write-Host "Completion-loss/restart reconciliation LAB PASSED. Evidence: $ResultsDirectory"

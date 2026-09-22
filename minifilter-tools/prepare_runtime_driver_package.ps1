@@ -119,6 +119,7 @@ Write-Warning 'This script did not enable TESTSIGNING, change Secure Boot, insta
 ){
     throw "Could not resolve an exact 40-character Git commit for runtime package provenance: '$commit'"
 }
+
 $propsPath=Join-Path $root 'Directory.Build.props'
 if(-not (Test-Path -LiteralPath $propsPath -PathType Leaf)){
     throw 'Directory.Build.props is required for runtime package version provenance.'

@@ -289,8 +289,13 @@ if($preCreateStart -lt 0 -or $preCreateEnd -lt 0 -or $preWriteStart -lt 0 -or $p
 $preCreateBlock=$src.Substring($preCreateStart,$preCreateEnd-$preCreateStart)
 $preWriteBlock=$src.Substring($preWriteStart,$preWriteEnd-$preWriteStart)
 $preSetBlock=$src.Substring($preSetStart,$preSetEnd-$preSetStart)
-if($preCreateBlock -notmatch [regex]::Escape('RgIsContainedRequestor(Data) && RgCreateMayMutate(&event)') -or
-   $preCreateBlock.IndexOf('RgIsContainedRequestor(Data) && RgCreateMayMutate(&event)') -gt $preCreateBlock.LastIndexOf('RgGateEvent(Data, &event')){
+$readOnlyCreateBypass=$preCreateBlock.IndexOf('if (!RgCreateMayMutate(&event))')
+$createGateCall=$preCreateBlock.LastIndexOf('RgGateEvent(Data, &event')
+if($readOnlyCreateBypass -lt 0 -or $createGateCall -lt 0 -or $readOnlyCreateBypass -gt $createGateCall){
+    throw 'Read-only CREATE must bypass the synchronous user-mode gate before RgGateEvent.'
+}
+if($preCreateBlock -notmatch [regex]::Escape('if (RgIsContainedRequestor(Data))') -or
+   $preCreateBlock.IndexOf('if (RgIsContainedRequestor(Data))') -gt $createGateCall){
     throw 'Mutation-capable CREATE must fail in kernel for the contained process before the user-mode gate.'
 }
 if($preWriteBlock -notmatch [regex]::Escape('if (RgIsContainedRequestor(Data))') -or

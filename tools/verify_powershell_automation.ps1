@@ -73,9 +73,14 @@ foreach($cmd in $cmdFiles){
     if($text -match '(?i)\b(?:powershell(?:\.exe)?|pwsh(?:\.exe)?)\b[^\r\n]*\s-File\s' -and
        $text -notmatch '(?i)\s-NoExit(?:\s|$)' -and
        $text -match '(?im)^\s*pause\s*$'){
-        $pauseIndex=[Array]::FindIndex([string[]]$lines,[Predicate[string]]{param($line) $line -match '(?i)^\s*pause\s*$'})
-        $captureIndex=[Array]::FindIndex([string[]]$lines,[Predicate[string]]{param($line) $line -match '(?i)^\s*set\s+"?[A-Za-z_][A-Za-z0-9_]*=%ERRORLEVEL%"?\s*$'})
-        $exitIndex=[Array]::FindIndex([string[]]$lines,[Predicate[string]]{param($line) $line -match '(?i)^\s*exit\s+/b\s+%[A-Za-z_][A-Za-z0-9_]*%\s*$'})
+        $pauseIndex=-1
+        $captureIndex=-1
+        $exitIndex=-1
+        for($i=0;$i -lt $lines.Count;$i++){
+            if($pauseIndex -lt 0 -and $lines[$i] -match '(?i)^\s*pause\s*$'){$pauseIndex=$i}
+            if($captureIndex -lt 0 -and $lines[$i] -match '(?i)^\s*set\s+"?[A-Za-z_][A-Za-z0-9_]*=%ERRORLEVEL%"?\s*$'){$captureIndex=$i}
+            if($exitIndex -lt 0 -and $lines[$i] -match '(?i)^\s*exit\s+/b\s+%[A-Za-z_][A-Za-z0-9_]*%\s*$'){$exitIndex=$i}
+        }
         if($captureIndex -lt 0 -or $pauseIndex -lt 0 -or $exitIndex -lt 0 -or
            $captureIndex -gt $pauseIndex -or $exitIndex -lt $pauseIndex){
             $relative=$cmd.FullName.Substring($RepositoryRoot.Length).TrimStart([char[]]@('\','/'))

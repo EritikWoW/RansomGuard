@@ -7,7 +7,8 @@ const string PortName = @"\RansomGuardMinifilterPort";
 const int ProtocolVersion = 13;
 
 var options = Options.Parse(args);
-Console.WriteLine("RansomGuard Minifilter AUDIT client v0.7.21.0");
+var productVersion = System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version?.ToString() ?? "unknown";
+Console.WriteLine($"RansomGuard Minifilter AUDIT client v{productVersion}");
 Console.WriteLine("READ-ONLY: this client cannot block, suspend, kill, rename, delete, or modify files.");
 Console.WriteLine("It only receives metadata emitted by the lab minifilter.");
 Console.WriteLine();

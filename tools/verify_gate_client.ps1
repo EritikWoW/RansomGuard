@@ -244,6 +244,20 @@ if($preflightBlock -match '(?i)ReleaseContainment|ClearContainment'){
   throw 'GateClient must not expose a runtime containment release/bypass command.'
 }
 
+$fileOpenStart=$text.IndexOf('public static SafeFileHandle OpenPreflight(string path)')
+$fileOpenEnd=$text.IndexOf('public static SafeFileHandle OpenPreflightDirectory(string path)',$fileOpenStart)
+if($fileOpenStart -lt 0 -or $fileOpenEnd -lt 0){throw 'OpenPreflight source block missing.'}
+$fileOpenBlock=$text.Substring($fileOpenStart,$fileOpenEnd-$fileOpenStart)
+foreach($required in @('FileReadData','FileReadAttributes','FileReadData | FileReadAttributes','ShareRead','CreateFileW')){
+  if($fileOpenBlock -notmatch [regex]::Escape($required)){throw "File activation open missing invariant: $required"}
+}
+if($fileOpenBlock -match 'CreateFileW\(path, FileReadAttributes, ShareRead'){
+  throw 'Activation file open must be share-sensitive; FILE_READ_ATTRIBUTES alone does not enforce the hold.'
+}
+if($fileOpenBlock -match 'ShareWrite|ShareDelete'){
+  throw 'Activation file handles must not share WRITE or DELETE access.'
+}
+
 $directoryOpenStart=$text.IndexOf('public static SafeFileHandle OpenPreflightDirectory(string path)')
 $directoryOpenEnd=$text.IndexOf('public static void Cancel',$directoryOpenStart)
 if($directoryOpenStart -lt 0 -or $directoryOpenEnd -lt 0){throw 'OpenPreflightDirectory source block missing.'}

@@ -31,19 +31,13 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Verify disposable VM contract
+      - name: Verify runtime VM runner readiness
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
-          $id=[Security.Principal.WindowsIdentity]::GetCurrent()
-          $p=New-Object Security.Principal.WindowsPrincipal($id)
-          if(-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){throw 'Self-hosted runtime runner must run elevated.'}
-          $cs=Get-CimInstance Win32_ComputerSystem
-          $vm="$($cs.Manufacturer) $($cs.Model)"
-          if($vm -notmatch '(?i)virtual|vmware|virtualbox|kvm|qemu|hyper-v|parallels|xen'){throw "Runner is not an obvious VM: $vm"}
-          if($env:RANSOMGUARD_LAB_VM -cne 'I_UNDERSTAND'){throw 'LAB VM marker missing.'}
           if([string]::IsNullOrWhiteSpace($env:RANSOMGUARD_LAB_CERT_THUMBPRINT)){throw 'Environment secret RANSOMGUARD_LAB_CERT_THUMBPRINT is required.'}
-          Write-Host "Disposable VM contract accepted: $vm"
+          .\minifilter-tools\verify_runtime_runner_readiness.ps1 -CertificateThumbprint $env:RANSOMGUARD_LAB_CERT_THUMBPRINT
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4

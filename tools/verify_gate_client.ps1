@@ -367,8 +367,9 @@ if($text -notmatch 'GateWorkers\s*<\s*1' -or $text -notmatch 'GateWorkers\s*>\s*
   throw 'Gate worker argument must remain explicitly bounded.'
 }
 foreach($required in @(
-  'static bool RequiresGateReply(RgEventType type)',
-  'if (RequiresGateReply((RgEventType)ev.EventType))',
+  'static class GateMessagePolicy',
+  'public static bool RequiresReply(RgEventType type)',
+  'if (GateMessagePolicy.RequiresReply((RgEventType)ev.EventType))',
   'await worker.ConfigureAwait(false);',
   'FLT_PORT_FLAG_SYNC_HANDLE'
 )){
@@ -384,7 +385,7 @@ if(([regex]::Matches($receiveLoopBlock,[regex]::Escape('Native.FilterGetMessage(
   throw 'Runtime synchronous receive loop must issue exactly one FilterGetMessage per iteration.'
 }
 $loopDispatch=$receiveLoopBlock.IndexOf('Task.Run(() => ProcessMessageAsync(header, ev))')
-$replyRequired=$receiveLoopBlock.IndexOf('if (RequiresGateReply((RgEventType)ev.EventType))',$loopDispatch)
+$replyRequired=$receiveLoopBlock.IndexOf('if (GateMessagePolicy.RequiresReply((RgEventType)ev.EventType))',$loopDispatch)
 $replyAwait=$receiveLoopBlock.IndexOf('await worker.ConfigureAwait(false);',$replyRequired)
 if($loopDispatch -lt 0 -or $replyRequired -lt 0 -or $replyAwait -lt 0 -or
    $loopDispatch -gt $replyRequired -or $replyRequired -gt $replyAwait){

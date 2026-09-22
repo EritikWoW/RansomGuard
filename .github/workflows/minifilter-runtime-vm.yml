@@ -72,6 +72,10 @@ jobs:
         run: |
           $ErrorActionPreference='Stop'
           $results=Join-Path $env:RUNNER_TEMP 'ransomguard-runtime-results'
+          if(Test-Path -LiteralPath $results){
+            Remove-Item -LiteralPath $results -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $results -Force | Out-Null
           .\minifilter-tools\run_runtime_integration_lab.ps1 -LabReleaseDirectory $env:RG_LAB_RELEASE -DriverPackageDirectory $env:RG_DRIVER_PACKAGE -RootBase '${{ inputs.root_base }}' -ResultsDirectory $results
           $summary=Get-Content -LiteralPath (Join-Path $results 'runtime-result.json') -Raw | ConvertFrom-Json
           if(-not $summary.passed){throw 'Runtime result did not report passed=true.'}

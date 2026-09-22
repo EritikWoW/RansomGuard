@@ -62,6 +62,14 @@ These are userspace policy/store tests plus kernel source gates. They do not pro
 execution, tunneled-name handling, or file-ID race safety; those still require an isolated Windows VM.
 
 
+## Self-hosted runtime VM validation
+
+The compile workflow is not evidence of runtime correctness. Real Filter Manager behavior is validated only by the manually dispatched `Minifilter runtime VM lab` workflow on a disposable self-hosted Windows VM.
+
+Before registering or dispatching that runner, follow `docs/RUNTIME_VM_RUNNER.md`. The reusable `minifilter-tools/verify_runtime_runner_readiness.ps1` check must pass under the same Windows identity used by the Actions runner. It validates the administrator/VM boundary, signing certificate private key, Visual Studio C++ toolchain, complete x64 WDK surface and required driver-management commands without changing boot, trust, Secure Boot, TESTSIGNING or Defender settings.
+
+Runtime evidence from that workflow is required before treating minifilter preservation or containment semantics as experimentally validated.
+
 ## Automated x64 minifilter compile gate
 
 GitHub Actions restores pinned Microsoft WDK/SDK C++ 10.0.28000.2526 packages and builds

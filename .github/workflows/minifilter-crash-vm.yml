@@ -59,8 +59,7 @@ jobs:
           $filters=(& fltmc filters 2>$null | Out-String)
           if($LASTEXITCODE -ne 0){throw "Unable to query Filter Manager before crash lab, exit=$LASTEXITCODE"}
           if($filters -match '(?m)^\s*RansomGuardMinifilter\b'){
-            Write-Warning 'Removing RansomGuardMinifilter left loaded by a prior failed LAB run.'
-            .\minifilter-tools\unload_minifilter_lab.ps1 -Volume $volume
+            throw 'STALE KERNEL STATE: RansomGuardMinifilter is still loaded from an earlier crash/fault run. Do not attempt repeated unloads of an unknown stale driver generation. Revert the disposable VM checkpoint, start the runner again, then rerun this workflow.'
           }
 
       - name: Setup .NET 10

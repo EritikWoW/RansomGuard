@@ -25,7 +25,8 @@ if($env:RANSOMGUARD_LAB_VM -cne 'I_UNDERSTAND'){
 $root=Split-Path -Parent $PSScriptRoot
 $buildScript=Join-Path $PSScriptRoot 'build_minifilter.ps1'
 & $buildScript -Configuration $Configuration
-if($LASTEXITCODE -ne 0){throw "Unsigned minifilter build failed, exit=$LASTEXITCODE"}
+# build_minifilter.ps1 throws on failure. $LASTEXITCODE here would describe whichever
+# native tool happened to run last inside that script, not the script invocation itself.
 
 $sourcePackage=Get-ChildItem -LiteralPath (Join-Path $root 'minifilter-build') -Directory |
     Sort-Object Name -Descending | Select-Object -First 1

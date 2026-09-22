@@ -94,6 +94,8 @@ foreach($required in @(
   'RgControlCommand.ActivateAndContainProcess',
   '--contain-pid',
   '--fault-after-create-intent',
+  '--reconcile-only',
+  'RECONCILE ONLY: observed=',
   'Environment.FailFast("RansomGuard LAB fault injection: after durable CREATE intent, before kernel reply.")',
   'TargetProcessId = containPid ?? 0',
   'ContainmentActive',
@@ -317,7 +319,7 @@ if($preflightBlock -match 'Native\.Reply\('){throw 'Activation preflight events 
 $containOption=$text.IndexOf('case "--contain-pid"')
 $containRejectSystem=$text.IndexOf('parsedPid <= 4',$containOption)
 $containRejectSelf=$text.IndexOf('parsedPid == Environment.ProcessId',$containOption)
-$containPrepareReject=$text.IndexOf('Containment/fault-injection options cannot be combined with --prepare-root')
+$containPrepareReject=$text.IndexOf('Containment/fault/reconciliation options cannot be combined with --prepare-root')
 if($containOption -lt 0 -or $containRejectSystem -lt 0 -or $containRejectSelf -lt 0 -or $containPrepareReject -lt 0){
   throw 'LAB containment CLI must reject system/self PID and prepare-only combinations.'
 }
@@ -408,10 +410,14 @@ if($loopDispatch -lt 0 -or $replyRequired -lt 0 -or $replyAwait -lt 0 -or
 }
 $verifyBeforeRestart=$text.IndexOf('repository.VerifyAll()')
 $restartObserve=$text.IndexOf('RestartReconciliation.ObservePendingAsync(',$verifyBeforeRestart)
+$reconcileOnly=$text.IndexOf('if (options.ReconcileOnly)',$restartObserve)
+$reconcileReturn=$text.IndexOf('return;',$reconcileOnly)
 $createSession=$text.IndexOf('repository.CreateSession(',$restartObserve)
-if($verifyBeforeRestart -lt 0 -or $restartObserve -lt 0 -or $createSession -lt 0 -or
-   $verifyBeforeRestart -gt $restartObserve -or $restartObserve -gt $createSession){
-  throw 'Pending restart evidence must be observed only after repository validation and before a new session starts.'
+if($verifyBeforeRestart -lt 0 -or $restartObserve -lt 0 -or $reconcileOnly -lt 0 -or
+   $reconcileReturn -lt 0 -or $createSession -lt 0 -or
+   $verifyBeforeRestart -gt $restartObserve -or $restartObserve -gt $reconcileOnly -or
+   $reconcileOnly -gt $reconcileReturn -or $reconcileReturn -gt $createSession){
+  throw 'Pending restart evidence must be observed after repository validation, with reconcile-only exiting before any new session is created.'
 }
 $restartClassStart=$text.IndexOf('static class RestartReconciliation')
 $restartClassEnd=$text.IndexOf('readonly record struct RestartReconciliationSummary',$restartClassStart)

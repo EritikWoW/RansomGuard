@@ -31,16 +31,16 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Audit PowerShell automation
+        shell: pwsh
+        run: .\tools\verify_powershell_automation.ps1
+
       - name: Verify runtime VM runner readiness
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
           if([string]::IsNullOrWhiteSpace($env:RANSOMGUARD_LAB_CERT_THUMBPRINT)){throw 'Environment secret RANSOMGUARD_LAB_CERT_THUMBPRINT is required.'}
           .\minifilter-tools\verify_runtime_runner_readiness.ps1 -CertificateThumbprint $env:RANSOMGUARD_LAB_CERT_THUMBPRINT
-
-      - name: Audit PowerShell automation
-        shell: pwsh
-        run: .\tools\verify_powershell_automation.ps1
 
       - name: Clear stale LAB minifilter from prior failed run
         shell: pwsh

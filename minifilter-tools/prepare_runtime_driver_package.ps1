@@ -107,16 +107,7 @@ foreach($signed in @($sys,$cat)){
 
 $commit=''
 try{$commit=(& git -C $root rev-parse HEAD).Trim()}catch{}
-if($commit -notmatch '^[A-Fa-f0-9]{40}
-$provenance | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'runtime-package.json') -Encoding utf8
-
-Get-ChildItem -LiteralPath $OutputDirectory -File |
-    ForEach-Object { '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash, $_.Name } |
-    Set-Content -LiteralPath (Join-Path $OutputDirectory 'SHA256SUMS.txt') -Encoding ascii
-
-Write-Host "SIGNED RUNTIME DRIVER PACKAGE READY: $OutputDirectory" -ForegroundColor Green
-Write-Warning 'This script did not enable TESTSIGNING, change Secure Boot, install trust roots, or modify Defender. Those lab prerequisites must already exist in the disposable VM image.'
-){
+if($commit -notmatch '^[A-Fa-f0-9]{40}$'){
     throw "Could not resolve an exact 40-character Git commit for runtime package provenance: '$commit'"
 }
 
@@ -126,16 +117,7 @@ if(-not (Test-Path -LiteralPath $propsPath -PathType Leaf)){
 }
 [xml]$propsXml=Get-Content -LiteralPath $propsPath -Raw
 $productVersion=[string]$propsXml.Project.PropertyGroup.Version
-if($productVersion -notmatch '^\d+\.\d+\.\d+\.\d+
-$provenance | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'runtime-package.json') -Encoding utf8
-
-Get-ChildItem -LiteralPath $OutputDirectory -File |
-    ForEach-Object { '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash, $_.Name } |
-    Set-Content -LiteralPath (Join-Path $OutputDirectory 'SHA256SUMS.txt') -Encoding ascii
-
-Write-Host "SIGNED RUNTIME DRIVER PACKAGE READY: $OutputDirectory" -ForegroundColor Green
-Write-Warning 'This script did not enable TESTSIGNING, change Secure Boot, install trust roots, or modify Defender. Those lab prerequisites must already exist in the disposable VM image.'
-){
+if($productVersion -notmatch '^\d+\.\d+\.\d+\.\d+$'){
     throw "Invalid runtime package product version in Directory.Build.props: '$productVersion'"
 }
 

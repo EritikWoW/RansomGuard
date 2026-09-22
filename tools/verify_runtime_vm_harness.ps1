@@ -39,6 +39,8 @@ foreach($required in @(
     'prepare_runtime_driver_package.ps1',
     'verify_runtime_runner_readiness.ps1',
     'run_runtime_integration_lab.ps1',
+    'unload_minifilter_lab.ps1',
+    'Clear stale LAB minifilter from prior failed run',
     'runtime-package.json',
     'Remove-Item -LiteralPath $results -Recurse -Force',
     'github.sha'

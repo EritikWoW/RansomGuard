@@ -134,6 +134,9 @@ foreach($required in @(
     'pwsh.exe',
     'Confirm-SecureBootUEFI',
     'Set-AuthenticodeSignature',
+    'X509EnhancedKeyUsageExtension',
+    '2.5.29.37',
+    'EnhancedKeyUsages',
     'TrustedPublisher',
     'testsigning',
     'fltmc filters',
@@ -141,6 +144,10 @@ foreach($required in @(
     'pnputil.exe'
 )){
     if($readiness -notmatch [regex]::Escape($required)){throw "Runtime runner readiness check missing invariant: $required"}
+}
+
+if($readiness -match [regex]::Escape('EnhancedKeyUsageList')){
+    throw 'Runtime runner readiness must decode the certificate EKU extension directly; EnhancedKeyUsageList provider projections are not stable across PowerShell hosts.'
 }
 
 $package=Get-Content -LiteralPath $packageScript -Raw

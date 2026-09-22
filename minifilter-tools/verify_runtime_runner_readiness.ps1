@@ -140,9 +140,29 @@ foreach($cmdletName in @('Get-FileHash','Get-AuthenticodeSignature','Set-Authent
 }
 
 $codeSigningOid='1.3.6.1.5.5.7.3.3'
-$ekuOids=@($cert.EnhancedKeyUsageList | ForEach-Object {$_.ObjectId.Value})
+$ekuExtension=$cert.Extensions |
+    Where-Object {$_.Oid.Value -eq '2.5.29.37'} |
+    Select-Object -First 1
+if(-not $ekuExtension){
+    throw 'Lab signing certificate does not contain an Enhanced Key Usage extension.'
+}
+
+if($ekuExtension -is [Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]){
+    $decodedEku=$ekuExtension
+}else{
+    try{
+        $decodedEku=[Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new(
+            $ekuExtension,
+            $ekuExtension.Critical
+        )
+    }catch{
+        throw "Could not decode the certificate Enhanced Key Usage extension: $($_.Exception.Message)"
+    }
+}
+
+$ekuOids=@($decodedEku.EnhancedKeyUsages | ForEach-Object {[string]$_.Value})
 if($ekuOids -notcontains $codeSigningOid){
-    throw 'Lab signing certificate does not contain the Code Signing EKU.'
+    throw "Lab signing certificate does not contain the Code Signing EKU. EKUs: $($ekuOids -join ', ')"
 }
 
 $rootTrusted=Get-ChildItem Cert:\LocalMachine\Root -ErrorAction SilentlyContinue |

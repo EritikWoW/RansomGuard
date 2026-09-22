@@ -189,6 +189,15 @@ foreach($path in @($runtimeScript,$packageScript,$readinessScript,$workflowPath)
 }
 
 $helper=Get-Content -LiteralPath $helperSource -Raw
+foreach($requiredDiagnostic in @(
+    'RUNTIME HARNESS ERROR',
+    'HResult: 0x{ex.HResult:X8}',
+    'Win32Error:',
+    'Environment.ExitCode = 20'
+)){
+    if($helper -notmatch [regex]::Escape($requiredDiagnostic)){throw "Runtime mapping helper missing explicit crash diagnostic: $requiredDiagnostic"}
+}
+
 foreach($required in @(
     'hold-map',
     'hold-dir-delete',

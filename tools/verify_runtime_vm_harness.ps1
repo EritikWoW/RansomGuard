@@ -10,10 +10,13 @@ $helperSource=Join-Path $root 'tests\RansomGuard.Minifilter.RuntimeHarness\Progr
 $helperProject=Join-Path $root 'tests\RansomGuard.Minifilter.RuntimeHarness\RansomGuard.Minifilter.RuntimeHarness.csproj'
 $build=Join-Path $root 'build_windows.ps1'
 $buildWrapper=Join-Path $root 'build_windows.cmd'
+$automationAudit=Join-Path $root 'tools\verify_powershell_automation.ps1'
 
-foreach($path in @($workflowPath,$runtimeScript,$packageScript,$readinessScript,$installScript,$helperSource,$helperProject,$build,$buildWrapper)){
+foreach($path in @($workflowPath,$runtimeScript,$packageScript,$readinessScript,$installScript,$helperSource,$helperProject,$build,$buildWrapper,$automationAudit)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Runtime VM harness required file missing: $path"}
 }
+
+& $automationAudit -RepositoryRoot $root
 
 foreach($scriptPath in @($runtimeScript,$packageScript,$readinessScript,$installScript)){
     $tokens=$null
@@ -222,13 +225,14 @@ $buildText=Get-Content -LiteralPath $build -Raw
 foreach($required in @(
     'RansomGuard.Minifilter.RuntimeHarness.csproj',
     'MinifilterLab\RuntimeHarness',
-    'verify_runtime_vm_harness.ps1'
+    'verify_runtime_vm_harness.ps1',
+    'verify_powershell_automation.ps1'
 )){
     if($buildText -notmatch [regex]::Escape($required)){throw "Engineering LAB build missing runtime harness packaging invariant: $required"}
 }
 
 $buildWrapperText=Get-Content -LiteralPath $buildWrapper -Raw
-foreach($required in @('where.exe pwsh.exe','set "PS_EXE=pwsh.exe"','powershell.exe')){
+foreach($required in @('where.exe pwsh.exe','set "PS_EXE=pwsh.exe"','powershell.exe','if /I not "%GITHUB_ACTIONS%"=="true" pause')){
     if($buildWrapperText -notmatch [regex]::Escape($required)){throw "Windows build wrapper missing PowerShell host invariant: $required"}
 }
 

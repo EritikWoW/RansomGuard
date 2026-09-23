@@ -65,6 +65,8 @@ Console.WriteLine($"Bounded gate workers : {options.GateWorkers}");
 Console.WriteLine($"Rollback budget      : max-session={options.MaxStoreMiB} MiB; min-free={options.MinFreeMiB} MiB");
 if (options.DropFirstCreateCompletion)
     Console.WriteLine("LAB completion-loss injection : ARMED for the first authoritative CREATE result.");
+if (options.DropFirstRenameCompletion)
+    Console.WriteLine("LAB completion-loss injection : ARMED for the first authoritative RENAME result.");
 Console.WriteLine("Press Ctrl+C to disconnect. The driver then stops gating because no client is connected.");
 
 var context = new RgConnectContext
@@ -106,6 +108,7 @@ var activeWorkers = new List<Task>();
 var replySync = new object();
 var gateWorkerFailures = 0;
 var droppedCreateCompletion = 0;
+var droppedRenameCompletion = 0;
 var buffer = Marshal.AllocHGlobal(checked(headerSize + eventSize));
 
 async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
@@ -264,6 +267,16 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
 
         if ((RgEventType)ev.EventType == RgEventType.RenameResult)
         {
+            if (options.DropFirstRenameCompletion &&
+                Interlocked.CompareExchange(ref droppedRenameCompletion, 1, 0) == 0)
+            {
+                Console.Error.WriteLine(
+                    $"LAB COMPLETION LOSS: intentionally dropping authoritative RENAME result request={ev.RelatedSequence}; status=0x{ev.CompletionStatus:X8}; exiting cleanly for restart reconciliation.");
+                cts.Cancel();
+                Native.Cancel(port);
+                return;
+            }
+
             await using var renameResultReservation = await storageBudget.ReserveAsync(
                 RollbackStorageBudget.MetadataReservationBytes,
                 "rename-completion-evidence",
@@ -1330,6 +1343,7 @@ sealed record Options(
     int ContainAfterEvents,
     int ContainAfterPaths,
     bool DropFirstCreateCompletion,
+    bool DropFirstRenameCompletion,
     bool ReconcileOnly)
 {
     public const int DefaultGateWorkers = 4;
@@ -1355,6 +1369,7 @@ sealed record Options(
         var containAfterPaths = DefaultContainAfterPaths;
         var containThresholdSpecified = false;
         var dropFirstCreateCompletion = false;
+        var dropFirstRenameCompletion = false;
         var reconcileOnly = false;
         for (var i = 0; i < args.Length; i++)
         {
@@ -1403,16 +1418,19 @@ sealed record Options(
                     containThresholdSpecified = true;
                     break;
                 case "--drop-first-create-completion": dropFirstCreateCompletion = true; break;
+                case "--drop-first-rename-completion": dropFirstRenameCompletion = true; break;
                 case "--reconcile-only": reconcileOnly = true; break;
                 case "--prepare-root": prepare = true; break;
                 default: throw new ArgumentException($"Unknown/incomplete argument: {args[i]}");
             }
         }
         if (string.IsNullOrWhiteSpace(root)) throw new ArgumentException("Pass --root <disposable-test-directory>.");
-        if (prepare && (containPid.HasValue || containAfterPid.HasValue || dropFirstCreateCompletion || reconcileOnly))
+        if (prepare && (containPid.HasValue || containAfterPid.HasValue || dropFirstCreateCompletion || dropFirstRenameCompletion || reconcileOnly))
             throw new ArgumentException("Containment/fault/reconciliation options cannot be combined with --prepare-root.");
-        if (reconcileOnly && (containPid.HasValue || containAfterPid.HasValue || dropFirstCreateCompletion || containThresholdSpecified))
+        if (reconcileOnly && (containPid.HasValue || containAfterPid.HasValue || dropFirstCreateCompletion || dropFirstRenameCompletion || containThresholdSpecified))
             throw new ArgumentException("--reconcile-only cannot be combined with containment or fault injection.");
+        if (dropFirstCreateCompletion && dropFirstRenameCompletion)
+            throw new ArgumentException("Only one completion-loss injection may be armed per GateClient session.");
         if (containPid.HasValue && containAfterPid.HasValue)
             throw new ArgumentException("--contain-pid and --contain-after-pid are mutually exclusive.");
         if (containThresholdSpecified && !containAfterPid.HasValue)
@@ -1422,7 +1440,8 @@ sealed record Options(
         store ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RansomGuardV072", "GateRollback");
         return new Options(
             root, store, session, prepare, gateWorkers, maxStoreMiB, minFreeMiB,
-            containPid, containAfterPid, containAfterEvents, containAfterPaths, dropFirstCreateCompletion, reconcileOnly);
+            containPid, containAfterPid, containAfterEvents, containAfterPaths,
+            dropFirstCreateCompletion, dropFirstRenameCompletion, reconcileOnly);
     }
 }
 

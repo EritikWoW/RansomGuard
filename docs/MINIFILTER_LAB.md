@@ -9,7 +9,7 @@ The minifilter has two mutually exclusive user-mode connection modes:
 The LAB Gate exists to validate preservation ordering. It is **not** a production driver configuration.
 Do not load it on a primary workstation and do not point it at real documents.
 
-On startup, v0.7.21.0 scans older pending CREATE/RENAME intents under the same LAB root and appends conservative restart evidence (path state + FILE_ID_INFO when available). This evidence never substitutes for the original kernel completion event. Verified recovery may expose an exact, fully consistent restart-evidence set as Review-only crash recovery; absent, ambiguous, indeterminate or conflicting evidence remains Blocked.
+On startup, older pending CREATE/RENAME/TRUNCATE intents under the same LAB root are conservatively re-observed. CREATE/RENAME record path state + FILE_ID_INFO in restart-state; protocol-v14 TRUNCATE records FILE_ID plus safely queryable EOF evidence in truncate-state. Restart evidence never substitutes for the original kernel completion event. Exact consistent evidence may become Review-only crash recovery; absent, ambiguous, indeterminate or conflicting evidence remains Blocked.
 
 Protocol v11 also observes paging writes on streams that were successfully opened inside the LAB root. The driver uses a pre-established nonpaged stream context and emits no-reply evidence only; it does not run a filesystem name query or synchronous preservation gate in the paging path. Treat these events as visibility, not as proof that memory-mapped writes are recoverable.
 
@@ -55,7 +55,7 @@ Only runtime logs/journals and `runtime-result.json` are uploaded. The signed te
 
 0.7.16 adds a LAB-only `RollbackRecovery\RansomGuard.RollbackRecovery.exe` plus `rollback_recovery.cmd`.
 
-Use `plan` first to generate a deterministic recovery plan for one rollback session. The plan classifies full-preimage/range-COW copy-out as Ready and keeps CREATE/RENAME/topology work in Review or Blocked states.
+Use `plan` first to generate a deterministic recovery plan for one rollback session. The plan classifies full-preimage/range-COW copy-out as Ready and keeps CREATE/RENAME/TRUNCATE/topology transaction work in Informational, Review or Blocked states.
 
 Use `execute` only with a saved plan. Before any output directory is created, the executor rebuilds the current plan from validated journal evidence and refuses stale PlanId/evidence digests. Only freshly rebuilt Ready actions are executed.
 
@@ -91,7 +91,7 @@ There is no `--disable-budget`, unlimited mode, or automatic free-space override
 
 Retention is never automatic. Generate a plan first, review candidates/issues, then execute that exact plan. Default policy is 30 days, 32 GiB managed completed storage and a 24-hour minimum age for pressure cleanup.
 
-Only lifecycle-Completed, unheld sessions with no pending CREATE/RENAME intent can become new purge candidates. Active, Faulted, Held and legacy sessions remain protected.
+Only lifecycle-Completed, unheld sessions with no pending CREATE/RENAME/TRUNCATE intent can become new purge candidates. Active, Faulted, Held and legacy sessions remain protected.
 
 Cleanup is staged through `Retired\<session>` and the repository-level retention journal before deletion. See `docs/ROLLBACK_RETENTION.md`.
 
@@ -216,6 +216,8 @@ Containment is armed atomically with successful activation preflight. For the co
 The control protocol intentionally has no release/clear/bypass command. Disconnecting GateClient or unloading the LAB driver releases the process reference and clears containment. This is Engineering LAB functionality only; the ordinary service/detector does not invoke it.
 
 ## Event-bound containment transition — 0.7.21
+
+Protocol v14 retains all v13 containment semantics and adds correlated no-reply `TruncateResult` evidence. EOF pre-operation requests carry the exact requested length; the safe post-operation path records authoritative status, FILE_ID_INFO and observed EOF when available. Allocation-size/VDL loss is intentionally not inferred during restart.
 
 Protocol v13 keeps the pre-armed `--contain-pid` path and adds an explicit transition test path with `--contain-after-pid <pid>`. GateClient opens and keeps a handle to that exact process; if it exits, the authorization is invalid and a later process reusing the same numeric PID is not accepted.
 

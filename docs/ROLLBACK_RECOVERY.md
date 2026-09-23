@@ -38,7 +38,7 @@ Only two action kinds may ever be `Ready`:
 1. `RestoreFullPreimageCopy`
 2. `RestoreRangeCowCopy`
 
-CREATE/RENAME/topology actions are never executed automatically.
+CREATE/RENAME/TRUNCATE/topology actions are never executed automatically.
 
 ## Full pre-image recovery
 
@@ -83,6 +83,8 @@ For a pending CREATE/RENAME with no authoritative completion, 0.7.19 checks `res
 - If every matching durable observation is decisive and all observations agree on `SupportsCompleted`, the pending topology action becomes `Review`.
 - If every matching durable observation is decisive and all observations agree on `SupportsNotCompleted`, the pending topology action becomes `Review`.
 - If there is no matching evidence, or any matching observation is `Indeterminate` / `Ambiguous`, or observations conflict, the action remains `Blocked`.
+
+Protocol v14 applies the same boundary to TRUNCATE through its separate truncate-state restart journal. Exact EOF evidence can make a pending transaction Review-only; allocation-size/VDL loss stays unresolved. The executor never changes a live EOF/allocation/VDL value.
 
 This assessment never writes a CREATE/RENAME completion journal entry and never turns a topology action into `Ready`. The executor therefore still cannot delete incident-created paths, reverse renames, overwrite live objects, or restore in place.
 

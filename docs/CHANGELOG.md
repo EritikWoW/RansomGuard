@@ -1,3 +1,33 @@
+# RansomGuard 0.7.24.0
+
+- Bumped the Engineering LAB minifilter wire protocol to v14 without changing the fixed RG_EVENT structure size.
+- Added correlated no-reply `TruncateResult` post-operation evidence for FileEndOfFileInformation, FileAllocationInformation and FileValidDataLengthInformation.
+- Added hash-chained write-through `truncate-state` intent/completion/restart journals. The intent records exact request sequence, requested length, original observable length, FILE_ID_INFO and preservation proof before allow.
+- Existing files retain/reuse a verified full pre-image before a TRUNCATE intent is committed; incident-created files do not manufacture a pre-incident image.
+- Successful post-operation evidence queries FILE_ID_INFO plus EOF/allocation size only from PASSIVE_LEVEL with special kernel APCs enabled. Unavailable identity/metric detail remains explicit rather than guessed.
+- Lost EOF completion can be classified after restart only when the same FILE_ID has either the exact requested length or the exact original length. Unexpected lengths are Ambiguous; allocation-size and valid-data-length loss remain Indeterminate.
+- Recovery planning adds ReviewTruncateTransaction. Transaction state never becomes an executable live-length mutation; verified full-preimage/range-COW copy-out remains the only Ready recovery path.
+- Session lifecycle and retention now treat pending TRUNCATE intents as unresolved transaction evidence and protect those sessions from cleanup.
+- Added LAB-only `--drop-first-truncate-completion`, a single-operation native EOF helper, and disposable-VM evidence requirements for lost TruncateResult restart reconciliation.
+- Bumped userspace/LAB and driver package version to 0.7.24.0.
+
+# RansomGuard 0.7.23.0
+
+- Extended disposable-VM completion-loss proof to RENAME.
+- GateClient can intentionally omit the first authoritative RenameResult only after the filesystem rename has completed, then exit cleanly for restart reconciliation.
+- The VM harness proves source removal, destination presence, FILE_ID continuity, durable rename intent, absent authoritative completion, SupportsCompleted restart evidence, and Review-only topology recovery.
+- CREATE completion-loss remains a regression scenario in the same manual workflow.
+- Kept automatic live rename/delete/topology mutation disabled; verified content copy-out remains separate.
+- Synchronized userspace/LAB manifests, driver INF and product package version to 0.7.23.0.
+
+# RansomGuard 0.7.22.0
+
+- Added disposable-VM completion-loss proof for CREATE without hard-crashing GateClient while the kernel is waiting for a blocking reply.
+- GateClient can intentionally omit the first authoritative CreateResult after the filesystem CREATE has completed, then cancel its receive loop and exit cleanly.
+- Restart reconciliation proves an originally absent target that now exists as SupportsCompleted while leaving the authoritative completion journal empty.
+- Recovery planning keeps the pending CREATE transaction Review-only and never promotes automatic deletion/topology mutation to Ready.
+- Added bounded minifilter unload handling so failed runtime experiments cannot hang the self-hosted VM cleanup path indefinitely.
+
 # RansomGuard 0.7.21.0
 
 - Bumped the Engineering LAB minifilter wire protocol to v13.

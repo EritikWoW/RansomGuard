@@ -135,7 +135,7 @@ if($script -notmatch [regex]::Escape('$vhdPath=Join-Path $ScratchDirectory')){
     throw 'Disposable VHD must be created under the guarded scratch directory.'
 }
 
-$staleStart=$script.IndexOf("$staleVhds=@(Get-ChildItem -LiteralPath $ScratchDirectory -Filter 'RansomGuard-*.vhd'")
+$staleStart=$script.IndexOf('$staleVhds=@(Get-ChildItem -LiteralPath $ScratchDirectory')
 $staleImage=$script.IndexOf('Get-DiskImage -ImagePath $staleVhd.FullName -ErrorAction Stop',$staleStart)
 $staleAttached=$script.IndexOf('if($image.Attached)',$staleImage)
 $staleDelete=$script.IndexOf('Remove-Item -LiteralPath $staleVhd.FullName -Force -ErrorAction Stop',$staleAttached)

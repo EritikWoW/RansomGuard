@@ -1,3 +1,16 @@
+# RansomGuard 0.7.29.0
+
+- Added a combined manual disposable-VM fault campaign without changing minifilter protocol v15.
+- Added an isolated low-disk campaign that creates and formats only a newly created expandable VHD under a guarded RansomGuard scratch path, places the rollback store on that VHD, activates the real gate, then consumes only the scratch-volume free space until it crosses the configured 64 MiB reserve.
+- Under storage pressure, a real protected-root RENAME must fail closed, the source pathname must remain present, the destination must remain absent, GateClient must report a rollback storage budget denial, and the gate must stay alive.
+- After the VHD filler is removed, the same RENAME must succeed and commit a SHA-256-verified full pre-image, proving recovery from pressure without restarting the gate.
+- Added a real-reboot qualification split into explicit ARM and VERIFY phases because a self-hosted GitHub Actions job cannot survive a VM reboot.
+- ARM deliberately drops the first authoritative TRUNCATE completion only after the filesystem EOF mutation succeeds, commits the intent plus full pre-image, writes a flushed/hash-bound persistent state file, and intentionally leaves the LAB minifilter loaded for the reboot boundary.
+- VERIFY refuses to run unless Windows boot time changed, requires the filter to be cleared by reboot, proves the changed EOF plus pending durable intent and pre-image survived the reboot, runs reconcile-only, requires exact SupportsCompleted restart evidence, and confirms recovery keeps the TRUNCATE transaction Review-only while the verified full pre-image remains the sole Ready copy-out.
+- Added a dedicated fault-campaign source gate. It forbids host-disk clean/select operations, hard-coded existing-volume formatting, automatic reboot/shutdown/boot-policy mutation, and Driver Verifier commands in this milestone.
+- Extended the existing manual minifilter crash workflow with campaign choices: completion-loss, low-disk, reboot-arm and reboot-verify.
+- Bumped userspace/LAB and driver package version to 0.7.29.0.
+
 # RansomGuard 0.7.28.0
 
 - Added a separate manual disposable-VM concurrency stress campaign without changing minifilter protocol v15.

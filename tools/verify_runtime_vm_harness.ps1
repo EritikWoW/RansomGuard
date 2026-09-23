@@ -100,12 +100,12 @@ foreach($required in @(
     'concurrencyTruncateCorrelated',
     'concurrencyDeleteCorrelated',
     'concurrencyMappedEvidence',
-    'concurrencyGateWorkers=4',
+    'concurrencyMessageSlots=4',
     '$summary.concurrencyProcessCount=$stressProcesses.Count',
     'Concurrency stress launched an unexpected helper count',
     'concurrency-stress',
     "'--gate-workers','4'",
-    "'Bounded gate workers\s+: 4'",
+    "'Bounded message slots:\s+4 .*reply-required gate is serialized'",
     "'Sessions\concurrency-stress'",
     "'create-state\create-completion-journal.jsonl'",
     '$stressCount=4',
@@ -179,7 +179,7 @@ if($runtime -match [regex]::Escape('foreach($path in @($truncateFiles+$deleteFil
 }
 
 foreach($damaged in @(
-    'Bounded gate workerss+: 4',
+    'Bounded message slots:s+4 .*reply-required gate is serialized',
     'Sessionsconcurrency-stress',
     'create-statecreate-completion-journal.jsonl',
     'rename-staterename-completion-journal.jsonl',

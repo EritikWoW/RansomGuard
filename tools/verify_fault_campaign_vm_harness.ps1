@@ -136,9 +136,9 @@ foreach($required in @(
     "inputs.campaign == 'reboot-verify'",
     "inputs.campaign != 'reboot-verify'",
     "inputs.campaign != 'reboot-arm'",
-    "$selectedRoot=switch($env:RG_FAULT_CAMPAIGN)",
-    "'low-disk' {$env:RG_LOW_DISK_ROOT_BASE}",
-    "'reboot-verify' {$env:RG_REBOOT_ROOT_BASE}",
+    '$selectedRoot=switch($env:RG_FAULT_CAMPAIGN)',
+    '''low-disk'' {$env:RG_LOW_DISK_ROOT_BASE}',
+    '''reboot-verify'' {$env:RG_REBOOT_ROOT_BASE}',
     'ransomguard-low-disk-fault-evidence',
     'ransomguard-reboot-arm-evidence',
     'ransomguard-reboot-verify-evidence'

@@ -15,7 +15,7 @@ foreach($required in @(
     'type=expandable',
     'Format-Volume -DriveLetter $letter -FileSystem NTFS',
     'RansomGuard-low-disk-filler.bin',
-    'Rollback storage budget denied rename-source-preimage',
+    'Rollback storage budget denied gate-event:Create',
     'failClosedObserved',
     'sourcePreservedOnDenial',
     'destinationAbsentOnDenial',
@@ -152,4 +152,4 @@ if($workflow -match '(?m)^\s*push\s*:'){
     throw 'Fault campaign VM workflow must remain manual-only.'
 }
 
-Write-Host 'Fault campaign source gate PASSED: isolated low-disk VHD pressure is fail-closed and bounded; reboot proof is explicit ARM/real-boot/VERIFY with exact-commit durable state; workflow never reboots the self-hosted runner or enables Driver Verifier.'
+Write-Host 'Fault campaign source gate PASSED: isolated low-disk VHD pressure fails closed at the mutation-capable CREATE/open admission boundary before RENAME intent, retry evidence is durable, reboot proof is explicit ARM/real-boot/VERIFY with exact-commit state, and the workflow never reboots the self-hosted runner or enables Driver Verifier.'

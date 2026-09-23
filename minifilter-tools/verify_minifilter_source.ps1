@@ -394,7 +394,7 @@ if($proto -notmatch 'RgEventDeleteDispositionResult' -or
     throw 'Protocol v15 must expose correlated DELETE disposition and cleanup lifecycle evidence.'
 }
 $deletePopulate=$src.IndexOf('} else if (EventType == RgEventDeleteDisposition) {')
-$deleteReadFlags=$src.IndexOf('RgReadDeleteDispositionFlags(Data, &deleteFlags)',$deletePopulate)
+$deleteReadFlags=$src.IndexOf('RgReadDeleteDispositionFlags(Data, &Event->Flags)',$deletePopulate)
 if($deletePopulate -lt 0 -or $deleteReadFlags -lt 0 -or $deletePopulate -gt $deleteReadFlags){
     throw 'DELETE pre-operation event must carry the exact FileDispositionInformation/Ex flags.'
 }

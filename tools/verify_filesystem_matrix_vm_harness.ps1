@@ -31,6 +31,11 @@ foreach($required in @(
     'RansomGuard-Filesystem-Matrix-Results',
     'STALE MATRIX STATE',
     'RansomGuard-*.vhd',
+    'Get-DiskImage -ImagePath $staleVhd.FullName -ErrorAction Stop',
+    'if($image.Attached)',
+    'Recovered detached stale filesystem-matrix VHD',
+    'unable to verify whether scratch VHD is detached',
+    'scratch VHD is still attached',
     'RGFSNTFS',
     'RGFSREFS',
     'Provisioned=$false',
@@ -128,6 +133,18 @@ if($script -match '(?im)\bFormat-Volume\b[^\r\n]*-DriveLetter\s+[A-Z](?:\s|$)'){
 }
 if($script -notmatch [regex]::Escape('$vhdPath=Join-Path $ScratchDirectory')){
     throw 'Disposable VHD must be created under the guarded scratch directory.'
+}
+
+$staleStart=$script.IndexOf("$staleVhds=@(Get-ChildItem -LiteralPath $ScratchDirectory -Filter 'RansomGuard-*.vhd'")
+$staleImage=$script.IndexOf('Get-DiskImage -ImagePath $staleVhd.FullName -ErrorAction Stop',$staleStart)
+$staleAttached=$script.IndexOf('if($image.Attached)',$staleImage)
+$staleDelete=$script.IndexOf('Remove-Item -LiteralPath $staleVhd.FullName -Force -ErrorAction Stop',$staleAttached)
+$staleVolumeCheck=$script.IndexOf('$staleVolumes=@(Get-Volume',$staleDelete)
+if($staleStart -lt 0 -or $staleImage -lt 0 -or $staleAttached -lt 0 -or
+   $staleDelete -lt 0 -or $staleVolumeCheck -lt 0 -or
+   $staleStart -gt $staleImage -or $staleImage -gt $staleAttached -or
+   $staleAttached -gt $staleDelete -or $staleDelete -gt $staleVolumeCheck){
+    throw 'Stale VHD recovery must prove the guarded scratch VHD is detached before deleting it.'
 }
 
 $scenarioFunctionStart=$script.IndexOf('function Run-FileSystemScenario(')

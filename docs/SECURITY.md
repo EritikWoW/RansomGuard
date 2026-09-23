@@ -1,68 +1,73 @@
-# 0.7.1.0 administrative UX boundary
+# RansomGuard security boundary
 
-Only presentation and read-only installation preflight are added. A GUI acknowledgement
-is not an authentication secret. System-changing clicks remain in the UAC-elevated
-same-EXE dialog; Management independently checks privileges, input, hashes and state.
-Preflight does not create state. State migration still uses the unchanged guarded
-backend and requires distinct consent; it does not automatically continue to install.
-No claim of tamper-proof state or safe archive isolation is added. Kernel/loading,
-Defender settings, ordinary-process containment and live IPC permissions are unchanged.
+Read [THREAT_MODEL.md](THREAT_MODEL.md) first. It is the canonical statement of current attacker capabilities, fail-open/fail-closed behavior and production qualification boundaries.
 
-# Scoped trust additions (0.6.3.0)
+## Current product boundary
 
-Read SCOPED_TRUST.md for the exact scope and limitations. This is NOT a scan
-exclusion or a file-I/O allow rule. All incidents and original risk scores remain.
-Only repeated console warnings can be downgraded to Information after full
-context verification; first/changed/critical/unknown cases are not quieted.
-The admin-only CLI does not change the read-only pipe or Windows Defender.
-New binary hash or unknown/mismatched signer requires a NEW explicit review.
-Current filesystem-path snapshots do not prove historical identity under races.
-No defense against equal/higher-privilege compromise is claimed.
+The normal RansomGuard product is AuditOnly for ordinary applications. It does not install or load the Engineering LAB minifilter and does not claim production ransomware blocking.
 
-# Security boundary, 0.6.3.0
+The Engineering LAB minifilter is restricted to disposable test environments and explicit test data. Its altitude is an unassigned LAB placeholder and its test-signing path is not a production trust anchor.
 
-The ordinary-process policy remains audit-only. No new driver, process injection,
-security weakening or unrestricted file encryption is added. Read RECOVERY_AND_LIVE.md
-for offline limits, candidate validation and exact lab authorization.
+No claim is made that the current product is tamper-proof against a local administrator, a malicious kernel component/BYOVD path, physical/boot compromise or a compromised signing/build system.
 
-Recovery does not provide an HTTP/named-pipe write endpoint. It is either the
-explicit standalone offline CLI or the existing authorized lab pipeline.
-Unknown formats never produce guessed plaintext. Recovery outputs are new copies.
-Private keys, candidates, dump addresses and plaintext are not sent to the UI.
-Dumps can contain environment variables, secrets and other unrelated data.
-Protect the complete incident directory and recovered plaintext as sensitive.
+## Administrative boundary
 
-The current IPC release-path check is not cryptographic executable attestation.
-Local administrators can modify files and security state. Four local subscribers
-can exhaust the permitted UI slots (bounded denial of service, not detector blocking).
-The snapshot protocol retains only the latest 100 in-memory summaries and sends 50;
-this is not unlimited event replay. Slow clients are disconnected; other work stays
-independent. Physical non-privileged isolation/PPL and production installer/signing
-are separate work. Never claim this development package is tamper-proof.
+A GUI acknowledgement is not an authentication secret. System-changing UI actions execute through the explicitly elevated same-EXE administration path, while Management independently checks privilege, fixed own-service identity, reviewed inputs, file identity/hashes, ACL/state invariants and operation-specific confirmation.
 
-File path checks and open-handle sharing reduce accidental or adversarial reparse
-and overwrite risks but are not a guarantee against an administrator/kernel attacker.
-Scan limits are intentional; NotFound and Incomplete are not evidence of no key.
-On cancellation or an I/O failure, partial NEW output files can remain; source
-files are never overwritten. Sensitive managed buffers are cleared where controlled,
-but no absolute whole-process zeroization guarantee is made.
+The live UI transport remains read-only. Administrative mutation is not exposed through the status/incidents/diagnostics/subscribe named-pipe protocol.
 
-Source gates are inexpensive regression checks, not security proofs. Windows
-integration, named-pipe ACL behavior, native dump capture, WPF and clean shutdown
-still require actual local tests. Keep all existing Windows security enabled.
+The service installer does not silently overwrite an existing registration or treat a path/name match as executable identity. Published UI/service bytes remain hash-paired.
 
-## 0.6.3.0 state-store recovery boundary
+## State-store boundary
 
-Localization is presentation-only. The maintenance dialog does not relax access-control
-checks. Recovery is fixed-path, explicit, requires a reviewed directory revision and
-idle service/instance state, then renames by an identity-checked handle without replacing
-another object. It never recursively changes child ACLs or imports old rules. The
-archive keeps its permissions and previously opened handles; it is NOT guaranteed
-isolated or private. The new root is created and verified by the existing private store
-code. Partial operations are reported rather than presented as a completed rollback.
+Private service/incident state uses ACL and reparse-point checks. Those checks reduce accidental and lower-privilege tampering but are not a security boundary against an arbitrary local administrator or kernel attacker.
 
-Cooperating startup/management use a short-lived maintenance lease. SCM startup releases
-its own lease BEFORE waiting for a new service to start. No new handle is held across
-await; the normal service instance mutex remains separate. These measures do not defend
-against arbitrary administrators, kernel code, or non-cooperating third-party tools.
-Native race, failure and filesystem behavior must still be tested on Windows.
+State-store recovery is fixed-path and explicit. It does not recursively rewrite child ACLs, import old trust rules or claim that an archived tree is confidential. Previously opened handles and inherited child ACLs can outlive a root operation.
+
+## Scoped trust
+
+Scoped trust is presentation context, not an I/O allow rule or scan exclusion. Detection, risk score and evidence remain intact. A trusted/reviewed image can still produce an incident and suspected content transformation vetoes quieting.
+
+Executable name, location, publisher display name, first-seen count or negative lookup never grants immunity. Hash/signing evidence is revalidated according to the scoped-trust contract.
+
+## Telemetry and monitoring
+
+ETW failure is explicit. The service enters diagnostics-only rather than presenting a false healthy state. SCM Running alone is not proof that filesystem monitoring is available.
+
+Queues/windows are intentionally bounded. Event loss, queue drops, stale evidence and truncated windows prevent the LAB automatic decision path from claiming healthy evidence.
+
+## LAB preservation boundary
+
+For resolved, in-scope ordinary user-mode mutations while the LAB gate is connected and activated, destructive I/O follows preserve-before-allow and failures in preservation/admission/gate handling fail closed.
+
+Important exceptions are explicit in THREAT_MODEL.md:
+
+- unresolved/name-query-failed scope classification currently fails open;
+- out-of-root operations are outside the negotiated gate;
+- kernel-mode requestors are outside the ordinary observation path;
+- paging writes are non-blocking evidence and rely on the conservative pre-preserved CREATE baseline;
+- driver presence without an active GateClient/session is not equivalent to protection.
+
+Do not deploy the LAB blocking path on primary workstations or real user data.
+
+## Recovery boundary
+
+Rollback recovery is conservative and copy-out oriented. It verifies evidence and writes to new output paths. Restart observations never fabricate authoritative filesystem completion.
+
+Crypto recovery is experimental and format-specific. Unknown formats, missing candidates or failed authentication produce unsupported/not-found/failure states rather than guessed plaintext.
+
+Memory dumps, rollback evidence and recovered plaintext can contain sensitive data. Protect them as incident data. Do not commit dumps, private keys or test-signing certificates to the repository.
+
+## IPC/privacy boundary
+
+The read-only local pipe exposes bounded health/incident metadata and has no mutation commands. This is not equivalent to a privileged forensic channel. Enterprise deployment must explicitly decide which monitored-root/process metadata non-admin local users may read.
+
+## Build and release boundary
+
+Source gates are regression checks, not independent security proofs. Kernel loadability, Filter Manager ordering, filesystem semantics, ACL/UAC behavior and recovery behavior require real Windows/runtime qualification.
+
+Release-oriented engineering requires exact build inputs, immutable action references, locked dependency graphs, artifact hashes/provenance, protected branches, enforced review and protected signing keys. Repository settings such as branch/ruleset enforcement are not established merely by files in this tree.
+
+## Reporting
+
+When reporting a security issue, include the affected commit/version, whether the issue is in the normal Audit product or Engineering LAB path, the minimal reproduction, expected/actual security invariant and whether real data was used. Do not attach sensitive dumps, private keys or user data to a public issue.

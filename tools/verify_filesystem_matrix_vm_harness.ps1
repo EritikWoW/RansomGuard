@@ -140,7 +140,7 @@ if($script -notmatch [regex]::Escape('$vhdPath=Join-Path $ScratchDirectory')){
 $staleStart=$script.IndexOf('$staleVhds=@(Get-ChildItem -LiteralPath $ScratchDirectory')
 $staleImage=$script.IndexOf('Get-DiskImage -ImagePath $staleVhd.FullName -ErrorAction Stop',$staleStart)
 $staleAttached=$script.IndexOf('if($image.Attached)',$staleImage)
-$staleFilterCheck=$script.IndexOf("if($filters -match '(?m)^\s*RansomGuardMinifilter\b')",$staleAttached)
+$staleFilterCheck=$script.IndexOf('if($filters -match ''(?m)^\s*RansomGuardMinifilter\b'')',$staleAttached)
 $staleDismount=$script.IndexOf('Dismount-DiskImage -ImagePath $staleVhd.FullName -ErrorAction Stop | Out-Host',$staleFilterCheck)
 $staleRequery=$script.IndexOf('$image=Get-DiskImage -ImagePath $staleVhd.FullName -ErrorAction Stop',$staleDismount)
 $staleRecheck=$script.IndexOf('if($image.Attached)',$staleRequery)

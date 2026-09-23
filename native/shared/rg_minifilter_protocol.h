@@ -1,11 +1,11 @@
 #pragma once
 
 // Wire protocol between the RansomGuard lab minifilter and user-mode clients.
-// v14 adds authoritative TRUNCATE post-operation reconciliation without changing RG_EVENT size.
+// v15 adds DELETE disposition-result and handle-cleanup finalization evidence without changing RG_EVENT size.
 // The driver binds the exact requestor PEPROCESS for that IRP before allowing it to continue.
 // The production bundle still does not install or enable the driver.
 
-#define RG_PROTOCOL_VERSION 14u
+#define RG_PROTOCOL_VERSION 15u
 #define RG_PATH_CHARS 512u
 #define RG_GATE_ROOT_CHARS 260u
 #define RG_PORT_NAME L"\\RansomGuardMinifilterPort"
@@ -15,6 +15,9 @@
 #define RG_CREATE_OPTIONS_MASK 0x00FFFFFFu
 #define RG_EVENT_FLAG_PAGING_IO 0x00000001u
 #define RG_EVENT_FLAG_PREFLIGHT_WRITABLE_VIEW 0x00000002u
+#define RG_EVENT_FLAG_DELETE_PENDING 0x00000004u
+#define RG_EVENT_FLAG_DELETE_CANCELLED 0x00000008u
+#define RG_EVENT_FLAG_DELETE_CLEANUP 0x00000010u
 
 typedef enum _RG_EVENT_TYPE {
     RgEventInvalid = 0,
@@ -29,7 +32,9 @@ typedef enum _RG_EVENT_TYPE {
     RgEventWritableSection = 9,
     RgEventActivationPreflight = 10,
     RgEventContainmentActivated = 11,
-    RgEventTruncateResult = 12
+    RgEventTruncateResult = 12,
+    RgEventDeleteDispositionResult = 13,
+    RgEventDeleteFinalized = 14
 } RG_EVENT_TYPE;
 
 typedef enum _RG_PATH_STATUS {

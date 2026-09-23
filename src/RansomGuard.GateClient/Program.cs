@@ -461,6 +461,7 @@ repository.VerifyAll();
 var pendingCreateCount = createOperationStore.PendingIntents.Count;
 var pendingRenameCount = renameStore.PendingIntents.Count;
 var pendingTruncateCount = truncateStore.PendingIntents.Count;
+var unsettledDeleteCount = deleteStore.UnsettledIntents.Count;
 var containmentRecords = containmentStore.Records;
 var pendingContainmentAckCount = containmentRecords.Count(x =>
     x.Phase == ContainmentEvidencePhase.Requested &&
@@ -472,9 +473,10 @@ var lifecycleReason = workerFailureCount == 0 &&
                       pendingCreateCount == 0 &&
                       pendingRenameCount == 0 &&
                       pendingTruncateCount == 0 &&
+                      unsettledDeleteCount == 0 &&
                       pendingContainmentAckCount == 0
     ? "clean-gate-shutdown"
-    : $"gate-shutdown-faulted:workers={workerFailureCount};pending-create={pendingCreateCount};pending-rename={pendingRenameCount};pending-truncate={pendingTruncateCount};pending-containment-ack={pendingContainmentAckCount}";
+    : $"gate-shutdown-faulted:workers={workerFailureCount};pending-create={pendingCreateCount};pending-rename={pendingRenameCount};pending-truncate={pendingTruncateCount};unsettled-delete={unsettledDeleteCount};pending-containment-ack={pendingContainmentAckCount}";
 
 await using (var lifecycleReservation = await storageBudget.ReserveAsync(
                  RollbackStorageBudget.MetadataReservationBytes,
@@ -485,6 +487,7 @@ await using (var lifecycleReservation = await storageBudget.ReserveAsync(
         pendingCreateCount == 0 &&
         pendingRenameCount == 0 &&
         pendingTruncateCount == 0 &&
+        unsettledDeleteCount == 0 &&
         pendingContainmentAckCount == 0)
     {
         _ = await lifecycleStore.MarkCompletedAsync(lifecycleReason, CancellationToken.None)
@@ -1569,6 +1572,42 @@ static class RestartReconciliation
                             current.ObservedLength,
                             cancellationToken)
                         .ConfigureAwait(false);
+                    Count(evidence, ref observed, ref supportsCompleted, ref supportsNotCompleted, ref ambiguous);
+                }
+            }
+
+            var deleteRoot = Path.Combine(session.Root, "delete-state");
+            if (Directory.Exists(deleteRoot))
+            {
+                var deletes = new DeleteOperationStore(deleteRoot);
+                foreach (var intent in deletes.UnsettledIntents.Where(x => x.RequestDelete))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!PathPolicy.Under(intent.OriginalPath, currentRoot))
+                        continue;
+
+                    var current = PathProbe.ObserveForRestart(intent.OriginalPath);
+                    var finalizationState = DeleteOperationStore.ClassifyPathObservation(
+                        intent, current.State, current.Identity);
+                    await using var restartDeleteReservation = await storageBudget.ReserveAsync(
+                        RollbackStorageBudget.MetadataReservationBytes,
+                        "restart-delete-evidence",
+                        cancellationToken).ConfigureAwait(false);
+                    _ = await deletes.RecordFinalizationAsync(
+                            intent,
+                            DeleteFinalizationSource.RestartProbe,
+                            finalizationState,
+                            current.State,
+                            current.Identity,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+
+                    var evidence = finalizationState switch
+                    {
+                        DeleteFinalizationState.DeletedObserved => RestartEvidenceState.SupportsCompleted,
+                        DeleteFinalizationState.StillPresentSameIdentity => RestartEvidenceState.SupportsNotCompleted,
+                        _ => RestartEvidenceState.Ambiguous
+                    };
                     Count(evidence, ref observed, ref supportsCompleted, ref supportsNotCompleted, ref ambiguous);
                 }
             }

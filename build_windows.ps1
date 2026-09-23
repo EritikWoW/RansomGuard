@@ -110,6 +110,7 @@ try {
     & (Join-Path $PSScriptRoot 'tools\verify_gate_client.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_runtime_vm_harness.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_filesystem_matrix_vm_harness.ps1')
+    & (Join-Path $PSScriptRoot 'tools\verify_concurrency_stress_vm_harness.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_version_provenance.ps1')
     Write-Host '[1/6] Restore and execute policy/recovery/rollback tests (no process suspension in these tests).'
     Run-Dotnet -Arguments @('restore',$tests,'--locked-mode','-r','win-x64','-p:SelfContained=true',$auditErrors)

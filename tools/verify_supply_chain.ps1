@@ -74,9 +74,9 @@ foreach($workflow in $workflows){
 }
 
 $gitignorePath=Join-Path $RepositoryRoot '.gitignore'
-$gitignore=Get-Content -LiteralPath $gitignorePath -Raw
+$gitignoreLines=@(Get-Content -LiteralPath $gitignorePath | ForEach-Object { $_.Trim() })
 foreach($pattern in @('*.pfx','*.p12','*.key','.env','.env.*')){
-    if($gitignore -notmatch ('(?m)^'+[regex]::Escape($pattern)+'$')){
+    if($gitignoreLines -notcontains $pattern){
         throw ".gitignore must exclude sensitive file pattern '$pattern'."
     }
 }

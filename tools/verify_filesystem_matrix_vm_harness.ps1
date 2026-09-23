@@ -82,7 +82,7 @@ foreach($required in @(
     'cleanupPassed=$true',
     'FILESYSTEM MATRIX LAB PASSED',
     '$prepareOutput=@(& $GateExe --root $Root --prepare-root 2>&1)',
-    "& $installScript -Volume $volume -PackageDirectory $DriverPackageDirectory -Confirmation 'LAB-MINIFILTER' | Out-Host",
+    '& $installScript -Volume $volume -PackageDirectory $DriverPackageDirectory -Confirmation ''LAB-MINIFILTER'' | Out-Host',
     '& $helperExe create-new --file $createTarget | Out-Host',
     '& $helperExe rename-file --source $renameSource --destination $renameDestination | Out-Host',
     '& $helperExe map-write --file $mappedTarget | Out-Host',

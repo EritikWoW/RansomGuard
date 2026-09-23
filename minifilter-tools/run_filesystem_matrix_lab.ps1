@@ -468,11 +468,28 @@ if($staleVhds.Count -gt 0){
         }
 
         if($image.Attached){
-            throw "STALE MATRIX STATE: scratch VHD is still attached: $($staleVhd.FullName). Revert the disposable VM checkpoint before retrying."
+            $filters=(& fltmc filters 2>$null | Out-String)
+            if($LASTEXITCODE -ne 0){
+                throw "STALE MATRIX STATE: unable to verify Filter Manager state before detaching stale VHD: $($staleVhd.FullName)."
+            }
+            if($filters -match '(?m)^\s*RansomGuardMinifilter\b'){
+                throw "STALE MATRIX STATE: scratch VHD is still attached while RansomGuardMinifilter is loaded: $($staleVhd.FullName). Revert the disposable VM checkpoint before retrying."
+            }
+
+            if(-not(Get-Command Dismount-DiskImage -ErrorAction SilentlyContinue)){
+                throw "STALE MATRIX STATE: scratch VHD is attached, but Dismount-DiskImage is unavailable: $($staleVhd.FullName). Revert the disposable VM checkpoint before retrying."
+            }
+
+            Dismount-DiskImage -ImagePath $staleVhd.FullName -ErrorAction Stop | Out-Host
+            $image=Get-DiskImage -ImagePath $staleVhd.FullName -ErrorAction Stop
+            if($image.Attached){
+                throw "STALE MATRIX STATE: stale scratch VHD remained attached after Dismount-DiskImage: $($staleVhd.FullName). Revert the disposable VM checkpoint before retrying."
+            }
+            Write-Host "Recovered attached stale filesystem-matrix VHD after verified minifilter unload: $($staleVhd.Name)"
         }
 
         Remove-Item -LiteralPath $staleVhd.FullName -Force -ErrorAction Stop
-        Write-Host "Recovered detached stale filesystem-matrix VHD: $($staleVhd.Name)"
+        Write-Host "Removed stale filesystem-matrix VHD: $($staleVhd.Name)"
     }
 }
 $staleVolumes=@(Get-Volume -ErrorAction SilentlyContinue | Where-Object {

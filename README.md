@@ -1,4 +1,4 @@
-# RansomGuard 0.7.28.0
+# RansomGuard 0.7.29.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
@@ -6,7 +6,7 @@ and recover data through rollback plus adaptive crypto analysis.
 
 ## Core preservation milestone
 
-0.7.28.0 keeps the protocol-v15 preservation/recovery model and reproducible-build controls, and adds a manual bounded-concurrency VM qualification. An overload probe launches 16 independent CREATE helpers against the 8-request kernel gate and requires excess admission to fail closed without creating a pathname or durable user-mode transaction. The full CREATE/RENAME/TRUNCATE/DELETE/mapped-write qualification then runs at the supported concurrency ceiling of 8 and requires authoritative durable correlation, mapped-write pre-image integrity, writable-section evidence and paging-write evidence.
+0.7.29.0 keeps the protocol-v15 preservation/recovery model, reproducible-build controls and bounded-concurrency qualification, and adds isolated low-disk plus real-reboot fault campaigns. Storage pressure is confined to a newly created scratch VHD; reboot recovery is proven through explicit ARM and post-boot VERIFY phases bound to the exact commit.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 

@@ -189,8 +189,9 @@ jobs:
           $summary=Get-Content -LiteralPath (Join-Path $results 'low-disk-result.json') -Raw | ConvertFrom-Json
           foreach($name in @(
             'failClosedObserved','sourcePreservedOnDenial','destinationAbsentOnDenial',
-            'budgetDenialObserved','gateStayedAlive','retryPassed','preimageHashMatched',
-            'cleanupPassed','passed'
+            'budgetDenialObserved','deniedIntentAbsent','deniedCompletionAbsent',
+            'gateStayedAlive','retryPassed','retryEvidenceDurable','preimageHashMatched',
+            'preimageObjectVerified','cleanupPassed','passed'
           )){
             if($summary.$name -ne $true){throw "Low-disk result invariant '$name' was not true."}
           }
@@ -261,7 +262,12 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
-          $root=[IO.Path]::GetFullPath($env:RG_CRASH_ROOT_BASE)
+          $selectedRoot=switch($env:RG_FAULT_CAMPAIGN){
+            'low-disk' {$env:RG_LOW_DISK_ROOT_BASE}
+            'reboot-verify' {$env:RG_REBOOT_ROOT_BASE}
+            default {$env:RG_CRASH_ROOT_BASE}
+          }
+          $root=[IO.Path]::GetFullPath($selectedRoot)
           $volume=[IO.Path]::GetPathRoot($root).TrimEnd('\')
           $filters=(& fltmc filters 2>$null | Out-String)
           if($LASTEXITCODE -ne 0){throw "Unable to query Filter Manager during final cleanup, exit=$LASTEXITCODE"}

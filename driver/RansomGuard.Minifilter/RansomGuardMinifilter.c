@@ -37,6 +37,9 @@ static NTSTATUS RgCreateRenamePostContext(_Inout_ PFLT_CALLBACK_DATA Data,
                                           _In_ PCFLT_RELATED_OBJECTS FltObjects,
                                           _In_ ULONGLONG RequestSequence,
                                           _Outptr_ PRG_POST_CONTEXT *PostContext);
+static NTSTATUS RgCreateTruncatePostContext(_Inout_ PFLT_CALLBACK_DATA Data,
+                                            _In_ ULONGLONG RequestSequence,
+                                            _Outptr_ PRG_POST_CONTEXT *PostContext);
 static NTSTATUS RgCreateCreatePostContext(_Inout_ PFLT_CALLBACK_DATA Data,
                                           _In_ ULONGLONG RequestSequence,
                                           _Outptr_ PRG_POST_CONTEXT *PostContext);
@@ -394,6 +397,11 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
         if (!NT_SUCCESS(status)) {
             return RgCompleteDenied(Data);
         }
+    } else if (eventType == RgEventTruncate) {
+        status = RgCreateTruncatePostContext(Data, event.Sequence, &postContext);
+        if (!NT_SUCCESS(status)) {
+            return RgCompleteDenied(Data);
+        }
     }
 
     if (!RgGateEvent(Data, &event, &gateError, NULL)) {
@@ -439,6 +447,16 @@ static NTSTATUS RgPopulateEvent(PRG_EVENT Event, PFLT_CALLBACK_DATA Data,
         if (Data->Iopb->Parameters.Create.SecurityContext != NULL) {
             Event->Length = Data->Iopb->Parameters.Create.SecurityContext->DesiredAccess;
         }
+    } else if (EventType == RgEventTruncate) {
+        // FileAllocationInformation, FileEndOfFileInformation and FileValidDataLengthInformation
+        // all begin with one LARGE_INTEGER length value. Carry that exact requested value in
+        // ByteOffset so user mode can durably bind the intent before allowing the mutation.
+        if (Data->Iopb->Parameters.SetFileInformation.InfoBuffer == NULL ||
+            Data->Iopb->Parameters.SetFileInformation.Length < sizeof(LARGE_INTEGER)) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        Event->ByteOffset =
+            ((PLARGE_INTEGER)Data->Iopb->Parameters.SetFileInformation.InfoBuffer)->QuadPart;
     }
 
     status = FltGetFileNameInformation(Data,
@@ -579,7 +597,34 @@ static NTSTATUS RgCreateRenamePostContext(PFLT_CALLBACK_DATA Data,
 
     RtlZeroMemory(context, sizeof(*context));
     context->RequestSequence = RequestSequence;
+    context->PostEventType = RgEventRenameResult;
+    context->FileInformationClass =
+        (ULONG)Data->Iopb->Parameters.SetFileInformation.FileInformationClass;
     context->PreDestinationNameInfo = destinationInfo;
+    *PostContext = context;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS RgCreateTruncatePostContext(PFLT_CALLBACK_DATA Data,
+                                            ULONGLONG RequestSequence,
+                                            PRG_POST_CONTEXT *PostContext)
+{
+    PRG_POST_CONTEXT context = NULL;
+
+    *PostContext = NULL;
+    context = (PRG_POST_CONTEXT)ExAllocatePool2(
+        POOL_FLAG_NON_PAGED,
+        sizeof(RG_POST_CONTEXT),
+        RG_POOL_TAG);
+    if (context == NULL) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    RtlZeroMemory(context, sizeof(*context));
+    context->RequestSequence = RequestSequence;
+    context->PostEventType = RgEventTruncateResult;
+    context->FileInformationClass =
+        (ULONG)Data->Iopb->Parameters.SetFileInformation.FileInformationClass;
     *PostContext = context;
     return STATUS_SUCCESS;
 }
@@ -612,6 +657,7 @@ static NTSTATUS RgCreateCreatePostContext(PFLT_CALLBACK_DATA Data,
 
     RtlZeroMemory(context, sizeof(*context));
     context->RequestSequence = RequestSequence;
+    context->PostEventType = RgEventCreateResult;
     context->PreCreateNameInfo = nameInfo;
     *PostContext = context;
     return STATUS_SUCCESS;
@@ -972,8 +1018,10 @@ static FLT_POSTOP_CALLBACK_STATUS RgPostSetInformationSafe(PFLT_CALLBACK_DATA Da
     PRG_POST_CONTEXT context = (PRG_POST_CONTEXT)CompletionContext;
     PFLT_FILE_NAME_INFORMATION tunneledInfo = NULL;
     PFLT_FILE_NAME_INFORMATION finalInfo = NULL;
+    FILE_STANDARD_INFORMATION standardInfo;
     RG_EVENT event;
     NTSTATUS status = STATUS_SUCCESS;
+    ULONG returned = 0;
     ULONG chars = 0;
     LARGE_INTEGER systemTime;
 
@@ -983,42 +1031,80 @@ static FLT_POSTOP_CALLBACK_STATUS RgPostSetInformationSafe(PFLT_CALLBACK_DATA Da
         return FLT_POSTOP_FINISHED_PROCESSING;
     }
 
+    if (context->PostEventType != RgEventRenameResult &&
+        context->PostEventType != RgEventTruncateResult) {
+        RgFreePostContext(context);
+        InterlockedIncrement(&gDropped);
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    }
+
     RtlZeroMemory(&event, sizeof(event));
     event.ProtocolVersion = RG_PROTOCOL_VERSION;
-    event.EventType = RgEventRenameResult;
+    event.EventType = context->PostEventType;
+    event.FileInformationClass = context->FileInformationClass;
     event.Sequence = (ULONGLONG)InterlockedIncrement64(&gSequence);
     event.RelatedSequence = context->RequestSequence;
     event.CompletionStatus = (ULONG)Data->IoStatus.Status;
     event.CompletionInformation = (ULONGLONG)Data->IoStatus.Information;
+    event.ByteOffset = -1;
     event.DestinationPathStatus = RgPathUnknown;
+    event.IdentityStatus = RgIdentityUnknown;
     KeQuerySystemTimePrecise(&systemTime);
     event.SystemTime100ns = systemTime.QuadPart;
 
-    if (NT_SUCCESS(Data->IoStatus.Status)) {
-        status = FltGetTunneledName(Data, context->PreDestinationNameInfo, &tunneledInfo);
-        if (NT_SUCCESS(status)) {
-            finalInfo = (tunneledInfo != NULL) ? tunneledInfo : context->PreDestinationNameInfo;
-            chars = finalInfo->Name.Length / sizeof(WCHAR);
-            if (chars >= RG_PATH_CHARS) {
-                chars = RG_PATH_CHARS - 1;
-                event.DestinationPathStatus = RgPathTruncated;
+    if (context->PostEventType == RgEventRenameResult) {
+        if (NT_SUCCESS(Data->IoStatus.Status)) {
+            status = FltGetTunneledName(Data, context->PreDestinationNameInfo, &tunneledInfo);
+            if (NT_SUCCESS(status)) {
+                finalInfo = (tunneledInfo != NULL) ? tunneledInfo : context->PreDestinationNameInfo;
+                chars = finalInfo->Name.Length / sizeof(WCHAR);
+                if (chars >= RG_PATH_CHARS) {
+                    chars = RG_PATH_CHARS - 1;
+                    event.DestinationPathStatus = RgPathTruncated;
+                } else {
+                    event.DestinationPathStatus = RgPathResolved;
+                }
+
+                if (chars != 0) {
+                    RtlCopyMemory(event.DestinationPath, finalInfo->Name.Buffer, chars * sizeof(WCHAR));
+                }
+                event.DestinationPath[chars] = L'\0';
             } else {
-                event.DestinationPathStatus = RgPathResolved;
+                event.DestinationPathStatus = RgPathQueryFailed;
             }
 
-            if (chars != 0) {
-                RtlCopyMemory(event.DestinationPath, finalInfo->Name.Buffer, chars * sizeof(WCHAR));
+            // Safe post-processing guarantees only IRQL <= APC_LEVEL. FltQueryInformationFile
+            // requires PASSIVE_LEVEL with special kernel APCs enabled.
+            if (KeGetCurrentIrql() == PASSIVE_LEVEL && !KeAreAllApcsDisabled()) {
+                RgPopulatePostOperationIdentity(&event, FltObjects);
+            } else {
+                event.IdentityStatus = RgIdentityQueryFailed;
             }
-            event.DestinationPath[chars] = L'\0';
-        } else {
-            event.DestinationPathStatus = RgPathQueryFailed;
         }
-
-        // FltDoCompletionProcessingWhenSafe guarantees only IRQL <= APC_LEVEL. FltQueryInformationFile
-        // requires PASSIVE_LEVEL with special kernel APCs enabled, so never issue the identity query
-        // from an APC_LEVEL/improper APC context. Partial reconciliation remains explicit in protocol v8.
-        if (KeGetCurrentIrql() == PASSIVE_LEVEL && !KeAreAllApcsDisabled()) {
+    } else if (NT_SUCCESS(Data->IoStatus.Status)) {
+        // TRUNCATE post-operation evidence keeps the authoritative filesystem status even when
+        // a safe identity/length query is unavailable. Missing details remain explicitly unresolved.
+        if (KeGetCurrentIrql() == PASSIVE_LEVEL && !KeAreAllApcsDisabled() &&
+            FltObjects != NULL && FltObjects->Instance != NULL && FltObjects->FileObject != NULL) {
             RgPopulatePostOperationIdentity(&event, FltObjects);
+
+            if (context->FileInformationClass == FileEndOfFileInformation ||
+                context->FileInformationClass == FileAllocationInformation) {
+                RtlZeroMemory(&standardInfo, sizeof(standardInfo));
+                status = FltQueryInformationFile(
+                    FltObjects->Instance,
+                    FltObjects->FileObject,
+                    &standardInfo,
+                    sizeof(standardInfo),
+                    FileStandardInformation,
+                    &returned);
+                if (NT_SUCCESS(status) && returned >= (ULONG)sizeof(standardInfo)) {
+                    event.ByteOffset =
+                        (context->FileInformationClass == FileEndOfFileInformation)
+                            ? standardInfo.EndOfFile.QuadPart
+                            : standardInfo.AllocationSize.QuadPart;
+                }
+            }
         } else {
             event.IdentityStatus = RgIdentityQueryFailed;
         }

@@ -310,6 +310,114 @@ public static class RollbackRecoveryPlanner
             }
         }
 
+        var deleteRoot = Path.Combine(sessionRoot, "delete-state");
+        if (Directory.Exists(deleteRoot))
+        {
+            var deletes = new DeleteOperationStore(deleteRoot);
+            deletes.VerifyAll();
+
+            foreach (var intent in deletes.Intents.OrderBy(x => x.Sequence))
+            {
+                var assessment = deletes.AssessFinalization(intent);
+                if (!deletes.TryGetCompletion(intent.RequestSequence, out var completion) || completion is null)
+                {
+                    var reviewable = assessment.State is
+                        DeleteFinalizationAssessmentState.ConsistentDeletedObserved or
+                        DeleteFinalizationAssessmentState.ConsistentStillPresent or
+                        DeleteFinalizationAssessmentState.ConsistentCancelled;
+                    var missingReason = assessment.State switch
+                    {
+                        DeleteFinalizationAssessmentState.ConsistentDeletedObserved =>
+                            "DELETE intent has no authoritative disposition completion, but durable cleanup/restart evidence consistently observes the original path absent. This supports manual review only and never manufactures a kernel completion.",
+                        DeleteFinalizationAssessmentState.ConsistentStillPresent =>
+                            "DELETE intent has no authoritative disposition completion, but durable cleanup/restart evidence consistently observes the original FILE_ID still present. This supports manual review only and never manufactures a kernel completion.",
+                        DeleteFinalizationAssessmentState.ConsistentCancelled =>
+                            "DELETE intent has no authoritative disposition completion, but a later handle-scoped disposition superseded/cancelled it. Manual review remains required because the missing completion is not reconstructed.",
+                        DeleteFinalizationAssessmentState.Unresolved =>
+                            "DELETE intent has no authoritative disposition completion and finalization evidence is ambiguous or conflicting.",
+                        _ =>
+                            "DELETE intent has no authoritative disposition completion and no durable finalization evidence."
+                    };
+                    actions.Add(NewAction(
+                        actions.Count + 1,
+                        RecoveryActionKind.ReviewDeleteTransaction,
+                        reviewable ? RecoveryActionState.Review : RecoveryActionState.Blocked,
+                        intent.OriginalPath,
+                        null,
+                        reviewable ? assessment.LatestRecordSha256 : intent.RecordSha256,
+                        intent.RequestSequence,
+                        false,
+                        missingReason));
+                    continue;
+                }
+
+                if (completion.State == DeleteDispositionCompletionState.Failed)
+                {
+                    actions.Add(NewAction(
+                        actions.Count + 1,
+                        RecoveryActionKind.ReviewDeleteTransaction,
+                        RecoveryActionState.Informational,
+                        intent.OriginalPath,
+                        null,
+                        completion.RecordSha256,
+                        intent.RequestSequence,
+                        false,
+                        "Filesystem DELETE disposition failed authoritatively; the requested delete transition was not accepted."));
+                    continue;
+                }
+
+                if (!intent.RequestDelete)
+                {
+                    actions.Add(NewAction(
+                        actions.Count + 1,
+                        RecoveryActionKind.ReviewDeleteTransaction,
+                        RecoveryActionState.Informational,
+                        intent.OriginalPath,
+                        null,
+                        assessment.LatestRecordSha256.Length == 64
+                            ? assessment.LatestRecordSha256
+                            : completion.RecordSha256,
+                        intent.RequestSequence,
+                        false,
+                        "A disposition-clear request completed authoritatively. It is evidence about handle delete state, not a request to mutate recovery topology."));
+                    continue;
+                }
+
+                var finalState = assessment.State switch
+                {
+                    DeleteFinalizationAssessmentState.ConsistentDeletedObserved => RecoveryActionState.Review,
+                    DeleteFinalizationAssessmentState.ConsistentStillPresent => RecoveryActionState.Review,
+                    DeleteFinalizationAssessmentState.ConsistentCancelled => RecoveryActionState.Review,
+                    _ => RecoveryActionState.Blocked
+                };
+                var finalReason = assessment.State switch
+                {
+                    DeleteFinalizationAssessmentState.ConsistentDeletedObserved =>
+                        "DELETE disposition was accepted and cleanup/restart evidence consistently observes the original path absent. Verified pre-image content may be copied out separately; live topology is never recreated automatically.",
+                    DeleteFinalizationAssessmentState.ConsistentStillPresent =>
+                        "DELETE disposition was accepted, but cleanup/restart evidence consistently observes the same FILE_ID still present. Manual review is required; no automatic delete or restore is permitted.",
+                    DeleteFinalizationAssessmentState.ConsistentCancelled =>
+                        "DELETE disposition was accepted, then a later handle-scoped disposition superseded/cancelled it. Manual review is required; topology remains untouched.",
+                    DeleteFinalizationAssessmentState.Unresolved =>
+                        "DELETE disposition was accepted, but finalization evidence is ambiguous or conflicting. Topology recovery is blocked.",
+                    _ =>
+                        "DELETE disposition was accepted, but no handle-cleanup/restart finalization evidence is durable yet. Topology recovery is blocked."
+                };
+                actions.Add(NewAction(
+                    actions.Count + 1,
+                    RecoveryActionKind.ReviewDeleteTransaction,
+                    finalState,
+                    intent.OriginalPath,
+                    null,
+                    assessment.LatestRecordSha256.Length == 64
+                        ? assessment.LatestRecordSha256
+                        : completion.RecordSha256,
+                    intent.RequestSequence,
+                    false,
+                    finalReason));
+            }
+        }
+
         var evidenceSha = ComputeJournalEvidenceDigest(sessionRoot);
         var ordered = actions
             .OrderBy(x => x.Index)
@@ -407,7 +515,8 @@ public enum RecoveryActionKind
     ReviewOriginallyAbsentPath = 3,
     ReviewCreateTransaction = 4,
     ReviewRenameTopology = 5,
-    ReviewTruncateTransaction = 6
+    ReviewTruncateTransaction = 6,
+    ReviewDeleteTransaction = 7
 }
 
 public enum RecoveryActionState

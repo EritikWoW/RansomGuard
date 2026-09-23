@@ -335,12 +335,9 @@ static void CreateNewFile(string filePath)
         throw new System.ComponentModel.Win32Exception(
             Marshal.GetLastWin32Error(), $"CreateFileW(CREATE_NEW) failed for '{filePath}'.");
 
-    var payload = new byte[] { 0x52, 0x47 };
-    if (!Native.WriteFile(file, payload, (uint)payload.Length, out var written, IntPtr.Zero))
-        throw new System.ComponentModel.Win32Exception(
-            Marshal.GetLastWin32Error(), "WriteFile after CREATE_NEW failed.");
-    if (written != payload.Length)
-        throw new IOException($"create-new wrote {written} byte(s), expected {payload.Length}.");
+    // The completion-loss scenario is about CREATE transaction reconciliation only.
+    // Do not issue a follow-up WRITE: dropping CreateResult intentionally begins gate shutdown,
+    // and a second mutation would test shutdown timing instead of lost CREATE completion.
 }
 
 static void MapAndWrite(string filePath)

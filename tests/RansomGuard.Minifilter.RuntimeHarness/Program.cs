@@ -5,7 +5,7 @@ if (!OperatingSystem.IsWindows())
     throw new PlatformNotSupportedException("RansomGuard minifilter runtime harness is Windows-only.");
 
 if (args.Length == 0)
-    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | map-write --file <path> | create-new --file <path> | rename-file --source <path> --destination <path> | truncate-eof --file <path> --length <bytes> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker> | containment-transition --file-a <path> --file-b <path> --ready <marker> --go <marker> --result <marker>");
+    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | map-write --file <path> | create-new --file <path> | rename-file --source <path> --destination <path> | truncate-eof --file <path> --length <bytes> --ready <marker> --go <marker> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker> | containment-transition --file-a <path> --file-b <path> --ready <marker> --go <marker> --result <marker>");
 
 var command = args[0].ToLowerInvariant();
 var options = Parse(args.Skip(1).ToArray());
@@ -40,7 +40,9 @@ try
         case "truncate-eof":
             TruncateEndOfFile(
                 Require(options, "--file"),
-                RequireInt64(options, "--length"));
+                RequireInt64(options, "--length"),
+                Require(options, "--ready"),
+                Require(options, "--go"));
             break;
         case "containment-probe":
             ContainmentProbe(
@@ -376,7 +378,7 @@ static void RenameFile(string sourcePath, string destinationPath)
     File.Move(sourcePath, destinationPath, overwrite: false);
 }
 
-static void TruncateEndOfFile(string filePath, long length)
+static void TruncateEndOfFile(string filePath, long length, string readyMarker, string goMarker)
 {
     EnsureFile(filePath);
     var originalLength = new FileInfo(filePath).Length;
@@ -404,10 +406,23 @@ static void TruncateEndOfFile(string filePath, long length)
         throw new System.ComponentModel.Win32Exception(
             Marshal.GetLastWin32Error(), $"CreateFileW for truncate failed for '{filePath}'.");
 
-    // The write-capable open itself has a correlated CREATE result. Give the no-reply CREATE
-    // completion worker time to durably close that transaction before the deliberate TRUNCATE
-    // completion-loss point is reached.
-    Thread.Sleep(500);
+    // The write-capable open itself has a correlated CREATE result. Do not race that no-reply
+    // completion with the deliberate TRUNCATE loss point: advertise the open, then wait until
+    // the external harness confirms CreateResult persistence before issuing SetInformation.
+    foreach (var marker in new[] { readyMarker, goMarker })
+    {
+        var parent = Path.GetDirectoryName(marker);
+        if (!string.IsNullOrWhiteSpace(parent)) Directory.CreateDirectory(parent);
+        if (File.Exists(marker)) File.Delete(marker);
+    }
+    File.WriteAllText(readyMarker, $"pid={Environment.ProcessId};file={filePath};utc={DateTime.UtcNow:O}");
+    var deadline = DateTime.UtcNow.AddSeconds(45);
+    while (!File.Exists(goMarker))
+    {
+        if (DateTime.UtcNow >= deadline)
+            throw new TimeoutException("Timed out waiting for durable CREATE completion before TRUNCATE.");
+        Thread.Sleep(50);
+    }
 
     var info = new Native.FileEndOfFileInfo { EndOfFile = length };
     if (!Native.SetFileInformationByHandle(

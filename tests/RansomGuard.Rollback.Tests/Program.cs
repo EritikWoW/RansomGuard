@@ -946,15 +946,25 @@ try
               RestartPathState.File,
               destinationIdentity) == DeleteFinalizationState.Ambiguous,
         "restart DELETE evidence refuses a replacement FILE_ID at the original pathname");
+    var replacementDeleteIntent = await deleteState.RecordIntentAsync(
+        307,
+        Path.Combine(sourceDir, "replacement-delete.bin"),
+        DeleteOperationStore.FileDispositionInformation,
+        DeleteOperationStore.FileDispositionDelete,
+        sourceIdentity,
+        false,
+        new string('7', 64));
     var replacementObservation = await deleteState.RecordFinalizationAsync(
-        deleteIntent,
+        replacementDeleteIntent,
         DeleteFinalizationSource.RestartProbe,
         DeleteFinalizationState.Ambiguous,
         RestartPathState.File,
         destinationIdentity);
     Check(replacementObservation.CurrentIdentity == destinationIdentity &&
-          deleteState.AssessFinalization(deleteIntent).State ==
-              DeleteFinalizationAssessmentState.Unresolved,
+          deleteState.AssessFinalization(replacementDeleteIntent).State ==
+              DeleteFinalizationAssessmentState.Unresolved &&
+          deleteState.UnsettledIntents.Any(x =>
+              x.RequestSequence == replacementDeleteIntent.RequestSequence),
         "DELETE restart persists replacement FILE_ID as ambiguous evidence instead of rejecting it");
 
     var mismatchedDeleteIntentRejected = false;
@@ -1046,7 +1056,7 @@ try
 
     deleteState.VerifyAll();
     var reopenedDeleteState = new DeleteOperationStore(deleteStateRoot);
-    Check(reopenedDeleteState.Intents.Count == 2 &&
+    Check(reopenedDeleteState.Intents.Count == 3 &&
           reopenedDeleteState.Completions.Count == 2 &&
           reopenedDeleteState.Finalizations.Count == 5,
         "DELETE intent/completion/finalization hash chains rebuild after reopen");

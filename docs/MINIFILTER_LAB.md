@@ -15,7 +15,7 @@ Protocol v11 also observes paging writes on streams that were successfully opene
 
 ## Activation preflight
 
-A v0.7.25.0 LAB connection is not active immediately after `FilterConnectCommunicationPort`. GateClient first scans all existing non-reparse files under the disposable root. For every file, the kernel post-CREATE probe records final path/FILE_ID_INFO and tests `MmDoesFileHaveUserWritableReferences`.
+A v0.7.26.0 LAB connection is not active immediately after `FilterConnectCommunicationPort`. GateClient first scans all existing non-reparse files under the disposable root. For every file, the kernel post-CREATE probe records final path/FILE_ID_INFO and tests `MmDoesFileHaveUserWritableReferences`.
 
 If any file already has a user-writable mapped view, if a probe cannot be completed authoritatively, or if a pre-existing write/delete handle prevents the read-shared probe from opening the file, activation is refused. GateClient keeps every successful read-shared probe handle open until the explicit `ActivateGate` message succeeds, preventing a new write/delete handle from racing the rest of the scan.
 
@@ -50,6 +50,12 @@ Runtime scenario B activates cleanly, opens the test file for content-write acce
 - a final test-file hash different from the original hash.
 
 Only runtime logs/journals and `runtime-result.json` are uploaded. The signed test driver package is deleted after the run.
+
+0.7.26 extends the same manual workflow with an isolated filesystem compatibility matrix. The harness creates an expandable VHD file only under the guarded `RansomGuard-Filesystem-Matrix-Scratch` runner directory, attaches that new virtual disk, creates one partition, assigns an unused temporary drive letter, and formats only that new volume. NTFS is mandatory. ReFS is attempted separately; if the runner Windows edition cannot create ReFS, the evidence records the explicit capability failure and does not claim ReFS compatibility.
+
+For every supported filesystem, the minifilter is attached only to the temporary volume and the run must prove real CREATE, RENAME, EOF TRUNCATE and DELETE completion journals plus a mapped-write full pre-image, `WritableSection = BaselineVerified` and paging-write evidence. Cleanup stops GateClient, unloads the minifilter, confirms unload before VHD detach, detaches the VHD and only then deletes the VHD file. A stale matrix VHD/volume or an unload failure is fail-fast and requires reverting the disposable VM checkpoint; the workflow does not repeatedly unload or blindly delete scratch state.
+
+The matrix script contains no DiskPart `select disk`, `clean`, host partition deletion/conversion commands, hard-coded existing-volume formatting, boot changes, trust-store changes or Defender changes. Matrix evidence is uploaded separately as `ransomguard-filesystem-matrix-evidence`.
 
 ## Verified rollback recovery
 
@@ -120,7 +126,7 @@ Build the engineering package:
 .\build_lab.cmd
 ```
 
-Then, from the generated `RansomGuard-Lab-v0.7.21.0-*` directory, build/install the minifilter only in a
+Then, from the generated `RansomGuard-Lab-v0.7.26.0-*` directory, build/install the minifilter only in a
 Windows test VM using the existing lab scripts.
 
 ## Audit mode

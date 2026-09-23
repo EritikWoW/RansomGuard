@@ -1910,6 +1910,48 @@ try
     Check(committedBudgetRejected,
         "storage budget re-measures committed session bytes before admission");
 
+    // Full-preimage commits atomically rename .tmp files while other gate workers can
+    // measure the same session. A directory scan must not fail just because an enumerated
+    // transient name moved before FileInfo.Length was read.
+    var churnBudgetRoot = Path.Combine(root, "storage-budget-rename-race");
+    var churnObjects = Path.Combine(churnBudgetRoot, "objects");
+    Directory.CreateDirectory(churnObjects);
+    var churnBudget = new RollbackStorageBudget(
+        churnBudgetRoot,
+        64 * 1024 * 1024,
+        0);
+    var churnTask = Task.Run(async () =>
+    {
+        for (var i = 0; i < 2000; i++)
+        {
+            var token = Guid.NewGuid().ToString("N");
+            var temp = Path.Combine(churnObjects, token + ".preimage.tmp");
+            var committed = Path.Combine(churnObjects, token + ".preimage");
+            await File.WriteAllBytesAsync(temp, new byte[4096]);
+            await Task.Yield();
+            File.Move(temp, committed);
+            await Task.Yield();
+            File.Delete(committed);
+        }
+    });
+    Exception? churnMeasurementFailure = null;
+    for (var i = 0; i < 300; i++)
+    {
+        try
+        {
+            _ = await churnBudget.GetStatusAsync();
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            churnMeasurementFailure = ex;
+            break;
+        }
+        await Task.Yield();
+    }
+    await churnTask;
+    Check(churnMeasurementFailure is null,
+        "storage budget tolerates atomic temp-to-object rename during concurrent scan");
+
     var estimateRepo = new RollbackRepository(Path.Combine(root, "storage-estimator-repo"));
     var estimateSession = estimateRepo.CreateSession("estimate_case");
     var estimateSource = Path.Combine(root, "storage-estimator-source");

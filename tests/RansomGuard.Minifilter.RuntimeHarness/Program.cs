@@ -5,7 +5,7 @@ if (!OperatingSystem.IsWindows())
     throw new PlatformNotSupportedException("RansomGuard minifilter runtime harness is Windows-only.");
 
 if (args.Length == 0)
-    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | map-write --file <path> | create-new --file <path> | rename-file --source <path> --destination <path> | truncate-eof --file <path> --length <bytes> --ready <marker> --go <marker> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker> | containment-transition --file-a <path> --file-b <path> --ready <marker> --go <marker> --result <marker>");
+    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | map-write --file <path> | create-new --file <path> | rename-file --source <path> --destination <path> | truncate-eof --file <path> --length <bytes> --ready <marker> --go <marker> | delete-file --file <path> --ready <marker> --go <marker> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker> | containment-transition --file-a <path> --file-b <path> --ready <marker> --go <marker> --result <marker>");
 
 var command = args[0].ToLowerInvariant();
 var options = Parse(args.Skip(1).ToArray());
@@ -41,6 +41,12 @@ try
             TruncateEndOfFile(
                 Require(options, "--file"),
                 RequireInt64(options, "--length"),
+                Require(options, "--ready"),
+                Require(options, "--go"));
+            break;
+        case "delete-file":
+            DeleteFileByDisposition(
+                Require(options, "--file"),
                 Require(options, "--ready"),
                 Require(options, "--go"));
             break;
@@ -437,6 +443,61 @@ static void TruncateEndOfFile(string filePath, long length, string readyMarker, 
     // exactly one successful EOF mutation followed by a deliberately lost TruncateResult.
 }
 
+static void DeleteFileByDisposition(string filePath, string readyMarker, string goMarker)
+{
+    EnsureFile(filePath);
+
+    const uint DeleteAccess = 0x00010000;
+    const uint ShareRead = 0x00000001;
+    const uint ShareWrite = 0x00000002;
+    const uint ShareDelete = 0x00000004;
+    const uint OpenExisting = 3;
+    const uint FileAttributeNormal = 0x00000080;
+    const int FileDispositionInfo = 4;
+
+    using var file = Native.CreateFileW(
+        filePath,
+        DeleteAccess,
+        ShareRead | ShareWrite | ShareDelete,
+        IntPtr.Zero,
+        OpenExisting,
+        FileAttributeNormal,
+        IntPtr.Zero);
+    if (file.IsInvalid)
+        throw new System.ComponentModel.Win32Exception(
+            Marshal.GetLastWin32Error(), $"CreateFileW DELETE handle failed for '{filePath}'.");
+
+    // Opening with DELETE access is itself mutation-capable and receives a correlated CREATE
+    // transaction. Do not race that CreateResult with the deliberate DELETE loss point.
+    foreach (var marker in new[] { readyMarker, goMarker })
+    {
+        var parent = Path.GetDirectoryName(marker);
+        if (!string.IsNullOrWhiteSpace(parent)) Directory.CreateDirectory(parent);
+        if (File.Exists(marker)) File.Delete(marker);
+    }
+    File.WriteAllText(readyMarker, $"pid={Environment.ProcessId};file={filePath};utc={DateTime.UtcNow:O}");
+    var deadline = DateTime.UtcNow.AddSeconds(45);
+    while (!File.Exists(goMarker))
+    {
+        if (DateTime.UtcNow >= deadline)
+            throw new TimeoutException("Timed out waiting for durable CREATE completion before DELETE disposition.");
+        Thread.Sleep(50);
+    }
+
+    var info = new Native.FileDispositionInfo { DeleteFile = true };
+    if (!Native.SetFileInformationByHandle(
+            file,
+            FileDispositionInfo,
+            ref info,
+            checked((uint)Marshal.SizeOf<Native.FileDispositionInfo>())))
+        throw new System.ComponentModel.Win32Exception(
+            Marshal.GetLastWin32Error(),
+            $"SetFileInformationByHandle(FileDispositionInfo) failed for '{filePath}'.");
+
+    // No follow-up mutation is allowed here. Disposing this exact handle drives IRP_MJ_CLEANUP
+    // and lets the filesystem finalize (or refuse) the previously accepted disposition.
+}
+
 static void MapAndWrite(string filePath)
 {
     EnsureFile(filePath);
@@ -525,6 +586,13 @@ static class Native
         public long EndOfFile;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct FileDispositionInfo
+    {
+        [MarshalAs(UnmanagedType.Bool)]
+        public bool DeleteFile;
+    }
+
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern SafeFileHandle CreateFileW(
         string lpFileName,
@@ -541,6 +609,14 @@ static class Native
         SafeFileHandle hFile,
         int fileInformationClass,
         ref FileEndOfFileInfo fileInformation,
+        uint bufferSize);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetFileInformationByHandle(
+        SafeFileHandle hFile,
+        int fileInformationClass,
+        ref FileDispositionInfo fileInformation,
         uint bufferSize);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]

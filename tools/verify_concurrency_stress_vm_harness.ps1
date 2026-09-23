@@ -51,6 +51,9 @@ foreach($required in @(
     'Assert-MappedEvidence',
     'Assert-RequestUnique',
     'Assert-NoPendingTransactions',
+    'Assert-GateWorkersHealthy',
+    'Wait-DeleteFinalizations',
+    'gateWorkersHealthyPassed',
     'noPendingTransactionsPassed',
     'snapshotRelativePath',
     'Get-FileHash -LiteralPath $snapshot -Algorithm SHA256',
@@ -133,6 +136,7 @@ foreach($required in @(
     'noPendingTransactionsPassed',
     'preimageHashPassed',
     'gateStayedAlive',
+    'gateWorkersHealthyPassed',
     'cleanupPassed',
     'ransomguard-concurrency-stress-evidence'
 )){
@@ -147,4 +151,4 @@ if($workflow -match '(?im)\b(verifier(?:\.exe)?|shutdown(?:\.exe)?|Restart-Compu
     throw 'Concurrency stress VM workflow must not reboot, enable Driver Verifier, or format/manage disks.'
 }
 
-Write-Host 'Concurrency stress source gate PASSED: overflow width 16 exceeds kernel cap 8 and must prove fail-closed admission denial, qualification phases run at cap=8, destructive/mapped operations are correlated to durable evidence, pre-images are hash-checked, cleanup is bounded, and reboot/disk/verifier operations are absent.'
+Write-Host 'Concurrency stress source gate PASSED: overflow width 16 exceeds kernel cap 8 and must prove fail-closed admission denial, qualification phases run at cap=8, DELETE waits for durable topology finalization, GateClient worker failures are fatal, destructive/mapped operations are correlated to durable evidence, pre-images are hash-checked, cleanup is bounded, and reboot/disk/verifier operations are absent.'

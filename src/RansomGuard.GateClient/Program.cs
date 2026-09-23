@@ -63,7 +63,7 @@ Console.WriteLine($"Rollback session   : {sessionId}");
 Console.WriteLine($"Rollback store     : {store.Root}");
 Console.WriteLine($"Restart evidence   : observed={restartSummary.Observed}, completed-evidence={restartSummary.SupportsCompleted}, not-completed-evidence={restartSummary.SupportsNotCompleted}, ambiguous={restartSummary.Ambiguous}");
 Console.WriteLine("CREATE/write/rename/delete/truncate in this root are gated by durable preservation semantics.");
-Console.WriteLine($"Bounded gate workers : {options.GateWorkers}");
+Console.WriteLine($"Bounded message slots: {options.GateWorkers} (reply-required gate is serialized on the synchronous port)");
 Console.WriteLine($"Rollback budget      : max-session={options.MaxStoreMiB} MiB; min-free={options.MinFreeMiB} MiB");
 if (options.DropFirstCreateCompletion)
     Console.WriteLine("LAB completion-loss injection : ARMED for the first authoritative CREATE result.");

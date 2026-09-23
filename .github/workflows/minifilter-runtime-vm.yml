@@ -133,6 +133,30 @@ jobs:
           }
           "RG_RUNTIME_RESULTS=$results" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Run NTFS and ReFS filesystem compatibility matrix
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $matrixResults=Join-Path $env:RUNNER_TEMP 'ransomguard-filesystem-matrix-results'
+          $matrixScratch=Join-Path $env:RUNNER_TEMP 'RansomGuard-Filesystem-Matrix-Scratch'
+          if(Test-Path -LiteralPath $matrixResults){
+            Remove-Item -LiteralPath $matrixResults -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $matrixResults -Force | Out-Null
+          New-Item -ItemType Directory -Path $matrixScratch -Force | Out-Null
+          .\minifilter-tools\run_filesystem_matrix_lab.ps1 -LabReleaseDirectory $env:RG_LAB_RELEASE -DriverPackageDirectory $env:RG_DRIVER_PACKAGE -ScratchDirectory $matrixScratch -ResultsDirectory $matrixResults
+          $matrix=Get-Content -LiteralPath (Join-Path $matrixResults 'filesystem-matrix-result.json') -Raw | ConvertFrom-Json
+          foreach($name in @('ntfsAttempted','ntfsSupported','ntfsPassed','refsAttempted','cleanupPassed','passed')){
+            if($matrix.$name -ne $true){throw "Filesystem matrix invariant '$name' was not true."}
+          }
+          if($matrix.refsSupported -eq $true -and $matrix.refsPassed -ne $true){
+            throw 'ReFS was supported by the runner but its compatibility scenario did not pass.'
+          }
+          if($matrix.refsSupported -ne $true -and [string]::IsNullOrWhiteSpace([string]$matrix.refsUnsupportedReason)){
+            throw 'ReFS unsupported result must include the runner capability reason.'
+          }
+          "RG_FS_MATRIX_RESULTS=$matrixResults" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Ensure LAB minifilter is unloaded after run
         if: always()
         shell: pwsh
@@ -142,6 +166,14 @@ jobs:
           $volume=[IO.Path]::GetPathRoot($root).TrimEnd('\')
           $filters=(& fltmc filters 2>$null | Out-String)
           if($LASTEXITCODE -ne 0){throw "Unable to query Filter Manager during final cleanup, exit=$LASTEXITCODE"}
+          $matrixSummary=Join-Path $env:RUNNER_TEMP 'ransomguard-filesystem-matrix-results\filesystem-matrix-result.json'
+          if((Test-Path -LiteralPath $matrixSummary) -and
+             $filters -match '(?m)^\s*RansomGuardMinifilter\b'){
+            $matrix=Get-Content -LiteralPath $matrixSummary -Raw | ConvertFrom-Json
+            if($matrix.cleanupPassed -ne $true){
+              throw 'STALE MATRIX KERNEL STATE: the filesystem matrix already failed its bounded cleanup and RansomGuardMinifilter is still loaded. Do not retry unload; revert the disposable VM checkpoint.'
+            }
+          }
           if($filters -match '(?m)^\s*RansomGuardMinifilter\b'){
             .\minifilter-tools\unload_minifilter_lab.ps1 -Volume $volume
           }
@@ -152,6 +184,15 @@ jobs:
         with:
           name: ransomguard-minifilter-runtime-evidence
           path: ${{ runner.temp }}/ransomguard-runtime-results/**
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload filesystem matrix evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ransomguard-filesystem-matrix-evidence
+          path: ${{ runner.temp }}/ransomguard-filesystem-matrix-results/**
           if-no-files-found: warn
           retention-days: 14
 

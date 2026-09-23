@@ -1,3 +1,15 @@
+# RansomGuard 0.7.26.0
+
+- Added a manual disposable-VM filesystem compatibility matrix without changing protocol v15.
+- The matrix creates only isolated expandable VHD scratch disks under a guarded RansomGuard runner directory; it never selects, cleans, partitions or formats an existing host disk.
+- NTFS scratch-volume coverage is mandatory. ReFS is attempted separately and records an explicit unsupported capability reason when the runner Windows edition cannot create ReFS.
+- Each supported filesystem must prove real authoritative CREATE, RENAME, TRUNCATE and DELETE completion evidence through the minifilter/GateClient path.
+- Each supported filesystem also exercises a real writable mapping and requires verified full-preimage SHA-256, WritableSection BaselineVerified evidence and paging-write evidence.
+- The minifilter is explicitly attached only to the temporary matrix volume; cleanup stops GateClient, unloads the filter, detaches the VHD and deletes the VHD file.
+- Added a source safety gate forbidding host-disk clean/select/delete operations, hard-coded Format-Volume targets and boot/security policy mutation.
+- Extended the existing manual runtime VM workflow to upload separate filesystem-matrix evidence.
+- Bumped userspace/LAB and driver package version to 0.7.26.0.
+
 # RansomGuard 0.7.25.0
 
 - Bumped the Engineering LAB minifilter wire protocol to v15 without changing the fixed RG_EVENT structure size.

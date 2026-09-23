@@ -94,10 +94,14 @@ foreach($required in @(
   'RgControlCommand.ActivateAndContainProcess',
   '--contain-pid',
   '--drop-first-create-completion',
+  '--drop-first-rename-completion',
   '--reconcile-only',
   'RECONCILE ONLY: observed=',
   'LAB COMPLETION LOSS: intentionally dropping authoritative CREATE result',
+  'LAB COMPLETION LOSS: intentionally dropping authoritative RENAME result',
   'Interlocked.CompareExchange(ref droppedCreateCompletion, 1, 0) == 0',
+  'Interlocked.CompareExchange(ref droppedRenameCompletion, 1, 0) == 0',
+  'Only one completion-loss injection may be armed per GateClient session.',
   'TargetProcessId = containPid ?? 0',
   'ContainmentActive',
   'ContainedProcessId',
@@ -215,6 +219,18 @@ if($lossOption -lt 0 -or $lossBranch -lt 0 -or $lossCheck -lt 0 -or $lossCancel 
 }
 if($text -match [regex]::Escape('Environment.FailFast("RansomGuard LAB fault injection: after durable CREATE intent, before kernel reply.")')){
   throw 'GateClient must not hard-crash while the kernel is waiting for a blocking gate reply.'
+}
+
+$renameLossOption=$text.IndexOf('case "--drop-first-rename-completion"')
+$renameLossBranch=$text.IndexOf('if ((RgEventType)ev.EventType == RgEventType.RenameResult)')
+$renameLossCheck=$text.IndexOf('if (options.DropFirstRenameCompletion',$renameLossBranch)
+$renameLossCancel=$text.IndexOf('cts.Cancel();',$renameLossCheck)
+$renameLossPersist=$text.IndexOf('RenameReconciliation.HandleAsync(',$renameLossBranch)
+if($renameLossOption -lt 0 -or $renameLossBranch -lt 0 -or $renameLossCheck -lt 0 -or
+   $renameLossCancel -lt 0 -or $renameLossPersist -lt 0 -or
+   $renameLossBranch -gt $renameLossCheck -or $renameLossCheck -gt $renameLossCancel -or
+   $renameLossCancel -gt $renameLossPersist){
+  throw 'LAB RENAME completion-loss injection must drop the received RenameResult before authoritative completion persistence.'
 }
 
 $renameBranch=$text.IndexOf('if (eventType == RgEventType.Rename)')

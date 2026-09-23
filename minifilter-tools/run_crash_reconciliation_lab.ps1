@@ -157,6 +157,19 @@ $triggerErr=$triggerOut + '.err'
 $reconcileOut=Join-Path $ResultsDirectory 'reconcile-only.out.log'
 $reconcileErr=$reconcileOut + '.err'
 $planPath=Join-Path $ResultsDirectory 'create-intent-recovery-plan.json'
+
+$renameRoot=Join-Path $RootBase "rename-result-loss-$stamp"
+$renameStore=Join-Path $ResultsDirectory 'rename-result-loss-store'
+$renameSession='rename-result-loss'
+$renameSource=Join-Path $renameRoot 'source-before-rename.bin'
+$renameDestination=Join-Path $renameRoot 'destination-after-rename.bin'
+$renameGateOut=Join-Path $ResultsDirectory 'rename-gate.out.log'
+$renameGateErr=$renameGateOut + '.err'
+$renameTriggerOut=Join-Path $ResultsDirectory 'rename-trigger.out.log'
+$renameTriggerErr=$renameTriggerOut + '.err'
+$renameReconcileOut=Join-Path $ResultsDirectory 'rename-reconcile-only.out.log'
+$renameReconcileErr=$renameReconcileOut + '.err'
+$renamePlanPath=Join-Path $ResultsDirectory 'rename-recovery-plan.json'
 $installScript=Join-Path $PSScriptRoot 'install_minifilter_lab.ps1'
 $unloadScript=Join-Path $PSScriptRoot 'unload_minifilter_lab.ps1'
 
@@ -175,6 +188,13 @@ $summary=[ordered]@{
     restartObserved=$false
     restartSupportsCompleted=$false
     recoveryTransactionNotReady=$false
+    renameCompletionLossObserved=$false
+    renameIntentDurable=$false
+    renameCompletionAbsent=$false
+    renameTopologyChanged=$false
+    renameRestartObserved=$false
+    renameRestartSupportsCompleted=$false
+    renameRecoveryTopologyNotReady=$false
     cleanupPassed=$false
     cleanupError=$null
     passed=$false
@@ -183,6 +203,8 @@ $summary=[ordered]@{
 $installed=$false
 $gate=$null
 $trigger=$null
+$renameGate=$null
+$renameTrigger=$null
 $runtimeFailure=$null
 $cleanupFailure=$null
 
@@ -316,13 +338,157 @@ try{
         throw "Crash-reconciled CREATE transaction must contain no Ready actions. readyCount=$($plan.readyCount)"
     }
     $summary.recoveryTransactionNotReady=$true
+
+    # Scenario 2: the RENAME itself succeeds, but its authoritative post-operation result is
+    # intentionally omitted before user-mode persistence. Restart reconciliation must prove the
+    # source identity moved to the destination without manufacturing a kernel completion.
+    Prepare-GateRoot $gateExe $renameRoot
+    [IO.File]::WriteAllBytes(
+        $renameSource,
+        [Text.Encoding]::UTF8.GetBytes('RANSOMGUARD-RENAME-COMPLETION-LOSS-V1'))
+    if(Test-Path -LiteralPath $renameDestination){
+        throw "RENAME destination must start absent: $renameDestination"
+    }
+
+    $renameGate=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $renameRoot),
+        '--store',(Quote-Arg $renameStore),
+        '--session',$renameSession,
+        '--drop-first-rename-completion'
+    ) $renameGateOut $renameGateErr
+
+    Wait-LogPattern $renameGateOut 'LAB completion-loss injection\s+: ARMED for the first authoritative RENAME result' $renameGate 45
+    Wait-LogPattern $renameGateOut 'kernel gate ACTIVE' $renameGate 45
+
+    $renameTrigger=Start-LoggedProcess $helperExe @(
+        'rename-file',
+        '--source',(Quote-Arg $renameSource),
+        '--destination',(Quote-Arg $renameDestination)
+    ) $renameTriggerOut $renameTriggerErr
+
+    if(-not $renameTrigger.WaitForExit(45000)){
+        Stop-Process -Id $renameTrigger.Id -Force -ErrorAction SilentlyContinue
+        throw 'RENAME completion-loss trigger did not return.'
+    }
+    if($renameTrigger.ExitCode -ne 0){
+        $err=Get-Content -LiteralPath $renameTriggerErr -Raw -ErrorAction SilentlyContinue
+        throw "RENAME must complete before completion evidence is intentionally dropped. exit=$($renameTrigger.ExitCode). $err"
+    }
+
+    if(-not $renameGate.WaitForExit(30000)){
+        Stop-Process -Id $renameGate.Id -Force -ErrorAction SilentlyContinue
+        throw 'GateClient did not exit cleanly after dropping the authoritative RENAME result.'
+    }
+    if($renameGate.ExitCode -ne 0){
+        throw "GateClient RENAME completion-loss injection should exit cleanly. exit=$($renameGate.ExitCode)"
+    }
+
+    $renameGateCombined=(Get-Content -LiteralPath $renameGateOut -Raw -ErrorAction SilentlyContinue)+[Environment]::NewLine+
+        (Get-Content -LiteralPath $renameGateErr -Raw -ErrorAction SilentlyContinue)
+    if($renameGateCombined -notmatch 'LAB COMPLETION LOSS: intentionally dropping authoritative RENAME result'){
+        throw "GateClient did not prove the intended RENAME completion-loss point. Output: $renameGateCombined"
+    }
+    $summary.renameCompletionLossObserved=$true
+
+    if(Test-Path -LiteralPath $renameSource){
+        throw "RENAME source still exists even though the filesystem operation completed: $renameSource"
+    }
+    if(-not (Test-Path -LiteralPath $renameDestination -PathType Leaf)){
+        throw "RENAME destination does not exist after the completed operation: $renameDestination"
+    }
+    $summary.renameTopologyChanged=$true
+
+    $renameSessionRoot=Join-Path $renameStore "Sessions\$renameSession"
+    $renameIntentJournal=Join-Path $renameSessionRoot 'rename-state\rename-journal.jsonl'
+    $renameCompletionJournal=Join-Path $renameSessionRoot 'rename-state\rename-completion-journal.jsonl'
+    $renameIntents=@(Read-JsonLines $renameIntentJournal)
+    if($renameIntents.Count -ne 1){
+        throw "Expected exactly one durable RENAME intent after result loss. Found $($renameIntents.Count)."
+    }
+    $renameIntent=$renameIntents[0]
+    if(-not [string]::Equals([IO.Path]::GetFullPath([string]$renameIntent.sourcePath),$renameSource,[StringComparison]::OrdinalIgnoreCase) -or
+       -not [string]::Equals([IO.Path]::GetFullPath([string]$renameIntent.destinationPath),$renameDestination,[StringComparison]::OrdinalIgnoreCase)){
+        throw "Durable RENAME intent path mismatch. source='$($renameIntent.sourcePath)' destination='$($renameIntent.destinationPath)'."
+    }
+    if([uint64]$renameIntent.requestSequence -eq 0){
+        throw 'Durable RENAME intent requestSequence must be nonzero.'
+    }
+    $summary.renameIntentDurable=$true
+
+    $renameCompletions=@(Read-JsonLines $renameCompletionJournal)
+    if($renameCompletions.Count -ne 0){
+        throw "Authoritative RENAME completion must be absent after intentional result loss. Found $($renameCompletions.Count)."
+    }
+    $summary.renameCompletionAbsent=$true
+
+    $renameReconcile=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $renameRoot),
+        '--store',(Quote-Arg $renameStore),
+        '--reconcile-only'
+    ) $renameReconcileOut $renameReconcileErr
+    if(-not $renameReconcile.WaitForExit(30000)){
+        Stop-Process -Id $renameReconcile.Id -Force -ErrorAction SilentlyContinue
+        throw 'RENAME reconcile-only GateClient did not exit.'
+    }
+    if($renameReconcile.ExitCode -ne 0){
+        $err=Get-Content -LiteralPath $renameReconcileErr -Raw -ErrorAction SilentlyContinue
+        throw "RENAME reconcile-only GateClient failed, exit=$($renameReconcile.ExitCode). $err"
+    }
+
+    $renameReconcileText=(Get-Content -LiteralPath $renameReconcileOut -Raw)
+    if($renameReconcileText -notmatch 'RECONCILE ONLY: observed=1; completed-evidence=1; not-completed-evidence=0; ambiguous=0'){
+        throw "Unexpected RENAME restart reconciliation summary: $renameReconcileText"
+    }
+    $summary.renameRestartObserved=$true
+
+    $renameRestartJournal=Join-Path $renameSessionRoot 'restart-state\restart-reconciliation-journal.jsonl'
+    $renameRestart=@(Read-JsonLines $renameRestartJournal)
+    if($renameRestart.Count -ne 1){
+        throw "Expected exactly one RENAME restart observation. Found $($renameRestart.Count)."
+    }
+    $renameRestartRecord=$renameRestart[0]
+    if([int]$renameRestartRecord.operationKind -ne 2 -or
+       [uint64]$renameRestartRecord.requestSequence -ne [uint64]$renameIntent.requestSequence -or
+       [int]$renameRestartRecord.evidence -ne 1 -or
+       [int]$renameRestartRecord.sourceState -ne 1 -or
+       [int]$renameRestartRecord.destinationState -ne 2){
+        throw "Restart observation is not exact RENAME SupportsCompleted evidence: $($renameRestartRecord | ConvertTo-Json -Compress -Depth 20)"
+    }
+    if(-not [string]::Equals(
+        ([string]$renameRestartRecord.destinationFileIdHex),
+        ([string]$renameIntent.sourceFileIdHex),
+        [StringComparison]::OrdinalIgnoreCase)){
+        throw 'RENAME restart destination identity does not match the durable source identity.'
+    }
+    $summary.renameRestartSupportsCompleted=$true
+
+    & $recoveryExe plan --repository $renameStore --session $renameSession --output $renamePlanPath
+    if($LASTEXITCODE -ne 0){throw "RENAME recovery planner failed, exit=$LASTEXITCODE"}
+    $renamePlan=Get-Content -LiteralPath $renamePlanPath -Raw | ConvertFrom-Json -Depth 40
+    $renameTopology=@($renamePlan.actions | Where-Object {
+        [int]$_.kind -eq 5 -and [uint64]$_.evidenceSequence -eq [uint64]$renameIntent.requestSequence
+    })
+    if($renameTopology.Count -ne 1){
+        throw "Expected exactly one ReviewRenameTopology action bound to the pending RENAME intent. Found $($renameTopology.Count)."
+    }
+    if([int]$renameTopology[0].state -eq 1){
+        throw 'Crash-reconciled RENAME topology was incorrectly promoted to Ready.'
+    }
+    if([int]$renameTopology[0].state -ne 2){
+        throw "Consistent SupportsCompleted RENAME topology should be Review, found state=$($renameTopology[0].state)."
+    }
+    if($renamePlan.automaticTopologyMutationAllowed -ne $false){
+        throw 'Recovery planner must not enable automatic topology mutation for crash-reconciled RENAME.'
+    }
+    $summary.renameRecoveryTopologyNotReady=$true
+
     $summary.passed=$true
 }
 catch{
     $runtimeFailure=$_
 }
 finally{
-    foreach($p in @($trigger,$gate)){
+    foreach($p in @($trigger,$gate,$renameTrigger,$renameGate)){
         if($p -and -not $p.HasExited){
             Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
         }
@@ -352,4 +518,4 @@ if($cleanupFailure){throw $cleanupFailure}
 if($runtimeFailure){throw $runtimeFailure}
 if(-not $summary.passed){throw 'Crash/fault runtime harness did not pass all invariants.'}
 
-Write-Host "Completion-loss/restart reconciliation LAB PASSED. Evidence: $ResultsDirectory"
+Write-Host "CREATE/RENAME completion-loss restart reconciliation LAB PASSED. Evidence: $ResultsDirectory"

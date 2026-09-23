@@ -1,4 +1,4 @@
-# RansomGuard 0.7.21.0
+# RansomGuard 0.7.23.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
@@ -6,7 +6,7 @@ and recover data through rollback plus adaptive crypto analysis.
 
 ## Core preservation milestone
 
-0.7.21.0 retains the preservation/recovery/retention foundation and adds an event-bound transition from preserved gate evidence to kernel process-object containment.
+0.7.23.0 retains the preservation/recovery/retention and event-bound containment foundation, and adds disposable-VM proof for restart reconciliation when authoritative CREATE or RENAME post-operation completion evidence is intentionally lost after the filesystem mutation has already completed.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 
@@ -79,6 +79,10 @@ Protocol v13 also removes the previous blind skip of paging-write callbacks. Aft
 
 0.7.21 introduces protocol v13 and a safer runtime transition primitive. An explicitly authorized LAB process is held open by GateClient so PID reuse cannot silently re-authorize a replacement. After a bounded number of successfully preserved mutations across multiple paths, GateClient first commits a write-through hash-chained containment request, then sets `RG_GATE_REPLY_FLAG_CONTAIN_REQUESTOR` on the reply for that exact kernel event. The minifilter references `FltGetRequestorProcess(Data)` for that IRP before allowing it to continue, emits a no-reply `ContainmentActivated` event, and GateClient commits a linked kernel-active receipt. Unknown reply flags, containment flags on denied/unpreserved operations, latch conflicts, missing activation receipts and journal-link mismatches fail closed. The ordinary service remains AuditOnly; this is the validated bridge required before production detector policy can be connected.
 
+0.7.22 adds a disposable-VM completion-loss proof for CREATE. In an explicit LAB mode, GateClient may intentionally omit the first authoritative `CreateResult` only after the filesystem CREATE has completed, then exit cleanly and restart in reconciliation-only mode. The runtime harness proves the durable CREATE intent remains, the authoritative completion journal is empty, the created path exists, restart evidence classifies the exact pending intent as `SupportsCompleted`, and the recovery planner keeps the transaction in `Review` rather than promoting topology mutation to `Ready`. This replaces the earlier unsafe idea of hard-crashing GateClient while the kernel was still waiting for a blocking gate reply.
+
+0.7.23 extends the same live proof to RENAME. The harness starts with a durable source file and absent destination, allows the rename to complete, intentionally omits the first authoritative `RenameResult`, then verifies after restart that the source path is missing and the destination carries the exact durable source FILE_ID_INFO. Restart reconciliation must classify that pending rename as `SupportsCompleted`; the recovery planner may expose the topology transaction only as `Review`, while verified content copy-out remains separate and automatic rename/delete of live paths stays forbidden.
+
 ## Recovery safety
 
 Range recovery:
@@ -130,11 +134,12 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.7.21.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.7.23.0-<timestamp>\UI\RansomGuard.Ui.exe
 
-Manual disposable-VM runtime workflow:
+Manual disposable-VM runtime workflows:
 
     .github\workflows\minifilter-runtime-vm.yml
+    .github\workflows\minifilter-crash-vm.yml
 
 LAB gate documentation:
 
@@ -152,7 +157,7 @@ Bounded concurrent gate admission/workers are now implemented with a kernel cap 
 
 Restart evidence for pending/missing CREATE/RENAME completion events is durable and conservative; authoritative completion is never inferred from a restart probe. The recovery planner may expose exact, fully consistent restart evidence as `Review` only, while ambiguous/indeterminate/conflicting evidence stays `Blocked`. Paging writes on streams opened through the LAB gate are visible as durable evidence without synchronously blocking the paging path.
 
-Remaining core work includes stronger live crash/fault-injection coverage for operations whose kernel post-operation result is lost before user-mode delivery,
-broader live NTFS/ReFS coverage beyond the automated disposable-VM mapping harness,
+Remaining core work includes broader live fault-injection beyond the validated CREATE/RENAME completion-loss cases,
+broader live NTFS/ReFS coverage beyond the automated disposable-VM mapping and completion-loss harnesses,
 production retention UI/policy integration, production detector-to-containment authorization/policy, process-state capture, adaptive crypto reconstruction, production recovery UI/topology orchestration,
 driver signing and Microsoft-assigned production altitude.

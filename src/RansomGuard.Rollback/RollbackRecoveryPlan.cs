@@ -258,7 +258,7 @@ public static class RollbackRecoveryPlanner
                     var reviewable = assessment.State is
                         RestartEvidenceAssessmentState.ConsistentSupportsCompleted or
                         RestartEvidenceAssessmentState.ConsistentSupportsNotCompleted;
-                    var reason = assessment.State switch
+                    var restartReason = assessment.State switch
                     {
                         RestartEvidenceAssessmentState.ConsistentSupportsCompleted =>
                             "TRUNCATE intent has no authoritative kernel completion, but durable restart evidence consistently supports completion. Manual review is allowed; restart evidence never becomes a kernel completion.",
@@ -278,7 +278,7 @@ public static class RollbackRecoveryPlanner
                         reviewable ? assessment.LatestRecordSha256 : intent.RecordSha256,
                         intent.RequestSequence,
                         false,
-                        reason));
+                        restartReason));
                     continue;
                 }
 
@@ -288,7 +288,7 @@ public static class RollbackRecoveryPlanner
                     TruncateCompletionState.Succeeded => RecoveryActionState.Informational,
                     _ => RecoveryActionState.Review
                 };
-                var reason = completion.State switch
+                var completionReason = completion.State switch
                 {
                     TruncateCompletionState.Failed =>
                         "Filesystem TRUNCATE failed; no length mutation recovery decision is required.",
@@ -306,7 +306,7 @@ public static class RollbackRecoveryPlanner
                     completion.RecordSha256,
                     intent.RequestSequence,
                     false,
-                    reason));
+                    completionReason));
             }
         }
 

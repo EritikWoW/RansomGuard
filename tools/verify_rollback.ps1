@@ -175,6 +175,9 @@ foreach($required in @(
     'RestartEvidenceState.SupportsNotCompleted',
     'RestartEvidenceState.Indeterminate',
     'RestartEvidenceState.Ambiguous',
+    'TRUNCATE restart observation intent binding mismatch',
+    'TRUNCATE restart observation path does not match its committed intent',
+    'TRUNCATE restart assessment intent binding mismatch',
     'FileOptions.WriteThrough',
     'Flush(true)'
 )){

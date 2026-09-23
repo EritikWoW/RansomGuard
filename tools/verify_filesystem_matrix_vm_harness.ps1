@@ -39,6 +39,8 @@ foreach($required in @(
     'Get-FreeDriveLetter',
     'Remove-ScratchVhd',
     'detach vdisk',
+    'minifilter unload failed before VHD detach',
+    'refusing to detach/delete the active scratch VHD',
     'install_minifilter_lab.ps1',
     'unload_minifilter_lab.ps1',
     "'NTFS','ReFS'",
@@ -105,6 +107,14 @@ if($script -notmatch [regex]::Escape('if($full -notmatch ''(?i)RansomGuard'')'))
 }
 if($script -notmatch [regex]::Escape("if(-not $activeVhd.Supported)")){
     throw 'Filesystem matrix must distinguish unsupported filesystem creation from a failed supported scenario.'
+}
+
+$scenarioStart=$script.IndexOf('$scenario=Run-FileSystemScenario $activeVhd')
+$unload=$script.IndexOf('& $unloadScript -Volume ([string]$activeVhd.Volume)',$scenarioStart)
+$detach=$script.IndexOf('Remove-ScratchVhd $activeVhd',$unload)
+if($scenarioStart -lt 0 -or $unload -lt 0 -or $detach -lt 0 -or
+   $scenarioStart -gt $unload -or $unload -gt $detach){
+    throw 'Filesystem matrix must unload the minifilter before detaching/deleting a supported scratch VHD.'
 }
 
 $workflow=Get-Content -LiteralPath $workflowPath -Raw

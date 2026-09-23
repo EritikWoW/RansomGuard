@@ -33,9 +33,11 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Audit PowerShell automation
+      - name: Audit PowerShell automation and supply chain
         shell: pwsh
-        run: .\tools\verify_powershell_automation.ps1
+        run: |
+          .\tools\verify_powershell_automation.ps1
+          .\tools\verify_supply_chain.ps1
 
       - name: Verify runtime VM runner readiness
         shell: pwsh

@@ -715,12 +715,12 @@ try{
         Wait-Path $deleteReady 30 "stress delete ready $i"
     }
 
-    foreach($path in @($truncateFiles+$deleteFiles)){
+    foreach($targetPath in @($truncateFiles+$deleteFiles)){
         $null=Wait-JournalMatch $createCompletionJournal {
             param($x)
-            [string]::Equals([IO.Path]::GetFullPath([string]$x.finalPath),$path,[StringComparison]::OrdinalIgnoreCase) -and
+            [string]::Equals([IO.Path]::GetFullPath([string]$x.finalPath),$targetPath,[StringComparison]::OrdinalIgnoreCase) -and
             [int]$x.state -ne 5
-        } 45 "durable stress CREATE completion for $path"
+        } 45 "durable stress CREATE completion for $targetPath"
     }
 
     # Add 12 immediate operations, then release all 8 waiting SetInformation calls.

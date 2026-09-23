@@ -298,7 +298,7 @@ function Run-FileSystemScenario($Vhd){
             '--ready',(Quote-Arg $truncateReady),'--go',(Quote-Arg $truncateGo)
         ) (Join-Path $ResultsDirectory ("{0}-truncate.out.log" -f $fs.ToLowerInvariant())) (Join-Path $ResultsDirectory ("{0}-truncate.err.log" -f $fs.ToLowerInvariant()))
         Wait-Path $truncateReady 30 "$fs truncate helper readiness"
-        Wait-LogPattern $gateOut ([regex]::Escape($truncateTarget)) $gate 30
+        Wait-LogPattern $gateOut ("CreateResult.*" + [regex]::Escape($truncateTarget)) $gate 30
         Set-Content -LiteralPath $truncateGo -Value 'go' -Encoding ASCII
         if(-not $truncateProc.WaitForExit(45000)){Stop-Process -Id $truncateProc.Id -Force -ErrorAction SilentlyContinue; throw "$fs TRUNCATE helper timeout."}
         if($truncateProc.ExitCode -ne 0){throw "$fs TRUNCATE helper failed, exit=$($truncateProc.ExitCode)"}
@@ -309,7 +309,7 @@ function Run-FileSystemScenario($Vhd){
             '--ready',(Quote-Arg $deleteReady),'--go',(Quote-Arg $deleteGo)
         ) (Join-Path $ResultsDirectory ("{0}-delete.out.log" -f $fs.ToLowerInvariant())) (Join-Path $ResultsDirectory ("{0}-delete.err.log" -f $fs.ToLowerInvariant()))
         Wait-Path $deleteReady 30 "$fs delete helper readiness"
-        Wait-LogPattern $gateOut ([regex]::Escape($deleteTarget)) $gate 30
+        Wait-LogPattern $gateOut ("CreateResult.*" + [regex]::Escape($deleteTarget)) $gate 30
         Set-Content -LiteralPath $deleteGo -Value 'go' -Encoding ASCII
         if(-not $deleteProc.WaitForExit(45000)){Stop-Process -Id $deleteProc.Id -Force -ErrorAction SilentlyContinue; throw "$fs DELETE helper timeout."}
         if($deleteProc.ExitCode -ne 0){throw "$fs DELETE helper failed, exit=$($deleteProc.ExitCode)"}

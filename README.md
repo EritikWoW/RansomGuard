@@ -1,4 +1,4 @@
-# RansomGuard 0.7.29.0
+# RansomGuard 0.7.30.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
@@ -6,7 +6,7 @@ and recover data through rollback plus adaptive crypto analysis.
 
 ## Core preservation milestone
 
-0.7.29.0 keeps the protocol-v15 preservation/recovery model, reproducible-build controls and bounded-concurrency qualification, and adds isolated low-disk plus real-reboot fault campaigns. Storage pressure is confined to a newly created scratch VHD; reboot recovery is proven through explicit ARM and post-boot VERIFY phases bound to the exact commit.
+0.7.30.0 keeps the protocol-v15 preservation/recovery model and prior low-disk/reboot qualification, and adds a dedicated Driver Verifier campaign for the Engineering LAB minifilter. Verification is targeted only at `RansomGuardMinifilter.sys`, uses Windows standard verifier checks in one-boot mode, exercises the existing bounded-concurrency runtime proof, schedules `verifier /reset`, then requires a second reboot to prove verifier state is clear.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 
@@ -93,7 +93,9 @@ Protocol v13 also removes the previous blind skip of paging-write callbacks. Aft
 
 0.7.28 adds a separate manual self-hosted concurrency-stress workflow without changing protocol v15. The stress harness configures GateClient at its maximum 8 workers. A dedicated 16-wide CREATE overload probe must observe bounded fail-closed admission above the kernel cap without creating denied pathnames or durable transactions. The full CREATE, RENAME, synchronized TRUNCATE, synchronized DELETE and mapped-write qualification then runs at the supported concurrency ceiling of 8. The harness re-opens the durable JSONL evidence, requires unique request correlations and authoritative successful completions for every admitted mutation, requires DeletedObserved finalization for each delete, rejects GateClient worker failures, and verifies each mapped target's committed pre-image SHA-256 plus BaselineVerified writable-section and paging-write evidence.
 
-0.7.29 adds a combined manual fault campaign without changing protocol v15. Low-disk testing uses only a newly created expandable NTFS VHD as the rollback-store volume: after gate activation the harness consumes scratch-volume free space below the configured reserve, requires a real in-scope RENAME attempt to be denied at the mutation-capable source CREATE/open admission boundary before any RENAME intent is persisted, then removes the filler and requires the same RENAME to succeed with correlated durable intent/completion evidence and a physically verified full pre-image object (length + SHA-256). Real reboot recovery is split into ARM and VERIFY phases because a self-hosted Actions job cannot resume through a VM reboot. ARM persists a completion-lost TRUNCATE intent, verified full pre-image and SHA-256-bound campaign state while deliberately leaving the LAB filter loaded. After the operator reboots the disposable VM, VERIFY requires a newer Windows boot time, proves the EOF mutation plus durable pending evidence survived, runs reconcile-only restart observation, and confirms the transaction remains Review-only while verified pre-image copy-out remains Ready. The workflow itself never issues reboot/shutdown, boot-policy or Driver Verifier commands.
+0.7.29 adds a combined manual fault campaign without changing protocol v15. Low-disk testing uses only a newly created expandable NTFS VHD as the rollback-store volume: after gate activation the harness consumes scratch-volume free space below the configured reserve, requires a real in-scope RENAME attempt to be denied at the mutation-capable source CREATE/open admission boundary before any RENAME intent is persisted, then removes the filler and requires the same RENAME to succeed with correlated durable intent/completion evidence and a physically verified full pre-image object (length + SHA-256). Real reboot recovery is split into ARM and VERIFY phases because a self-hosted Actions job cannot resume through a VM reboot. ARM persists a completion-lost TRUNCATE intent, verified full pre-image and SHA-256-bound campaign state while deliberately leaving the LAB filter loaded. After the operator reboots the disposable VM, VERIFY requires a newer Windows boot time, proves the EOF mutation plus durable pending evidence survived, runs reconcile-only restart observation, and confirms the transaction remains Review-only while verified pre-image copy-out remains Ready. The workflow itself never issues reboot/shutdown or boot-policy commands.
+
+0.7.30 adds a separate manual Driver Verifier qualification without changing protocol v15. ARM refuses any pre-existing verifier configuration, selects only `RansomGuardMinifilter.sys`, enables Windows standard Driver Verifier checks and `bootmode=oneboot`, and persists exact-commit campaign state. After a real VM reboot, the runtime phase proves the loaded target appears in current verifier activity, runs the full bounded-concurrency CREATE/RENAME/TRUNCATE/DELETE/mapped-write stress contract, rejects any bugcheck event in the qualification window, and executes `verifier /reset`. A second real reboot is mandatory; CLEAR then proves persistent settings and current verifier activity are absent before archiving the campaign. If Verifier itself detects a kernel violation and bugchecks the VM, the run is intentionally not considered passed.
 
 
 ## Recovery safety
@@ -147,12 +149,13 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.7.29.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.7.30.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 Manual disposable-VM runtime workflows:
 
     .github\workflows\minifilter-runtime-vm.yml
     .github\workflows\minifilter-crash-vm.yml
+    .github\workflows\minifilter-verifier-vm.yml
 
 LAB gate documentation:
 
@@ -170,6 +173,6 @@ Bounded concurrent gate admission/workers are now implemented with a kernel cap 
 
 Restart evidence for pending/missing CREATE/RENAME/TRUNCATE completion events and unsettled DELETE lifecycle transactions is durable and conservative; authoritative completion is never inferred from a restart or topology probe. DELETE cleanup is handle-lifecycle evidence only, while pathname state is observed separately. The recovery planner may expose exact, fully consistent evidence as `Review` only, while cleanup-only, ambiguous, indeterminate or conflicting evidence stays `Blocked`. Paging writes on streams opened through the LAB gate are visible as durable evidence without synchronously blocking the paging path.
 
-Remaining core work includes Driver Verifier qualification and broader long-duration/mixed-workload stress,
+Remaining core work includes broader long-duration/mixed-workload stress,
 production retention UI/policy integration, production detector-to-containment authorization/policy, process-state capture, adaptive crypto reconstruction, production recovery UI/topology orchestration,
 driver signing and Microsoft-assigned production altitude.

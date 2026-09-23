@@ -226,6 +226,9 @@ public static class ServiceAdministration
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Win32Exception or ArgumentException) { return false; }
     }
+    private static bool IsSha256Hex(string? value) =>
+        value is { Length: 64 } && value.All(char.IsAsciiHexDigit);
+
     private static FileStream VerifyInstalledImage(string path)
     {
         string folder = Path.GetDirectoryName(path) ?? throw new IOException("Installed path missing.");
@@ -233,7 +236,7 @@ public static class ServiceAdministration
         using var recordFile = new FileStream(recordPath, FileMode.Open, FileAccess.Read, FileShare.Read);
         if (recordFile.Length > 4096) throw new IOException("Install record too large.");
         var record = JsonSerializer.Deserialize<InstallRecord>(recordFile) ?? throw new IOException("Install record unavailable; reinstall using this UI.");
-        if (record.Schema != 1 || !DecisionPolicy.HashEqual(record.ImageSha256, record.ImageSha256)) throw new IOException("Install record invalid.");
+        if (record.Schema != 1 || !IsSha256Hex(record.ImageSha256)) throw new IOException("Install record invalid.");
         FileSafety.NoReparse(path);
         var image = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
         try

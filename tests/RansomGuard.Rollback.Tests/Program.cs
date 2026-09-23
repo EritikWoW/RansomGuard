@@ -875,6 +875,20 @@ try
               -1) == RestartEvidenceState.Indeterminate,
         "restart allocation-size evidence stays indeterminate instead of guessing filesystem rounding");
 
+    var mismatchedTruncateIntentRejected = false;
+    try
+    {
+        _ = await truncateState.RecordRestartObservationAsync(
+            truncateIntent with { OriginalPath = Path.Combine(sourceDir, "different-truncate.bin") },
+            truncateCompletedEvidence,
+            RestartPathState.File,
+            sourceIdentity,
+            1024);
+    }
+    catch (InvalidDataException) { mismatchedTruncateIntentRejected = true; }
+    Check(mismatchedTruncateIntentRejected,
+        "TRUNCATE restart evidence rejects a cloned intent whose path does not match the committed record");
+
     var truncateRestart = await truncateState.RecordRestartObservationAsync(
         truncateIntent,
         truncateCompletedEvidence,

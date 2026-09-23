@@ -112,6 +112,9 @@ foreach($required in @(
 if($workflow -match '(?m)^\s*push\s*:'){
     throw 'Driver Verifier VM workflow must remain manual-only.'
 }
+if($workflow.Contains('\\${{')){
+    throw 'Driver Verifier workflow contains an escaped GitHub expression and would pass a literal instead of evaluating inputs/secrets.'
+}
 
 if($arm -notmatch [regex]::Escape('Driver Verifier already has persistent settings')){
     throw 'Driver Verifier ARM must refuse pre-existing verifier state instead of overwriting it.'

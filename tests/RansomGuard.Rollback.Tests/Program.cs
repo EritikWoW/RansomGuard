@@ -1972,6 +1972,33 @@ try
     _ = await new RollbackSessionLifecycleStore(pendingTruncateSession.Root)
         .MarkCompletedAsync("synthetic-invalid-truncate-completed");
 
+    var pendingDeleteSession = retentionRepo.CreateSession("pending_delete_completed");
+    var pendingDeleteOps = new DeleteOperationStore(
+        Path.Combine(pendingDeleteSession.Root, "delete-state"));
+    var pendingDeleteIntent = await pendingDeleteOps.RecordIntentAsync(
+        12003,
+        Path.Combine(retentionSource, "pending-delete.bin"),
+        DeleteOperationStore.FileDispositionInformationEx,
+        DeleteOperationStore.FileDispositionDelete,
+        new DurableFileIdentity(new string('3', 16), new string('4', 32)),
+        true,
+        string.Empty);
+    _ = await pendingDeleteOps.RecordCompletionAsync(
+        pendingDeleteIntent.RequestSequence,
+        DeleteDispositionCompletionState.AcceptedDeletePending,
+        0,
+        0,
+        true,
+        null);
+    _ = await pendingDeleteOps.RecordFinalizationAsync(
+        pendingDeleteIntent,
+        DeleteFinalizationSource.KernelCleanup,
+        DeleteFinalizationState.CleanupObserved,
+        RestartPathState.QueryFailed,
+        null);
+    _ = await new RollbackSessionLifecycleStore(pendingDeleteSession.Root)
+        .MarkCompletedAsync("synthetic-invalid-delete-completed");
+
     var retentionPlanHeld = RollbackRetentionPlanner.Build(retentionRepoRoot);
     Check(retentionPlanHeld.Actions.Any(x =>
               x.Kind == RollbackRetentionActionKind.PurgeCompletedSession &&
@@ -1980,17 +2007,21 @@ try
           !retentionPlanHeld.Actions.Any(x => x.SessionId == "active_session") &&
           !retentionPlanHeld.Actions.Any(x => x.SessionId == "faulted_session") &&
           !retentionPlanHeld.Actions.Any(x => x.SessionId == "pending_completed") &&
-          !retentionPlanHeld.Actions.Any(x => x.SessionId == "pending_truncate_completed"),
+          !retentionPlanHeld.Actions.Any(x => x.SessionId == "pending_truncate_completed") &&
+          !retentionPlanHeld.Actions.Any(x => x.SessionId == "pending_delete_completed"),
         "retention planner selects only eligible completed unheld sessions");
     Check(retentionPlanHeld.HeldSessions == 1 &&
-          retentionPlanHeld.ProtectedSessions >= 4 &&
+          retentionPlanHeld.ProtectedSessions >= 5 &&
           retentionPlanHeld.Issues.Any(x =>
               x.SessionId == "pending_completed" &&
-              x.Reason.Contains("pending CREATE/RENAME/TRUNCATE", StringComparison.Ordinal)) &&
+              x.Reason.Contains("pending CREATE/RENAME/TRUNCATE/DELETE", StringComparison.Ordinal)) &&
           retentionPlanHeld.Issues.Any(x =>
               x.SessionId == "pending_truncate_completed" &&
-              x.Reason.Contains("pending CREATE/RENAME/TRUNCATE", StringComparison.Ordinal)),
-        "retention planner protects pending CREATE and TRUNCATE transaction sessions");
+              x.Reason.Contains("pending CREATE/RENAME/TRUNCATE/DELETE", StringComparison.Ordinal)) &&
+          retentionPlanHeld.Issues.Any(x =>
+              x.SessionId == "pending_delete_completed" &&
+              x.Reason.Contains("pending CREATE/RENAME/TRUNCATE/DELETE", StringComparison.Ordinal)),
+        "retention planner protects pending CREATE, TRUNCATE and cleanup-only DELETE transaction sessions");
 
     var staleRetentionPlan = retentionPlanHeld;
     _ = await oldLifecycle.SetHoldAsync("temporary-hold-after-plan");

@@ -1,4 +1,4 @@
-# RansomGuard 0.7.27.0
+# RansomGuard 0.7.28.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
@@ -6,7 +6,7 @@ and recover data through rollback plus adaptive crypto analysis.
 
 ## Core preservation milestone
 
-0.7.27.0 keeps the protocol-v15 preservation/recovery model and the disposable-VHD filesystem matrix, while hardening build provenance: the repository selects one exact .NET SDK, pins GitHub Actions to reviewed immutable commit SHAs, validates those pins in source gates, and uses committed NuGet dependency lock files for locked-mode restore.
+0.7.28.0 keeps the protocol-v15 preservation/recovery model and reproducible-build controls, and adds a manual bounded-concurrency VM qualification. Each phase launches 16 independent filesystem helpers against an 8-request kernel gate / 8-worker user-mode gate, then verifies durable CREATE/RENAME/TRUNCATE/DELETE correlation plus mapped-write pre-image, writable-section and paging-write evidence.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 
@@ -91,6 +91,8 @@ Protocol v13 also removes the previous blind skip of paging-write callbacks. Aft
 
 0.7.27 hardens reproducibility and supply-chain inputs without changing protocol v15. `global.json` pins .NET SDK 10.0.401 with roll-forward disabled; CI installs that exact SDK; every third-party GitHub Action is referenced by a reviewed full commit SHA rather than a mutable version tag. A dedicated source gate rejects floating SDK/action references and verifies secret-bearing file patterns stay ignored. NuGet dependency graphs are committed as `packages.lock.json` files and restore runs in locked mode so an unreviewed graph change fails the build instead of silently resolving different transitive packages.
 
+0.7.28 adds a separate manual self-hosted concurrency-stress workflow without changing protocol v15. The stress harness configures GateClient at its maximum 8 workers, then launches 16 helpers per phase so admission pressure exceeds the kernel's 8 simultaneous blocking gate requests. CREATE, RENAME, synchronized TRUNCATE, synchronized DELETE and mapped-write phases must all finish successfully. The harness re-opens the durable JSONL evidence, requires unique request correlations and authoritative successful completions for every targeted mutation, requires DeletedObserved finalization for each delete, and verifies each mapped target's committed pre-image SHA-256 plus BaselineVerified writable-section and paging-write evidence. The test is VM-only and deliberately excludes formatting, reboot, boot-policy and Driver Verifier operations; those remain separate fault campaigns.
+
 
 ## Recovery safety
 
@@ -143,7 +145,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.7.27.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.7.28.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 Manual disposable-VM runtime workflows:
 
@@ -167,6 +169,6 @@ Bounded concurrent gate admission/workers are now implemented with a kernel cap 
 Restart evidence for pending/missing CREATE/RENAME/TRUNCATE completion events and unsettled DELETE lifecycle transactions is durable and conservative; authoritative completion is never inferred from a restart or topology probe. DELETE cleanup is handle-lifecycle evidence only, while pathname state is observed separately. The recovery planner may expose exact, fully consistent evidence as `Review` only, while cleanup-only, ambiguous, indeterminate or conflicting evidence stays `Blocked`. Paging writes on streams opened through the LAB gate are visible as durable evidence without synchronously blocking the paging path.
 
 Remaining core work includes broader fault-injection beyond the validated CREATE/RENAME/TRUNCATE/DELETE completion-loss cases,
-additional filesystem/runtime stress beyond the isolated NTFS/ReFS compatibility matrix (including reboot/crash, storage-pressure and Driver Verifier campaigns),
+additional filesystem/runtime fault campaigns beyond the isolated compatibility/concurrency proofs (including reboot/crash, storage-pressure and Driver Verifier campaigns),
 production retention UI/policy integration, production detector-to-containment authorization/policy, process-state capture, adaptive crypto reconstruction, production recovery UI/topology orchestration,
 driver signing and Microsoft-assigned production altitude.

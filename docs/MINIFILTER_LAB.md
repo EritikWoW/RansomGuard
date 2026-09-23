@@ -1,4 +1,4 @@
-# RansomGuard minifilter engineering lab — v0.7.25.0
+# RansomGuard minifilter engineering lab — v0.7.30.0
 
 The minifilter has two mutually exclusive user-mode connection modes:
 
@@ -247,4 +247,18 @@ The existing manual workflow `.github\workflows\minifilter-crash-vm.yml` now exp
 The Actions job deliberately does not issue `Restart-Computer`, `shutdown.exe`, boot-policy commands or Driver Verifier commands. After a successful `reboot-arm`, reboot the disposable VM manually, ensure the self-hosted runner is listening again, then launch `reboot-verify` from the exact same branch/commit. Do not use **Re-run jobs** as a substitute for the VERIFY phase.
 
 The low-disk campaign never selects or cleans a host disk. Formatting is allowed only on the dynamically assigned drive letter of the newly created VHD. If VHD detach cannot be confirmed, the harness leaves the VHD file intact and fails cleanup so the VM checkpoint can be reverted safely.
+
+## Driver Verifier qualification — 0.7.30
+
+The manual workflow `.github\workflows\minifilter-verifier-vm.yml` is a separate destructive disposable-VM campaign. It is not part of ordinary product installation and must not be run on a workstation.
+
+The campaign has three explicit phases on one unchanged commit:
+
+1. `arm` refuses any pre-existing Driver Verifier configuration, selects only `RansomGuardMinifilter.sys`, enables the Windows standard Driver Verifier profile, sets `bootmode=oneboot`, and writes durable exact-commit state under `C:\RansomGuard-VM-Verifier\Active`.
+2. Reboot the VM manually. Start the self-hosted runner elevated again, then launch a NEW workflow with `phase=runtime`. The runtime phase proves the loaded RansomGuard driver appears in current verifier activity and runs the bounded-concurrency CREATE/RENAME/TRUNCATE/DELETE/mapped-write qualification. A bugcheck in this window is a failed qualification, not a pass. On a clean run it executes `verifier /reset`.
+3. Reboot the VM manually a second time. Start the runner elevated and launch a NEW workflow with `phase=clear`. CLEAR requires the second boot transition, proves scheduled/current verifier activity no longer names the target driver, proves the minifilter is unloaded, and archives the campaign.
+
+The source gate forbids all-driver selection, wildcard driver targets, volatile verifier mode, persistent boot mode, direct registry mutation of `VerifyDrivers`/`VerifyDriverLevel`, automatic reboot/shutdown and BCD changes. The workflow uses Driver Verifier's one-boot mode as an additional boot-loop safety boundary; if the verifier boot cannot complete, revert the disposable VM checkpoint rather than modifying a primary machine.
+
+Do not use **Re-run jobs** to cross either reboot boundary. Each post-reboot phase must be a new workflow dispatch on the exact same commit.
 

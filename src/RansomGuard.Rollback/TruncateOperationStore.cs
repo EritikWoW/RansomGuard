@@ -203,7 +203,19 @@ public sealed class TruncateOperationStore
         if (intent.RequestSequence == 0 || !IsSha256(intent.RecordSha256))
             throw new InvalidDataException("TRUNCATE restart observation requires a committed intent.");
 
-        ValidateRestartFields(intent, evidence, pathState, currentIdentity, observedLength);
+        TruncateOperationIntent committedIntent;
+        lock (_intents)
+        {
+            committedIntent = _intents.SingleOrDefault(x => x.RequestSequence == intent.RequestSequence)
+                ?? throw new InvalidDataException("TRUNCATE restart observation references a missing intent.");
+        }
+
+        if (!committedIntent.RecordSha256.Equals(intent.RecordSha256, StringComparison.OrdinalIgnoreCase) ||
+            !committedIntent.OriginalPath.Equals(
+                NormalizePath(intent.OriginalPath), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("TRUNCATE restart observation intent binding mismatch.");
+
+        ValidateRestartFields(committedIntent, evidence, pathState, currentIdentity, observedLength);
 
         await _appendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -211,8 +223,8 @@ public sealed class TruncateOperationStore
             lock (_intents)
             {
                 var duplicate = _restart.LastOrDefault(x =>
-                    x.RequestSequence == intent.RequestSequence &&
-                    x.IntentRecordSha256.Equals(intent.RecordSha256, StringComparison.OrdinalIgnoreCase) &&
+                    x.RequestSequence == committedIntent.RequestSequence &&
+                    x.IntentRecordSha256.Equals(committedIntent.RecordSha256, StringComparison.OrdinalIgnoreCase) &&
                     x.Evidence == evidence &&
                     x.PathState == pathState &&
                     object.Equals(x.CurrentIdentity, currentIdentity) &&
@@ -222,8 +234,8 @@ public sealed class TruncateOperationStore
 
             var sequence = checked(++_nextRestartSequence);
             var payload = new TruncateRestartPayload(
-                sequence, DateTime.UtcNow, intent.RequestSequence, intent.RecordSha256,
-                evidence, intent.OriginalPath, pathState,
+                sequence, DateTime.UtcNow, committedIntent.RequestSequence, committedIntent.RecordSha256,
+                evidence, committedIntent.OriginalPath, pathState,
                 currentIdentity?.VolumeSerialHex ?? string.Empty,
                 currentIdentity?.FileIdHex ?? string.Empty,
                 observedLength, _lastRestartHash);
@@ -249,8 +261,8 @@ public sealed class TruncateOperationStore
         lock (_intents)
         {
             matches = _restart.Where(x =>
-                    x.RequestSequence == intent.RequestSequence &&
-                    x.IntentRecordSha256.Equals(intent.RecordSha256, StringComparison.OrdinalIgnoreCase))
+                    x.RequestSequence == committedIntent.RequestSequence &&
+                    x.IntentRecordSha256.Equals(committedIntent.RecordSha256, StringComparison.OrdinalIgnoreCase))
                 .OrderBy(x => x.Sequence).ToArray();
         }
 
@@ -465,11 +477,15 @@ public sealed class TruncateOperationStore
                 !Hash(line.Payload).Equals(line.RecordSha256, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("TRUNCATE restart hash chain mismatch.");
 
+            var normalizedPath = NormalizePath(line.OriginalPath);
+            if (!normalizedPath.Equals(intent.OriginalPath, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("TRUNCATE restart observation path does not match its committed intent.");
+
             DurableFileIdentity? identity = string.IsNullOrEmpty(line.CurrentVolumeSerialHex)
                 ? null
                 : new DurableFileIdentity(line.CurrentVolumeSerialHex, line.CurrentFileIdHex);
             ValidateRestartFields(intent, line.Evidence, line.PathState, identity, line.ObservedLength);
-            rebuilt.Add(line.ToObservation() with { OriginalPath = NormalizePath(line.OriginalPath) });
+            rebuilt.Add(line.ToObservation() with { OriginalPath = normalizedPath });
             previous = line.RecordSha256;
             expected++;
         }

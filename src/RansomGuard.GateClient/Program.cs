@@ -1050,6 +1050,7 @@ static class GateDecision
         RollbackStore store, RangeRollbackStore writeStore, CreateRollbackStore createStore,
         CreateOperationStore createOperationStore, FileIdentityStore identityStore,
         RenameRollbackStore renameStore, TruncateOperationStore truncateStore,
+        DeleteOperationStore deleteStore,
         RollbackStorageBudget storageBudget,
         CancellationToken cancellationToken)
     {
@@ -1093,6 +1094,11 @@ static class GateDecision
                     identityBaseline, sourceOriginallyAbsent, storageBudget, cancellationToken)
                     .ConfigureAwait(false);
 
+            if (eventType == RgEventType.DeleteDisposition)
+                return await EvaluateDeleteAsync(ev, path, store, deleteStore,
+                    identityBaseline, sourceOriginallyAbsent, storageBudget, cancellationToken)
+                    .ConfigureAwait(false);
+
             // Once a path is known to have been absent at incident start, later non-rename mutations must not
             // manufacture a pre-image from data that was created during the incident.
             if (sourceOriginallyAbsent)
@@ -1112,16 +1118,7 @@ static class GateDecision
             }
             else
             {
-                var mutation = eventType switch
-                {
-                    RgEventType.DeleteDisposition => RollbackMutationKind.Delete,
-                    _ => throw new InvalidOperationException("Unsupported gate event type.")
-                };
-                var estimate = RollbackStorageBudget.EstimateFullPreimageBytes(store, path);
-                await using var captureReservation = await storageBudget.ReserveAsync(
-                    estimate, $"full-preimage:{eventType}", cancellationToken).ConfigureAwait(false);
-                _ = await store.CapturePreimageAsync(path, mutation, identityBaseline.Identity, cancellationToken)
-                    .ConfigureAwait(false);
+                throw new InvalidOperationException("Unsupported gate event type.");
             }
 
             return Allow(ev.Sequence, RgGateDecision.SnapshotCommitted);
@@ -1141,6 +1138,59 @@ static class GateDecision
             Console.Error.WriteLine($"Gate capture failed: {ex.GetType().Name}: {ex.Message}");
             return Deny(ev.Sequence, 5);
         }
+    }
+
+    private static async Task<RgGateReply> EvaluateDeleteAsync(
+        RgEvent ev,
+        string path,
+        RollbackStore store,
+        DeleteOperationStore deleteStore,
+        FileIdentityBaseline identityBaseline,
+        bool sourceOriginallyAbsent,
+        RollbackStorageBudget storageBudget,
+        CancellationToken cancellationToken)
+    {
+        if (ev.FileInformationClass is not
+            (DeleteOperationStore.FileDispositionInformation or
+             DeleteOperationStore.FileDispositionInformationEx))
+            return Deny(ev.Sequence, 15);
+
+        var requestDelete = (ev.Flags & DeleteOperationStore.FileDispositionDelete) != 0;
+        var preservationRecordSha256 = string.Empty;
+
+        if (requestDelete && !sourceOriginallyAbsent)
+        {
+            var estimate = RollbackStorageBudget.EstimateFullPreimageBytes(store, path);
+            await using var captureReservation = await storageBudget.ReserveAsync(
+                estimate, "delete-full-preimage", cancellationToken).ConfigureAwait(false);
+            var capture = await store.CapturePreimageAsync(
+                    path,
+                    RollbackMutationKind.Delete,
+                    identityBaseline.Identity,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            preservationRecordSha256 = capture.RecordSha256;
+        }
+
+        _ = await deleteStore.RecordIntentAsync(
+                ev.Sequence,
+                path,
+                ev.FileInformationClass,
+                ev.Flags,
+                identityBaseline.Identity,
+                sourceOriginallyAbsent,
+                preservationRecordSha256,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!requestDelete)
+            return Allow(ev.Sequence, RgGateDecision.NoPreservationRequired);
+
+        return Allow(
+            ev.Sequence,
+            sourceOriginallyAbsent
+                ? RgGateDecision.BaselineCommitted
+                : RgGateDecision.SnapshotCommitted);
     }
 
     private static async Task<RgGateReply> EvaluateTruncateAsync(

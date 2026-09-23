@@ -133,7 +133,7 @@ try {
         Run-Dotnet -Arguments @('restore',$project,'--locked-mode','-r','win-x64','-p:SelfContained=true',$auditErrors)
     }
     $auditPath = Join-Path $logs "dependencies-$stamp.json"
-    $json = & dotnet list $svc package --include-transitive --vulnerable --format json
+    $json = & dotnet list $svc package --include-transitive --vulnerable --format json --no-restore
     if ($LASTEXITCODE -ne 0) { throw 'Package vulnerability audit failed. Do not bypass it for deployment.' }
     $json | Set-Content -LiteralPath $auditPath -Encoding UTF8
     $audit = ($json -join [Environment]::NewLine) | ConvertFrom-Json

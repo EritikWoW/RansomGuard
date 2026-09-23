@@ -98,7 +98,7 @@ if($script -match '(?im)\b(taskkill|wmic\s+process|Get-Process\s+[^#\r\n]*\|\s*S
 if($script -match '(?im)Remove-Item[^\r\n]*\$RootBase'){
     throw 'Concurrency stress harness must not recursively delete the caller-supplied RootBase.'
 }
-if($script -notmatch [regex]::Escape("if($full -notmatch '(?i)RansomGuard')") -or
+if($script -notmatch [regex]::Escape('if($full -notmatch ''(?i)RansomGuard'')') -or
    $script -notmatch [regex]::Escape('if([string]::IsNullOrWhiteSpace($drive) -or $full -eq $drive)')){
     throw 'Concurrency stress root safety checks are missing.'
 }

@@ -2,9 +2,15 @@ $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
 $program=Join-Path $root 'src\RansomGuard.GateClient\Program.cs'
 $manifest=Join-Path $root 'src\RansomGuard.GateClient\app.manifest'
-if(-not(Test-Path -LiteralPath $program) -or -not(Test-Path -LiteralPath $manifest)){throw 'Gate client source/manifest missing.'}
+$fileIdentity=Join-Path $root 'src\RansomGuard.Rollback\FileIdentityStore.cs'
+if(-not(Test-Path -LiteralPath $program) -or
+   -not(Test-Path -LiteralPath $manifest) -or
+   -not(Test-Path -LiteralPath $fileIdentity)){
+  throw 'Gate client source/manifest/file-identity source missing.'
+}
 $text=Get-Content -LiteralPath $program -Raw
 $manifestText=Get-Content -LiteralPath $manifest -Raw
+$fileIdentityText=Get-Content -LiteralPath $fileIdentity -Raw
 
 foreach($required in @(
   'RANSOMGUARD-LAB-GATE-V1',
@@ -129,6 +135,21 @@ foreach($required in @(
   'Activation refused:'
 )){
   if($text -notmatch [regex]::Escape($required)){throw "Gate client invariant missing: $required"}
+}
+
+foreach($required in @(
+  'private const int FileStandardInfo = 1;',
+  'public byte DeletePending;',
+  'public byte Directory;',
+  'QueryHandleStandardInfo(',
+  'GetFileInformationByHandleExStandard('
+)){
+  if($fileIdentityText -notmatch [regex]::Escape($required)){
+    throw "FILE_STANDARD_INFO interop invariant missing: $required"
+  }
+}
+if($fileIdentityText -match '\[MarshalAs\(UnmanagedType\.Bool\)\]\s*public\s+bool\s+(DeletePending|Directory)'){
+  throw 'FILE_STANDARD_INFO uses one-byte BOOLEAN fields, not Win32 BOOL marshaling.'
 }
 
 if($manifestText -notmatch 'requestedExecutionLevel\s+level="requireAdministrator"'){throw 'Gate client must require explicit administrator elevation.'}

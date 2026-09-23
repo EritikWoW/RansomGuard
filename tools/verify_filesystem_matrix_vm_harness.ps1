@@ -55,6 +55,8 @@ foreach($required in @(
     'rename-file',
     'truncate-eof',
     'delete-file',
+    '"CreateResult.*" + [regex]::Escape($truncateTarget)',
+    '"CreateResult.*" + [regex]::Escape($deleteTarget)',
     'map-write',
     'create-completion-journal.jsonl',
     'rename-completion-journal.jsonl',

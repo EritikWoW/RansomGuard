@@ -404,6 +404,11 @@ static void TruncateEndOfFile(string filePath, long length)
         throw new System.ComponentModel.Win32Exception(
             Marshal.GetLastWin32Error(), $"CreateFileW for truncate failed for '{filePath}'.");
 
+    // The write-capable open itself has a correlated CREATE result. Give the no-reply CREATE
+    // completion worker time to durably close that transaction before the deliberate TRUNCATE
+    // completion-loss point is reached.
+    Thread.Sleep(500);
+
     var info = new Native.FileEndOfFileInfo { EndOfFile = length };
     if (!Native.SetFileInformationByHandle(
             file,

@@ -8,8 +8,12 @@ $unload=Get-Content -LiteralPath (Join-Path $root 'minifilter-tools\unload_minif
 
 foreach($required in @(
   '--drop-first-create-completion',
+  '--drop-first-rename-completion',
   'LAB COMPLETION LOSS: intentionally dropping authoritative CREATE result',
+  'LAB COMPLETION LOSS: intentionally dropping authoritative RENAME result',
   'Interlocked.CompareExchange(ref droppedCreateCompletion, 1, 0) == 0',
+  'Interlocked.CompareExchange(ref droppedRenameCompletion, 1, 0) == 0',
+  'Only one completion-loss injection may be armed per GateClient session.',
   'cts.Cancel();',
   'Native.Cancel(port);',
   '--reconcile-only',
@@ -31,6 +35,15 @@ $persist=$gate.IndexOf('CreateReconciliation.HandleAsync(',$createResult)
 if($createResult -lt 0 -or $drop -lt 0 -or $cancel -lt 0 -or $persist -lt 0 -or
    $createResult -gt $drop -or $drop -gt $cancel -or $cancel -gt $persist){
   throw 'CREATE completion-loss injection must run after receiving CreateResult but before authoritative completion persistence.'
+}
+
+$renameResult=$gate.IndexOf('if ((RgEventType)ev.EventType == RgEventType.RenameResult)')
+$renameDrop=$gate.IndexOf('if (options.DropFirstRenameCompletion',$renameResult)
+$renameCancel=$gate.IndexOf('cts.Cancel();',$renameDrop)
+$renamePersist=$gate.IndexOf('RenameReconciliation.HandleAsync(',$renameResult)
+if($renameResult -lt 0 -or $renameDrop -lt 0 -or $renameCancel -lt 0 -or $renamePersist -lt 0 -or
+   $renameResult -gt $renameDrop -or $renameDrop -gt $renameCancel -or $renameCancel -gt $renamePersist){
+  throw 'RENAME completion-loss injection must run after receiving RenameResult but before authoritative completion persistence.'
 }
 
 $restart=$gate.IndexOf('RestartReconciliation.ObservePendingAsync(')
@@ -59,6 +72,15 @@ if($createNewBlock -match [regex]::Escape('Native.WriteFile')){
 }
 
 foreach($required in @(
+  'case "rename-file":',
+  'RenameFile(',
+  'File.Move(sourcePath, destinationPath, overwrite: false)',
+  'rename-file destination must start absent'
+)){
+  if($helper -notmatch [regex]::Escape($required)){throw "RuntimeHarness RENAME completion-loss trigger invariant missing: $required"}
+}
+
+foreach($required in @(
   'Assert-DisposableVm',
   'LAB-MINIFILTER',
   "'--drop-first-create-completion'",
@@ -78,6 +100,27 @@ foreach($required in @(
   'completionLossObserved',
   'targetCreated',
   'restartSupportsCompleted',
+  "'--drop-first-rename-completion'",
+  "'rename-file'",
+  'RENAME must complete before completion evidence is intentionally dropped',
+  'RENAME source still exists even though the filesystem operation completed',
+  'rename-state\rename-journal.jsonl',
+  'rename-state\rename-completion-journal.jsonl',
+  '[int]$renameRestartRecord.operationKind -ne 2',
+  '[int]$renameRestartRecord.evidence -ne 1',
+  '[int]$renameRestartRecord.sourceState -ne 1',
+  '[int]$renameRestartRecord.destinationState -ne 2',
+  '[int]$_.kind -eq 5',
+  '[int]$renameTopology[0].state -eq 1',
+  '[int]$renameTopology[0].state -ne 2',
+  'automaticTopologyMutationAllowed',
+  'renameCompletionLossObserved',
+  'renameIntentDurable',
+  'renameCompletionAbsent',
+  'renameTopologyChanged',
+  'renameRestartObserved',
+  'renameRestartSupportsCompleted',
+  'renameRecoveryTopologyNotReady',
   'unload_minifilter_lab.ps1',
   'crash-runtime-result.json'
 )){
@@ -100,6 +143,13 @@ foreach($required in @(
   'restartObserved',
   'restartSupportsCompleted',
   'recoveryTransactionNotReady',
+  'renameCompletionLossObserved',
+  'renameIntentDurable',
+  'renameCompletionAbsent',
+  'renameTopologyChanged',
+  'renameRestartObserved',
+  'renameRestartSupportsCompleted',
+  'renameRecoveryTopologyNotReady',
   'cleanupPassed',
   'Upload crash evidence',
   'Ensure LAB minifilter is unloaded after run'
@@ -124,4 +174,4 @@ if($workflow -notmatch [regex]::Escape('STALE KERNEL STATE: RansomGuardMinifilte
   throw 'VM startup must fail fast on an already-loaded stale LAB minifilter.'
 }
 
-Write-Host 'Completion-loss VM harness source check PASSED: CREATE completed, authoritative result intentionally omitted, restart evidence supports completion, recovery transaction remains non-Ready.'
+Write-Host 'Completion-loss VM harness source check PASSED: CREATE and RENAME completed, authoritative results intentionally omitted, restart evidence supports completion, topology transactions remain non-Ready.'

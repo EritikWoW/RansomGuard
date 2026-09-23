@@ -73,7 +73,7 @@ if($arm -match [regex]::Escape('unload_minifilter_lab.ps1') -and
 }
 
 foreach($required in @(
-    'reboot-arm-state.json.sha256',
+    "`$stateHashPath=`$statePath+'.sha256'",
     'Get-FileHash -LiteralPath $statePath -Algorithm SHA256',
     'LastBootUpTime',
     'No VM reboot was observed between ARM and VERIFY',

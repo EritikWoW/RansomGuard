@@ -13,8 +13,11 @@ foreach($required in @('Environment.ProcessPath','Verb = "runas"','AdminContract
 foreach($required in @('DemandAdministrator','AdminContract.CheckConfirmation','Inspect(rule.ImagePath, true)','prepared.Digest','ScopedRuleVerifier.CheckScopes','Commit(')) {
  if(-not$rules.Contains($required)){throw "Missing administrative trust validation: $required"}
 }
-foreach($required in @('DemandAdministrator','AdminContract.CheckConfirmation','AdminContract.ServiceName','VerifyRegistration','FileMode.CreateNew','FileShare.Read','MatchesInstalledPeer','expectedServiceHash','WaitFor(service, 1)','TimeSpan.FromSeconds(30)')) {
+foreach($required in @('DemandAdministrator','AdminContract.CheckConfirmation','AdminContract.ServiceName','VerifyRegistration','FileMode.CreateNew','FileShare.Read','MatchesInstalledPeer','expectedServiceHash','WaitFor(service, 1)','TimeSpan.FromSeconds(30)','IsSha256Hex(record.ImageSha256)','value.All(char.IsAsciiHexDigit)')) {
  if(-not$service.Contains($required)){throw "Missing own-service control invariant: $required"}
+}
+if($service.Contains('DecisionPolicy.HashEqual(record.ImageSha256, record.ImageSha256)')){
+ throw 'Install record validation must not use a self-comparison as a SHA-256 format check.'
 }
 $wizard=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Ui\Administration\SetupWizardPane.cs') -Raw
 $text=($launch,$window,$wizard,$rules,$service) -join "`n"

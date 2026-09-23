@@ -6,7 +6,7 @@ and recover data through rollback plus adaptive crypto analysis.
 
 ## Core preservation milestone
 
-0.7.28.0 keeps the protocol-v15 preservation/recovery model and reproducible-build controls, and adds a manual bounded-concurrency VM qualification. Each phase launches 16 independent filesystem helpers against an 8-request kernel gate / 8-worker user-mode gate, then verifies durable CREATE/RENAME/TRUNCATE/DELETE correlation plus mapped-write pre-image, writable-section and paging-write evidence.
+0.7.28.0 keeps the protocol-v15 preservation/recovery model and reproducible-build controls, and adds a manual bounded-concurrency VM qualification. An overload probe launches 16 independent CREATE helpers against the 8-request kernel gate and requires excess admission to fail closed without creating a pathname or durable user-mode transaction. The full CREATE/RENAME/TRUNCATE/DELETE/mapped-write qualification then runs at the supported concurrency ceiling of 8 and requires authoritative durable correlation, mapped-write pre-image integrity, writable-section evidence and paging-write evidence.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 

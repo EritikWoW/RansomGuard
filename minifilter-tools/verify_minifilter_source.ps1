@@ -42,7 +42,7 @@ foreach($required in @(
     'RgEventIsInsideGateRoot',
     'gClientProcessId',
     'RG_GATE_TIMEOUT_MS',
-    'RG_MAX_GATE_INFLIGHT',
+    'RG_MAX_GATE_INFLIGHT 8L',
     'gGateInFlight',
     'RgAcquireClientPort',
     'RgReleaseClientPort',

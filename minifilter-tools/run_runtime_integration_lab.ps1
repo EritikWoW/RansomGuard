@@ -190,6 +190,34 @@ function Assert-CorrelatedJournalPair(
     }
 }
 
+function Wait-CorrelatedJournalPair(
+    [string]$IntentPath,
+    [string]$CompletionPath,
+    [string]$Description,
+    [int]$Seconds,
+    [int]$ExactCount=0,
+    [int]$MinimumCount=1
+){
+    $deadline=(Get-Date).AddSeconds($Seconds)
+    $lastError=''
+    while((Get-Date) -lt $deadline){
+        try{
+            $intents=@(Read-JsonJournal $IntentPath "$Description intent")
+            $completions=@(Read-JsonJournal $CompletionPath "$Description completion")
+            Assert-CorrelatedJournalPair $intents $completions $Description $ExactCount $MinimumCount
+            return [pscustomobject]@{
+                IntentCount=$intents.Count
+                CompletionCount=$completions.Count
+            }
+        }
+        catch{
+            $lastError=$_.Exception.Message
+        }
+        Start-Sleep -Milliseconds 150
+    }
+    throw "Timed out waiting for correlated $Description journals. Last error: $lastError"
+}
+
 function New-TestFile([string]$Path){
     $parent=Split-Path -Parent $Path
     New-Item -ItemType Directory -Path $parent -Force | Out-Null
@@ -321,8 +349,8 @@ $summary=[ordered]@{
     concurrencyTruncateCorrelated=$false
     concurrencyDeleteCorrelated=$false
     concurrencyMappedEvidence=$false
-    concurrencyGateWorkers=4
-    concurrencyProcessCount=20
+    concurrencyGateWorkers=0
+    concurrencyProcessCount=0
     cleanupPassed=$false
     cleanupError=$null
     passed=$false
@@ -683,6 +711,7 @@ try{
     ) $stressOut $stressErr
     Wait-LogPattern $stressOut 'Bounded gate workers\s+: 4' $gateStress 45
     Wait-LogPattern $stressOut 'kernel gate ACTIVE' $gateStress 45
+    $summary.concurrencyGateWorkers=4
 
     $stressSession=Join-Path $stressStore 'Sessions\concurrency-stress'
     $createCompletionJournal=Join-Path $stressSession 'create-state\create-completion-journal.jsonl'
@@ -746,6 +775,11 @@ try{
     }
     foreach($marker in $stressGoMarkers){
         New-Item -ItemType File -Path $marker -Force | Out-Null
+    }
+
+    $summary.concurrencyProcessCount=$stressProcesses.Count
+    if($summary.concurrencyProcessCount -ne 20){
+        throw "Concurrency stress launched an unexpected helper count: $($summary.concurrencyProcessCount)"
     }
 
     Wait-StressProcesses $stressProcesses 90
@@ -834,26 +868,25 @@ try{
     }
     $summary.concurrencyMappedEvidence=$true
 
-    $createIntents=@(Read-JsonJournal (Join-Path $stressSession 'create-state\create-intent-journal.jsonl') 'stress CREATE intent')
-    $createCompletions=@(Read-JsonJournal $createCompletionJournal 'stress CREATE completion')
-    Assert-CorrelatedJournalPair $createIntents $createCompletions 'stress CREATE' 0 16
+    $createPair=Wait-CorrelatedJournalPair (Join-Path $stressSession 'create-state\create-intent-journal.jsonl') $createCompletionJournal 'stress CREATE' 45 0 16
+    if($createPair.IntentCount -lt 16 -or $createPair.IntentCount -ne $createPair.CompletionCount){
+        throw "Stress CREATE correlation count mismatch after wait."
+    }
     $summary.concurrencyCreateCorrelated=$true
 
-    $renameIntents=@(Read-JsonJournal (Join-Path $stressSession 'rename-state\rename-journal.jsonl') 'stress RENAME intent')
-    $renameCompletions=@(Read-JsonJournal $renameCompletionJournal 'stress RENAME completion')
-    Assert-CorrelatedJournalPair $renameIntents $renameCompletions 'stress RENAME' 4 4
-    $summary.concurrencyRenameCorrelated=$true
+    $renamePair=Wait-CorrelatedJournalPair (Join-Path $stressSession 'rename-state\rename-journal.jsonl') $renameCompletionJournal 'stress RENAME' 45 4 4
+    $summary.concurrencyRenameCorrelated=($renamePair.IntentCount -eq 4 -and $renamePair.CompletionCount -eq 4)
 
-    $truncateIntents=@(Read-JsonJournal (Join-Path $stressSession 'truncate-state\truncate-intent-journal.jsonl') 'stress TRUNCATE intent')
-    $truncateCompletions=@(Read-JsonJournal $truncateCompletionJournal 'stress TRUNCATE completion')
-    Assert-CorrelatedJournalPair $truncateIntents $truncateCompletions 'stress TRUNCATE' 4 4
-    $summary.concurrencyTruncateCorrelated=$true
+    $truncatePair=Wait-CorrelatedJournalPair $truncateIntentJournal $truncateCompletionJournal 'stress TRUNCATE' 45 4 4
+    $summary.concurrencyTruncateCorrelated=($truncatePair.IntentCount -eq 4 -and $truncatePair.CompletionCount -eq 4)
 
-    $deleteIntents=@(Read-JsonJournal (Join-Path $stressSession 'delete-state\delete-intent-journal.jsonl') 'stress DELETE intent')
-    $deleteCompletions=@(Read-JsonJournal $deleteCompletionJournal 'stress DELETE completion')
-    Assert-CorrelatedJournalPair $deleteIntents $deleteCompletions 'stress DELETE' 4 4
-    $summary.concurrencyDeleteCorrelated=$true
+    $deletePair=Wait-CorrelatedJournalPair $deleteIntentJournal $deleteCompletionJournal 'stress DELETE' 45 4 4
+    $summary.concurrencyDeleteCorrelated=($deletePair.IntentCount -eq 4 -and $deletePair.CompletionCount -eq 4)
 
+    if($gateStress.HasExited){
+        $err=if(Test-Path -LiteralPath $stressErr){Get-Content -LiteralPath $stressErr -Raw -ErrorAction SilentlyContinue}else{''}
+        throw "GateClient exited before concurrency stress evidence was finalized. exit=$($gateStress.ExitCode). $err"
+    }
     if(Test-Path -LiteralPath $stressErr){
         $stressErrors=Get-Content -LiteralPath $stressErr -Raw -ErrorAction SilentlyContinue
         if($stressErrors -match 'Gate worker failed:'){

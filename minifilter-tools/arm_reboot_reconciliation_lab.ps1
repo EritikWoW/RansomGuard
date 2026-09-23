@@ -70,7 +70,7 @@ function Wait-Path([string]$Path,[System.Diagnostics.Process]$Process,[int]$Seco
         if($Process.HasExited){throw "$Description process exited early. exit=$($Process.ExitCode)"}
         Start-Sleep -Milliseconds 100
     }
-    throw "Timed out waiting for $Description: $Path"
+    throw "Timed out waiting for ${Description}: $Path"
 }
 
 function Wait-LogPattern([string]$Path,[string]$Pattern,[System.Diagnostics.Process]$Process,[int]$Seconds){

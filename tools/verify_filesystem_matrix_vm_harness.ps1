@@ -108,6 +108,19 @@ if($script -notmatch [regex]::Escape("if(-not $activeVhd.Supported)")){
 }
 
 $workflow=Get-Content -LiteralPath $workflowPath -Raw
+foreach($required in @(
+    'Run NTFS and ReFS filesystem compatibility matrix',
+    'run_filesystem_matrix_lab.ps1',
+    'filesystem-matrix-result.json',
+    "'ntfsAttempted','ntfsSupported','ntfsPassed','refsAttempted','cleanupPassed','passed'",
+    'refsUnsupportedReason',
+    'ransomguard-filesystem-matrix-evidence',
+    'Upload filesystem matrix evidence'
+)){
+    if($workflow -notmatch [regex]::Escape($required)){
+        throw "Runtime VM workflow missing filesystem matrix invariant: $required"
+    }
+}
 if($workflow -match '(?m)^\s+(push|pull_request|schedule):'){
     throw 'Filesystem matrix must remain behind the manual runtime VM workflow.'
 }

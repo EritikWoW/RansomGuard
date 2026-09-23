@@ -234,3 +234,17 @@ The transition counter advances only for successful blocking gate replies that a
 When the threshold is met, GateClient reserves storage and durably appends a Requested record to `containment-state\containment-journal.jsonl` before setting the containment reply flag. The minifilter accepts that flag only on an allowed preservation decision, references the exact requestor process object from the current callback data, installs the latch, and queues a no-reply `ContainmentActivated` event related to the original gate sequence. GateClient then appends the linked KernelActive receipt.
 
 There is still no release/bypass command. A missing KernelActive receipt leaves the session faulted. This path is intentionally LAB-only and does not allow the ordinary service heuristic to contain arbitrary applications.
+
+## Fault campaign — 0.7.29
+
+The existing manual workflow `.github\workflows\minifilter-crash-vm.yml` now exposes four campaign choices:
+
+- `completion-loss` — the existing CREATE/RENAME/TRUNCATE/DELETE result-loss reconciliation campaign.
+- `low-disk` — creates a new expandable NTFS VHD under the runner temp RansomGuard scratch directory, uses only that VHD for rollback storage, drives free space below the configured reserve, requires a protected-root RENAME to fail closed with unchanged topology, then removes the filler and proves the same RENAME succeeds with a hash-verified full pre-image.
+- `reboot-arm` — commits a TRUNCATE intent and full pre-image, deliberately omits the authoritative TruncateResult, writes a SHA-256-bound state record under `C:\RansomGuard-VM-Reboot\Active`, and intentionally leaves the LAB filter loaded.
+- `reboot-verify` — must be run only after a real VM reboot. It requires Windows `LastBootUpTime` to be newer than the ARM record, requires the filter to be absent after reboot, performs reconcile-only restart observation, and proves the transaction remains Review-only while full-preimage copy-out is Ready.
+
+The Actions job deliberately does not issue `Restart-Computer`, `shutdown.exe`, boot-policy commands or Driver Verifier commands. After a successful `reboot-arm`, reboot the disposable VM manually, ensure the self-hosted runner is listening again, then launch `reboot-verify` from the exact same branch/commit. Do not use **Re-run jobs** as a substitute for the VERIFY phase.
+
+The low-disk campaign never selects or cleans a host disk. Formatting is allowed only on the dynamically assigned drive letter of the newly created VHD. If VHD detach cannot be confirmed, the harness leaves the VHD file intact and fails cleanup so the VM checkpoint can be reverted safely.
+

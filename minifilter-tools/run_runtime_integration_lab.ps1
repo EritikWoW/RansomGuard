@@ -172,12 +172,12 @@ function Assert-CorrelatedJournalPair(
         throw "$Description produced too few intents: $($Intents.Count), minimum=$MinimumCount"
     }
 
-    $intentSet=[Collections.Generic.HashSet[uint64]]::new()
+    $intentSet=[System.Collections.Generic.HashSet[uint64]]::new()
     foreach($record in $Intents){
         $seq=[uint64]$record.requestSequence
         if($seq -eq 0 -or -not $intentSet.Add($seq)){throw "$Description contains duplicate/zero intent requestSequence=$seq"}
     }
-    $completionSet=[Collections.Generic.HashSet[uint64]]::new()
+    $completionSet=[System.Collections.Generic.HashSet[uint64]]::new()
     foreach($record in $Completions){
         $seq=[uint64]$record.requestSequence
         if($seq -eq 0 -or -not $completionSet.Add($seq)){throw "$Description contains duplicate/zero completion requestSequence=$seq"}
@@ -770,12 +770,14 @@ try{
     }
 
     # Wait for the authoritative journals required by the 20-process burst.
-    $renameCompletionJournal=Join-Path $stressSession 'rename-stateename-completion-journal.jsonl'
-    $truncateCompletionJournal=Join-Path $stressSession 'truncate-state	runcate-completion-journal.jsonl'
-    $deleteCompletionJournal=Join-Path $stressSession 'delete-statedelete-completion-journal.jsonl'
-    $deleteFinalizationJournal=Join-Path $stressSession 'delete-statedelete-finalization-journal.jsonl'
-    $sectionJournal=Join-Path $stressSession 'section-statewritable-section-journal.jsonl'
-    $pagingJournal=Join-Path $stressSession 'paging-statepaging-write-journal.jsonl'
+    $renameCompletionJournal=Join-Path $stressSession 'rename-state\rename-completion-journal.jsonl'
+    $truncateIntentJournal=Join-Path $stressSession 'truncate-state\truncate-intent-journal.jsonl'
+    $truncateCompletionJournal=Join-Path $stressSession 'truncate-state\truncate-completion-journal.jsonl'
+    $deleteIntentJournal=Join-Path $stressSession 'delete-state\delete-intent-journal.jsonl'
+    $deleteCompletionJournal=Join-Path $stressSession 'delete-state\delete-completion-journal.jsonl'
+    $deleteFinalizationJournal=Join-Path $stressSession 'delete-state\delete-finalization-journal.jsonl'
+    $sectionJournal=Join-Path $stressSession 'section-state\writable-section-journal.jsonl'
+    $pagingJournal=Join-Path $stressSession 'paging-state\paging-write-journal.jsonl'
     $rollbackJournal=Join-Path $stressSession 'journal.jsonl'
 
     for($i=0;$i -lt $stressCount;$i++){
@@ -784,17 +786,29 @@ try{
             [string]::Equals([IO.Path]::GetFullPath([string]$x.finalDestinationPath),$renameDestinations[$i],[StringComparison]::OrdinalIgnoreCase) -and
             [int]$x.state -ne 5
         } 45 "stress RENAME completion $i"
+        $truncateIntent=Wait-JournalMatch $truncateIntentJournal {
+            param($x)
+            [string]::Equals([IO.Path]::GetFullPath([string]$x.originalPath),$truncateFiles[$i],[StringComparison]::OrdinalIgnoreCase)
+        } 45 "stress TRUNCATE intent $i"
         $null=Wait-JournalMatch $truncateCompletionJournal {
             param($x)
-            [int64]$x.observedLength -eq 4096
+            [uint64]$x.requestSequence -eq [uint64]$truncateIntent.requestSequence -and
+            [int64]$x.observedLength -eq 4096 -and
+            [int]$x.state -ne 5
         } 45 "stress TRUNCATE completion $i"
+        $deleteIntent=Wait-JournalMatch $deleteIntentJournal {
+            param($x)
+            [string]::Equals([IO.Path]::GetFullPath([string]$x.originalPath),$deleteFiles[$i],[StringComparison]::OrdinalIgnoreCase) -and
+            $x.requestDelete -eq $true
+        } 45 "stress DELETE intent $i"
         $deleteCompletion=Wait-JournalMatch $deleteCompletionJournal {
             param($x)
+            [uint64]$x.requestSequence -eq [uint64]$deleteIntent.requestSequence -and
             [int]$x.state -ne 1
         } 45 "stress DELETE completion $i"
         $null=Wait-JournalMatch $deleteFinalizationJournal {
             param($x)
-            [uint64]$x.requestSequence -eq [uint64]$deleteCompletion.requestSequence -and
+            [uint64]$x.requestSequence -eq [uint64]$deleteIntent.requestSequence -and
             [int]$x.state -eq 1
         } 45 "stress DELETE finalization $i"
         $null=Wait-JournalMatch $sectionJournal {
@@ -820,23 +834,23 @@ try{
     }
     $summary.concurrencyMappedEvidence=$true
 
-    $createIntents=Read-JsonJournal (Join-Path $stressSession 'create-statecreate-intent-journal.jsonl') 'stress CREATE intent'
-    $createCompletions=Read-JsonJournal $createCompletionJournal 'stress CREATE completion'
+    $createIntents=@(Read-JsonJournal (Join-Path $stressSession 'create-state\create-intent-journal.jsonl') 'stress CREATE intent')
+    $createCompletions=@(Read-JsonJournal $createCompletionJournal 'stress CREATE completion')
     Assert-CorrelatedJournalPair $createIntents $createCompletions 'stress CREATE' 0 16
     $summary.concurrencyCreateCorrelated=$true
 
-    $renameIntents=Read-JsonJournal (Join-Path $stressSession 'rename-stateename-journal.jsonl') 'stress RENAME intent'
-    $renameCompletions=Read-JsonJournal $renameCompletionJournal 'stress RENAME completion'
+    $renameIntents=@(Read-JsonJournal (Join-Path $stressSession 'rename-state\rename-journal.jsonl') 'stress RENAME intent')
+    $renameCompletions=@(Read-JsonJournal $renameCompletionJournal 'stress RENAME completion')
     Assert-CorrelatedJournalPair $renameIntents $renameCompletions 'stress RENAME' 4 4
     $summary.concurrencyRenameCorrelated=$true
 
-    $truncateIntents=Read-JsonJournal (Join-Path $stressSession 'truncate-state	runcate-intent-journal.jsonl') 'stress TRUNCATE intent'
-    $truncateCompletions=Read-JsonJournal $truncateCompletionJournal 'stress TRUNCATE completion'
+    $truncateIntents=@(Read-JsonJournal (Join-Path $stressSession 'truncate-state\truncate-intent-journal.jsonl') 'stress TRUNCATE intent')
+    $truncateCompletions=@(Read-JsonJournal $truncateCompletionJournal 'stress TRUNCATE completion')
     Assert-CorrelatedJournalPair $truncateIntents $truncateCompletions 'stress TRUNCATE' 4 4
     $summary.concurrencyTruncateCorrelated=$true
 
-    $deleteIntents=Read-JsonJournal (Join-Path $stressSession 'delete-statedelete-intent-journal.jsonl') 'stress DELETE intent'
-    $deleteCompletions=Read-JsonJournal $deleteCompletionJournal 'stress DELETE completion'
+    $deleteIntents=@(Read-JsonJournal (Join-Path $stressSession 'delete-state\delete-intent-journal.jsonl') 'stress DELETE intent')
+    $deleteCompletions=@(Read-JsonJournal $deleteCompletionJournal 'stress DELETE completion')
     Assert-CorrelatedJournalPair $deleteIntents $deleteCompletions 'stress DELETE' 4 4
     $summary.concurrencyDeleteCorrelated=$true
 

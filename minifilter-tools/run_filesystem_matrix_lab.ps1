@@ -454,7 +454,26 @@ New-Item -ItemType Directory -Path $ResultsDirectory -Force | Out-Null
 
 $staleVhds=@(Get-ChildItem -LiteralPath $ScratchDirectory -Filter 'RansomGuard-*.vhd' -File -ErrorAction SilentlyContinue)
 if($staleVhds.Count -gt 0){
-    throw "STALE MATRIX STATE: scratch VHD file(s) remain from an earlier run: $($staleVhds.Name -join ', '). Revert the disposable VM checkpoint before retrying."
+    $getDiskImage=Get-Command Get-DiskImage -ErrorAction SilentlyContinue
+    if($null -eq $getDiskImage){
+        throw "STALE MATRIX STATE: scratch VHD file(s) remain, but Get-DiskImage is unavailable to prove they are detached: $($staleVhds.Name -join ', '). Revert the disposable VM checkpoint before retrying."
+    }
+
+    foreach($staleVhd in $staleVhds){
+        $image=$null
+        try{
+            $image=Get-DiskImage -ImagePath $staleVhd.FullName -ErrorAction Stop
+        }catch{
+            throw "STALE MATRIX STATE: unable to verify whether scratch VHD is detached: $($staleVhd.FullName). $($_.Exception.Message)"
+        }
+
+        if($image.Attached){
+            throw "STALE MATRIX STATE: scratch VHD is still attached: $($staleVhd.FullName). Revert the disposable VM checkpoint before retrying."
+        }
+
+        Remove-Item -LiteralPath $staleVhd.FullName -Force -ErrorAction Stop
+        Write-Host "Recovered detached stale filesystem-matrix VHD: $($staleVhd.Name)"
+    }
 }
 $staleVolumes=@(Get-Volume -ErrorAction SilentlyContinue | Where-Object {
     [string]$_.FileSystemLabel -in @('RGFSNTFS','RGFSREFS')

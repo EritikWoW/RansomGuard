@@ -12,3 +12,13 @@
 /minifilter-tools/ @EritikWoW
 /tools/ @EritikWoW
 /.github/workflows/ @EritikWoW
+# Build/supply-chain and security-claim review routing.
+/.github/CODEOWNERS @EritikWoW
+/.github/dependabot.yml @EritikWoW
+/global.json @EritikWoW
+/Directory.Build.props @EritikWoW
+/**/packages.lock.json @EritikWoW
+/docs/SECURITY.md @EritikWoW
+/docs/THREAT_MODEL.md @EritikWoW
+/tools/verify_supply_chain.ps1 @EritikWoW
+/tools/verify_threat_model.ps1 @EritikWoW

@@ -112,17 +112,17 @@ try {
     & (Join-Path $PSScriptRoot 'tools\verify_filesystem_matrix_vm_harness.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_version_provenance.ps1')
     Write-Host '[1/6] Restore and execute policy/recovery/rollback tests (no process suspension in these tests).'
-    Run-Dotnet -Arguments @('restore',$tests,$auditErrors)
+    Run-Dotnet -Arguments @('restore',$tests,'--locked-mode',$auditErrors)
     Run-Dotnet -Arguments @('run','--project',$tests,'-c','Release','--no-restore')
-    Run-Dotnet -Arguments @('restore',$recoveryTests,$auditErrors)
+    Run-Dotnet -Arguments @('restore',$recoveryTests,'--locked-mode',$auditErrors)
     Run-Dotnet -Arguments @('run','--project',$recoveryTests,'-c','Release','--no-restore')
-    Run-Dotnet -Arguments @('restore',$scopedTests,$auditErrors)
+    Run-Dotnet -Arguments @('restore',$scopedTests,'--locked-mode',$auditErrors)
     Run-Dotnet -Arguments @('run','--project',$scopedTests,'-c','Release','--no-restore')
-    Run-Dotnet -Arguments @('restore',$adminTests,$auditErrors)
+    Run-Dotnet -Arguments @('restore',$adminTests,'--locked-mode',$auditErrors)
     Run-Dotnet -Arguments @('run','--project',$adminTests,'-c','Release','--no-restore')
-    Run-Dotnet -Arguments @('restore',$localizationTests,$auditErrors)
+    Run-Dotnet -Arguments @('restore',$localizationTests,'--locked-mode',$auditErrors)
     Run-Dotnet -Arguments @('run','--project',$localizationTests,'-c','Release','--no-restore')
-    Run-Dotnet -Arguments @('restore',$rollbackTests,$auditErrors)
+    Run-Dotnet -Arguments @('restore',$rollbackTests,'--locked-mode',$auditErrors)
     Run-Dotnet -Arguments @('run','--project',$rollbackTests,'-c','Release','--no-restore')
     & (Join-Path $PSScriptRoot 'tools\verify_scoped_trust.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_recovery_boundary.ps1')
@@ -130,7 +130,7 @@ try {
     $projects=@($svc,$ui,$recovery)
     if($IncludeLab){$projects+=@($sim,$filterClient,$gateClient,$runtimeHarness,$rollbackRecovery,$rollbackMaintenance)}
     foreach ($project in $projects) {
-        Run-Dotnet -Arguments @('restore',$project,'-r','win-x64','-p:SelfContained=true',$auditErrors)
+        Run-Dotnet -Arguments @('restore',$project,'--locked-mode','-r','win-x64','-p:SelfContained=true',$auditErrors)
     }
     $auditPath = Join-Path $logs "dependencies-$stamp.json"
     $json = & dotnet list $svc package --include-transitive --vulnerable --format json

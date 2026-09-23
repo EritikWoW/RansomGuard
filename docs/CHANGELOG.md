@@ -1,7 +1,7 @@
 # RansomGuard 0.7.28.0
 
-- Added a disposable-VM mixed high-concurrency runtime proof without changing minifilter protocol v15.
-- The stress run fixes GateClient at four preservation workers while the kernel retains its bounded eight-request gate admission cap.
+- Added a disposable-VM mixed pressure/correlation runtime proof without changing minifilter protocol v15.
+- The stress run launches 20 helpers while the kernel retains its bounded eight-request blocking-admission cap. GateClient is configured with four bounded message-processing slots, but reply-required preservation remains intentionally serialized on the single synchronous Filter Manager handle; only no-reply evidence processing can overlap in those slots.
 - Launches 20 helper processes across CREATE, RENAME, TRUNCATE, DELETE and mapped-write operations.
 - TRUNCATE and DELETE handles wait for their exact mutation-capable CREATE completion to become durable before the destructive SetInformation burst is released.
 - Requires exact path-to-requestSequence binding for each TRUNCATE/DELETE, exact 4/4 RENAME/TRUNCATE/DELETE intent-completion correlation, and at least 16 fully correlated CREATE transactions.

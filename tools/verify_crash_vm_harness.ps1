@@ -80,15 +80,18 @@ if($restart -lt 0 -or $reconcileOnly -lt 0 -or $newSession -lt 0 -or
 
 foreach($required in @(
   'case "create-new":',
-  'CreateNewFile(Require(options, "--file"))',
+  'CreateNewFile(',
+  'Require(options, "--file")',
+  'OptionalPath(options, "--ready")',
+  'OptionalPath(options, "--go")',
   'const uint CreateNew = 1',
   'CreateFileW(CREATE_NEW)',
   'The completion-loss scenario is about CREATE transaction reconciliation only.'
 )){
   if($helper -notmatch [regex]::Escape($required)){throw "RuntimeHarness completion-loss trigger invariant missing: $required"}
 }
-$createNewStart=$helper.IndexOf('static void CreateNewFile(string filePath)')
-$createNewEnd=$helper.IndexOf('static void MapAndWrite(string filePath)',$createNewStart)
+$createNewStart=$helper.IndexOf('static void CreateNewFile(string filePath, string? readyMarker, string? goMarker)')
+$createNewEnd=$helper.IndexOf('static void RenameFile(',$createNewStart)
 if($createNewStart -lt 0 -or $createNewEnd -lt 0){throw 'CreateNewFile source block missing.'}
 $createNewBlock=$helper.Substring($createNewStart,$createNewEnd-$createNewStart)
 if($createNewBlock -match [regex]::Escape('Native.WriteFile')){
@@ -139,7 +142,7 @@ foreach($required in @(
   if($helper -notmatch [regex]::Escape($required)){throw "RuntimeHarness DELETE completion-loss trigger invariant missing: $required"}
 }
 $deleteHelperStart=$helper.IndexOf('static void DeleteFileByDisposition(string filePath, string readyMarker, string goMarker)')
-$deleteHelperEnd=$helper.IndexOf('static void MapAndWrite(string filePath)',$deleteHelperStart)
+$deleteHelperEnd=$helper.IndexOf('static void MapAndWrite(',$deleteHelperStart)
 if($deleteHelperStart -lt 0 -or $deleteHelperEnd -lt 0){
   throw 'DeleteFileByDisposition source block missing.'
 }

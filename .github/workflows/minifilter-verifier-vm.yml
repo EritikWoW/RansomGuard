@@ -98,7 +98,7 @@ jobs:
           "RG_LAB_RELEASE=$($lab.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build and sign exact-commit runtime driver package
-        if: ${{ inputs.phase == 'runtime' }}
+        if: ${{ inputs.phase == 'arm' || inputs.phase == 'runtime' }}
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
@@ -128,10 +128,10 @@ jobs:
           $results=Join-Path $env:RUNNER_TEMP 'ransomguard-driver-verifier-arm-results'
           if(Test-Path -LiteralPath $results){Remove-Item -LiteralPath $results -Recurse -Force}
           New-Item -ItemType Directory -Path $results -Force | Out-Null
-          .\minifilter-tools\arm_driver_verifier_lab.ps1 -RootBase $env:RG_VERIFIER_ROOT_BASE -ResultsDirectory $results
+          .\minifilter-tools\arm_driver_verifier_lab.ps1 -DriverPackageDirectory $env:RG_DRIVER_PACKAGE -RootBase $env:RG_VERIFIER_ROOT_BASE -ResultsDirectory $results
           $summary=Get-Content -LiteralPath (Join-Path $results 'driver-verifier-arm-result.json') -Raw | ConvertFrom-Json
           foreach($name in @(
-            'cleanVerifierState','targetOnlyConfigured','standardFlagsConfigured',
+            'cleanVerifierState','driverPackageRegistered','targetOnlyConfigured','standardFlagsConfigured',
             'querySettingsConfirmed','oneBootCommandSucceeded','stateDurable',
             'rebootRequired','passed'
           )){
@@ -234,7 +234,7 @@ jobs:
           retention-days: 14
 
       - name: Remove signed lab package
-        if: ${{ always() && inputs.phase == 'runtime' }}
+        if: ${{ always() && (inputs.phase == 'arm' || inputs.phase == 'runtime') }}
         shell: pwsh
         run: |
           if($env:RG_DRIVER_PACKAGE -and (Test-Path -LiteralPath $env:RG_DRIVER_PACKAGE)){

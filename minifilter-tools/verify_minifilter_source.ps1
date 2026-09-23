@@ -58,6 +58,25 @@ foreach($required in @(
     'RgEventTruncate',
     'RgEventTruncateResult',
     'RgCreateTruncatePostContext',
+    'RgEventDeleteDisposition',
+    'RgEventDeleteDispositionResult',
+    'RgEventDeleteFinalized',
+    'RgCreateDeletePostContext',
+    'RgReadDeleteDispositionFlags',
+    'RG_DELETE_DISPOSITION_DELETE',
+    'RG_EVENT_FLAG_DELETE_PENDING',
+    'RG_EVENT_FLAG_DELETE_STATE_RESOLVED',
+    'RG_EVENT_FLAG_DELETE_CANCELLED',
+    'RG_EVENT_FLAG_DELETE_CLEANUP',
+    'FileDispositionInformation',
+    'FileDispositionInformationEx',
+    'IRP_MJ_CLEANUP',
+    'RgPreCleanup',
+    'RgPostCleanup',
+    'FLT_STREAMHANDLE_CONTEXT',
+    'FltSetStreamHandleContext',
+    'FltGetStreamHandleContext',
+    'FltDeleteStreamHandleContext',
     'FileEndOfFileInformation',
     'FileAllocationInformation',
     'FileValidDataLengthInformation',
@@ -319,10 +338,10 @@ if($src -notmatch 'FltCreateCommunicationPort\([^;]*RgConnect,\s*RgDisconnect,\s
    $src -notmatch 'RgConnect, RgDisconnect, RgMessage, 1'){
     throw 'Communication port must register RgMessage for activation handshake.'
 }
-if($proto -notmatch '#define\s+RG_PROTOCOL_VERSION\s+14u'){throw 'Minifilter protocol must be v14 for authoritative TRUNCATE reconciliation.'}
+if($proto -notmatch '#define\s+RG_PROTOCOL_VERSION\s+15u'){throw 'Minifilter protocol must be v15 for DELETE lifecycle reconciliation.'}
 if($proto -notmatch 'RG_GATE_ROOT_CHARS'){throw 'Protocol must carry an explicit bounded gate root.'}
 foreach($required in @('RgControlActivateAndContainProcess','RgControlQueryContainment','TargetProcessId','ContainmentActive','ContainedProcessId','RG_GATE_REPLY_FLAG_CONTAIN_REQUESTOR','RgEventContainmentActivated')){
-    if($proto -notmatch [regex]::Escape($required)){throw "Protocol v14 containment field missing: $required"}
+    if($proto -notmatch [regex]::Escape($required)){throw "Protocol v15 containment field missing: $required"}
 }
 if($src -notmatch 'Unresolved/out-of-root paths fail open'){throw 'LAB gate must document fail-open behavior outside the explicitly resolved gate root.'}
 if($src -notmatch 'requestorPid\s*==\s*\(ULONGLONG\)InterlockedCompareExchange64\(&gClientProcessId'){throw 'Gate client PID must be excluded to prevent rollback-store self-deadlock.'}
@@ -343,7 +362,7 @@ if($src -notmatch 'RgEventRenameResult' -or
 }
 
 if($proto -notmatch 'RgEventTruncateResult'){
-    throw 'Protocol v14 must expose a correlated TruncateResult event.'
+    throw 'Protocol v15 must retain a correlated TruncateResult event.'
 }
 if($src -notmatch [regex]::Escape('context->PostEventType = RgEventTruncateResult') -or
    $src -notmatch [regex]::Escape('event.EventType = context->PostEventType') -or
@@ -367,11 +386,66 @@ if($truncatePost -lt 0 -or $truncatePassive -lt 0 -or $truncateApc -lt 0 -or $tr
    $truncatePost -gt $truncatePassive -or $truncatePassive -gt $truncateQuery -or $truncateApc -gt $truncateQuery -or $truncateQuery -gt $truncateQueue){
     throw 'TRUNCATE post-operation FILE_STANDARD_INFO query must remain PASSIVE/APC-safe and precede no-reply result delivery.'
 }
+
+if($proto -notmatch 'RgEventDeleteDispositionResult' -or
+   $proto -notmatch 'RgEventDeleteFinalized' -or
+   $proto -notmatch 'RG_DELETE_DISPOSITION_DELETE' -or
+   $proto -notmatch 'RG_EVENT_FLAG_DELETE_CLEANUP'){
+    throw 'Protocol v15 must expose correlated DELETE disposition and cleanup lifecycle evidence.'
+}
+$deletePopulate=$src.IndexOf('} else if (EventType == RgEventDeleteDisposition) {')
+$deleteReadFlags=$src.IndexOf('RgReadDeleteDispositionFlags(Data, &deleteFlags)',$deletePopulate)
+if($deletePopulate -lt 0 -or $deleteReadFlags -lt 0 -or $deletePopulate -gt $deleteReadFlags){
+    throw 'DELETE pre-operation event must carry the exact FileDispositionInformation/Ex flags.'
+}
+$deletePre=$src.IndexOf('else if (eventType == RgEventDeleteDisposition)')
+$deleteContext=$src.IndexOf('RgCreateDeletePostContext(Data, event.Sequence, &postContext)',$deletePre)
+$deleteGate=$src.IndexOf('RgGateEvent(Data, &event',$deleteContext)
+if($deletePre -lt 0 -or $deleteContext -lt 0 -or $deleteGate -lt 0 -or
+   $deletePre -gt $deleteContext -or $deleteContext -gt $deleteGate){
+    throw 'DELETE must capture exact post-operation correlation before entering the blocking user-mode gate.'
+}
+$deletePost=$src.IndexOf('context->PostEventType == RgEventDeleteDispositionResult')
+$deleteIdentity=$src.IndexOf('RgPopulatePostOperationIdentity(&event, FltObjects)',$deletePost)
+$deleteStateQuery=$src.IndexOf('FileStandardInformation',$deleteIdentity)
+$deleteAttach=$src.IndexOf('RgAttachDeleteHandleContext(',$deleteStateQuery)
+$deleteQueue=$src.IndexOf('RgQueueRawEvent(&event, RgClientLabGate)',$deleteAttach)
+if($deletePost -lt 0 -or $deleteIdentity -lt 0 -or $deleteStateQuery -lt 0 -or
+   $deleteAttach -lt 0 -or $deleteQueue -lt 0 -or
+   $deletePost -gt $deleteIdentity -or $deleteIdentity -gt $deleteStateQuery -or
+   $deleteStateQuery -gt $deleteAttach -or $deleteAttach -gt $deleteQueue){
+    throw 'Successful DELETE disposition must query state when safe, bind the exact stream-handle context, then emit no-reply disposition evidence.'
+}
+if($src -notmatch [regex]::Escape('RgCancelDeleteHandleContext(FltObjects)')){
+    throw 'A successful disposition-clear request must cancel the exact handle-scoped DELETE lifecycle context.'
+}
+$cleanupStart=$src.IndexOf('FLT_PREOP_CALLBACK_STATUS RgPreCleanup(')
+$cleanupEnd=$src.IndexOf('static VOID RgAttachPagingStreamContext',$cleanupStart)
+if($cleanupStart -lt 0 -or $cleanupEnd -lt 0){throw 'DELETE cleanup callback block missing.'}
+$cleanupBlock=$src.Substring($cleanupStart,$cleanupEnd-$cleanupStart)
+foreach($forbidden in @('RgGateEvent(','FltGetFileNameInformation(','FltQueryInformationFile(')){
+    if($cleanupBlock.Contains($forbidden)){throw "DELETE cleanup lifecycle must remain no-reply and filesystem-query free: $forbidden"}
+}
+foreach($required in @(
+    'FltGetStreamHandleContext',
+    'FLT_PREOP_SUCCESS_WITH_CALLBACK',
+    'RG_EVENT_FLAG_DELETE_CLEANUP',
+    'RgQueueDeleteFinalization(',
+    'FltReleaseContext(context)'
+)){
+    if($cleanupBlock -notmatch [regex]::Escape($required)){throw "DELETE cleanup lifecycle invariant missing: $required"}
+}
+$deleteFinalizer=$src.IndexOf('static VOID RgQueueDeleteFinalization(')
+if($deleteFinalizer -lt 0 -or
+   $src.IndexOf('event.EventType = RgEventDeleteFinalized',$deleteFinalizer) -lt 0 -or
+   $src.IndexOf('event.RelatedSequence = Context->RequestSequence',$deleteFinalizer) -lt 0){
+    throw 'DELETE cleanup/cancellation evidence must remain correlated to the exact disposition request.'
+}
 if($proto -notmatch 'RgGateBaselineCommitted' -or $proto -notmatch 'RgGateNoPreservationRequired'){throw 'Protocol must distinguish committed absence baselines from no-op create opens.'}
 if($infText -notmatch 'StartType\s*=\s*3'){throw 'Driver must remain demand-start in the lab prototype.'}
 if($infText -notmatch 'Instance1\.Flags\s*=\s*0x1'){throw 'Automatic volume attachment must remain suppressed.'}
 if($infText -notmatch 'Instance1\.Altitude\s*=\s*"370099\.4242"'){throw 'Unexpected LAB altitude. Review altitude policy manually.'}
-Write-Host 'LAB pre-write gate source check PASSED, including protocol-v14 TRUNCATE reconciliation, event-bound PEPROCESS containment, fail-closed activation preflight, bounded admission and paging/section evidence.' -ForegroundColor Green
+Write-Host 'LAB pre-write gate source check PASSED, including protocol-v15 DELETE lifecycle/TRUNCATE reconciliation, event-bound PEPROCESS containment, fail-closed activation preflight, bounded admission and paging/section evidence.' -ForegroundColor Green
 Write-Host 'Gate scope: one explicit NT root negotiated by the single connected client.'
 Write-Host 'In-scope mutations normally require an explicit preservation decision; an activation-bound contained PEPROCESS is denied before the user-mode gate.'
 Write-Host 'Out-of-scope/unresolved I/O remains fail-open; no process-control or kernel file-writing APIs are present.'

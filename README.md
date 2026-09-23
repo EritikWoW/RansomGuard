@@ -6,7 +6,7 @@ and recover data through rollback plus adaptive crypto analysis.
 
 ## Core preservation milestone
 
-0.7.28.0 keeps protocol v15 and the reproducible-build hardening, and adds a disposable-VM mixed high-concurrency proof for the bounded gate: 20 parallel helper processes exercise CREATE, RENAME, TRUNCATE, DELETE and mapped I/O while GateClient is fixed at four workers and kernel blocking admission remains capped at eight.
+0.7.28.0 keeps protocol v15 and the reproducible-build hardening, and adds a disposable-VM mixed pressure/correlation proof for the bounded gate: 20 helper processes concurrently exercise CREATE, RENAME, TRUNCATE, DELETE and mapped I/O while kernel blocking admission remains capped at eight. GateClient keeps four bounded message-processing slots, but reply-required preservation remains intentionally serialized on its single synchronous Filter Manager handle; the four slots apply to bounded no-reply evidence processing rather than four simultaneous preservation replies.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 
@@ -164,7 +164,7 @@ LAB gate documentation:
 This milestone validates the preservation model and reduces write-path storage amplification.
 It is not yet production ransomware blocking.
 
-Bounded concurrent gate admission/workers are now implemented with a kernel cap of 8 and a configurable user-mode worker pool (default 4). The port mutex is no longer held across blocking FltSendMessage waits.
+Bounded kernel gate admission is capped at 8 simultaneous blocking sends. GateClient exposes a configurable 1..8 message-processing slot limit (default 4), but reply-required preservation is intentionally serialized because the LAB client uses one synchronous Filter Manager handle and must complete FilterReplyMessage before issuing the next blocking receive. No-reply completion/evidence events may use the bounded slots concurrently. The port mutex is not held across blocking FltSendMessage waits.
 
 Restart evidence for pending/missing CREATE/RENAME/TRUNCATE completion events and unsettled DELETE lifecycle transactions is durable and conservative; authoritative completion is never inferred from a restart or topology probe. DELETE cleanup is handle-lifecycle evidence only, while pathname state is observed separately. The recovery planner may expose exact, fully consistent evidence as `Review` only, while cleanup-only, ambiguous, indeterminate or conflicting evidence stays `Blocked`. Paging writes on streams opened through the LAB gate are visible as durable evidence without synchronously blocking the paging path.
 

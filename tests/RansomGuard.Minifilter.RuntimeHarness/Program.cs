@@ -5,7 +5,7 @@ if (!OperatingSystem.IsWindows())
     throw new PlatformNotSupportedException("RansomGuard minifilter runtime harness is Windows-only.");
 
 if (args.Length == 0)
-    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | map-write --file <path> | create-new --file <path> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker> | containment-transition --file-a <path> --file-b <path> --ready <marker> --go <marker> --result <marker>");
+    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | map-write --file <path> | create-new --file <path> | rename-file --source <path> --destination <path> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker> | containment-transition --file-a <path> --file-b <path> --ready <marker> --go <marker> --result <marker>");
 
 var command = args[0].ToLowerInvariant();
 var options = Parse(args.Skip(1).ToArray());
@@ -31,6 +31,11 @@ try
             break;
         case "create-new":
             CreateNewFile(Require(options, "--file"));
+            break;
+        case "rename-file":
+            RenameFile(
+                Require(options, "--source"),
+                Require(options, "--destination"));
             break;
         case "containment-probe":
             ContainmentProbe(
@@ -338,6 +343,24 @@ static void CreateNewFile(string filePath)
     // The completion-loss scenario is about CREATE transaction reconciliation only.
     // Do not issue a follow-up WRITE: dropping CreateResult intentionally begins gate shutdown,
     // and a second mutation would test shutdown timing instead of lost CREATE completion.
+}
+
+static void RenameFile(string sourcePath, string destinationPath)
+{
+    if (!File.Exists(sourcePath))
+        throw new FileNotFoundException("rename-file source does not exist.", sourcePath);
+    if (File.Exists(destinationPath) || Directory.Exists(destinationPath))
+        throw new IOException("rename-file destination must start absent: " + destinationPath);
+
+    var sourceParent = Path.GetDirectoryName(sourcePath);
+    var destinationParent = Path.GetDirectoryName(destinationPath);
+    if (string.IsNullOrWhiteSpace(sourceParent) ||
+        string.IsNullOrWhiteSpace(destinationParent) ||
+        !Directory.Exists(sourceParent) ||
+        !Directory.Exists(destinationParent))
+        throw new DirectoryNotFoundException("rename-file requires existing source/destination parent directories.");
+
+    File.Move(sourcePath, destinationPath, overwrite: false);
 }
 
 static void MapAndWrite(string filePath)

@@ -93,6 +93,21 @@ function Assert-OnlyTargetDriver($State,[string]$Context){
     }
 }
 
+function Read-And-VerifyState([string]$StatePath){
+    $hashPath=$StatePath+'.sha256'
+    if(-not(Test-Path -LiteralPath $StatePath -PathType Leaf)){throw "Driver Verifier campaign state is missing: $StatePath"}
+    if(-not(Test-Path -LiteralPath $hashPath -PathType Leaf)){throw "Driver Verifier campaign state hash is missing: $hashPath"}
+    $expected=(Get-Content -LiteralPath $hashPath -Raw).Trim()
+    $actual=(Get-FileHash -LiteralPath $StatePath -Algorithm SHA256).Hash
+    if(-not [string]::Equals($expected,$actual,[StringComparison]::OrdinalIgnoreCase)){
+        throw "Driver Verifier campaign state SHA-256 mismatch. expected=$expected actual=$actual"
+    }
+    return [pscustomobject]@{
+        State=(Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json -Depth 30)
+        Hash=$actual
+    }
+}
+
 function Write-DurableJson([string]$Path,$Value){
     $tmp=$Path+'.tmp'
     $json=$Value | ConvertTo-Json -Depth 30
@@ -128,9 +143,6 @@ $ResultsDirectory=Assert-SafePath $ResultsDirectory 'ResultsDirectory'
 New-Item -ItemType Directory -Path $RootBase,$ResultsDirectory -Force | Out-Null
 
 $active=Join-Path $RootBase 'Active'
-if(Test-Path -LiteralPath $active){
-    throw "REFUSED: an existing Driver Verifier campaign is already active or awaiting cleanup: $active"
-}
 
 $summary=[ordered]@{
     schema=1
@@ -140,6 +152,10 @@ $summary=[ordered]@{
     targetDriver=$TargetDriver
     standardMask=('0x{0:X8}' -f $StandardMask)
     cleanVerifierState=$false
+    priorFailedCampaignArchived=$false
+    priorFailedCampaignArchivePath=$null
+    priorFailedCampaignWorkflowSha=$null
+    priorFailedCampaignStateSha256=$null
     driverPackageRegistered=$false
     targetOnlyConfigured=$false
     standardFlagsConfigured=$false
@@ -165,6 +181,49 @@ try{
         throw "REFUSED: Driver Verifier already has persistent settings. VerifyDrivers='$($before.Drivers)' VerifyDriverLevel=0x$('{0:X8}' -f $before.Level). Revert/clean the disposable VM instead of overwriting unrelated verifier state."
     }
     $summary.cleanVerifierState=$true
+
+    if(Test-Path -LiteralPath $active){
+        $priorStatePath=Join-Path $active 'driver-verifier-state.json'
+        $priorVerified=Read-And-VerifyState $priorStatePath
+        $prior=$priorVerified.State
+        if([int]$prior.schema -ne 1 -or [string]$prior.phase -ne 'runtime-failed-reset'){
+            throw "REFUSED: existing Driver Verifier Active state is not a recoverable runtime-failed-reset campaign. schema='$($prior.schema)' phase='$($prior.phase)'."
+        }
+        if(-not [string]::Equals([string]$prior.targetDriver,$TargetDriver,[StringComparison]::OrdinalIgnoreCase)){
+            throw "REFUSED: prior failed campaign target '$($prior.targetDriver)' does not match '$TargetDriver'."
+        }
+        if(-not [bool]$prior.resetScheduled){
+            throw 'REFUSED: prior runtime-failed-reset campaign does not prove verifier /reset was scheduled.'
+        }
+        $priorRuntimeBoot=[DateTime]::Parse(
+            [string]$prior.runtimeBootUtc,
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+        $currentBoot=([datetime](Get-CimInstance Win32_OperatingSystem).LastBootUpTime).ToUniversalTime()
+        if($currentBoot -le $priorRuntimeBoot.AddSeconds(1)){
+            throw "REFUSED: prior runtime-failed-reset campaign has not crossed the required reset reboot. runtimeBoot=$($priorRuntimeBoot.ToString('o')) currentBoot=$($currentBoot.ToString('o'))"
+        }
+
+        $priorQuery=Invoke-Verifier @('/querysettings') 'querysettings-prior-failed-reset'
+        if($priorQuery.ExitCode -ne 0){
+            throw "verifier /querysettings failed while validating prior failed-reset cleanup. exit=$($priorQuery.ExitCode). Output: $($priorQuery.Output)"
+        }
+        $priorDriverNames=@([regex]::Matches($priorQuery.Output,'(?i)\b[A-Za-z0-9_.-]+\.sys\b') | ForEach-Object {$_.Value} | Select-Object -Unique)
+        if($priorDriverNames.Count -gt 0){
+            throw "REFUSED: scheduled Driver Verifier targets remain after prior failed-reset reboot: $($priorDriverNames -join ', ')."
+        }
+
+        $failedArchive=Join-Path $RootBase ("Failed-{0}" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+        if(Test-Path -LiteralPath $failedArchive){
+            throw "REFUSED: failed-campaign archive path already exists: $failedArchive"
+        }
+        Move-Item -LiteralPath $active -Destination $failedArchive
+        $summary.priorFailedCampaignArchived=$true
+        $summary.priorFailedCampaignArchivePath=$failedArchive
+        $summary.priorFailedCampaignWorkflowSha=[string]$prior.workflowSha
+        $summary.priorFailedCampaignStateSha256=$priorVerified.Hash
+        Write-Host "Archived verified prior runtime-failed-reset campaign after reset reboot: $failedArchive"
+    }
 
     New-Item -ItemType Directory -Path $active -Force | Out-Null
     $queryBefore=Invoke-Verifier @('/querysettings') 'querysettings-before'

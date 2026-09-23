@@ -37,6 +37,14 @@ foreach($required in @(
     'overflowDenied',
     'Wait-StressGroupAllowAccessDenied',
     'Assert-OverflowDeniedEvidence',
+    'overflow-r{0:D2}.go',
+    'all CREATE overflow helpers to reach the shared start barrier',
+    'create-qualification.go',
+    'all CREATE qualification helpers to reach the shared start barrier',
+    'rename-qualification.go',
+    'all RENAME qualification helpers to reach the shared start barrier',
+    'mapped-qualification.go',
+    'all MAPPED-WRITE qualification helpers to reach the shared start barrier',
     'Win32Error:\s*5',
     'create-new',
     'rename-file',
@@ -115,6 +123,24 @@ if($script -notmatch [regex]::Escape('if($full -notmatch ''(?i)RansomGuard'')') 
 }
 
 
+$helperPath=Join-Path $RepositoryRoot 'tests\RansomGuard.Minifilter.RuntimeHarness\Program.cs'
+if(-not(Test-Path -LiteralPath $helperPath -PathType Leaf)){
+    throw 'RuntimeHarness source is missing for deterministic concurrency barriers.'
+}
+$helper=Get-Content -LiteralPath $helperPath -Raw
+foreach($required in @(
+    'OptionalPath(options, "--ready")',
+    'OptionalPath(options, "--go")',
+    'WaitForOptionalBarrier',
+    'WaitForOptionalBarrier(readyMarker, goMarker, "create-new")',
+    'WaitForOptionalBarrier(readyMarker, goMarker, "rename-file")',
+    'WaitForOptionalBarrier(readyMarker, goMarker, "map-write")'
+)){
+    if(-not $helper.Contains($required)){
+        throw "RuntimeHarness concurrency barrier invariant missing: $required"
+    }
+}
+
 $workflowPath=Join-Path $RepositoryRoot '.github\workflows\minifilter-stress-vm.yml'
 if(-not(Test-Path -LiteralPath $workflowPath -PathType Leaf)){
     throw 'Concurrency stress VM workflow is missing.'
@@ -151,4 +177,4 @@ if($workflow -match '(?im)\b(verifier(?:\.exe)?|shutdown(?:\.exe)?|Restart-Compu
     throw 'Concurrency stress VM workflow must not reboot, enable Driver Verifier, or format/manage disks.'
 }
 
-Write-Host 'Concurrency stress source gate PASSED: overflow width 16 exceeds kernel cap 8 and must prove fail-closed admission denial, qualification phases run at cap=8, DELETE waits for durable topology finalization, GateClient worker failures are fatal, destructive/mapped operations are correlated to durable evidence, pre-images are hash-checked, cleanup is bounded, and reboot/disk/verifier operations are absent.'
+Write-Host 'Concurrency stress source gate PASSED: helper processes synchronize on shared start barriers so overflow width 16 genuinely races kernel cap 8, qualification phases run at cap=8, DELETE waits for durable topology finalization, GateClient worker failures are fatal, destructive/mapped operations are correlated to durable evidence, pre-images are hash-checked, cleanup is bounded, and reboot/disk/verifier operations are absent.'

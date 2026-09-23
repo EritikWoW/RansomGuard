@@ -349,7 +349,7 @@ $summary=[ordered]@{
     concurrencyTruncateCorrelated=$false
     concurrencyDeleteCorrelated=$false
     concurrencyMappedEvidence=$false
-    concurrencyGateWorkers=0
+    concurrencyMessageSlots=0
     concurrencyProcessCount=0
     cleanupPassed=$false
     cleanupError=$null
@@ -710,9 +710,9 @@ try{
         '--session','concurrency-stress',
         '--gate-workers','4'
     ) $stressOut $stressErr
-    Wait-LogPattern $stressOut 'Bounded gate workers\s+: 4' $gateStress 45
+    Wait-LogPattern $stressOut 'Bounded message slots:\s+4 .*reply-required gate is serialized' $gateStress 45
     Wait-LogPattern $stressOut 'kernel gate ACTIVE' $gateStress 45
-    $summary.concurrencyGateWorkers=4
+    $summary.concurrencyMessageSlots=4
 
     $stressSession=Join-Path $stressStore 'Sessions\concurrency-stress'
     $createCompletionJournal=Join-Path $stressSession 'create-state\create-completion-journal.jsonl'

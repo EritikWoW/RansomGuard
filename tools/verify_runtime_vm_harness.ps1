@@ -160,7 +160,7 @@ if($stressStart -lt 0 -or $stressStopTransition -lt 0 -or $stressGateStart -lt 0
    $stressCreateCompletion -gt $stressImmediate -or $stressImmediate -gt $stressRelease -or
    $stressRelease -gt $stressWait -or $stressWait -gt $stressCorrelation -or
    $stressCorrelation -gt $stressStop){
-    throw 'Concurrency stress must stop the prior gate, fix GateClient at 4 workers, hold destructive handles until durable CREATE completion, release one mixed burst, correlate journals, then stop the stress gate.'
+    throw 'Concurrency stress must stop the prior gate, configure 4 bounded message slots, hold destructive handles until durable CREATE completion, release one mixed burst, correlate journals, then stop the stress gate.'
 }
 
 foreach($binding in @(
@@ -419,4 +419,4 @@ foreach($required in @('where.exe pwsh.exe','set "PS_EXE=pwsh.exe"','powershell.
     if($buildWrapperText -notmatch [regex]::Escape($required)){throw "Windows build wrapper missing PowerShell host invariant: $required"}
 }
 
-Write-Host 'Runtime VM harness source gate PASSED: manual self-hosted VM only, exact-commit signed driver provenance, mapping coverage, bounded 20-process concurrency stress, containment transitions, no boot/trust/Defender mutation.' -ForegroundColor Green
+Write-Host 'Runtime VM harness source gate PASSED: manual self-hosted VM only, exact-commit signed driver provenance, mapping coverage, bounded 20-process pressure/correlation stress with serialized reply-required gate semantics, containment transitions, no boot/trust/Defender mutation.' -ForegroundColor Green

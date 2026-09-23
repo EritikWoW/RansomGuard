@@ -187,6 +187,7 @@ $summary=[ordered]@{
     rebootRequired=$false
     passed=$false
     error=$null
+    cleanupError=$null
 }
 
 try{

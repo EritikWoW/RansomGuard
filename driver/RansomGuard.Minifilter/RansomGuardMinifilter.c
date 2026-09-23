@@ -66,6 +66,7 @@ static NTSTATUS RgMessage(_In_opt_ PVOID ConnectionCookie,
 static NTSTATUS RgPopulateEvent(_Out_ PRG_EVENT Event, _Inout_ PFLT_CALLBACK_DATA Data,
                                 _In_ PCFLT_RELATED_OBJECTS FltObjects,
                                 _In_ RG_EVENT_TYPE EventType, _In_ ULONG FileInformationClass);
+static NTSTATUS RgReadDeleteDispositionFlags(_In_ PFLT_CALLBACK_DATA Data, _Out_ PULONG Flags);
 static VOID RgPopulateRenameDestination(_Inout_ PRG_EVENT Event, _Inout_ PFLT_CALLBACK_DATA Data,
                                         _In_ PCFLT_RELATED_OBJECTS FltObjects);
 static BOOLEAN RgEventPathMatchesGateRoot(_In_ const RG_EVENT *Event);
@@ -412,6 +413,11 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
         if (!NT_SUCCESS(status)) {
             return RgCompleteDenied(Data);
         }
+    } else if (eventType == RgEventDeleteDisposition) {
+        status = RgCreateDeletePostContext(Data, event.Sequence, &postContext);
+        if (!NT_SUCCESS(status)) {
+            return RgCompleteDenied(Data);
+        }
     }
 
     if (!RgGateEvent(Data, &event, &gateError, NULL)) {
@@ -467,6 +473,11 @@ static NTSTATUS RgPopulateEvent(PRG_EVENT Event, PFLT_CALLBACK_DATA Data,
         }
         Event->ByteOffset =
             ((PLARGE_INTEGER)Data->Iopb->Parameters.SetFileInformation.InfoBuffer)->QuadPart;
+    } else if (EventType == RgEventDeleteDisposition) {
+        status = RgReadDeleteDispositionFlags(Data, &Event->Flags);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
     }
 
     status = FltGetFileNameInformation(Data,
@@ -502,6 +513,46 @@ static NTSTATUS RgPopulateEvent(PRG_EVENT Event, PFLT_CALLBACK_DATA Data,
     }
 
     return status;
+}
+
+static NTSTATUS RgReadDeleteDispositionFlags(PFLT_CALLBACK_DATA Data, PULONG Flags)
+{
+    FILE_INFORMATION_CLASS infoClass;
+    PVOID buffer;
+    ULONG length;
+
+    if (Data == NULL || Flags == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    *Flags = 0;
+    infoClass = Data->Iopb->Parameters.SetFileInformation.FileInformationClass;
+    buffer = Data->Iopb->Parameters.SetFileInformation.InfoBuffer;
+    length = Data->Iopb->Parameters.SetFileInformation.Length;
+
+    if (buffer == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (infoClass == FileDispositionInformation) {
+        if (length < sizeof(FILE_DISPOSITION_INFORMATION)) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        if (((PFILE_DISPOSITION_INFORMATION)buffer)->DeleteFile) {
+            *Flags = RG_DELETE_DISPOSITION_DELETE;
+        }
+        return STATUS_SUCCESS;
+    }
+
+    if (infoClass == FileDispositionInformationEx) {
+        if (length < sizeof(ULONG)) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        *Flags = *(PULONG)buffer;
+        return STATUS_SUCCESS;
+    }
+
+    return STATUS_INVALID_INFO_CLASS;
 }
 
 static VOID RgPopulateRenameDestination(PRG_EVENT Event, PFLT_CALLBACK_DATA Data,

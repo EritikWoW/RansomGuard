@@ -1,0 +1,14 @@
+# Review routing for security-sensitive areas.
+# Enforcement still requires repository branch/ruleset settings; this file alone
+# does not require approval or provide independent review.
+* @EritikWoW
+
+/driver/ @EritikWoW
+/native/ @EritikWoW
+/src/RansomGuard.GateClient/ @EritikWoW
+/src/RansomGuard.Management/ @EritikWoW
+/src/RansomGuard.Recovery/ @EritikWoW
+/src/RansomGuard.Rollback/ @EritikWoW
+/minifilter-tools/ @EritikWoW
+/tools/ @EritikWoW
+/.github/workflows/ @EritikWoW

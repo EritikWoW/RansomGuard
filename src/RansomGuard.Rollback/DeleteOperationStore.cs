@@ -318,17 +318,39 @@ public sealed class DeleteOperationStore
                 matches[^1].RecordSha256);
         }
 
-        var topologyStates = topology.Select(x => x.State).Distinct().ToArray();
-        if (topologyStates.Length != 1)
+        if (topology.Length == 0)
             return new DeleteFinalizationAssessment(
                 DeleteFinalizationAssessmentState.Unresolved, matches.Length, matches[^1].RecordSha256);
 
+        var firstDeleted = Array.FindIndex(
+            topology,
+            x => x.State == DeleteFinalizationState.DeletedObserved);
+        if (firstDeleted >= 0)
+        {
+            // DELETE may remain visible while other handles are open, then become absent later.
+            // Accept only that monotonic same-FILE_ID-present -> missing evolution. Once absence
+            // has been observed, any later present observation is conflicting evidence.
+            if (topology.Skip(firstDeleted + 1)
+                .Any(x => x.State != DeleteFinalizationState.DeletedObserved))
+                return new DeleteFinalizationAssessment(
+                    DeleteFinalizationAssessmentState.Unresolved,
+                    matches.Length,
+                    matches[^1].RecordSha256);
+
+            return new DeleteFinalizationAssessment(
+                DeleteFinalizationAssessmentState.ConsistentDeletedObserved,
+                matches.Length,
+                matches[^1].RecordSha256);
+        }
+
+        if (topology.All(x => x.State == DeleteFinalizationState.StillPresentSameIdentity))
+            return new DeleteFinalizationAssessment(
+                DeleteFinalizationAssessmentState.ConsistentStillPresent,
+                matches.Length,
+                matches[^1].RecordSha256);
+
         return new DeleteFinalizationAssessment(
-            topologyStates[0] == DeleteFinalizationState.DeletedObserved
-                ? DeleteFinalizationAssessmentState.ConsistentDeletedObserved
-                : DeleteFinalizationAssessmentState.ConsistentStillPresent,
-            matches.Length,
-            matches[^1].RecordSha256);
+            DeleteFinalizationAssessmentState.Unresolved, matches.Length, matches[^1].RecordSha256);
     }
 
     public static DeleteFinalizationState ClassifyPathObservation(
@@ -366,25 +388,10 @@ public sealed class DeleteOperationStore
         if (!intent.RequestDelete)
             return false;
 
-        var matches = _finalizations.Where(x =>
-                x.RequestSequence == intent.RequestSequence &&
-                x.IntentRecordSha256.Equals(intent.RecordSha256, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(x => x.Sequence).ToArray();
-        if (matches.Length == 0 ||
-            matches.Any(x => x.State is DeleteFinalizationState.Ambiguous or
-                DeleteFinalizationState.StillPresentSameIdentity))
-            return true;
-
-        var decisive = matches
-            .Where(x => x.State != DeleteFinalizationState.CleanupObserved)
-            .Select(x => x.State)
-            .Distinct()
-            .ToArray();
-        if (decisive.Length != 1)
-            return true;
-
-        return decisive[0] is not
-            (DeleteFinalizationState.DeletedObserved or DeleteFinalizationState.Cancelled);
+        var assessment = AssessFinalization(intent);
+        return assessment.State is not
+            (DeleteFinalizationAssessmentState.ConsistentDeletedObserved or
+             DeleteFinalizationAssessmentState.ConsistentCancelled);
     }
 
     private void LoadAndValidateIntents(bool rebuildState = true)

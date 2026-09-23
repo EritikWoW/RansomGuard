@@ -48,6 +48,16 @@ foreach($project in $projects){
     }
 }
 
+$buildPath=Join-Path $RepositoryRoot 'build_windows.ps1'
+$buildLines=Get-Content -LiteralPath $buildPath
+$restoreLines=@($buildLines | Where-Object { $_ -match "Run-Dotnet\s+-Arguments\s+@\('restore'," })
+if($restoreLines.Count -eq 0){throw 'Central build contains no managed restore commands.'}
+foreach($line in $restoreLines){
+    if($line -notmatch [regex]::Escape("'--locked-mode'")){
+        throw "Managed restore is not explicitly locked-mode: $($line.Trim())"
+    }
+}
+
 $workflowRoot=Join-Path $RepositoryRoot '.github\workflows'
 $workflows=@(Get-ChildItem -LiteralPath $workflowRoot -Filter '*.yml' -File)
 if($workflows.Count -eq 0){throw 'No GitHub Actions workflows found.'}

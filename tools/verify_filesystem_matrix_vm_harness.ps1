@@ -116,8 +116,9 @@ if($script -notmatch [regex]::Escape('$vhdPath=Join-Path $ScratchDirectory')){
 if($script -notmatch [regex]::Escape('if($full -notmatch ''(?i)RansomGuard'')')){
     throw 'Scratch/results paths must retain the explicit RansomGuard name guard.'
 }
-if($script -notmatch [regex]::Escape("if(-not $activeVhd.Supported)")){
-    throw 'Filesystem matrix must distinguish unsupported filesystem creation from a failed supported scenario.'
+if($script -notmatch [regex]::Escape('if(-not $activeVhd.Provisioned)') -or
+   $script -notmatch [regex]::Escape('if(-not $activeVhd.Supported)')){
+    throw 'Filesystem matrix must distinguish VHD provisioning failure from an unsupported filesystem format capability.'
 }
 
 $scenarioStart=$script.IndexOf('$scenario=Run-FileSystemScenario $activeVhd')

@@ -27,6 +27,12 @@ var restartSummary = await RestartReconciliation.ObservePendingAsync(
     checked(options.MaxStoreMiB * RollbackStorageBudget.MiB),
     checked(options.MinFreeMiB * RollbackStorageBudget.MiB),
     CancellationToken.None).ConfigureAwait(false);
+if (options.ReconcileOnly)
+{
+    Console.WriteLine(
+        $"RECONCILE ONLY: observed={restartSummary.Observed}; completed-evidence={restartSummary.SupportsCompleted}; not-completed-evidence={restartSummary.SupportsNotCompleted}; ambiguous={restartSummary.Ambiguous}");
+    return;
+}
 var sessionId = options.SessionId ?? $"gate-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}";
 var store = repository.CreateSession(sessionId);
 var lifecycleStore = new RollbackSessionLifecycleStore(store.Root);
@@ -57,6 +63,8 @@ Console.WriteLine($"Restart evidence   : observed={restartSummary.Observed}, com
 Console.WriteLine("CREATE/write/rename/delete/truncate in this root are gated by durable preservation semantics.");
 Console.WriteLine($"Bounded gate workers : {options.GateWorkers}");
 Console.WriteLine($"Rollback budget      : max-session={options.MaxStoreMiB} MiB; min-free={options.MinFreeMiB} MiB");
+if (options.DropFirstCreateCompletion)
+    Console.WriteLine("LAB completion-loss injection : ARMED for the first authoritative CREATE result.");
 Console.WriteLine("Press Ctrl+C to disconnect. The driver then stops gating because no client is connected.");
 
 var context = new RgConnectContext
@@ -97,6 +105,7 @@ using var workerSlots = new SemaphoreSlim(options.GateWorkers, options.GateWorke
 var activeWorkers = new List<Task>();
 var replySync = new object();
 var gateWorkerFailures = 0;
+var droppedCreateCompletion = 0;
 var buffer = Marshal.AllocHGlobal(checked(headerSize + eventSize));
 
 async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
@@ -232,6 +241,16 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
 
         if ((RgEventType)ev.EventType == RgEventType.CreateResult)
         {
+            if (options.DropFirstCreateCompletion &&
+                Interlocked.CompareExchange(ref droppedCreateCompletion, 1, 0) == 0)
+            {
+                Console.Error.WriteLine(
+                    $"LAB COMPLETION LOSS: intentionally dropping authoritative CREATE result request={ev.RelatedSequence}; status=0x{ev.CompletionStatus:X8}; exiting cleanly for restart reconciliation.");
+                cts.Cancel();
+                Native.Cancel(port);
+                return;
+            }
+
             await using var createResultReservation = await storageBudget.ReserveAsync(
                 RollbackStorageBudget.MetadataReservationBytes,
                 "create-completion-evidence",
@@ -1309,7 +1328,9 @@ sealed record Options(
     ulong? ContainPid,
     int? ContainAfterPid,
     int ContainAfterEvents,
-    int ContainAfterPaths)
+    int ContainAfterPaths,
+    bool DropFirstCreateCompletion,
+    bool ReconcileOnly)
 {
     public const int DefaultGateWorkers = 4;
     public const int MaxGateWorkers = 8;
@@ -1333,6 +1354,8 @@ sealed record Options(
         var containAfterEvents = DefaultContainAfterEvents;
         var containAfterPaths = DefaultContainAfterPaths;
         var containThresholdSpecified = false;
+        var dropFirstCreateCompletion = false;
+        var reconcileOnly = false;
         for (var i = 0; i < args.Length; i++)
         {
             switch (args[i].ToLowerInvariant())
@@ -1379,13 +1402,17 @@ sealed record Options(
                             "--contain-after-paths must be between 1 and 16.");
                     containThresholdSpecified = true;
                     break;
+                case "--drop-first-create-completion": dropFirstCreateCompletion = true; break;
+                case "--reconcile-only": reconcileOnly = true; break;
                 case "--prepare-root": prepare = true; break;
                 default: throw new ArgumentException($"Unknown/incomplete argument: {args[i]}");
             }
         }
         if (string.IsNullOrWhiteSpace(root)) throw new ArgumentException("Pass --root <disposable-test-directory>.");
-        if (prepare && (containPid.HasValue || containAfterPid.HasValue))
-            throw new ArgumentException("Containment options cannot be combined with --prepare-root.");
+        if (prepare && (containPid.HasValue || containAfterPid.HasValue || dropFirstCreateCompletion || reconcileOnly))
+            throw new ArgumentException("Containment/fault/reconciliation options cannot be combined with --prepare-root.");
+        if (reconcileOnly && (containPid.HasValue || containAfterPid.HasValue || dropFirstCreateCompletion || containThresholdSpecified))
+            throw new ArgumentException("--reconcile-only cannot be combined with containment or fault injection.");
         if (containPid.HasValue && containAfterPid.HasValue)
             throw new ArgumentException("--contain-pid and --contain-after-pid are mutually exclusive.");
         if (containThresholdSpecified && !containAfterPid.HasValue)
@@ -1395,7 +1422,7 @@ sealed record Options(
         store ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RansomGuardV072", "GateRollback");
         return new Options(
             root, store, session, prepare, gateWorkers, maxStoreMiB, minFreeMiB,
-            containPid, containAfterPid, containAfterEvents, containAfterPaths);
+            containPid, containAfterPid, containAfterEvents, containAfterPaths, dropFirstCreateCompletion, reconcileOnly);
     }
 }
 

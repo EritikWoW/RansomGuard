@@ -1,0 +1,158 @@
+name: Minifilter completion-loss recovery VM lab
+
+on:
+  workflow_dispatch:
+    inputs:
+      root_base:
+        description: Disposable VM-only crash/fault root base. Must contain RansomGuard.
+        required: true
+        default: C:\RansomGuard-VM-Crash
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ransomguard-crash-vm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  crash-runtime:
+    environment: ransomguard-lab-vm
+    runs-on: [self-hosted, Windows, X64, ransomguard-lab-vm]
+    timeout-minutes: 15
+    env:
+      RANSOMGUARD_LAB_VM: I_UNDERSTAND
+      RANSOMGUARD_LAB_CERT_THUMBPRINT: ${{ secrets.RANSOMGUARD_LAB_CERT_THUMBPRINT }}
+      RG_CRASH_ROOT_BASE: ${{ inputs.root_base || 'C:\\RansomGuard-VM-Crash' }}
+      RG_WORKFLOW_SHA: ${{ github.sha }}
+
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Audit PowerShell and crash harness
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          .\tools\verify_powershell_automation.ps1
+          .\tools\verify_crash_vm_harness.ps1
+
+      - name: Verify runtime VM runner readiness
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          if([string]::IsNullOrWhiteSpace($env:RANSOMGUARD_LAB_CERT_THUMBPRINT)){throw 'Environment secret RANSOMGUARD_LAB_CERT_THUMBPRINT is required.'}
+          .\minifilter-tools\verify_runtime_runner_readiness.ps1 -CertificateThumbprint $env:RANSOMGUARD_LAB_CERT_THUMBPRINT
+
+      - name: Clear stale LAB minifilter from prior failed run
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $root=[IO.Path]::GetFullPath($env:RG_CRASH_ROOT_BASE)
+          $volume=[IO.Path]::GetPathRoot($root).TrimEnd('\')
+          $filters=(& fltmc filters 2>$null | Out-String)
+          if($LASTEXITCODE -ne 0){throw "Unable to query Filter Manager before crash lab, exit=$LASTEXITCODE"}
+          if($filters -match '(?m)^\s*RansomGuardMinifilter\b'){
+            throw 'STALE KERNEL STATE: RansomGuardMinifilter is still loaded from an earlier crash/fault run. Do not attempt repeated unloads of an unknown stale driver generation. Revert the disposable VM checkpoint, start the runner again, then rerun this workflow.'
+          }
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build Engineering LAB userspace bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          .\build_lab.cmd
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          $lab=Get-ChildItem .\release -Directory -Filter 'RansomGuard-Lab-v*' | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+          if(-not $lab){throw 'Engineering LAB release directory not found.'}
+          "RG_LAB_RELEASE=$($lab.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build and sign exact-commit runtime driver package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $package=Join-Path $env:RUNNER_TEMP 'ransomguard-crash-driver'
+          .\minifilter-tools\prepare_runtime_driver_package.ps1 -CertificateThumbprint $env:RANSOMGUARD_LAB_CERT_THUMBPRINT -OutputDirectory $package
+          $provenance=Get-Content -LiteralPath (Join-Path $package 'runtime-package.json') -Raw | ConvertFrom-Json
+          if([int]$provenance.schema -ne 2){throw "Runtime package provenance schema must be 2. Found '$($provenance.schema)'."}
+          if($provenance.commit -ne $env:RG_WORKFLOW_SHA){throw "Runtime driver provenance commit '$($provenance.commit)' does not match workflow commit '$env:RG_WORKFLOW_SHA'."}
+          $expectedThumb=$env:RANSOMGUARD_LAB_CERT_THUMBPRINT.Replace(' ','').ToUpperInvariant()
+          if([string]$provenance.certificateThumbprint -ne $expectedThumb){throw "Runtime package certificate thumbprint '$($provenance.certificateThumbprint)' does not match the configured LAB certificate '$expectedThumb'."}
+          foreach($artifact in @(
+            @('sysSha256',(Join-Path $package 'RansomGuardMinifilter.sys')),
+            @('infSha256',(Join-Path $package 'RansomGuardMinifilter.inf')),
+            @('catSha256',(Join-Path $package 'RansomGuardMinifilter.cat'))
+          )){
+            $expected=[string]$provenance.($artifact[0])
+            $actual=(Get-FileHash -LiteralPath $artifact[1] -Algorithm SHA256).Hash
+            if(-not [string]::Equals($expected,$actual,[StringComparison]::OrdinalIgnoreCase)){
+              throw "Runtime package artifact hash mismatch for $($artifact[1])."
+            }
+          }
+          "RG_DRIVER_PACKAGE=$package" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run CREATE completion-loss and restart reconciliation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $results=Join-Path $env:RUNNER_TEMP 'ransomguard-crash-results'
+          if(Test-Path -LiteralPath $results){
+            Remove-Item -LiteralPath $results -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $results -Force | Out-Null
+          .\minifilter-tools\run_crash_reconciliation_lab.ps1 -LabReleaseDirectory $env:RG_LAB_RELEASE -DriverPackageDirectory $env:RG_DRIVER_PACKAGE -RootBase $env:RG_CRASH_ROOT_BASE -ResultsDirectory $results
+          $summary=Get-Content -LiteralPath (Join-Path $results 'crash-runtime-result.json') -Raw | ConvertFrom-Json
+          foreach($name in @(
+            'completionLossObserved',
+            'createIntentDurable',
+            'createCompletionAbsent',
+            'targetCreated',
+            'restartObserved',
+            'restartSupportsCompleted',
+            'recoveryTransactionNotReady',
+            'cleanupPassed',
+            'passed'
+          )){
+            if($summary.$name -ne $true){throw "Crash runtime result invariant '$name' was not true."}
+          }
+          if(-not [string]::IsNullOrWhiteSpace([string]$summary.cleanupError)){
+            throw "Crash runtime cleanup reported an error: $($summary.cleanupError)"
+          }
+          "RG_CRASH_RESULTS=$results" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Ensure LAB minifilter is unloaded after run
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $root=[IO.Path]::GetFullPath($env:RG_CRASH_ROOT_BASE)
+          $volume=[IO.Path]::GetPathRoot($root).TrimEnd('\')
+          $filters=(& fltmc filters 2>$null | Out-String)
+          if($LASTEXITCODE -ne 0){throw "Unable to query Filter Manager during final cleanup, exit=$LASTEXITCODE"}
+          if($filters -match '(?m)^\s*RansomGuardMinifilter\b'){
+            .\minifilter-tools\unload_minifilter_lab.ps1 -Volume $volume
+          }
+
+      - name: Upload crash evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ransomguard-minifilter-crash-evidence
+          path: ${{ runner.temp }}/ransomguard-crash-results/**
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Remove signed lab package
+        if: always()
+        shell: pwsh
+        run: |
+          if($env:RG_DRIVER_PACKAGE -and (Test-Path -LiteralPath $env:RG_DRIVER_PACKAGE)){
+            Remove-Item -LiteralPath $env:RG_DRIVER_PACKAGE -Recurse -Force -ErrorAction SilentlyContinue
+          }

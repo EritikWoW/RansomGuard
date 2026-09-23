@@ -5,7 +5,7 @@ if (!OperatingSystem.IsWindows())
     throw new PlatformNotSupportedException("RansomGuard minifilter runtime harness is Windows-only.");
 
 if (args.Length == 0)
-    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | map-write --file <path> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker> | containment-transition --file-a <path> --file-b <path> --ready <marker> --go <marker> --result <marker>");
+    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | map-write --file <path> | create-new --file <path> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker> | containment-transition --file-a <path> --file-b <path> --ready <marker> --go <marker> --result <marker>");
 
 var command = args[0].ToLowerInvariant();
 var options = Parse(args.Skip(1).ToArray());
@@ -28,6 +28,9 @@ try
             break;
         case "map-write":
             MapAndWrite(Require(options, "--file"));
+            break;
+        case "create-new":
+            CreateNewFile(Require(options, "--file"));
             break;
         case "containment-probe":
             ContainmentProbe(
@@ -301,6 +304,40 @@ static bool TryWriteTransitionByte(SafeFileHandle handle, long offset, byte valu
 
     error = 0;
     return true;
+}
+
+static void CreateNewFile(string filePath)
+{
+    if (File.Exists(filePath) || Directory.Exists(filePath))
+        throw new IOException("create-new requires an absent path: " + filePath);
+
+    var parent = Path.GetDirectoryName(filePath);
+    if (string.IsNullOrWhiteSpace(parent) || !Directory.Exists(parent))
+        throw new DirectoryNotFoundException("create-new parent directory does not exist: " + parent);
+
+    const uint GenericWrite = 0x40000000;
+    const uint ShareRead = 0x00000001;
+    const uint ShareWrite = 0x00000002;
+    const uint ShareDelete = 0x00000004;
+    const uint CreateNew = 1;
+    const uint FileAttributeNormal = 0x00000080;
+    const uint FileFlagWriteThrough = 0x80000000;
+
+    using var file = Native.CreateFileW(
+        filePath,
+        GenericWrite,
+        ShareRead | ShareWrite | ShareDelete,
+        IntPtr.Zero,
+        CreateNew,
+        FileAttributeNormal | FileFlagWriteThrough,
+        IntPtr.Zero);
+    if (file.IsInvalid)
+        throw new System.ComponentModel.Win32Exception(
+            Marshal.GetLastWin32Error(), $"CreateFileW(CREATE_NEW) failed for '{filePath}'.");
+
+    // The completion-loss scenario is about CREATE transaction reconciliation only.
+    // Do not issue a follow-up WRITE: dropping CreateResult intentionally begins gate shutdown,
+    // and a second mutation would test shutdown timing instead of lost CREATE completion.
 }
 
 static void MapAndWrite(string filePath)

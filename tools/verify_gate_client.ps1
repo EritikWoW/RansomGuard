@@ -93,6 +93,11 @@ foreach($required in @(
   'RgControlCommand.ActivateGate',
   'RgControlCommand.ActivateAndContainProcess',
   '--contain-pid',
+  '--drop-first-create-completion',
+  '--reconcile-only',
+  'RECONCILE ONLY: observed=',
+  'LAB COMPLETION LOSS: intentionally dropping authoritative CREATE result',
+  'Interlocked.CompareExchange(ref droppedCreateCompletion, 1, 0) == 0',
   'TargetProcessId = containPid ?? 0',
   'ContainmentActive',
   'ContainedProcessId',
@@ -199,6 +204,19 @@ if($createEvaluate -lt 0 -or $createIntent -lt 0 -or $createReturn -lt 0 -or $cr
   throw 'CREATE intent must be durably committed before any allow decision is returned.'
 }
 
+$lossOption=$text.IndexOf('case "--drop-first-create-completion"')
+$lossBranch=$text.IndexOf('if ((RgEventType)ev.EventType == RgEventType.CreateResult)')
+$lossCheck=$text.IndexOf('if (options.DropFirstCreateCompletion',$lossBranch)
+$lossCancel=$text.IndexOf('cts.Cancel();',$lossCheck)
+$lossPersist=$text.IndexOf('CreateReconciliation.HandleAsync(',$lossBranch)
+if($lossOption -lt 0 -or $lossBranch -lt 0 -or $lossCheck -lt 0 -or $lossCancel -lt 0 -or $lossPersist -lt 0 -or
+   $lossBranch -gt $lossCheck -or $lossCheck -gt $lossCancel -or $lossCancel -gt $lossPersist){
+  throw 'LAB CREATE completion-loss injection must drop the received CreateResult before authoritative completion persistence.'
+}
+if($text -match [regex]::Escape('Environment.FailFast("RansomGuard LAB fault injection: after durable CREATE intent, before kernel reply.")')){
+  throw 'GateClient must not hard-crash while the kernel is waiting for a blocking gate reply.'
+}
+
 $renameBranch=$text.IndexOf('if (eventType == RgEventType.Rename)')
 $renameSourceCapture=$text.IndexOf('CapturePreimageAsync(sourcePath, RollbackMutationKind.Rename',$renameBranch)
 $renameIntent=$text.IndexOf('renameStore.CaptureIntentAsync(',$renameSourceCapture)
@@ -302,7 +320,7 @@ if($preflightBlock -match 'Native\.Reply\('){throw 'Activation preflight events 
 $containOption=$text.IndexOf('case "--contain-pid"')
 $containRejectSystem=$text.IndexOf('parsedPid <= 4',$containOption)
 $containRejectSelf=$text.IndexOf('parsedPid == Environment.ProcessId',$containOption)
-$containPrepareReject=$text.IndexOf('Containment options cannot be combined with --prepare-root')
+$containPrepareReject=$text.IndexOf('Containment/fault/reconciliation options cannot be combined with --prepare-root')
 if($containOption -lt 0 -or $containRejectSystem -lt 0 -or $containRejectSelf -lt 0 -or $containPrepareReject -lt 0){
   throw 'LAB containment CLI must reject system/self PID and prepare-only combinations.'
 }
@@ -393,10 +411,14 @@ if($loopDispatch -lt 0 -or $replyRequired -lt 0 -or $replyAwait -lt 0 -or
 }
 $verifyBeforeRestart=$text.IndexOf('repository.VerifyAll()')
 $restartObserve=$text.IndexOf('RestartReconciliation.ObservePendingAsync(',$verifyBeforeRestart)
+$reconcileOnly=$text.IndexOf('if (options.ReconcileOnly)',$restartObserve)
+$reconcileReturn=$text.IndexOf('return;',$reconcileOnly)
 $createSession=$text.IndexOf('repository.CreateSession(',$restartObserve)
-if($verifyBeforeRestart -lt 0 -or $restartObserve -lt 0 -or $createSession -lt 0 -or
-   $verifyBeforeRestart -gt $restartObserve -or $restartObserve -gt $createSession){
-  throw 'Pending restart evidence must be observed only after repository validation and before a new session starts.'
+if($verifyBeforeRestart -lt 0 -or $restartObserve -lt 0 -or $reconcileOnly -lt 0 -or
+   $reconcileReturn -lt 0 -or $createSession -lt 0 -or
+   $verifyBeforeRestart -gt $restartObserve -or $restartObserve -gt $reconcileOnly -or
+   $reconcileOnly -gt $reconcileReturn -or $reconcileReturn -gt $createSession){
+  throw 'Pending restart evidence must be observed after repository validation, with reconcile-only exiting before any new session is created.'
 }
 $restartClassStart=$text.IndexOf('static class RestartReconciliation')
 $restartClassEnd=$text.IndexOf('readonly record struct RestartReconciliationSummary',$restartClassStart)

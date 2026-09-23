@@ -27,8 +27,25 @@ $propsPath=Join-Path $RepositoryRoot 'Directory.Build.props'
 if([string]$props.Project.PropertyGroup.RestorePackagesWithLockFile -ne 'true'){
     throw 'Directory.Build.props must keep RestorePackagesWithLockFile=true.'
 }
+if([string]$props.Project.PropertyGroup.RestoreLockedMode -ne 'true'){
+    throw 'Directory.Build.props must keep RestoreLockedMode=true.'
+}
 if([string]$props.Project.PropertyGroup.Deterministic -ne 'true'){
     throw 'Directory.Build.props must keep Deterministic=true.'
+}
+
+$projects=@(Get-ChildItem -LiteralPath (Join-Path $RepositoryRoot 'src') -Filter '*.csproj' -File -Recurse)
+$projects+=@(Get-ChildItem -LiteralPath (Join-Path $RepositoryRoot 'tests') -Filter '*.csproj' -File -Recurse)
+if($projects.Count -eq 0){throw 'No managed project files found for lock-file verification.'}
+foreach($project in $projects){
+    $lock=Join-Path $project.DirectoryName 'packages.lock.json'
+    if(-not(Test-Path -LiteralPath $lock -PathType Leaf)){
+        throw "Managed project is missing committed NuGet lock file: $($project.FullName)"
+    }
+    $parsed=Get-Content -LiteralPath $lock -Raw | ConvertFrom-Json
+    if([int]$parsed.version -ne 1 -or $null -eq $parsed.dependencies){
+        throw "Invalid NuGet lock file: $lock"
+    }
 }
 
 $workflowRoot=Join-Path $RepositoryRoot '.github\workflows'
@@ -81,4 +98,4 @@ foreach($pattern in @('*.pfx','*.p12','*.key','.env','.env.*')){
     }
 }
 
-Write-Host "Supply-chain gate PASSED: SDK 10.0.401 is exact, roll-forward is disabled, $($workflows.Count) workflows use reviewed full-SHA action pins, and sensitive key/env file patterns are ignored."
+Write-Host "Supply-chain gate PASSED: SDK 10.0.401 is exact, roll-forward/restore drift are disabled, $($projects.Count) managed projects have committed lock files, $($workflows.Count) workflows use reviewed full-SHA action pins, and sensitive key/env file patterns are ignored."

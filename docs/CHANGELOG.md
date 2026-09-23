@@ -1,3 +1,17 @@
+# RansomGuard 0.7.25.0
+
+- Bumped the Engineering LAB minifilter wire protocol to v15 without changing the fixed RG_EVENT structure size.
+- Added durable DELETE intent, disposition-completion and finalization journals, all write-through, hash-chained and bound to the exact request sequence, pathname and FILE_ID_INFO.
+- Before allowing FileDispositionInformation/FileDispositionInformationEx delete requests, GateClient captures/reuses the verified full pre-image for pre-existing files and commits the exact disposition flags plus durable DELETE intent.
+- Added correlated no-reply DeleteDispositionResult evidence with authoritative NTSTATUS plus DeletePending and FILE_ID_INFO when those fields can be queried safely.
+- Successful delete dispositions bind an exact stream-handle context. A later disposition clear/superseding request records cancellation; IRP_MJ_CLEANUP records CleanupObserved for that exact handle/request.
+- CleanupObserved is deliberately not treated as pathname deletion. GateClient persists cleanup first, then performs a separate bounded live topology probe; restart reconciliation performs the same conservative probe for unsettled transactions.
+- Missing pathname can support completed DELETE topology, the same FILE_ID still present can support non-completion, and replacement identities/query failures/conflicting observations remain unresolved. Restart/finalization evidence never manufactures an authoritative disposition completion.
+- Recovery planning adds ReviewDeleteTransaction. DELETE topology remains Informational/Review/Blocked and is never an executable Ready mutation; verified pre-image copy-out remains separate.
+- Session lifecycle and retention protect missing-completion, cleanup-only, same-identity-present, ambiguous and conflicting DELETE transactions from cleanup.
+- Added LAB-only --drop-first-delete-completion plus a synchronized native FileDispositionInfo helper and extended the manual disposable-VM completion-loss harness with CREATE/RENAME/TRUNCATE/DELETE evidence requirements.
+- Bumped userspace/LAB and driver package version to 0.7.25.0.
+
 # RansomGuard 0.7.24.0
 
 - Bumped the Engineering LAB minifilter wire protocol to v14 without changing the fixed RG_EVENT structure size.

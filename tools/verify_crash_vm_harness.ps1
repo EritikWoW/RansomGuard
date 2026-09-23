@@ -104,7 +104,7 @@ foreach($required in @(
 )){
   if($helper -notmatch [regex]::Escape($required)){throw "RuntimeHarness TRUNCATE completion-loss trigger invariant missing: $required"}
 }
-$truncateHelperStart=$helper.IndexOf('static void TruncateEndOfFile(string filePath, long length)')
+$truncateHelperStart=$helper.IndexOf('static void TruncateEndOfFile(string filePath, long length, string readyMarker, string goMarker)')
 $truncateHelperEnd=$helper.IndexOf('static void MapAndWrite(string filePath)',$truncateHelperStart)
 if($truncateHelperStart -lt 0 -or $truncateHelperEnd -lt 0){
   throw 'TruncateEndOfFile source block missing.'

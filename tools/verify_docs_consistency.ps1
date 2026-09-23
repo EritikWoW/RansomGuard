@@ -27,7 +27,8 @@ foreach($required in @(
     @('Changelog',"# RansomGuard $version",$changelog),
     @('Product target protocol','current engineering branch uses protocol v15',$target),
     @('Product target build hardening','0.7.27 hardens build provenance',$target),
-    @('Product target current stress','0.7.28 adds a dedicated bounded-concurrency runtime qualification',$target)
+    @('Product target concurrency stress','0.7.28 adds a dedicated bounded-concurrency runtime qualification',$target),
+    @('Product target current fault campaign','0.7.29 adds separate storage-pressure and real-reboot fault qualifications',$target)
 )){
     $label=[string]$required[0]
     $needle=[string]$required[1]
@@ -47,4 +48,4 @@ foreach($stale in @(
     }
 }
 
-Write-Host "Documentation consistency gate PASSED: operator docs, product target, README and changelog match version $version, protocol v15 and the 0.7.28 concurrency-stress milestone."
+Write-Host "Documentation consistency gate PASSED: operator docs, product target, README and changelog match version $version, protocol v15, 0.7.28 bounded concurrency and the 0.7.29 fault-campaign milestone."

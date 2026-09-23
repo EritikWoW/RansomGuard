@@ -94,6 +94,24 @@ foreach($required in @(
     'transitionRequested',
     'transitionKernelActive',
     'transitionDeniedNextWrite',
+    'concurrencyStressPassed',
+    'concurrencyCreateCorrelated',
+    'concurrencyRenameCorrelated',
+    'concurrencyTruncateCorrelated',
+    'concurrencyDeleteCorrelated',
+    'concurrencyMappedEvidence',
+    'concurrencyGateWorkers=4',
+    'concurrencyProcessCount=20',
+    'concurrency-stress',
+    "'--gate-workers','4'",
+    '$stressCount=4',
+    'Wait-StressProcesses $stressProcesses 90',
+    'Assert-CorrelatedJournalPair',
+    '[System.Collections.Generic.HashSet[uint64]]::new()',
+    '$truncateIntent.requestSequence',
+    '$deleteIntent.requestSequence',
+    'Stress mapped pre-image hash mismatch',
+    'Gate worker failed:',
     'containment-journal.jsonl',
     'Stop-LabProcess $gatePost',
     'Stop-LabProcess $gateContain',
@@ -114,6 +132,38 @@ foreach($required in @(
     'driverCatSha256'
 )){
     if($runtime -notmatch [regex]::Escape($required)){throw "Runtime integration script missing invariant: $required"}
+}
+
+$stressStart=$runtime.IndexOf('# Scenario 5: mixed high-concurrency stress.')
+$stressStopTransition=$runtime.IndexOf('Stop-LabProcess $gateTransition ''event-bound containment gate''',$stressStart)
+$stressGateStart=$runtime.IndexOf('''--gate-workers'',''4''',$stressStopTransition)
+$stressReady=$runtime.IndexOf('Wait-Path $truncateReady 30',$stressGateStart)
+$stressCreateCompletion=$runtime.IndexOf('$createCompletionJournal',$stressReady)
+$stressImmediate=$runtime.IndexOf('# Add 12 immediate operations',$stressCreateCompletion)
+$stressRelease=$runtime.IndexOf('foreach($marker in $stressGoMarkers)',$stressImmediate)
+$stressWait=$runtime.IndexOf('Wait-StressProcesses $stressProcesses 90',$stressRelease)
+$stressCorrelation=$runtime.IndexOf('Assert-CorrelatedJournalPair $renameIntents $renameCompletions ''stress RENAME'' 4 4',$stressWait)
+$stressStop=$runtime.IndexOf('Stop-LabProcess $gateStress ''concurrency stress gate''',$stressCorrelation)
+if($stressStart -lt 0 -or $stressStopTransition -lt 0 -or $stressGateStart -lt 0 -or
+   $stressReady -lt 0 -or $stressCreateCompletion -lt 0 -or $stressImmediate -lt 0 -or
+   $stressRelease -lt 0 -or $stressWait -lt 0 -or $stressCorrelation -lt 0 -or $stressStop -lt 0 -or
+   $stressStart -gt $stressStopTransition -or $stressStopTransition -gt $stressGateStart -or
+   $stressGateStart -gt $stressReady -or $stressReady -gt $stressCreateCompletion -or
+   $stressCreateCompletion -gt $stressImmediate -or $stressImmediate -gt $stressRelease -or
+   $stressRelease -gt $stressWait -or $stressWait -gt $stressCorrelation -or
+   $stressCorrelation -gt $stressStop){
+    throw 'Concurrency stress must stop the prior gate, fix GateClient at 4 workers, hold destructive handles until durable CREATE completion, release one mixed burst, correlate journals, then stop the stress gate.'
+}
+
+foreach($binding in @(
+    '[string]::Equals([IO.Path]::GetFullPath([string]$x.originalPath),$truncateFiles[$i]',
+    '[uint64]$x.requestSequence -eq [uint64]$truncateIntent.requestSequence',
+    '[string]::Equals([IO.Path]::GetFullPath([string]$x.originalPath),$deleteFiles[$i]',
+    '[uint64]$x.requestSequence -eq [uint64]$deleteIntent.requestSequence'
+)){
+    if($runtime -notmatch [regex]::Escape($binding)){
+        throw "Concurrency stress exact path/requestSequence binding missing: $binding"
+    }
 }
 
 $readiness=Get-Content -LiteralPath $readinessScript -Raw
@@ -342,4 +392,4 @@ foreach($required in @('where.exe pwsh.exe','set "PS_EXE=pwsh.exe"','powershell.
     if($buildWrapperText -notmatch [regex]::Escape($required)){throw "Windows build wrapper missing PowerShell host invariant: $required"}
 }
 
-Write-Host 'Runtime VM harness source gate PASSED: manual self-hosted VM only, exact-commit signed driver provenance, mapping coverage, pre-armed containment and event-bound containment transition, no boot/trust/Defender mutation.' -ForegroundColor Green
+Write-Host 'Runtime VM harness source gate PASSED: manual self-hosted VM only, exact-commit signed driver provenance, mapping coverage, bounded 20-process concurrency stress, containment transitions, no boot/trust/Defender mutation.' -ForegroundColor Green

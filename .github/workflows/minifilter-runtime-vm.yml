@@ -136,8 +136,8 @@ jobs:
           foreach($name in $requiredTrue){
             if($summary.$name -ne $true){throw "Runtime result invariant '$name' was not true."}
           }
-          if([int]$summary.concurrencyGateWorkers -ne 4){
-            throw "Runtime concurrency worker invariant mismatch: $($summary.concurrencyGateWorkers)"
+          if([int]$summary.concurrencyMessageSlots -ne 4){
+            throw "Runtime concurrency message-slot invariant mismatch: $($summary.concurrencyMessageSlots)"
           }
           if([int]$summary.concurrencyProcessCount -ne 20){
             throw "Runtime concurrency process-count invariant mismatch: $($summary.concurrencyProcessCount)"

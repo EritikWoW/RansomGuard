@@ -1081,7 +1081,8 @@ static FLT_POSTOP_CALLBACK_STATUS RgPostSetInformationSafe(PFLT_CALLBACK_DATA Da
                 event.IdentityStatus = RgIdentityQueryFailed;
             }
         }
-    } else if (NT_SUCCESS(Data->IoStatus.Status)) {
+    } else if (context->PostEventType == RgEventTruncateResult &&
+               NT_SUCCESS(Data->IoStatus.Status)) {
         // TRUNCATE post-operation evidence keeps the authoritative filesystem status even when
         // a safe identity/length query is unavailable. Missing details remain explicitly unresolved.
         if (KeGetCurrentIrql() == PASSIVE_LEVEL && !KeAreAllApcsDisabled() &&

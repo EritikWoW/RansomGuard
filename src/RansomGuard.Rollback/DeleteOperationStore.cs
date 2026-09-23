@@ -661,11 +661,20 @@ public sealed class DeleteOperationStore
 
         if (state == DeleteFinalizationState.Ambiguous)
         {
-            if (pathState is not
-                (RestartPathState.QueryFailed or RestartPathState.ReparsePoint or RestartPathState.Directory) ||
-                identity is not null)
-                throw new InvalidDataException("Ambiguous DELETE topology observation has invalid fields.");
-            return;
+            if (pathState == RestartPathState.File)
+            {
+                ValidateIdentity(identity
+                    ?? throw new InvalidDataException(
+                        "Ambiguous DELETE replacement-file observation requires its current identity."));
+                return;
+            }
+
+            if (pathState is
+                    (RestartPathState.QueryFailed or RestartPathState.ReparsePoint or RestartPathState.Directory) &&
+                identity is null)
+                return;
+
+            throw new InvalidDataException("Ambiguous DELETE topology observation has invalid fields.");
         }
 
         if (pathState == RestartPathState.File)

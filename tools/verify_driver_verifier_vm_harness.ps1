@@ -24,6 +24,13 @@ foreach($required in @(
     'StageOnly unexpectedly loaded RansomGuardMinifilter',
     'EXIT_CODE_REBOOT_NEEDED (2)',
     'Assert-VerifierMutationResult',
+    'Read-And-VerifyState',
+    "phase -ne 'runtime-failed-reset'",
+    'prior.resetScheduled',
+    'prior.runtimeBootUtc',
+    'querysettings-prior-failed-reset',
+    'priorFailedCampaignArchived',
+    'Failed-',
     "verifier /querysettings did not confirm bootmode=OneBoot",
     "phase='armed'",
     'bootMode=''oneboot''',
@@ -132,6 +139,19 @@ if($workflow.Contains('\${{')){
 if($arm -notmatch [regex]::Escape('Driver Verifier already has persistent settings')){
     throw 'Driver Verifier ARM must refuse pre-existing verifier state instead of overwriting it.'
 }
+$recoverPhase=$arm.IndexOf("phase -ne 'runtime-failed-reset'")
+$recoverReset=$arm.IndexOf('prior.resetScheduled',$recoverPhase)
+$recoverBoot=$arm.IndexOf('prior.runtimeBootUtc',$recoverReset)
+$recoverQuery=$arm.IndexOf("Invoke-Verifier @('/querysettings') 'querysettings-prior-failed-reset'",$recoverBoot)
+$recoverArchive=$arm.IndexOf('Move-Item -LiteralPath $active -Destination $failedArchive',$recoverQuery)
+$newActive=$arm.IndexOf('New-Item -ItemType Directory -Path $active -Force',$recoverArchive)
+if($recoverPhase -lt 0 -or $recoverReset -lt 0 -or $recoverBoot -lt 0 -or
+   $recoverQuery -lt 0 -or $recoverArchive -lt 0 -or $newActive -lt 0 -or
+   $recoverPhase -gt $recoverReset -or $recoverReset -gt $recoverBoot -or
+   $recoverBoot -gt $recoverQuery -or $recoverQuery -gt $recoverArchive -or
+   $recoverArchive -gt $newActive){
+    throw 'Driver Verifier ARM failed-reset recovery must remain state-hash/phase -> reset proof -> reboot proof -> querysettings-clear -> archive -> new Active.'
+}
 if($arm -match '(?i)fltmc\s+(load|attach)'){
     throw 'Driver Verifier ARM must not load or attach the minifilter before the verifier reboot.'
 }
@@ -148,4 +168,4 @@ if($clear -notmatch [regex]::Escape('Driver Verifier current activity still name
     throw 'Driver Verifier CLEAR must prove current verification activity is gone after the reset reboot.'
 }
 
-Write-Host 'Driver Verifier source gate PASSED: standard settings target only RansomGuardMinifilter.sys, bootmode is oneboot, runtime proves the loaded target is verified under bounded stress, /reset is mandatory, a second reboot proves clear state, and no workflow step can reboot the VM automatically.'
+Write-Host 'Driver Verifier source gate PASSED: standard settings target only RansomGuardMinifilter.sys, bootmode is oneboot, runtime proves the loaded target is verified under bounded stress, failed-reset campaigns can be archived only after hash/phase/reset/reboot/querysettings proof, /reset is mandatory, a second reboot proves clear state, and no workflow step can reboot the VM automatically.'

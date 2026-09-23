@@ -84,7 +84,10 @@ foreach($required in @(
     'RestartEvidenceState.SupportsNotCompleted',
     'RestartEvidenceState.Indeterminate',
     'RestartEvidenceState.Ambiguous',
-    'AssessRestart('
+    'AssessRestart(',
+    'TRUNCATE restart observation intent binding mismatch',
+    'TRUNCATE restart observation path does not match its committed intent',
+    'TRUNCATE restart assessment intent binding mismatch'
 )){
     if($truncateText -notmatch [regex]::Escape($required)){
         throw "TRUNCATE recovery invariant missing: $required"
@@ -190,6 +193,7 @@ foreach($required in @(
     'restart TRUNCATE EOF evidence recognizes requested length on the same FILE_ID',
     'restart TRUNCATE EOF evidence recognizes unchanged original length',
     'TRUNCATE restart evidence is idempotent and assessment binds the exact intent',
+    'TRUNCATE restart evidence rejects a cloned intent whose path does not match the committed record',
     'consistent restart TRUNCATE evidence becomes review-only and never a live length mutation',
     'stale recovery plan is rejected before any output is created'
 )){

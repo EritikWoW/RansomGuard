@@ -1,4 +1,4 @@
-# RansomGuard 0.7.28.0 - guided setup
+# RansomGuard 0.7.29.0 - guided setup
 
 This document describes the current audit-only guided setup. It does not enable automatic
 blocking, install/load the kernel driver, change Defender, or widen trust rules.

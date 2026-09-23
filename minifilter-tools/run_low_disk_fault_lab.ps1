@@ -350,8 +350,15 @@ try{
     $summary.destinationAbsentOnDenial=$true
 
     $gateErrorText=if(Test-Path -LiteralPath $gateErr){Get-Content -LiteralPath $gateErr -Raw}else{''}
-    if($gateErrorText -notmatch 'Rollback storage budget denied rename-source-preimage'){
-        throw "GateClient did not attribute the fail-closed denial to rollback storage pressure. Error log: $gateErrorText"
+    # File.Move must first obtain a mutation-capable source handle. GateDecision reserves
+    # metadata budget for that CREATE/open event before RENAME evaluation. Once free space is
+    # already below minFree, the correct fail-closed boundary is therefore gate-event:Create:
+    # the destructive RENAME must never be admitted far enough to persist a RENAME intent.
+    if($gateErrorText -notmatch 'Rollback storage budget denied gate-event:Create'){
+        throw "GateClient did not reject the mutation-capable source open at the storage-pressure admission boundary. Error log: $gateErrorText"
+    }
+    if($gateErrorText -match 'Rollback storage budget denied rename-source-preimage'){
+        throw 'Low-disk probe unexpectedly reached RENAME pre-image capture even though free space was already below the global gate reserve.'
     }
     $summary.budgetDenialObserved=$true
 
@@ -515,4 +522,4 @@ if(-not $summary.passed){
     throw "Low-disk fault campaign failed. error='$($summary.error)' cleanup='$($summary.cleanupError)' Evidence: $ResultsDirectory"
 }
 
-Write-Host "LOW-DISK FAULT LAB PASSED. denied under reserve, source preserved, retry succeeded with hash-verified pre-image. Evidence: $ResultsDirectory" -ForegroundColor Green
+Write-Host "LOW-DISK FAULT LAB PASSED. mutation-capable source open denied below reserve before RENAME intent, topology preserved, retry succeeded with durable RENAME evidence and hash-verified pre-image object. Evidence: $ResultsDirectory" -ForegroundColor Green

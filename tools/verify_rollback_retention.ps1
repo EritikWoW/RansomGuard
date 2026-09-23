@@ -206,6 +206,8 @@ $testText=Get-Content -LiteralPath $tests -Raw
 foreach($required in @(
     'rollback maintenance lease serializes retention and hold changes',
     'retention planner selects only eligible completed unheld sessions',
+    'retention planner protects pending CREATE and TRUNCATE transaction sessions',
+    'pending_truncate_completed',
     'retention executor rejects stale plan after lifecycle hold change',
     'retention executor quarantines and purges eligible completed session',
     'retention journal records started/quarantined/completed purge chain',

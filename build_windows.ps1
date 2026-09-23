@@ -16,6 +16,7 @@ function Run-Dotnet([string[]]$Arguments) {
 try {
     Write-Host '[preflight] Parse and audit repository PowerShell automation.'
     & (Join-Path $PSScriptRoot 'tools\verify_powershell_automation.ps1') -RepositoryRoot $PSScriptRoot
+    & (Join-Path $PSScriptRoot 'tools\verify_threat_model.ps1') -RepositoryRoot $PSScriptRoot
 
     if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { throw 'Install .NET 10 SDK on the BUILD PC. Target PCs do not need a runtime.' }
     $version = (& dotnet --version).Trim()

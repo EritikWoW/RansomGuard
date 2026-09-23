@@ -266,7 +266,7 @@ public sealed class TruncateOperationStore
         if (matches.Any(x =>
                 x.Evidence != first.Evidence ||
                 x.PathState != first.PathState ||
-                !Nullable.Equals(x.CurrentIdentity, first.CurrentIdentity) ||
+                !object.Equals(x.CurrentIdentity, first.CurrentIdentity) ||
                 x.ObservedLength != first.ObservedLength))
             return new RestartEvidenceAssessment(
                 RestartEvidenceAssessmentState.Unresolved, matches.Length, matches[^1].RecordSha256);

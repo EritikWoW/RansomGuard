@@ -2,9 +2,15 @@ $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
 $program=Join-Path $root 'src\RansomGuard.GateClient\Program.cs'
 $manifest=Join-Path $root 'src\RansomGuard.GateClient\app.manifest'
-if(-not(Test-Path -LiteralPath $program) -or -not(Test-Path -LiteralPath $manifest)){throw 'Gate client source/manifest missing.'}
+$fileIdentity=Join-Path $root 'src\RansomGuard.Rollback\FileIdentityStore.cs'
+if(-not(Test-Path -LiteralPath $program) -or
+   -not(Test-Path -LiteralPath $manifest) -or
+   -not(Test-Path -LiteralPath $fileIdentity)){
+  throw 'Gate client source/manifest/file-identity source missing.'
+}
 $text=Get-Content -LiteralPath $program -Raw
 $manifestText=Get-Content -LiteralPath $manifest -Raw
+$fileIdentityText=Get-Content -LiteralPath $fileIdentity -Raw
 
 foreach($required in @(
   'RANSOMGUARD-LAB-GATE-V1',
@@ -32,13 +38,21 @@ foreach($required in @(
   'RenameCompletionState.Failed',
   'FinalIdentity',
   'RgEventType.RenameResult',
+  'TruncateOperationStore',
+  'TruncateReconciliation.HandleAsync',
+  'TruncateCompletionState.Succeeded',
+  'TruncateCompletionState.Failed',
+  'RgEventType.TruncateResult',
+  'FileIdentityStore.QueryPathStandardInfo',
+  'truncateStore.RecordIntentAsync',
+  'pendingTruncateCount',
   'ev.RelatedSequence',
   'ev.CompletionStatus',
   'CaptureAbsentAsync',
   'CreateGatePolicy.TryParseDisposition',
   '(ev.Flags >> 24) & 0xFF',
   'ev.Flags & 0x00FFFFFF',
-  'ProtocolVersion = 13',
+  'ProtocolVersion = 14',
   'CreatePreservationAction.CaptureExistingPreimage',
   'CreatePreservationAction.RecordOriginallyAbsent',
   'CreatePreservationAction.DenyUnsupported',
@@ -95,12 +109,15 @@ foreach($required in @(
   '--contain-pid',
   '--drop-first-create-completion',
   '--drop-first-rename-completion',
+  '--drop-first-truncate-completion',
   '--reconcile-only',
   'RECONCILE ONLY: observed=',
   'LAB COMPLETION LOSS: intentionally dropping authoritative CREATE result',
   'LAB COMPLETION LOSS: intentionally dropping authoritative RENAME result',
+  'LAB COMPLETION LOSS: intentionally dropping authoritative TRUNCATE result',
   'Interlocked.CompareExchange(ref droppedCreateCompletion, 1, 0) == 0',
   'Interlocked.CompareExchange(ref droppedRenameCompletion, 1, 0) == 0',
+  'Interlocked.CompareExchange(ref droppedTruncateCompletion, 1, 0) == 0',
   'Only one completion-loss injection may be armed per GateClient session.',
   'TargetProcessId = containPid ?? 0',
   'ContainmentActive',
@@ -118,6 +135,21 @@ foreach($required in @(
   'Activation refused:'
 )){
   if($text -notmatch [regex]::Escape($required)){throw "Gate client invariant missing: $required"}
+}
+
+foreach($required in @(
+  'private const int FileStandardInfo = 1;',
+  'public byte DeletePending;',
+  'public byte Directory;',
+  'QueryHandleStandardInfo(',
+  'GetFileInformationByHandleExStandard('
+)){
+  if($fileIdentityText -notmatch [regex]::Escape($required)){
+    throw "FILE_STANDARD_INFO interop invariant missing: $required"
+  }
+}
+if($fileIdentityText -match '\[MarshalAs\(UnmanagedType\.Bool\)\]\s*public\s+bool\s+(DeletePending|Directory)'){
+  throw 'FILE_STANDARD_INFO uses one-byte BOOLEAN fields, not Win32 BOOL marshaling.'
 }
 
 if($manifestText -notmatch 'requestedExecutionLevel\s+level="requireAdministrator"'){throw 'Gate client must require explicit administrator elevation.'}
@@ -167,6 +199,15 @@ $resultReply=$text.IndexOf('Native.Reply(',$resultBranch)
 if($resultBranch -lt 0 -or $resultPersist -lt 0 -or $resultReturn -lt 0 -or
    ($resultReply -ge 0 -and $resultReply -lt $resultReturn)){
   throw 'RenameResult must be persisted as completion metadata and must not receive FilterReplyMessage.'
+}
+
+$truncateResultBranch=$text.IndexOf('if ((RgEventType)ev.EventType == RgEventType.TruncateResult)')
+$truncateResultPersist=$text.IndexOf('TruncateReconciliation.HandleAsync(',$truncateResultBranch)
+$truncateResultReturn=$text.IndexOf('return;',$truncateResultPersist)
+$truncateResultReply=$text.IndexOf('Native.Reply(',$truncateResultBranch)
+if($truncateResultBranch -lt 0 -or $truncateResultPersist -lt 0 -or $truncateResultReturn -lt 0 -or
+   ($truncateResultReply -ge 0 -and $truncateResultReply -lt $truncateResultReturn)){
+  throw 'TruncateResult must be persisted as completion metadata and must not receive FilterReplyMessage.'
 }
 
 $pagingBranch=$text.IndexOf('if ((RgEventType)ev.EventType == RgEventType.PagingWrite)')
@@ -233,6 +274,18 @@ if($renameLossOption -lt 0 -or $renameLossBranch -lt 0 -or $renameLossCheck -lt 
   throw 'LAB RENAME completion-loss injection must drop the received RenameResult before authoritative completion persistence.'
 }
 
+$truncateLossOption=$text.IndexOf('case "--drop-first-truncate-completion"')
+$truncateLossBranch=$text.IndexOf('if ((RgEventType)ev.EventType == RgEventType.TruncateResult)')
+$truncateLossCheck=$text.IndexOf('if (options.DropFirstTruncateCompletion',$truncateLossBranch)
+$truncateLossCancel=$text.IndexOf('cts.Cancel();',$truncateLossCheck)
+$truncateLossPersist=$text.IndexOf('TruncateReconciliation.HandleAsync(',$truncateLossBranch)
+if($truncateLossOption -lt 0 -or $truncateLossBranch -lt 0 -or $truncateLossCheck -lt 0 -or
+   $truncateLossCancel -lt 0 -or $truncateLossPersist -lt 0 -or
+   $truncateLossBranch -gt $truncateLossCheck -or $truncateLossCheck -gt $truncateLossCancel -or
+   $truncateLossCancel -gt $truncateLossPersist){
+  throw 'LAB TRUNCATE completion-loss injection must drop the received TruncateResult before authoritative completion persistence.'
+}
+
 $renameBranch=$text.IndexOf('if (eventType == RgEventType.Rename)')
 $renameSourceCapture=$text.IndexOf('CapturePreimageAsync(sourcePath, RollbackMutationKind.Rename',$renameBranch)
 $renameIntent=$text.IndexOf('renameStore.CaptureIntentAsync(',$renameSourceCapture)
@@ -240,6 +293,18 @@ $renameAllow=$text.IndexOf('RgGateDecision.SnapshotCommitted',$renameIntent)
 if($renameBranch -lt 0 -or $renameSourceCapture -lt 0 -or $renameIntent -lt 0 -or $renameAllow -lt 0 -or
    $renameSourceCapture -gt $renameIntent -or $renameIntent -gt $renameAllow){
   throw 'RENAME must preserve source/destination state and durably commit rename intent before allow.'
+}
+
+$truncateEvaluate=$text.IndexOf('private static async Task<RgGateReply> EvaluateTruncateAsync')
+$truncateStandard=$text.IndexOf('FileIdentityStore.QueryPathStandardInfo(path, identityBaseline.Identity)',$truncateEvaluate)
+$truncateCapture=$text.IndexOf('CapturePreimageAsync(',$truncateStandard)
+$truncateIntent=$text.IndexOf('truncateStore.RecordIntentAsync(',$truncateStandard)
+$truncateAllow=$text.IndexOf('return Allow(',$truncateIntent)
+if($truncateEvaluate -lt 0 -or $truncateStandard -lt 0 -or $truncateCapture -lt 0 -or
+   $truncateIntent -lt 0 -or $truncateAllow -lt 0 -or
+   $truncateEvaluate -gt $truncateStandard -or $truncateStandard -gt $truncateCapture -or
+   $truncateCapture -gt $truncateIntent -or $truncateIntent -gt $truncateAllow){
+  throw 'Pre-existing TRUNCATE must bind standard info, commit a full pre-image, commit its durable intent, then allow.'
 }
 
 $connect=$text.IndexOf('using var port = Native.Connect(')
@@ -448,4 +513,4 @@ if($restartBlock -notmatch [regex]::Escape('PathPolicy.Under(intent.OriginalPath
   throw 'Restart reconciliation must remain scoped to the explicitly selected LAB root.'
 }
 
-Write-Host 'LAB gate client source check PASSED: protocol-v13 event-bound containment, activation preflight, durable request/activation evidence, bounded workers, identity/restart evidence, no destructive/process-control APIs.'
+Write-Host 'LAB gate client source check PASSED: protocol-v14 TRUNCATE reconciliation, event-bound containment, activation preflight, bounded workers, durable identity/restart evidence, no destructive/process-control APIs.'

@@ -175,7 +175,7 @@ public sealed class FileIdentityStore
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("Durable file identity requires Windows FILE_ID_INFO.");
 
-        if (!GetFileInformationByHandleEx(handle, FileIdInfo, out var info,
+        if (!GetFileInformationByHandleExFileId(handle, FileIdInfo, out var info,
                 checked((uint)Marshal.SizeOf<NativeFileIdInfo>())))
             throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(),
                 "GetFileInformationByHandleEx(FileIdInfo) failed.");
@@ -183,6 +183,39 @@ public sealed class FileIdentityStore
         return new DurableFileIdentity(
             info.VolumeSerialNumber.ToString("X16"),
             info.FileId.Part0.ToString("X16") + info.FileId.Part1.ToString("X16"));
+    }
+
+    public static DurableFileStandardInfo QueryPathStandardInfo(
+        string path,
+        DurableFileIdentity expectedIdentity)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            throw new ArgumentException("Path is required.", nameof(path));
+
+        using var input = new FileStream(Path.GetFullPath(path), FileMode.Open, FileAccess.Read,
+            FileShare.Read | FileShare.Write | FileShare.Delete, 4096, FileOptions.None);
+        var actualIdentity = QueryHandleIdentity(input.SafeFileHandle);
+        if (!actualIdentity.Equals(expectedIdentity))
+            throw new InvalidDataException(
+                "File standard-info handle identity does not match the expected incident identity.");
+
+        return QueryHandleStandardInfo(input.SafeFileHandle);
+    }
+
+    public static DurableFileStandardInfo QueryHandleStandardInfo(SafeFileHandle handle)
+    {
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("Durable file standard information requires Windows.");
+
+        if (!GetFileInformationByHandleExStandard(handle, FileStandardInfo, out var info,
+                checked((uint)Marshal.SizeOf<NativeFileStandardInfo>())))
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(),
+                "GetFileInformationByHandleEx(FileStandardInfo) failed.");
+
+        if (info.AllocationSize < 0 || info.EndOfFile < 0)
+            throw new InvalidDataException("Windows returned a negative file length/allocation size.");
+
+        return new DurableFileStandardInfo(info.AllocationSize, info.EndOfFile);
     }
 
     private static string NormalizeSource(string path)
@@ -205,6 +238,7 @@ public sealed class FileIdentityStore
             throw new IOException("File identity path/store must not be a reparse point: " + path);
     }
 
+    private const int FileStandardInfo = 1;
     private const int FileIdInfo = 18;
 
     [StructLayout(LayoutKind.Sequential)]
@@ -221,15 +255,34 @@ public sealed class FileIdentityStore
         public NativeFileId128 FileId;
     }
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool GetFileInformationByHandleEx(
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeFileStandardInfo
+    {
+        public long AllocationSize;
+        public long EndOfFile;
+        public uint NumberOfLinks;
+        public byte DeletePending;
+        public byte Directory;
+    }
+
+    [DllImport("kernel32.dll", EntryPoint = "GetFileInformationByHandleEx", SetLastError = true)]
+    private static extern bool GetFileInformationByHandleExFileId(
         SafeFileHandle hFile,
         int fileInformationClass,
         out NativeFileIdInfo fileInformation,
         uint bufferSize);
+
+    [DllImport("kernel32.dll", EntryPoint = "GetFileInformationByHandleEx", SetLastError = true)]
+    private static extern bool GetFileInformationByHandleExStandard(
+        SafeFileHandle hFile,
+        int fileInformationClass,
+        out NativeFileStandardInfo fileInformation,
+        uint bufferSize);
 }
 
 public sealed record DurableFileIdentity(string VolumeSerialHex, string FileIdHex);
+
+public sealed record DurableFileStandardInfo(long AllocationSize, long EndOfFile);
 
 public sealed record FileIdentityBaseline(
     long Sequence,

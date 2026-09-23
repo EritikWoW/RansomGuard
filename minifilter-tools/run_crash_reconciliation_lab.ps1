@@ -93,6 +93,22 @@ function Wait-LogPattern(
     throw "Timed out waiting for log pattern '$Pattern'."
 }
 
+function Wait-File(
+    [string]$Path,
+    [System.Diagnostics.Process]$Process,
+    [int]$Seconds
+){
+    $deadline=(Get-Date).AddSeconds($Seconds)
+    while((Get-Date) -lt $deadline){
+        if(Test-Path -LiteralPath $Path -PathType Leaf){return}
+        if($Process.HasExited){
+            throw "Process exited before expected marker '$Path'. Exit=$($Process.ExitCode)."
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "Timed out waiting for marker '$Path'."
+}
+
 function Prepare-GateRoot([string]$GateExe,[string]$Root){
     New-Item -ItemType Directory -Path $Root -Force | Out-Null
     & $GateExe --root $Root --prepare-root
@@ -170,6 +186,23 @@ $renameTriggerErr=$renameTriggerOut + '.err'
 $renameReconcileOut=Join-Path $ResultsDirectory 'rename-reconcile-only.out.log'
 $renameReconcileErr=$renameReconcileOut + '.err'
 $renamePlanPath=Join-Path $ResultsDirectory 'rename-recovery-plan.json'
+
+$truncateRoot=Join-Path $RootBase "truncate-result-loss-$stamp"
+$truncateStore=Join-Path $ResultsDirectory 'truncate-result-loss-store'
+$truncateSession='truncate-result-loss'
+$truncateTarget=Join-Path $truncateRoot 'truncate-before-completion-loss.bin'
+$truncateOriginalLength=8192
+$truncateRequestedLength=1024
+$truncateGateOut=Join-Path $ResultsDirectory 'truncate-gate.out.log'
+$truncateGateErr=$truncateGateOut + '.err'
+$truncateTriggerOut=Join-Path $ResultsDirectory 'truncate-trigger.out.log'
+$truncateTriggerErr=$truncateTriggerOut + '.err'
+$truncateReady=Join-Path $ResultsDirectory 'truncate-open.ready'
+$truncateGo=Join-Path $ResultsDirectory 'truncate-open.go'
+$truncateReconcileOut=Join-Path $ResultsDirectory 'truncate-reconcile-only.out.log'
+$truncateReconcileErr=$truncateReconcileOut + '.err'
+$truncatePlanPath=Join-Path $ResultsDirectory 'truncate-recovery-plan.json'
+
 $installScript=Join-Path $PSScriptRoot 'install_minifilter_lab.ps1'
 $unloadScript=Join-Path $PSScriptRoot 'unload_minifilter_lab.ps1'
 
@@ -195,6 +228,13 @@ $summary=[ordered]@{
     renameRestartObserved=$false
     renameRestartSupportsCompleted=$false
     renameRecoveryTopologyNotReady=$false
+    truncateCompletionLossObserved=$false
+    truncateIntentDurable=$false
+    truncateCompletionAbsent=$false
+    truncateLengthChanged=$false
+    truncateRestartObserved=$false
+    truncateRestartSupportsCompleted=$false
+    truncateRecoveryTransactionNotReady=$false
     cleanupPassed=$false
     cleanupError=$null
     passed=$false
@@ -205,6 +245,8 @@ $gate=$null
 $trigger=$null
 $renameGate=$null
 $renameTrigger=$null
+$truncateGate=$null
+$truncateTrigger=$null
 $runtimeFailure=$null
 $cleanupFailure=$null
 
@@ -482,13 +524,162 @@ try{
     }
     $summary.renameRecoveryTopologyNotReady=$true
 
+    # Scenario 3: EOF truncation succeeds, but TruncateResult is intentionally omitted before
+    # user-mode persistence. Restart reconciliation must use exact FILE_ID + EOF evidence and
+    # recovery must keep the transaction review-only while the verified pre-image remains copy-out ready.
+    Prepare-GateRoot $gateExe $truncateRoot
+    [IO.File]::WriteAllBytes($truncateTarget,[byte[]]::new($truncateOriginalLength))
+    if((Get-Item -LiteralPath $truncateTarget).Length -ne $truncateOriginalLength){
+        throw "TRUNCATE source length setup mismatch: $truncateTarget"
+    }
+
+    $truncateGate=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $truncateRoot),
+        '--store',(Quote-Arg $truncateStore),
+        '--session',$truncateSession,
+        '--drop-first-truncate-completion'
+    ) $truncateGateOut $truncateGateErr
+
+    Wait-LogPattern $truncateGateOut 'LAB completion-loss injection\s+: ARMED for the first authoritative TRUNCATE result' $truncateGate 45
+    Wait-LogPattern $truncateGateOut 'kernel gate ACTIVE' $truncateGate 45
+
+    $truncateTrigger=Start-LoggedProcess $helperExe @(
+        'truncate-eof',
+        '--file',(Quote-Arg $truncateTarget),
+        '--length',([string]$truncateRequestedLength),
+        '--ready',(Quote-Arg $truncateReady),
+        '--go',(Quote-Arg $truncateGo)
+    ) $truncateTriggerOut $truncateTriggerErr
+
+    Wait-File $truncateReady $truncateTrigger 30
+    Wait-LogPattern $truncateGateOut 'CreateResult\s+request=' $truncateGate 30
+    Set-Content -LiteralPath $truncateGo -Value 'go' -Encoding ASCII
+
+    if(-not $truncateTrigger.WaitForExit(45000)){
+        Stop-Process -Id $truncateTrigger.Id -Force -ErrorAction SilentlyContinue
+        throw 'TRUNCATE completion-loss trigger did not return.'
+    }
+    if($truncateTrigger.ExitCode -ne 0){
+        $err=Get-Content -LiteralPath $truncateTriggerErr -Raw -ErrorAction SilentlyContinue
+        throw "TRUNCATE EOF must complete before completion evidence is intentionally dropped. exit=$($truncateTrigger.ExitCode). $err"
+    }
+
+    if(-not $truncateGate.WaitForExit(30000)){
+        Stop-Process -Id $truncateGate.Id -Force -ErrorAction SilentlyContinue
+        throw 'GateClient did not exit cleanly after dropping the authoritative TRUNCATE result.'
+    }
+    if($truncateGate.ExitCode -ne 0){
+        throw "GateClient TRUNCATE completion-loss injection should exit cleanly. exit=$($truncateGate.ExitCode)"
+    }
+
+    $truncateGateCombined=(Get-Content -LiteralPath $truncateGateOut -Raw -ErrorAction SilentlyContinue)+[Environment]::NewLine+
+        (Get-Content -LiteralPath $truncateGateErr -Raw -ErrorAction SilentlyContinue)
+    if($truncateGateCombined -notmatch 'LAB COMPLETION LOSS: intentionally dropping authoritative TRUNCATE result'){
+        throw "GateClient did not prove the intended TRUNCATE completion-loss point. Output: $truncateGateCombined"
+    }
+    $summary.truncateCompletionLossObserved=$true
+
+    $actualTruncateLength=(Get-Item -LiteralPath $truncateTarget).Length
+    if($actualTruncateLength -ne $truncateRequestedLength){
+        throw "TRUNCATE EOF did not persist the requested length. expected=$truncateRequestedLength actual=$actualTruncateLength"
+    }
+    $summary.truncateLengthChanged=$true
+
+    $truncateSessionRoot=Join-Path $truncateStore "Sessions\$truncateSession"
+    $truncateIntentJournal=Join-Path $truncateSessionRoot 'truncate-state\truncate-intent-journal.jsonl'
+    $truncateCompletionJournal=Join-Path $truncateSessionRoot 'truncate-state\truncate-completion-journal.jsonl'
+    $truncateIntents=@(Read-JsonLines $truncateIntentJournal)
+    if($truncateIntents.Count -ne 1){
+        throw "Expected exactly one durable TRUNCATE intent after result loss. Found $($truncateIntents.Count)."
+    }
+    $truncateIntent=$truncateIntents[0]
+    if(-not [string]::Equals([IO.Path]::GetFullPath([string]$truncateIntent.originalPath),$truncateTarget,[StringComparison]::OrdinalIgnoreCase) -or
+       [uint64]$truncateIntent.requestSequence -eq 0 -or
+       [uint32]$truncateIntent.fileInformationClass -ne 20 -or
+       [int64]$truncateIntent.requestedLength -ne $truncateRequestedLength -or
+       [int64]$truncateIntent.originalObservedLength -ne $truncateOriginalLength){
+        throw "Durable TRUNCATE intent mismatch: $($truncateIntent | ConvertTo-Json -Compress -Depth 20)"
+    }
+    $summary.truncateIntentDurable=$true
+
+    $truncateCompletions=@(Read-JsonLines $truncateCompletionJournal)
+    if($truncateCompletions.Count -ne 0){
+        throw "Authoritative TRUNCATE completion must be absent after intentional result loss. Found $($truncateCompletions.Count)."
+    }
+    $summary.truncateCompletionAbsent=$true
+
+    $truncateReconcile=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $truncateRoot),
+        '--store',(Quote-Arg $truncateStore),
+        '--reconcile-only'
+    ) $truncateReconcileOut $truncateReconcileErr
+    if(-not $truncateReconcile.WaitForExit(30000)){
+        Stop-Process -Id $truncateReconcile.Id -Force -ErrorAction SilentlyContinue
+        throw 'TRUNCATE reconcile-only GateClient did not exit.'
+    }
+    if($truncateReconcile.ExitCode -ne 0){
+        $err=Get-Content -LiteralPath $truncateReconcileErr -Raw -ErrorAction SilentlyContinue
+        throw "TRUNCATE reconcile-only GateClient failed, exit=$($truncateReconcile.ExitCode). $err"
+    }
+
+    $truncateReconcileText=(Get-Content -LiteralPath $truncateReconcileOut -Raw)
+    if($truncateReconcileText -notmatch 'RECONCILE ONLY: observed=1; completed-evidence=1; not-completed-evidence=0; ambiguous=0'){
+        throw "Unexpected TRUNCATE restart reconciliation summary: $truncateReconcileText"
+    }
+    $summary.truncateRestartObserved=$true
+
+    $truncateRestartJournal=Join-Path $truncateSessionRoot 'truncate-state\truncate-restart-journal.jsonl'
+    $truncateRestart=@(Read-JsonLines $truncateRestartJournal)
+    if($truncateRestart.Count -ne 1){
+        throw "Expected exactly one TRUNCATE restart observation. Found $($truncateRestart.Count)."
+    }
+    $truncateRestartRecord=$truncateRestart[0]
+    if([uint64]$truncateRestartRecord.requestSequence -ne [uint64]$truncateIntent.requestSequence -or
+       [int]$truncateRestartRecord.evidence -ne 1 -or
+       [int]$truncateRestartRecord.pathState -ne 2 -or
+       [int64]$truncateRestartRecord.observedLength -ne $truncateRequestedLength -or
+       -not [string]::Equals(
+            ([string]$truncateRestartRecord.currentFileIdHex),
+            ([string]$truncateIntent.originalFileIdHex),
+            [StringComparison]::OrdinalIgnoreCase)){
+        throw "Restart observation is not exact TRUNCATE SupportsCompleted EOF evidence: $($truncateRestartRecord | ConvertTo-Json -Compress -Depth 20)"
+    }
+    $summary.truncateRestartSupportsCompleted=$true
+
+    & $recoveryExe plan --repository $truncateStore --session $truncateSession --output $truncatePlanPath
+    if($LASTEXITCODE -ne 0){throw "TRUNCATE recovery planner failed, exit=$LASTEXITCODE"}
+    $truncatePlan=Get-Content -LiteralPath $truncatePlanPath -Raw | ConvertFrom-Json -Depth 40
+    $truncateTransaction=@($truncatePlan.actions | Where-Object {
+        [int]$_.kind -eq 6 -and [uint64]$_.evidenceSequence -eq [uint64]$truncateIntent.requestSequence
+    })
+    if($truncateTransaction.Count -ne 1){
+        throw "Expected exactly one ReviewTruncateTransaction action bound to the pending TRUNCATE intent. Found $($truncateTransaction.Count)."
+    }
+    if([int]$truncateTransaction[0].state -eq 1){
+        throw 'Crash-reconciled TRUNCATE transaction was incorrectly promoted to Ready.'
+    }
+    if([int]$truncateTransaction[0].state -ne 2){
+        throw "Consistent SupportsCompleted TRUNCATE transaction should be Review, found state=$($truncateTransaction[0].state)."
+    }
+    $truncateCopyOut=@($truncatePlan.actions | Where-Object {
+        [int]$_.kind -eq 1 -and [int]$_.state -eq 1 -and
+        [string]::Equals([IO.Path]::GetFullPath([string]$_.primaryPath),$truncateTarget,[StringComparison]::OrdinalIgnoreCase)
+    })
+    if($truncateCopyOut.Count -ne 1){
+        throw "TRUNCATE must retain exactly one verified Ready full-preimage copy-out action. Found $($truncateCopyOut.Count)."
+    }
+    if($truncatePlan.automaticTopologyMutationAllowed -ne $false){
+        throw 'Recovery planner must not enable automatic live mutation for crash-reconciled TRUNCATE.'
+    }
+    $summary.truncateRecoveryTransactionNotReady=$true
+
     $summary.passed=$true
 }
 catch{
     $runtimeFailure=$_
 }
 finally{
-    foreach($p in @($trigger,$gate,$renameTrigger,$renameGate)){
+    foreach($p in @($trigger,$gate,$renameTrigger,$renameGate,$truncateTrigger,$truncateGate)){
         if($p -and -not $p.HasExited){
             Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
         }
@@ -518,4 +709,4 @@ if($cleanupFailure){throw $cleanupFailure}
 if($runtimeFailure){throw $runtimeFailure}
 if(-not $summary.passed){throw 'Crash/fault runtime harness did not pass all invariants.'}
 
-Write-Host "CREATE/RENAME completion-loss restart reconciliation LAB PASSED. Evidence: $ResultsDirectory"
+Write-Host "CREATE/RENAME/TRUNCATE completion-loss restart reconciliation LAB PASSED. Evidence: $ResultsDirectory"

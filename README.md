@@ -1,4 +1,4 @@
-# RansomGuard 0.7.23.0
+# RansomGuard 0.7.24.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
@@ -6,7 +6,7 @@ and recover data through rollback plus adaptive crypto analysis.
 
 ## Core preservation milestone
 
-0.7.23.0 retains the preservation/recovery/retention and event-bound containment foundation, and adds disposable-VM proof for restart reconciliation when authoritative CREATE or RENAME post-operation completion evidence is intentionally lost after the filesystem mutation has already completed.
+0.7.24.0 retains the preservation/recovery/retention and event-bound containment foundation, and adds a durable two-phase TRUNCATE transaction with authoritative post-operation evidence plus conservative restart reconciliation for lost EOF completion.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 
@@ -25,7 +25,7 @@ undone by truncating the recovered copy to that length.
 Rename, delete-disposition and explicit truncate/allocation-length operations remain on the conservative
 **full-file pre-image** path for now.
 
-The engineering minifilter protocol is now v13 and reports CREATE, WRITE, RENAME, DELETE and TRUNCATE-class metadata operations. RENAME events also carry a normalized destination path.
+The engineering minifilter protocol is now v14 and reports CREATE, WRITE, RENAME, DELETE and TRUNCATE-class metadata operations. RENAME carries a normalized destination path, and length mutations can emit a correlated no-reply `TruncateResult` without changing the fixed RG_EVENT wire size.
 
 For CREATE, the gate distinguishes Windows create dispositions instead of treating every open as destructive:
 existing `FILE_SUPERSEDE`, `FILE_OVERWRITE` and `FILE_OVERWRITE_IF` require a durable full pre-image;
@@ -53,7 +53,7 @@ durably records the final tunneled name and 128-bit file identity when available
 identity-only or fully unresolved success states. A post-op identity that differs from the pre-op source identity is
 rejected. If reconciliation cannot be delivered, the intent remains pending instead of being treated as completed.
 
-On LAB gate restart, every older pending CREATE/RENAME intent under the same explicit root is now re-observed before a new session starts. RansomGuard records current path/file-identity evidence in a separate write-through SHA-256 hash-chained restart journal. Evidence can support completed, support not-completed, be indeterminate, or ambiguous. It never manufactures a filesystem completion record: authoritative completion still requires the original kernel post-operation result.
+On LAB gate restart, older pending CREATE/RENAME/TRUNCATE intents under the same explicit root are re-observed before a new session starts. CREATE/RENAME use the shared restart journal; TRUNCATE keeps FILE_ID and length evidence in `truncate-state/truncate-restart-journal.jsonl`. EOF loss can support completed/non-completed only when the exact durable FILE_ID and requested/original length match. Allocation-size and valid-data-length loss remain indeterminate rather than guessed. Restart evidence never manufactures a filesystem completion record: authoritative completion still requires the original kernel post-operation result.
 
 Protocol v13 also removes the previous blind skip of paging-write callbacks. After a successful in-scope CREATE, the minifilter attaches a nonpaged stream context containing the bounded tracked path and kernel file identity when available. A later paging write retrieves only that stream context and queues a no-reply `PagingWrite` event; it does not query file names, call the blocking gate, or perform filesystem I/O in the paging path. GateClient persists these observations in a separate hash-chained `paging-write-journal.jsonl`. PagingWrite itself remains visibility/evidence only. Starting with 0.7.11, mappings created from newly opened content-write capable handles have a full pre-image committed before the handle returns; this gives those mappings a recovery baseline without doing rollback I/O in the paging callback.
 
@@ -82,6 +82,8 @@ Protocol v13 also removes the previous blind skip of paging-write callbacks. Aft
 0.7.22 adds a disposable-VM completion-loss proof for CREATE. In an explicit LAB mode, GateClient may intentionally omit the first authoritative `CreateResult` only after the filesystem CREATE has completed, then exit cleanly and restart in reconciliation-only mode. The runtime harness proves the durable CREATE intent remains, the authoritative completion journal is empty, the created path exists, restart evidence classifies the exact pending intent as `SupportsCompleted`, and the recovery planner keeps the transaction in `Review` rather than promoting topology mutation to `Ready`. This replaces the earlier unsafe idea of hard-crashing GateClient while the kernel was still waiting for a blocking gate reply.
 
 0.7.23 extends the same live proof to RENAME. The harness starts with a durable source file and absent destination, allows the rename to complete, intentionally omits the first authoritative `RenameResult`, then verifies after restart that the source path is missing and the destination carries the exact durable source FILE_ID_INFO. Restart reconciliation must classify that pending rename as `SupportsCompleted`; the recovery planner may expose the topology transaction only as `Review`, while verified content copy-out remains separate and automatic rename/delete of live paths stays forbidden.
+
+0.7.24 introduces protocol v14 and makes TRUNCATE a two-phase durable transaction. Before allowing `FileEndOfFileInformation`, `FileAllocationInformation`, or `FileValidDataLengthInformation`, GateClient binds the exact FILE_ID_INFO, captures/reuses the verified full pre-image for a pre-existing file, records the requested length and safely observable original metric, and commits `truncate-intent-journal.jsonl`. The post-operation callback emits correlated `TruncateResult` evidence with authoritative NTSTATUS plus post-operation identity and EOF/allocation metric when safe for `FltQueryInformationFile`. Missing detail remains explicitly unresolved. Lost EOF completion may be classified only from exact same-FILE_ID requested/original lengths; allocation-size and valid-data-length loss remain `Indeterminate`. Recovery never changes a live file length automatically: the transaction is Informational/Review/Blocked while verified pre-image copy-out remains the only executable `Ready` action.
 
 ## Recovery safety
 
@@ -134,7 +136,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.7.23.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.7.24.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 Manual disposable-VM runtime workflows:
 
@@ -155,9 +157,9 @@ It is not yet production ransomware blocking.
 
 Bounded concurrent gate admission/workers are now implemented with a kernel cap of 8 and a configurable user-mode worker pool (default 4). The port mutex is no longer held across blocking FltSendMessage waits.
 
-Restart evidence for pending/missing CREATE/RENAME completion events is durable and conservative; authoritative completion is never inferred from a restart probe. The recovery planner may expose exact, fully consistent restart evidence as `Review` only, while ambiguous/indeterminate/conflicting evidence stays `Blocked`. Paging writes on streams opened through the LAB gate are visible as durable evidence without synchronously blocking the paging path.
+Restart evidence for pending/missing CREATE/RENAME/TRUNCATE completion events is durable and conservative; authoritative completion is never inferred from a restart probe. The recovery planner may expose exact, fully consistent restart evidence as `Review` only, while ambiguous/indeterminate/conflicting evidence stays `Blocked`. Paging writes on streams opened through the LAB gate are visible as durable evidence without synchronously blocking the paging path.
 
-Remaining core work includes broader live fault-injection beyond the validated CREATE/RENAME completion-loss cases,
+Remaining core work includes broader live fault-injection beyond the validated CREATE/RENAME/TRUNCATE completion-loss cases,
 broader live NTFS/ReFS coverage beyond the automated disposable-VM mapping and completion-loss harnesses,
 production retention UI/policy integration, production detector-to-containment authorization/policy, process-state capture, adaptive crypto reconstruction, production recovery UI/topology orchestration,
 driver signing and Microsoft-assigned production altitude.

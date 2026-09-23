@@ -244,6 +244,72 @@ public static class RollbackRecoveryPlanner
             }
         }
 
+        var truncateRoot = Path.Combine(sessionRoot, "truncate-state");
+        if (Directory.Exists(truncateRoot))
+        {
+            var truncates = new TruncateOperationStore(truncateRoot);
+            truncates.VerifyAll();
+
+            foreach (var intent in truncates.Intents.OrderBy(x => x.Sequence))
+            {
+                if (!truncates.TryGetCompletion(intent.RequestSequence, out var completion) || completion is null)
+                {
+                    var assessment = truncates.AssessRestart(intent);
+                    var reviewable = assessment.State is
+                        RestartEvidenceAssessmentState.ConsistentSupportsCompleted or
+                        RestartEvidenceAssessmentState.ConsistentSupportsNotCompleted;
+                    var restartReason = assessment.State switch
+                    {
+                        RestartEvidenceAssessmentState.ConsistentSupportsCompleted =>
+                            "TRUNCATE intent has no authoritative kernel completion, but durable restart evidence consistently supports completion. Manual review is allowed; restart evidence never becomes a kernel completion.",
+                        RestartEvidenceAssessmentState.ConsistentSupportsNotCompleted =>
+                            "TRUNCATE intent has no authoritative kernel completion, but durable restart evidence consistently supports non-completion. Manual review is allowed; restart evidence never becomes a kernel completion.",
+                        RestartEvidenceAssessmentState.Unresolved =>
+                            "TRUNCATE intent has no authoritative kernel completion and restart evidence is ambiguous, indeterminate, or conflicting.",
+                        _ =>
+                            "TRUNCATE intent has no authoritative kernel completion."
+                    };
+                    actions.Add(NewAction(
+                        actions.Count + 1,
+                        RecoveryActionKind.ReviewTruncateTransaction,
+                        reviewable ? RecoveryActionState.Review : RecoveryActionState.Blocked,
+                        intent.OriginalPath,
+                        null,
+                        reviewable ? assessment.LatestRecordSha256 : intent.RecordSha256,
+                        intent.RequestSequence,
+                        false,
+                        restartReason));
+                    continue;
+                }
+
+                var state = completion.State switch
+                {
+                    TruncateCompletionState.Failed => RecoveryActionState.Informational,
+                    TruncateCompletionState.Succeeded => RecoveryActionState.Informational,
+                    _ => RecoveryActionState.Review
+                };
+                var completionReason = completion.State switch
+                {
+                    TruncateCompletionState.Failed =>
+                        "Filesystem TRUNCATE failed; no length mutation recovery decision is required.",
+                    TruncateCompletionState.Succeeded =>
+                        "TRUNCATE succeeded authoritatively. Verified content recovery is represented separately by copy-out pre-image evidence; live length is never modified automatically.",
+                    _ =>
+                        "TRUNCATE succeeded authoritatively but post-operation metric and/or identity was unresolved. Copy-out evidence remains separate; manual review is required."
+                };
+                actions.Add(NewAction(
+                    actions.Count + 1,
+                    RecoveryActionKind.ReviewTruncateTransaction,
+                    state,
+                    intent.OriginalPath,
+                    null,
+                    completion.RecordSha256,
+                    intent.RequestSequence,
+                    false,
+                    completionReason));
+            }
+        }
+
         var evidenceSha = ComputeJournalEvidenceDigest(sessionRoot);
         var ordered = actions
             .OrderBy(x => x.Index)
@@ -340,7 +406,8 @@ public enum RecoveryActionKind
     RestoreRangeCowCopy = 2,
     ReviewOriginallyAbsentPath = 3,
     ReviewCreateTransaction = 4,
-    ReviewRenameTopology = 5
+    ReviewRenameTopology = 5,
+    ReviewTruncateTransaction = 6
 }
 
 public enum RecoveryActionState

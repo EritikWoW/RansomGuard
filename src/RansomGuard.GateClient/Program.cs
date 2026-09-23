@@ -41,6 +41,7 @@ var createStore = new CreateRollbackStore(Path.Combine(store.Root, "create-state
 var createOperationStore = new CreateOperationStore(Path.Combine(store.Root, "create-state"));
 var identityStore = new FileIdentityStore(Path.Combine(store.Root, "identity-state"));
 var renameStore = new RenameRollbackStore(Path.Combine(store.Root, "rename-state"));
+var truncateStore = new TruncateOperationStore(Path.Combine(store.Root, "truncate-state"));
 var pagingStore = new PagingWriteEvidenceStore(Path.Combine(store.Root, "paging-state"));
 var sectionStore = new WritableSectionEvidenceStore(Path.Combine(store.Root, "section-state"));
 var activationStore = new ActivationPreflightStore(Path.Combine(store.Root, "activation-state"));
@@ -67,11 +68,13 @@ if (options.DropFirstCreateCompletion)
     Console.WriteLine("LAB completion-loss injection : ARMED for the first authoritative CREATE result.");
 if (options.DropFirstRenameCompletion)
     Console.WriteLine("LAB completion-loss injection : ARMED for the first authoritative RENAME result.");
+if (options.DropFirstTruncateCompletion)
+    Console.WriteLine("LAB completion-loss injection : ARMED for the first authoritative TRUNCATE result.");
 Console.WriteLine("Press Ctrl+C to disconnect. The driver then stops gating because no client is connected.");
 
 var context = new RgConnectContext
 {
-    ProtocolVersion = 13,
+    ProtocolVersion = 14,
     ClientMode = (uint)RgClientMode.LabGate,
     ClientProcessId = (ulong)Environment.ProcessId,
     GateRootLengthBytes = checked((uint)(ntRoot.Length * 2)),
@@ -109,6 +112,7 @@ var replySync = new object();
 var gateWorkerFailures = 0;
 var droppedCreateCompletion = 0;
 var droppedRenameCompletion = 0;
+var droppedTruncateCompletion = 0;
 var buffer = Marshal.AllocHGlobal(checked(headerSize + eventSize));
 
 async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
@@ -117,7 +121,7 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
     {
         if ((RgEventType)ev.EventType == RgEventType.ContainmentActivated)
         {
-            if (ev.ProtocolVersion != 13 ||
+            if (ev.ProtocolVersion != 14 ||
                 ev.RelatedSequence == 0 ||
                 ev.ProcessId <= 4 ||
                 ev.CompletionStatus != 0)
@@ -160,7 +164,7 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
 
         if ((RgEventType)ev.EventType == RgEventType.WritableSection)
         {
-            if (ev.ProtocolVersion != 13 ||
+            if (ev.ProtocolVersion != 14 ||
                 ev.PathStatus != (uint)RgPathStatus.Resolved ||
                 ev.RelatedSequence == 0 ||
                 ev.CompletionInformation > uint.MaxValue)
@@ -209,7 +213,7 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
 
         if ((RgEventType)ev.EventType == RgEventType.PagingWrite)
         {
-            if (ev.ProtocolVersion != 13 || ev.PathStatus != (uint)RgPathStatus.Resolved)
+            if (ev.ProtocolVersion != 14 || ev.PathStatus != (uint)RgPathStatus.Resolved)
                 throw new InvalidDataException("Invalid paging-write evidence event.");
 
             var trackedPath = resolver.Resolve(ev.Path);
@@ -288,9 +292,32 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
             return;
         }
 
+        if ((RgEventType)ev.EventType == RgEventType.TruncateResult)
+        {
+            if (options.DropFirstTruncateCompletion &&
+                Interlocked.CompareExchange(ref droppedTruncateCompletion, 1, 0) == 0)
+            {
+                Console.Error.WriteLine(
+                    $"LAB COMPLETION LOSS: intentionally dropping authoritative TRUNCATE result request={ev.RelatedSequence}; status=0x{ev.CompletionStatus:X8}; exiting cleanly for restart reconciliation.");
+                cts.Cancel();
+                Native.Cancel(port);
+                return;
+            }
+
+            await using var truncateResultReservation = await storageBudget.ReserveAsync(
+                RollbackStorageBudget.MetadataReservationBytes,
+                "truncate-completion-evidence",
+                cts.Token).ConfigureAwait(false);
+            var completion = await TruncateReconciliation.HandleAsync(
+                ev, truncateStore, cts.Token).ConfigureAwait(false);
+            Console.WriteLine(
+                $"{DateTime.Now:HH:mm:ss.fff} {RgEventType.TruncateResult,-20} request={ev.RelatedSequence,-7} {completion.State,-36} status=0x{completion.CompletionStatus:X8} observed={completion.ObservedLength}");
+            return;
+        }
+
         var reply = await GateDecision.EvaluateAsync(
             ev, resolver, options.Root, store, writeStore, createStore, createOperationStore,
-            identityStore, renameStore, storageBudget, cts.Token).ConfigureAwait(false);
+            identityStore, renameStore, truncateStore, storageBudget, cts.Token).ConfigureAwait(false);
 
         var path = resolver.Resolve(ev.Path) ?? ev.Path ?? "<unresolved>";
         ContainmentTriggerEvidence? containmentRequest = null;
@@ -393,6 +420,7 @@ finally
 repository.VerifyAll();
 var pendingCreateCount = createOperationStore.PendingIntents.Count;
 var pendingRenameCount = renameStore.PendingIntents.Count;
+var pendingTruncateCount = truncateStore.PendingIntents.Count;
 var containmentRecords = containmentStore.Records;
 var pendingContainmentAckCount = containmentRecords.Count(x =>
     x.Phase == ContainmentEvidencePhase.Requested &&
@@ -403,9 +431,10 @@ var workerFailureCount = Volatile.Read(ref gateWorkerFailures);
 var lifecycleReason = workerFailureCount == 0 &&
                       pendingCreateCount == 0 &&
                       pendingRenameCount == 0 &&
+                      pendingTruncateCount == 0 &&
                       pendingContainmentAckCount == 0
     ? "clean-gate-shutdown"
-    : $"gate-shutdown-faulted:workers={workerFailureCount};pending-create={pendingCreateCount};pending-rename={pendingRenameCount};pending-containment-ack={pendingContainmentAckCount}";
+    : $"gate-shutdown-faulted:workers={workerFailureCount};pending-create={pendingCreateCount};pending-rename={pendingRenameCount};pending-truncate={pendingTruncateCount};pending-containment-ack={pendingContainmentAckCount}";
 
 await using (var lifecycleReservation = await storageBudget.ReserveAsync(
                  RollbackStorageBudget.MetadataReservationBytes,
@@ -415,6 +444,7 @@ await using (var lifecycleReservation = await storageBudget.ReserveAsync(
     if (workerFailureCount == 0 &&
         pendingCreateCount == 0 &&
         pendingRenameCount == 0 &&
+        pendingTruncateCount == 0 &&
         pendingContainmentAckCount == 0)
     {
         _ = await lifecycleStore.MarkCompletedAsync(lifecycleReason, CancellationToken.None)
@@ -505,10 +535,10 @@ static class ActivationPreflight
 
                 var arm = Native.Control(port, new RgControlRequest
                 {
-                    ProtocolVersion = 13,
+                    ProtocolVersion = 14,
                     Command = (uint)RgControlCommand.ArmPreflight
                 });
-                if (arm.ProtocolVersion != 13 ||
+                if (arm.ProtocolVersion != 14 ||
                     arm.Command != (uint)RgControlCommand.ArmPreflight ||
                     arm.Status != 0 ||
                     arm.GateActivated != 0)
@@ -571,11 +601,11 @@ static class ActivationPreflight
                 : RgControlCommand.ActivateGate;
             var activationReply = Native.Control(port, new RgControlRequest
             {
-                ProtocolVersion = 13,
+                ProtocolVersion = 14,
                 Command = (uint)activationCommand,
                 TargetProcessId = containPid ?? 0
             });
-            if (activationReply.ProtocolVersion != 13 ||
+            if (activationReply.ProtocolVersion != 14 ||
                 activationReply.Command != (uint)activationCommand ||
                 activationReply.Status != 0 ||
                 activationReply.GateActivated != 1)
@@ -637,7 +667,7 @@ static class ActivationPreflight
                     throw new InvalidOperationException("Activation refused: protected-root memory-mapped activity occurred during preflight.");
                 if (type != RgEventType.ActivationPreflight)
                     throw new InvalidDataException($"Unexpected event {type} during activation preflight.");
-                if (ev.ProtocolVersion != 13 || ev.PathStatus != (uint)RgPathStatus.Resolved)
+                if (ev.ProtocolVersion != 14 || ev.PathStatus != (uint)RgPathStatus.Resolved)
                     throw new InvalidDataException("Invalid activation preflight event.");
 
                 var resolved = resolver.Resolve(ev.Path);
@@ -665,7 +695,7 @@ static class CreateReconciliation
         CreateOperationStore operationStore,
         CancellationToken cancellationToken)
     {
-        if (ev.ProtocolVersion != 13 || ev.RelatedSequence == 0)
+        if (ev.ProtocolVersion != 14 || ev.RelatedSequence == 0)
             throw new InvalidDataException("Invalid CREATE completion correlation.");
 
         if (!NtSuccess(ev.CompletionStatus))
@@ -729,7 +759,7 @@ static class RenameReconciliation
         RenameRollbackStore renameStore,
         CancellationToken cancellationToken)
     {
-        if (ev.ProtocolVersion != 13 || ev.RelatedSequence == 0)
+        if (ev.ProtocolVersion != 14 || ev.RelatedSequence == 0)
             throw new InvalidDataException("Invalid rename completion correlation.");
 
         if (!NtSuccess(ev.CompletionStatus))
@@ -784,6 +814,67 @@ static class RenameReconciliation
     private static bool NtSuccess(uint status) => (status & 0x80000000u) == 0;
 }
 
+static class TruncateReconciliation
+{
+    public static async Task<TruncateOperationCompletion> HandleAsync(
+        RgEvent ev,
+        TruncateOperationStore store,
+        CancellationToken cancellationToken)
+    {
+        if (ev.ProtocolVersion != 14 || ev.RelatedSequence == 0)
+            throw new InvalidDataException("Invalid TRUNCATE completion correlation.");
+
+        var intent = store.Intents.SingleOrDefault(x => x.RequestSequence == ev.RelatedSequence)
+            ?? throw new InvalidDataException("TRUNCATE result has no committed intent.");
+        if (ev.FileInformationClass != intent.FileInformationClass)
+            throw new InvalidDataException("TRUNCATE result information class does not match its intent.");
+
+        if (!NtSuccess(ev.CompletionStatus))
+        {
+            return await store.RecordCompletionAsync(
+                    ev.RelatedSequence,
+                    TruncateCompletionState.Failed,
+                    ev.CompletionStatus,
+                    ev.CompletionInformation,
+                    -1,
+                    null,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        DurableFileIdentity? identity = null;
+        if (ev.IdentityStatus == (uint)RgIdentityStatus.Resolved &&
+            (ev.VolumeSerialNumber != 0 || ev.FileIdLow != 0 || ev.FileIdHigh != 0))
+        {
+            identity = new DurableFileIdentity(
+                ev.VolumeSerialNumber.ToString("X16"),
+                ev.FileIdLow.ToString("X16") + ev.FileIdHigh.ToString("X16"));
+        }
+
+        var metricResolved = intent.Metric != TruncateMetric.ValidDataLength && ev.ByteOffset >= 0;
+        var identityResolved = identity is not null;
+        var state = (metricResolved, identityResolved) switch
+        {
+            (true, true) => TruncateCompletionState.Succeeded,
+            (false, true) => TruncateCompletionState.SucceededMetricUnresolved,
+            (true, false) => TruncateCompletionState.SucceededIdentityUnresolved,
+            _ => TruncateCompletionState.SucceededMetricAndIdentityUnresolved
+        };
+
+        return await store.RecordCompletionAsync(
+                ev.RelatedSequence,
+                state,
+                ev.CompletionStatus,
+                ev.CompletionInformation,
+                metricResolved ? ev.ByteOffset : -1,
+                identity,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static bool NtSuccess(uint status) => (status & 0x80000000u) == 0;
+}
+
 static class GateMessagePolicy
 {
     public static bool RequiresReply(RgEventType type) =>
@@ -799,14 +890,15 @@ static class GateDecision
     public static async Task<RgGateReply> EvaluateAsync(RgEvent ev, DevicePathResolver resolver, string root,
         RollbackStore store, RangeRollbackStore writeStore, CreateRollbackStore createStore,
         CreateOperationStore createOperationStore, FileIdentityStore identityStore,
-        RenameRollbackStore renameStore, RollbackStorageBudget storageBudget,
+        RenameRollbackStore renameStore, TruncateOperationStore truncateStore,
+        RollbackStorageBudget storageBudget,
         CancellationToken cancellationToken)
     {
         try
         {
             // Never preserve or authorize against a truncated path. The kernel only sends a truncated
             // gate event when its known prefix is already inside the explicit LAB root, so deny it here.
-            if (ev.ProtocolVersion != 13 || ev.PathStatus != (uint)RgPathStatus.Resolved)
+            if (ev.ProtocolVersion != 14 || ev.PathStatus != (uint)RgPathStatus.Resolved)
                 return Deny(ev.Sequence, 1);
 
             var path = resolver.Resolve(ev.Path);
@@ -837,6 +929,11 @@ static class GateDecision
                     identityStore, renameStore, identityBaseline, sourceOriginallyAbsent,
                     storageBudget, cancellationToken).ConfigureAwait(false);
 
+            if (eventType == RgEventType.Truncate)
+                return await EvaluateTruncateAsync(ev, path, store, truncateStore,
+                    identityBaseline, sourceOriginallyAbsent, storageBudget, cancellationToken)
+                    .ConfigureAwait(false);
+
             // Once a path is known to have been absent at incident start, later non-rename mutations must not
             // manufacture a pre-image from data that was created during the incident.
             if (sourceOriginallyAbsent)
@@ -859,7 +956,6 @@ static class GateDecision
                 var mutation = eventType switch
                 {
                     RgEventType.DeleteDisposition => RollbackMutationKind.Delete,
-                    RgEventType.Truncate => RollbackMutationKind.Write,
                     _ => throw new InvalidOperationException("Unsupported gate event type.")
                 };
                 var estimate = RollbackStorageBudget.EstimateFullPreimageBytes(store, path);
@@ -886,6 +982,60 @@ static class GateDecision
             Console.Error.WriteLine($"Gate capture failed: {ex.GetType().Name}: {ex.Message}");
             return Deny(ev.Sequence, 5);
         }
+    }
+
+    private static async Task<RgGateReply> EvaluateTruncateAsync(
+        RgEvent ev,
+        string path,
+        RollbackStore store,
+        TruncateOperationStore truncateStore,
+        FileIdentityBaseline identityBaseline,
+        bool sourceOriginallyAbsent,
+        RollbackStorageBudget storageBudget,
+        CancellationToken cancellationToken)
+    {
+        if (ev.ByteOffset < 0)
+            return Deny(ev.Sequence, 14);
+
+        var standard = FileIdentityStore.QueryPathStandardInfo(path, identityBaseline.Identity);
+        var originalObservedLength = ev.FileInformationClass switch
+        {
+            TruncateOperationStore.FileEndOfFileInformation => standard.EndOfFile,
+            TruncateOperationStore.FileAllocationInformation => standard.AllocationSize,
+            TruncateOperationStore.FileValidDataLengthInformation => -1,
+            _ => throw new InvalidDataException(
+                $"Unsupported TRUNCATE information class {ev.FileInformationClass}.")
+        };
+
+        var preservationRecordSha256 = string.Empty;
+        if (!sourceOriginallyAbsent)
+        {
+            var estimate = RollbackStorageBudget.EstimateFullPreimageBytes(store, path);
+            await using var captureReservation = await storageBudget.ReserveAsync(
+                estimate, "truncate-full-preimage", cancellationToken).ConfigureAwait(false);
+            var capture = await store.CapturePreimageAsync(
+                    path, RollbackMutationKind.Write, identityBaseline.Identity, cancellationToken)
+                .ConfigureAwait(false);
+            preservationRecordSha256 = capture.RecordSha256;
+        }
+
+        _ = await truncateStore.RecordIntentAsync(
+                ev.Sequence,
+                path,
+                ev.FileInformationClass,
+                ev.ByteOffset,
+                originalObservedLength,
+                identityBaseline.Identity,
+                sourceOriginallyAbsent,
+                preservationRecordSha256,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return Allow(
+            ev.Sequence,
+            sourceOriginallyAbsent
+                ? RgGateDecision.BaselineCommitted
+                : RgGateDecision.SnapshotCommitted);
     }
 
     private static async Task<RgGateReply> EvaluateRenameAsync(
@@ -1086,7 +1236,7 @@ static class GateDecision
 
     private static RgGateReply Allow(ulong sequence, RgGateDecision decision) => new()
     {
-        ProtocolVersion = 13,
+        ProtocolVersion = 14,
         Decision = decision,
         RequestSequence = sequence,
         ErrorCode = 0
@@ -1094,7 +1244,7 @@ static class GateDecision
 
     private static RgGateReply Deny(ulong sequence, uint errorCode) => new()
     {
-        ProtocolVersion = 13,
+        ProtocolVersion = 14,
         Decision = RgGateDecision.Deny,
         RequestSequence = sequence,
         ErrorCode = errorCode
@@ -1184,6 +1334,35 @@ static class RestartReconciliation
                     Count(evidence, ref observed, ref supportsCompleted, ref supportsNotCompleted, ref ambiguous);
                 }
             }
+
+            var truncateRoot = Path.Combine(session.Root, "truncate-state");
+            if (Directory.Exists(truncateRoot))
+            {
+                var truncates = new TruncateOperationStore(truncateRoot);
+                foreach (var intent in truncates.PendingIntents)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!PathPolicy.Under(intent.OriginalPath, currentRoot))
+                        continue;
+
+                    var current = PathProbe.ObserveTruncateForRestart(intent.OriginalPath, intent.Metric);
+                    var evidence = TruncateOperationStore.ClassifyRestart(
+                        intent, current.PathState, current.Identity, current.ObservedLength);
+                    await using var restartTruncateReservation = await storageBudget.ReserveAsync(
+                        RollbackStorageBudget.MetadataReservationBytes,
+                        "restart-truncate-evidence",
+                        cancellationToken).ConfigureAwait(false);
+                    _ = await truncates.RecordRestartObservationAsync(
+                            intent,
+                            evidence,
+                            current.PathState,
+                            current.Identity,
+                            current.ObservedLength,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    Count(evidence, ref observed, ref supportsCompleted, ref supportsNotCompleted, ref ambiguous);
+                }
+            }
         }
 
         return new RestartReconciliationSummary(
@@ -1251,7 +1430,43 @@ static class PathProbe
             return new RestartPathObservation(RestartPathState.QueryFailed, null);
         }
     }
+
+    public static TruncateRestartProbe ObserveTruncateForRestart(string path, TruncateMetric metric)
+    {
+        try
+        {
+            var attributes = File.GetAttributes(path);
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+                return new TruncateRestartProbe(RestartPathState.ReparsePoint, null, -1);
+            if ((attributes & FileAttributes.Directory) != 0)
+                return new TruncateRestartProbe(RestartPathState.Directory, null, -1);
+
+            using var input = new FileStream(path, FileMode.Open, FileAccess.Read,
+                FileShare.Read | FileShare.Write | FileShare.Delete, 4096, FileOptions.None);
+            var identity = FileIdentityStore.QueryHandleIdentity(input.SafeFileHandle);
+            var standard = FileIdentityStore.QueryHandleStandardInfo(input.SafeFileHandle);
+            var observedLength = metric == TruncateMetric.EndOfFile ? standard.EndOfFile : -1;
+            return new TruncateRestartProbe(RestartPathState.File, identity, observedLength);
+        }
+        catch (FileNotFoundException)
+        {
+            return new TruncateRestartProbe(RestartPathState.Missing, null, -1);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return new TruncateRestartProbe(RestartPathState.Missing, null, -1);
+        }
+        catch
+        {
+            return new TruncateRestartProbe(RestartPathState.QueryFailed, null, -1);
+        }
+    }
 }
+
+readonly record struct TruncateRestartProbe(
+    RestartPathState PathState,
+    DurableFileIdentity? Identity,
+    long ObservedLength);
 
 sealed record ContainmentTriggerEvidence(
     long ProcessCreationFileTimeUtc,
@@ -1344,6 +1559,7 @@ sealed record Options(
     int ContainAfterPaths,
     bool DropFirstCreateCompletion,
     bool DropFirstRenameCompletion,
+    bool DropFirstTruncateCompletion,
     bool ReconcileOnly)
 {
     public const int DefaultGateWorkers = 4;
@@ -1370,6 +1586,7 @@ sealed record Options(
         var containThresholdSpecified = false;
         var dropFirstCreateCompletion = false;
         var dropFirstRenameCompletion = false;
+        var dropFirstTruncateCompletion = false;
         var reconcileOnly = false;
         for (var i = 0; i < args.Length; i++)
         {
@@ -1419,17 +1636,18 @@ sealed record Options(
                     break;
                 case "--drop-first-create-completion": dropFirstCreateCompletion = true; break;
                 case "--drop-first-rename-completion": dropFirstRenameCompletion = true; break;
+                case "--drop-first-truncate-completion": dropFirstTruncateCompletion = true; break;
                 case "--reconcile-only": reconcileOnly = true; break;
                 case "--prepare-root": prepare = true; break;
                 default: throw new ArgumentException($"Unknown/incomplete argument: {args[i]}");
             }
         }
         if (string.IsNullOrWhiteSpace(root)) throw new ArgumentException("Pass --root <disposable-test-directory>.");
-        if (prepare && (containPid.HasValue || containAfterPid.HasValue || dropFirstCreateCompletion || dropFirstRenameCompletion || reconcileOnly))
+        if (prepare && (containPid.HasValue || containAfterPid.HasValue || dropFirstCreateCompletion || dropFirstRenameCompletion || dropFirstTruncateCompletion || reconcileOnly))
             throw new ArgumentException("Containment/fault/reconciliation options cannot be combined with --prepare-root.");
-        if (reconcileOnly && (containPid.HasValue || containAfterPid.HasValue || dropFirstCreateCompletion || dropFirstRenameCompletion || containThresholdSpecified))
+        if (reconcileOnly && (containPid.HasValue || containAfterPid.HasValue || dropFirstCreateCompletion || dropFirstRenameCompletion || dropFirstTruncateCompletion || containThresholdSpecified))
             throw new ArgumentException("--reconcile-only cannot be combined with containment or fault injection.");
-        if (dropFirstCreateCompletion && dropFirstRenameCompletion)
+        if ((dropFirstCreateCompletion ? 1 : 0) + (dropFirstRenameCompletion ? 1 : 0) + (dropFirstTruncateCompletion ? 1 : 0) > 1)
             throw new ArgumentException("Only one completion-loss injection may be armed per GateClient session.");
         if (containPid.HasValue && containAfterPid.HasValue)
             throw new ArgumentException("--contain-pid and --contain-after-pid are mutually exclusive.");
@@ -1441,7 +1659,7 @@ sealed record Options(
         return new Options(
             root, store, session, prepare, gateWorkers, maxStoreMiB, minFreeMiB,
             containPid, containAfterPid, containAfterEvents, containAfterPaths,
-            dropFirstCreateCompletion, dropFirstRenameCompletion, reconcileOnly);
+            dropFirstCreateCompletion, dropFirstRenameCompletion, dropFirstTruncateCompletion, reconcileOnly);
     }
 }
 
@@ -1544,7 +1762,7 @@ sealed class DevicePathResolver
 }
 
 enum RgClientMode : uint { Audit = 1, LabGate = 2 }
-enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, RenameResult = 6, CreateResult = 7, PagingWrite = 8, WritableSection = 9, ActivationPreflight = 10, ContainmentActivated = 11 }
+enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, RenameResult = 6, CreateResult = 7, PagingWrite = 8, WritableSection = 9, ActivationPreflight = 10, ContainmentActivated = 11, TruncateResult = 12 }
 enum RgPathStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2, Truncated = 3 }
 enum RgIdentityStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2 }
 enum RgGateDecision : uint { Invalid = 0, SnapshotCommitted = 1, Deny = 2, BaselineCommitted = 3, NoPreservationRequired = 4 }

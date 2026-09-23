@@ -56,8 +56,12 @@ foreach($required in @(
     'FLT_PREOP_COMPLETE',
     'STATUS_ACCESS_DENIED',
     'RgEventTruncate',
+    'RgEventTruncateResult',
+    'RgCreateTruncatePostContext',
     'FileEndOfFileInformation',
     'FileAllocationInformation',
+    'FileValidDataLengthInformation',
+    'FileStandardInformation',
     'IRP_MJ_CREATE',
     'RgPreCreate',
     'RgEventCreate',
@@ -315,10 +319,10 @@ if($src -notmatch 'FltCreateCommunicationPort\([^;]*RgConnect,\s*RgDisconnect,\s
    $src -notmatch 'RgConnect, RgDisconnect, RgMessage, 1'){
     throw 'Communication port must register RgMessage for activation handshake.'
 }
-if($proto -notmatch '#define\s+RG_PROTOCOL_VERSION\s+13u'){throw 'Minifilter protocol must be v13 for event-bound process-object containment.'}
+if($proto -notmatch '#define\s+RG_PROTOCOL_VERSION\s+14u'){throw 'Minifilter protocol must be v14 for authoritative TRUNCATE reconciliation.'}
 if($proto -notmatch 'RG_GATE_ROOT_CHARS'){throw 'Protocol must carry an explicit bounded gate root.'}
 foreach($required in @('RgControlActivateAndContainProcess','RgControlQueryContainment','TargetProcessId','ContainmentActive','ContainedProcessId','RG_GATE_REPLY_FLAG_CONTAIN_REQUESTOR','RgEventContainmentActivated')){
-    if($proto -notmatch [regex]::Escape($required)){throw "Protocol v13 containment field missing: $required"}
+    if($proto -notmatch [regex]::Escape($required)){throw "Protocol v14 containment field missing: $required"}
 }
 if($src -notmatch 'Unresolved/out-of-root paths fail open'){throw 'LAB gate must document fail-open behavior outside the explicitly resolved gate root.'}
 if($src -notmatch 'requestorPid\s*==\s*\(ULONGLONG\)InterlockedCompareExchange64\(&gClientProcessId'){throw 'Gate client PID must be excluded to prevent rollback-store self-deadlock.'}
@@ -337,11 +341,37 @@ if($src -notmatch 'RgEventRenameResult' -or
    $src -notmatch 'RgPopulatePostOperationIdentity\(&event, FltObjects\)'){
     throw 'Successful RENAME completion must guard FltQueryInformationFile by PASSIVE_LEVEL/APC state before emitting RenameResult.'
 }
+
+if($proto -notmatch 'RgEventTruncateResult'){
+    throw 'Protocol v14 must expose a correlated TruncateResult event.'
+}
+if($src -notmatch [regex]::Escape('context->PostEventType = RgEventTruncateResult') -or
+   $src -notmatch [regex]::Escape('event.EventType = context->PostEventType') -or
+   $src -notmatch [regex]::Escape('event.RelatedSequence = context->RequestSequence')){
+    throw 'TRUNCATE must carry exact request correlation into authoritative post-operation evidence.'
+}
+if($src -notmatch [regex]::Escape('((PLARGE_INTEGER)Data->Iopb->Parameters.SetFileInformation.InfoBuffer)->QuadPart')){
+    throw 'TRUNCATE pre-operation event must carry the exact requested length from SetInformation.'
+}
+if($src -notmatch [regex]::Escape('context->FileInformationClass == FileEndOfFileInformation') -or
+   $src -notmatch [regex]::Escape('context->FileInformationClass == FileAllocationInformation') -or
+   $src -notmatch [regex]::Escape('FileStandardInformation')){
+    throw 'Successful TRUNCATE result must query authoritative EOF/allocation state when safe.'
+}
+$truncatePost=$src.IndexOf('context->PostEventType == RgEventTruncateResult')
+$truncatePassive=$src.IndexOf('KeGetCurrentIrql() == PASSIVE_LEVEL',$truncatePost)
+$truncateApc=$src.IndexOf('!KeAreAllApcsDisabled()',$truncatePost)
+$truncateQuery=$src.IndexOf('FltQueryInformationFile(',$truncatePost)
+$truncateQueue=$src.IndexOf('RgQueueRawEvent(&event, RgClientLabGate)',$truncatePost)
+if($truncatePost -lt 0 -or $truncatePassive -lt 0 -or $truncateApc -lt 0 -or $truncateQuery -lt 0 -or $truncateQueue -lt 0 -or
+   $truncatePost -gt $truncatePassive -or $truncatePassive -gt $truncateQuery -or $truncateApc -gt $truncateQuery -or $truncateQuery -gt $truncateQueue){
+    throw 'TRUNCATE post-operation FILE_STANDARD_INFO query must remain PASSIVE/APC-safe and precede no-reply result delivery.'
+}
 if($proto -notmatch 'RgGateBaselineCommitted' -or $proto -notmatch 'RgGateNoPreservationRequired'){throw 'Protocol must distinguish committed absence baselines from no-op create opens.'}
 if($infText -notmatch 'StartType\s*=\s*3'){throw 'Driver must remain demand-start in the lab prototype.'}
 if($infText -notmatch 'Instance1\.Flags\s*=\s*0x1'){throw 'Automatic volume attachment must remain suppressed.'}
 if($infText -notmatch 'Instance1\.Altitude\s*=\s*"370099\.4242"'){throw 'Unexpected LAB altitude. Review altitude policy manually.'}
-Write-Host 'LAB pre-write gate source check PASSED, including protocol-v13 event-bound PEPROCESS containment, fail-closed activation preflight, bounded admission, paging visibility and no-reply containment/section evidence.' -ForegroundColor Green
+Write-Host 'LAB pre-write gate source check PASSED, including protocol-v14 TRUNCATE reconciliation, event-bound PEPROCESS containment, fail-closed activation preflight, bounded admission and paging/section evidence.' -ForegroundColor Green
 Write-Host 'Gate scope: one explicit NT root negotiated by the single connected client.'
 Write-Host 'In-scope mutations normally require an explicit preservation decision; an activation-bound contained PEPROCESS is denied before the user-mode gate.'
 Write-Host 'Out-of-scope/unresolved I/O remains fail-open; no process-control or kernel file-writing APIs are present.'

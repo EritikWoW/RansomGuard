@@ -194,7 +194,7 @@ public static class RollbackRetentionPlanner
                 protectedCount++;
                 protectedCompletedBytes = checked(protectedCompletedBytes + sessionBytes);
                 issues.Add(new RollbackRetentionIssue(
-                    sessionId, "Completed lifecycle has pending CREATE/RENAME transaction evidence; protected from retention."));
+                    sessionId, "Completed lifecycle has pending CREATE/RENAME/TRUNCATE transaction evidence; protected from retention."));
                 inventory.Add(new RetentionInventoryItem(
                     sessionId, snapshot.State, false, completedUtc,
                     sessionBytes, digest, snapshot.LastRecordSha256));
@@ -324,6 +324,11 @@ public static class RollbackRetentionPlanner
         var renameRoot = Path.Combine(sessionRoot, "rename-state");
         if (Directory.Exists(renameRoot) &&
             new RenameRollbackStore(renameRoot).PendingIntents.Count != 0)
+            return true;
+
+        var truncateRoot = Path.Combine(sessionRoot, "truncate-state");
+        if (Directory.Exists(truncateRoot) &&
+            new TruncateOperationStore(truncateRoot).PendingIntents.Count != 0)
             return true;
 
         return false;

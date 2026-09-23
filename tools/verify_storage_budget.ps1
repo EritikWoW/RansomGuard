@@ -61,8 +61,11 @@ foreach($required in @(
     'paging-write-evidence',
     'create-completion-evidence',
     'rename-completion-evidence',
+    'truncate-completion-evidence',
     'restart-create-evidence',
     'restart-rename-evidence',
+    'restart-truncate-evidence',
+    'truncate-full-preimage',
     'gate-event:'
 )){
     if($gateText -notmatch [regex]::Escape($required)){throw "Gate storage-budget invariant missing: $required"}
@@ -75,6 +78,9 @@ $evaluateStart=$gateText.IndexOf('public static async Task<RgGateReply> Evaluate
 $evaluateEnd=$gateText.IndexOf('private static async Task<RgGateReply> EvaluateRenameAsync',$evaluateStart)
 if($evaluateStart -lt 0 -or $evaluateEnd -lt 0){throw 'GateDecision EvaluateAsync source block missing.'}
 $evaluate=$gateText.Substring($evaluateStart,$evaluateEnd-$evaluateStart)
+if($evaluate -notmatch [regex]::Escape('truncateStore.RecordIntentAsync(')){
+    throw 'TRUNCATE intent must remain inside the blocking gate storage-admission scope.'
+}
 $reserve=$evaluate.IndexOf('storageBudget.ReserveAsync(')
 $writeCapture=$evaluate.IndexOf('writeStore.CaptureWritePreimageAsync(')
 $fullCapture=$evaluate.IndexOf('store.CapturePreimageAsync(')

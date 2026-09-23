@@ -63,6 +63,8 @@ foreach($required in @(
     'gateWorkerFailures',
     'createOperationStore.PendingIntents.Count',
     'renameStore.PendingIntents.Count',
+    'truncateStore.PendingIntents.Count',
+    'pendingTruncateCount',
     'MarkCompletedAsync',
     'MarkFaultedAsync',
     'session-lifecycle-terminal'
@@ -98,6 +100,8 @@ foreach($required in @(
     'RollbackSessionLifecycleState.LegacyUnmanaged',
     'snapshot.IsHeld',
     'HasPendingTransactions',
+    'new TruncateOperationStore(truncateRoot).PendingIntents.Count',
+    'pending CREATE/RENAME/TRUNCATE transaction evidence',
     'UnresolvedExcessBytes',
     'AgeExpired',
     'CapacityPressure',
@@ -202,6 +206,8 @@ $testText=Get-Content -LiteralPath $tests -Raw
 foreach($required in @(
     'rollback maintenance lease serializes retention and hold changes',
     'retention planner selects only eligible completed unheld sessions',
+    'retention planner protects pending CREATE and TRUNCATE transaction sessions',
+    'pending_truncate_completed',
     'retention executor rejects stale plan after lifecycle hold change',
     'retention executor quarantines and purges eligible completed session',
     'retention journal records started/quarantined/completed purge chain',

@@ -1,7 +1,7 @@
 # RansomGuard rollback architecture — current through 0.7.21.0
 
 RansomGuard is moving from detection-only telemetry to `preserve -> contain -> recover`.
-The current 0.7.21 engineering line retains the deliberately constrained protocol-v13 minifilter gate, range-aware WRITE COW, CREATE/RENAME preservation and kernel completion reconciliation, activation/mapping evidence, verified copy-out recovery, bounded storage and crash-resumable retention. It additionally makes exact, fully-consistent restart reconciliation evidence usable for Review-only crash recovery without converting that evidence into authoritative completion.
+The current 0.7.24 engineering line retains the deliberately constrained minifilter gate, range-aware WRITE COW, CREATE/RENAME preservation, activation/mapping evidence, verified copy-out recovery, bounded storage and crash-resumable retention. Protocol v14 adds a separate two-phase TRUNCATE transaction with authoritative post-operation identity/length evidence and conservative Review-only restart reconciliation without converting restart observations into completion.
 
 ## WRITE ordering
 
@@ -314,7 +314,9 @@ The executor treats the supplied plan file only as a freshness token. It rebuild
 
 Every output is written under a new recovery root outside the rollback repository. Full-preimage recovery uses the existing verified snapshot path. Range-COW recovery uses the current damaged source only as a base and overlays committed original blocks. The executor records recovered length and SHA-256 in recovery-execution.json.
 
-No automatic delete, rename, overwrite-in-place, restore-in-place or originally-absent cleanup path exists. CREATE/RENAME topology remains Review/Blocked until explicit production recovery policy is designed and validated.
+No automatic delete, rename, truncate/extend, overwrite-in-place, restore-in-place or originally-absent cleanup path exists. CREATE/RENAME topology and TRUNCATE transaction decisions remain non-executable until explicit production recovery policy is designed and validated.
+
+Protocol v14 adds `truncate-intent-journal.jsonl`, `truncate-completion-journal.jsonl`, and `truncate-restart-journal.jsonl`. EOF restart evidence is decisive only for the same FILE_ID and exact requested/original lengths. Allocation-size and valid-data-length result loss remains Indeterminate. The recovery planner exposes `ReviewTruncateTransaction`; it never turns transaction evidence into an executable live file-length mutation.
 
 Starting in 0.7.19, a pending CREATE/RENAME with exact, fully consistent restart assessment may be represented as `Review` rather than `Blocked`. The action is bound to the latest restart-record hash (whose journal chain covers earlier observations), while the overall recovery PlanId still binds all session JSONL evidence. Crash-reconciled actions never become `Ready`; only verified full-preimage/range-COW copy-out remains executable.
 
@@ -341,7 +343,7 @@ The storage walk refuses reparse-point files/directories. The LAB client exposes
 
 0.7.18 adds an explicit retention boundary around rollback evidence.
 
-Every new session gets a write-through SHA-256 hash-chained lifecycle journal. GateClient records Completed only after worker drain, repository verification, no worker failure and no pending CREATE/RENAME intent. Faulted, Active, Held, legacy-unmanaged and pending-transaction sessions are retention-protected.
+Every new session gets a write-through SHA-256 hash-chained lifecycle journal. GateClient records Completed only after worker drain, repository verification, no worker failure and no pending CREATE/RENAME/TRUNCATE intent. Faulted, Active, Held, legacy-unmanaged and pending-transaction sessions are retention-protected.
 
 Retention planning is manual and read-only. It binds the current inventory into SHA-256 digests and a deterministic PlanId. Destructive execution and lifecycle Hold changes share one repository-wide cross-process maintenance lease, preventing a Hold from racing the final revalidation-to-purge window. Defaults are 30-day completed age, 32 GiB completed-storage cap and a 24-hour minimum age for pressure-driven purge. Protected completed bytes remain counted; if they prevent reaching the cap, UnresolvedExcessBytes remains nonzero rather than weakening protection.
 

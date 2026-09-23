@@ -63,6 +63,8 @@ foreach($required in @(
     'gateWorkerFailures',
     'createOperationStore.PendingIntents.Count',
     'renameStore.PendingIntents.Count',
+    'truncateStore.PendingIntents.Count',
+    'pendingTruncateCount',
     'MarkCompletedAsync',
     'MarkFaultedAsync',
     'session-lifecycle-terminal'
@@ -98,6 +100,8 @@ foreach($required in @(
     'RollbackSessionLifecycleState.LegacyUnmanaged',
     'snapshot.IsHeld',
     'HasPendingTransactions',
+    'new TruncateOperationStore(truncateRoot).PendingIntents.Count',
+    'pending CREATE/RENAME/TRUNCATE transaction evidence',
     'UnresolvedExcessBytes',
     'AgeExpired',
     'CapacityPressure',

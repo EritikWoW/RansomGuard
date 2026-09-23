@@ -1,7 +1,7 @@
 # RansomGuard 0.7.30.0
 
 - Added a dedicated manual disposable-VM Driver Verifier qualification without changing minifilter protocol v15.
-- ARM refuses any pre-existing verifier configuration, targets only `RansomGuardMinifilter.sys`, enables the Windows standard Driver Verifier profile, switches verifier boot mode to `oneboot`, and writes SHA-256-bound exact-commit campaign state before reboot.
+- ARM refuses any pre-existing verifier configuration, registers the exact signed `RansomGuardMinifilter.sys` package without loading it, enables the Windows standard Driver Verifier profile, switches verifier boot mode to `oneboot`, and writes SHA-256-bound exact-commit campaign state before reboot. Verifier return code 2 is treated as the documented `EXIT_CODE_REBOOT_NEEDED`, not as failure; postconditions still re-query the exact target and OneBoot mode.
 - The runtime phase refuses to proceed unless a real reboot occurred after ARM, then loads the exact signed driver and requires `verifier /query` to name that loaded target before exercising the existing bounded-concurrency qualification.
 - Verifier runtime covers admission overflow plus concurrent CREATE, RENAME, TRUNCATE, DELETE and mapped-write paths with the same durable transaction/pre-image/section/paging evidence requirements as 0.7.28.
 - Any Windows bugcheck event in the Driver Verifier qualification window fails the campaign rather than being treated as a successful stress result.

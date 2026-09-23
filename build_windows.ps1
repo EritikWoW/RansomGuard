@@ -16,10 +16,11 @@ function Run-Dotnet([string[]]$Arguments) {
 try {
     Write-Host '[preflight] Parse and audit repository PowerShell automation.'
     & (Join-Path $PSScriptRoot 'tools\verify_powershell_automation.ps1') -RepositoryRoot $PSScriptRoot
+    & (Join-Path $PSScriptRoot 'tools\verify_supply_chain.ps1') -RepositoryRoot $PSScriptRoot
 
     if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { throw 'Install .NET 10 SDK on the BUILD PC. Target PCs do not need a runtime.' }
     $version = (& dotnet --version).Trim()
-    if ([int]($version.Split('.')[0]) -lt 10) { throw "SDK 10+ required. Found: $version" }
+    if ($version -ne '10.0.401') { throw "Exact .NET SDK 10.0.401 required by global.json. Found: $version" }
     $svc = 'src\RansomGuard.Service\RansomGuard.Service.csproj'
     $sim = 'src\RansomGuard.Simulator\RansomGuard.Simulator.csproj'
     $filterClient = 'src\RansomGuard.FilterClient\RansomGuard.FilterClient.csproj'

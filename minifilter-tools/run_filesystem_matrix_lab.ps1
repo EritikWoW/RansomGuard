@@ -230,18 +230,18 @@ function New-ScratchVhd([string]$FileSystem){
 
 function Remove-ScratchVhd($Vhd){
     if($null -eq $Vhd){return}
-    try{
-        if($Vhd.VhdPath -and (Test-Path -LiteralPath $Vhd.VhdPath)){
-            $null=Invoke-DiskPartScript @(
-                "select vdisk file=""$($Vhd.VhdPath)""",
-                'detach vdisk'
-            ) "detach isolated $($Vhd.FileSystem) VHD" $true
-        }
-    }finally{
-        if($Vhd.VhdPath){
-            Remove-Item -LiteralPath $Vhd.VhdPath -Force -ErrorAction SilentlyContinue
-        }
+    if(-not $Vhd.VhdPath){return}
+    if(-not(Test-Path -LiteralPath $Vhd.VhdPath)){return}
+
+    $detach=Invoke-DiskPartScript @(
+        "select vdisk file=""$($Vhd.VhdPath)""",
+        'detach vdisk'
+    ) "detach isolated $($Vhd.FileSystem) VHD" $true
+    if(-not $detach.Succeeded){
+        throw "REFUSED: scratch VHD detach was not confirmed; leaving the VHD file intact for VM checkpoint recovery. Output: $($detach.Output)"
     }
+
+    Remove-Item -LiteralPath $Vhd.VhdPath -Force -ErrorAction Stop
 }
 
 function Run-FileSystemScenario($Vhd){

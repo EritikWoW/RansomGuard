@@ -138,8 +138,12 @@ function New-TestFile([string]$Path,[int]$Length=65536){
 
 function Prepare-GateRoot([string]$GateExe,[string]$Root){
     New-Item -ItemType Directory -Path $Root -Force | Out-Null
-    & $GateExe --root $Root --prepare-root
-    if($LASTEXITCODE -ne 0){throw "Gate root preparation failed for $Root, exit=$LASTEXITCODE"}
+    $prepareOutput=@(& $GateExe --root $Root --prepare-root 2>&1)
+    $prepareExit=$LASTEXITCODE
+    foreach($line in $prepareOutput){Write-Host $line}
+    if($prepareExit -ne 0){
+        throw "Gate root preparation failed for $Root, exit=$prepareExit. Output: $($prepareOutput -join [Environment]::NewLine)"
+    }
 }
 
 function Get-FreeDriveLetter {
@@ -278,7 +282,7 @@ function Run-FileSystemScenario($Vhd){
         New-TestFile $mappedTarget 65536
         $mappedOriginalHash=(Get-FileHash -LiteralPath $mappedTarget -Algorithm SHA256).Hash
 
-        & $installScript -Volume $volume -PackageDirectory $DriverPackageDirectory -Confirmation 'LAB-MINIFILTER'
+        & $installScript -Volume $volume -PackageDirectory $DriverPackageDirectory -Confirmation 'LAB-MINIFILTER' | Out-Host
 
         $gate=Start-LoggedProcess $gateExe @(
             '--root',(Quote-Arg $root),
@@ -287,11 +291,11 @@ function Run-FileSystemScenario($Vhd){
         ) $gateOut $gateErr
         Wait-LogPattern $gateOut 'kernel gate ACTIVE' $gate 45
 
-        & $helperExe create-new --file $createTarget
+        & $helperExe create-new --file $createTarget | Out-Host
         if($LASTEXITCODE -ne 0){throw "$fs CREATE_NEW helper failed, exit=$LASTEXITCODE"}
         if(-not(Test-Path -LiteralPath $createTarget -PathType Leaf)){throw "$fs CREATE_NEW target missing."}
 
-        & $helperExe rename-file --source $renameSource --destination $renameDestination
+        & $helperExe rename-file --source $renameSource --destination $renameDestination | Out-Host
         if($LASTEXITCODE -ne 0){throw "$fs RENAME helper failed, exit=$LASTEXITCODE"}
         if((Test-Path -LiteralPath $renameSource) -or -not(Test-Path -LiteralPath $renameDestination -PathType Leaf)){
             throw "$fs RENAME topology mismatch."
@@ -321,7 +325,7 @@ function Run-FileSystemScenario($Vhd){
         while((Get-Date) -lt $deleteDeadline -and (Test-Path -LiteralPath $deleteTarget)){Start-Sleep -Milliseconds 100}
         if(Test-Path -LiteralPath $deleteTarget){throw "$fs DELETE pathname still exists after exact handle cleanup."}
 
-        & $helperExe map-write --file $mappedTarget
+        & $helperExe map-write --file $mappedTarget | Out-Host
         if($LASTEXITCODE -ne 0){throw "$fs mapped-write helper failed, exit=$LASTEXITCODE"}
 
         $sessionRoot=Join-Path $store "Sessions\$session"
@@ -382,7 +386,7 @@ function Run-FileSystemScenario($Vhd){
             throw "$fs mapped-write pre-image hash mismatch."
         }
 
-        return [ordered]@{
+        return [pscustomobject][ordered]@{
             fileSystem=$fs
             supported=$true
             passed=$true
@@ -399,7 +403,7 @@ function Run-FileSystemScenario($Vhd){
         }
     }
     catch{
-        return [ordered]@{
+        return [pscustomobject][ordered]@{
             fileSystem=$fs
             supported=$true
             passed=$false
@@ -520,6 +524,10 @@ try{
 
         $summary[$supportedKey]=$true
         $scenario=Run-FileSystemScenario $activeVhd
+        if($null -eq $scenario -or $scenario -is [Array] -or
+           $scenario.PSObject.Properties.Name -notcontains 'passed'){
+            throw "$fs filesystem matrix scenario must return exactly one structured result object."
+        }
         $summary.scenarios+=@($scenario)
         $summary[$passedKey]=[bool]$scenario.passed
 

@@ -26,7 +26,7 @@ foreach($required in @(
     @('Audit quick start',"RansomGuard $version - audit-only quick start",$quick),
     @('Changelog',"# RansomGuard $version",$changelog),
     @('Product target protocol','current engineering branch uses protocol v15',$target),
-    @('Product target current milestone','0.7.28 validates the bounded gate under mixed high concurrency',$target)
+    @('Product target current milestone','0.7.28 validates bounded gate pressure and correlation under 20 concurrent helper processes',$target)
 )){
     $label=[string]$required[0]
     $needle=[string]$required[1]

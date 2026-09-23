@@ -46,13 +46,24 @@ foreach($required in @(
   'FileIdentityStore.QueryPathStandardInfo',
   'truncateStore.RecordIntentAsync',
   'pendingTruncateCount',
+  'DeleteOperationStore',
+  'DeleteReconciliation.HandleDispositionAsync',
+  'DeleteReconciliation.HandleFinalizationAsync',
+  'DeleteReconciliation.ObserveTopologyAsync',
+  'DeleteDispositionCompletionState.AcceptedDeletePending',
+  'DeleteFinalizationState.CleanupObserved',
+  'DeleteFinalizationSource.LivePostCleanupProbe',
+  'RgEventType.DeleteDispositionResult',
+  'RgEventType.DeleteFinalized',
+  'deleteStore.RecordIntentAsync',
+  'unsettledDeleteCount',
   'ev.RelatedSequence',
   'ev.CompletionStatus',
   'CaptureAbsentAsync',
   'CreateGatePolicy.TryParseDisposition',
   '(ev.Flags >> 24) & 0xFF',
   'ev.Flags & 0x00FFFFFF',
-  'ProtocolVersion = 14',
+  'ProtocolVersion = 15',
   'CreatePreservationAction.CaptureExistingPreimage',
   'CreatePreservationAction.RecordOriginallyAbsent',
   'CreatePreservationAction.DenyUnsupported',
@@ -110,14 +121,17 @@ foreach($required in @(
   '--drop-first-create-completion',
   '--drop-first-rename-completion',
   '--drop-first-truncate-completion',
+  '--drop-first-delete-completion',
   '--reconcile-only',
   'RECONCILE ONLY: observed=',
   'LAB COMPLETION LOSS: intentionally dropping authoritative CREATE result',
   'LAB COMPLETION LOSS: intentionally dropping authoritative RENAME result',
   'LAB COMPLETION LOSS: intentionally dropping authoritative TRUNCATE result',
+  'LAB COMPLETION LOSS: intentionally dropping authoritative DELETE disposition result',
   'Interlocked.CompareExchange(ref droppedCreateCompletion, 1, 0) == 0',
   'Interlocked.CompareExchange(ref droppedRenameCompletion, 1, 0) == 0',
   'Interlocked.CompareExchange(ref droppedTruncateCompletion, 1, 0) == 0',
+  'Interlocked.CompareExchange(ref droppedDeleteCompletion, 1, 0) == 0',
   'Only one completion-loss injection may be armed per GateClient session.',
   'TargetProcessId = containPid ?? 0',
   'ContainmentActive',
@@ -210,6 +224,29 @@ if($truncateResultBranch -lt 0 -or $truncateResultPersist -lt 0 -or $truncateRes
   throw 'TruncateResult must be persisted as completion metadata and must not receive FilterReplyMessage.'
 }
 
+$deleteResultBranch=$text.IndexOf('if ((RgEventType)ev.EventType == RgEventType.DeleteDispositionResult)')
+$deleteResultPersist=$text.IndexOf('DeleteReconciliation.HandleDispositionAsync(',$deleteResultBranch)
+$deleteResultReturn=$text.IndexOf('return;',$deleteResultPersist)
+$deleteResultReply=$text.IndexOf('Native.Reply(',$deleteResultBranch)
+if($deleteResultBranch -lt 0 -or $deleteResultPersist -lt 0 -or $deleteResultReturn -lt 0 -or
+   ($deleteResultReply -ge 0 -and $deleteResultReply -lt $deleteResultReturn)){
+  throw 'DeleteDispositionResult must be persisted as completion metadata and must not receive FilterReplyMessage.'
+}
+
+$deleteFinalBranch=$text.IndexOf('if ((RgEventType)ev.EventType == RgEventType.DeleteFinalized)')
+$deleteCleanupPersist=$text.IndexOf('DeleteReconciliation.HandleFinalizationAsync(',$deleteFinalBranch)
+$deleteDelay=$text.IndexOf('Task.Delay(100, cts.Token)',$deleteCleanupPersist)
+$deleteLivePersist=$text.IndexOf('DeleteReconciliation.ObserveTopologyAsync(',$deleteDelay)
+$deleteFinalReturn=$text.IndexOf('return;',$deleteLivePersist)
+$deleteFinalReply=$text.IndexOf('Native.Reply(',$deleteFinalBranch)
+if($deleteFinalBranch -lt 0 -or $deleteCleanupPersist -lt 0 -or $deleteDelay -lt 0 -or
+   $deleteLivePersist -lt 0 -or $deleteFinalReturn -lt 0 -or
+   $deleteFinalBranch -gt $deleteCleanupPersist -or $deleteCleanupPersist -gt $deleteDelay -or
+   $deleteDelay -gt $deleteLivePersist -or
+   ($deleteFinalReply -ge 0 -and $deleteFinalReply -lt $deleteFinalReturn)){
+  throw 'DeleteFinalized must persist cleanup first, probe topology separately, and never receive FilterReplyMessage.'
+}
+
 $pagingBranch=$text.IndexOf('if ((RgEventType)ev.EventType == RgEventType.PagingWrite)')
 $pagingPersist=$text.IndexOf('pagingStore.RecordAsync(',$pagingBranch)
 $pagingReturn=$text.IndexOf('return;',$pagingPersist)
@@ -286,6 +323,18 @@ if($truncateLossOption -lt 0 -or $truncateLossBranch -lt 0 -or $truncateLossChec
   throw 'LAB TRUNCATE completion-loss injection must drop the received TruncateResult before authoritative completion persistence.'
 }
 
+$deleteLossOption=$text.IndexOf('case "--drop-first-delete-completion"')
+$deleteLossBranch=$text.IndexOf('if ((RgEventType)ev.EventType == RgEventType.DeleteDispositionResult)')
+$deleteLossCheck=$text.IndexOf('if (options.DropFirstDeleteCompletion',$deleteLossBranch)
+$deleteLossCancel=$text.IndexOf('cts.Cancel();',$deleteLossCheck)
+$deleteLossPersist=$text.IndexOf('DeleteReconciliation.HandleDispositionAsync(',$deleteLossBranch)
+if($deleteLossOption -lt 0 -or $deleteLossBranch -lt 0 -or $deleteLossCheck -lt 0 -or
+   $deleteLossCancel -lt 0 -or $deleteLossPersist -lt 0 -or
+   $deleteLossBranch -gt $deleteLossCheck -or $deleteLossCheck -gt $deleteLossCancel -or
+   $deleteLossCancel -gt $deleteLossPersist){
+  throw 'LAB DELETE completion-loss injection must drop the received DeleteDispositionResult before authoritative completion persistence.'
+}
+
 $renameBranch=$text.IndexOf('if (eventType == RgEventType.Rename)')
 $renameSourceCapture=$text.IndexOf('CapturePreimageAsync(sourcePath, RollbackMutationKind.Rename',$renameBranch)
 $renameIntent=$text.IndexOf('renameStore.CaptureIntentAsync(',$renameSourceCapture)
@@ -305,6 +354,22 @@ if($truncateEvaluate -lt 0 -or $truncateStandard -lt 0 -or $truncateCapture -lt 
    $truncateEvaluate -gt $truncateStandard -or $truncateStandard -gt $truncateCapture -or
    $truncateCapture -gt $truncateIntent -or $truncateIntent -gt $truncateAllow){
   throw 'Pre-existing TRUNCATE must bind standard info, commit a full pre-image, commit its durable intent, then allow.'
+}
+
+$deleteEvaluate=$text.IndexOf('private static async Task<RgGateReply> EvaluateDeleteAsync')
+$deleteCapture=$text.IndexOf('CapturePreimageAsync(',$deleteEvaluate)
+$deleteIntent=$text.IndexOf('deleteStore.RecordIntentAsync(',$deleteEvaluate)
+$deleteAllow=$text.IndexOf('return Allow(',$deleteIntent)
+if($deleteEvaluate -lt 0 -or $deleteCapture -lt 0 -or $deleteIntent -lt 0 -or $deleteAllow -lt 0 -or
+   $deleteEvaluate -gt $deleteCapture -or $deleteCapture -gt $deleteIntent -or $deleteIntent -gt $deleteAllow){
+  throw 'Pre-existing DELETE must commit its full pre-image and durable DELETE intent before allow.'
+}
+$deleteRestart=$text.IndexOf('var deleteRoot = Path.Combine(session.Root, "delete-state")')
+$deleteUnsettled=$text.IndexOf('deletes.UnsettledIntents',$deleteRestart)
+$deleteRestartPersist=$text.IndexOf('deletes.RecordFinalizationAsync(',$deleteUnsettled)
+if($deleteRestart -lt 0 -or $deleteUnsettled -lt 0 -or $deleteRestartPersist -lt 0 -or
+   $deleteRestart -gt $deleteUnsettled -or $deleteUnsettled -gt $deleteRestartPersist){
+  throw 'Restart reconciliation must persist conservative topology evidence for unsettled DELETE transactions.'
 }
 
 $connect=$text.IndexOf('using var port = Native.Connect(')
@@ -513,4 +578,4 @@ if($restartBlock -notmatch [regex]::Escape('PathPolicy.Under(intent.OriginalPath
   throw 'Restart reconciliation must remain scoped to the explicitly selected LAB root.'
 }
 
-Write-Host 'LAB gate client source check PASSED: protocol-v14 TRUNCATE reconciliation, event-bound containment, activation preflight, bounded workers, durable identity/restart evidence, no destructive/process-control APIs.'
+Write-Host 'LAB gate client source check PASSED: protocol-v15 DELETE lifecycle plus TRUNCATE reconciliation, event-bound containment, bounded workers, durable identity/restart evidence, no destructive/process-control APIs.'

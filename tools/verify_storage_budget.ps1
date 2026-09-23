@@ -62,10 +62,15 @@ foreach($required in @(
     'create-completion-evidence',
     'rename-completion-evidence',
     'truncate-completion-evidence',
+    'delete-completion-evidence',
+    'delete-finalization-evidence',
+    'delete-live-topology-evidence',
     'restart-create-evidence',
     'restart-rename-evidence',
     'restart-truncate-evidence',
+    'restart-delete-evidence',
     'truncate-full-preimage',
+    'delete-full-preimage',
     'gate-event:'
 )){
     if($gateText -notmatch [regex]::Escape($required)){throw "Gate storage-budget invariant missing: $required"}
@@ -80,6 +85,9 @@ if($evaluateStart -lt 0 -or $evaluateEnd -lt 0){throw 'GateDecision EvaluateAsyn
 $evaluate=$gateText.Substring($evaluateStart,$evaluateEnd-$evaluateStart)
 if($evaluate -notmatch [regex]::Escape('truncateStore.RecordIntentAsync(')){
     throw 'TRUNCATE intent must remain inside the blocking gate storage-admission scope.'
+}
+if($evaluate -notmatch [regex]::Escape('deleteStore.RecordIntentAsync(')){
+    throw 'DELETE intent must remain inside the blocking gate storage-admission scope.'
 }
 $reserve=$evaluate.IndexOf('storageBudget.ReserveAsync(')
 $writeCapture=$evaluate.IndexOf('writeStore.CaptureWritePreimageAsync(')

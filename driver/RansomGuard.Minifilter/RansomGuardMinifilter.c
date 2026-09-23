@@ -40,6 +40,9 @@ static NTSTATUS RgCreateRenamePostContext(_Inout_ PFLT_CALLBACK_DATA Data,
 static NTSTATUS RgCreateTruncatePostContext(_Inout_ PFLT_CALLBACK_DATA Data,
                                             _In_ ULONGLONG RequestSequence,
                                             _Outptr_ PRG_POST_CONTEXT *PostContext);
+static NTSTATUS RgCreateDeletePostContext(_Inout_ PFLT_CALLBACK_DATA Data,
+                                          _In_ ULONGLONG RequestSequence,
+                                          _Outptr_ PRG_POST_CONTEXT *PostContext);
 static NTSTATUS RgCreateCreatePostContext(_Inout_ PFLT_CALLBACK_DATA Data,
                                           _In_ ULONGLONG RequestSequence,
                                           _Outptr_ PRG_POST_CONTEXT *PostContext);
@@ -63,6 +66,7 @@ static NTSTATUS RgMessage(_In_opt_ PVOID ConnectionCookie,
 static NTSTATUS RgPopulateEvent(_Out_ PRG_EVENT Event, _Inout_ PFLT_CALLBACK_DATA Data,
                                 _In_ PCFLT_RELATED_OBJECTS FltObjects,
                                 _In_ RG_EVENT_TYPE EventType, _In_ ULONG FileInformationClass);
+static NTSTATUS RgReadDeleteDispositionFlags(_In_ PFLT_CALLBACK_DATA Data, _Out_ PULONG Flags);
 static VOID RgPopulateRenameDestination(_Inout_ PRG_EVENT Event, _Inout_ PFLT_CALLBACK_DATA Data,
                                         _In_ PCFLT_RELATED_OBJECTS FltObjects);
 static BOOLEAN RgEventPathMatchesGateRoot(_In_ const RG_EVENT *Event);
@@ -90,12 +94,23 @@ static VOID RgAttachPagingStreamContext(_In_ PCFLT_RELATED_OBJECTS FltObjects,
                                         _In_ ULONGLONG CreateRequestSequence);
 static VOID RgObserveWritableSection(_Inout_ PFLT_CALLBACK_DATA Data,
                                      _In_ PCFLT_RELATED_OBJECTS FltObjects);
+static VOID RgAttachDeleteHandleContext(_In_ PCFLT_RELATED_OBJECTS FltObjects,
+                                        _In_ ULONGLONG RequestSequence,
+                                        _In_ ULONG FileInformationClass,
+                                        _In_ ULONG DispositionFlags);
+static VOID RgCancelDeleteHandleContext(_In_ PCFLT_RELATED_OBJECTS FltObjects);
+static VOID RgQueueDeleteFinalization(_In_ PRG_DELETE_HANDLE_CONTEXT Context,
+                                      _In_ ULONG EventFlags,
+                                      _In_ ULONG CompletionStatus,
+                                      _In_ ULONGLONG CompletionInformation,
+                                      _In_opt_ PFLT_CALLBACK_DATA Data);
 static VOID RgStreamContextCleanup(_In_ PFLT_CONTEXT Context,
                                    _In_ FLT_CONTEXT_TYPE ContextType);
 static FLT_PREOP_CALLBACK_STATUS RgCompleteDenied(_Inout_ PFLT_CALLBACK_DATA Data);
 
 static const FLT_CONTEXT_REGISTRATION gContexts[] = {
     { FLT_STREAM_CONTEXT, 0, RgStreamContextCleanup, sizeof(RG_STREAM_CONTEXT), RG_POOL_TAG },
+    { FLT_STREAMHANDLE_CONTEXT, 0, RgStreamContextCleanup, sizeof(RG_DELETE_HANDLE_CONTEXT), RG_POOL_TAG },
     { FLT_CONTEXT_END }
 };
 
@@ -103,6 +118,7 @@ static const FLT_OPERATION_REGISTRATION gCallbacks[] = {
     { IRP_MJ_CREATE, 0, RgPreCreate, RgPostCreate, NULL },
     { IRP_MJ_WRITE, 0, RgPreWrite, NULL, NULL },
     { IRP_MJ_SET_INFORMATION, 0, RgPreSetInformation, RgPostSetInformation, NULL },
+    { IRP_MJ_CLEANUP, 0, RgPreCleanup, RgPostCleanup, NULL },
     { IRP_MJ_ACQUIRE_FOR_SECTION_SYNCHRONIZATION, 0, RgPreAcquireForSectionSynchronization, NULL, NULL },
     { IRP_MJ_OPERATION_END }
 };
@@ -402,6 +418,11 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
         if (!NT_SUCCESS(status)) {
             return RgCompleteDenied(Data);
         }
+    } else if (eventType == RgEventDeleteDisposition) {
+        status = RgCreateDeletePostContext(Data, event.Sequence, &postContext);
+        if (!NT_SUCCESS(status)) {
+            return RgCompleteDenied(Data);
+        }
     }
 
     if (!RgGateEvent(Data, &event, &gateError, NULL)) {
@@ -457,6 +478,11 @@ static NTSTATUS RgPopulateEvent(PRG_EVENT Event, PFLT_CALLBACK_DATA Data,
         }
         Event->ByteOffset =
             ((PLARGE_INTEGER)Data->Iopb->Parameters.SetFileInformation.InfoBuffer)->QuadPart;
+    } else if (EventType == RgEventDeleteDisposition) {
+        status = RgReadDeleteDispositionFlags(Data, &Event->Flags);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
     }
 
     status = FltGetFileNameInformation(Data,
@@ -492,6 +518,46 @@ static NTSTATUS RgPopulateEvent(PRG_EVENT Event, PFLT_CALLBACK_DATA Data,
     }
 
     return status;
+}
+
+static NTSTATUS RgReadDeleteDispositionFlags(PFLT_CALLBACK_DATA Data, PULONG Flags)
+{
+    FILE_INFORMATION_CLASS infoClass;
+    PVOID buffer;
+    ULONG length;
+
+    if (Data == NULL || Flags == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    *Flags = 0;
+    infoClass = Data->Iopb->Parameters.SetFileInformation.FileInformationClass;
+    buffer = Data->Iopb->Parameters.SetFileInformation.InfoBuffer;
+    length = Data->Iopb->Parameters.SetFileInformation.Length;
+
+    if (buffer == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (infoClass == FileDispositionInformation) {
+        if (length < sizeof(FILE_DISPOSITION_INFORMATION)) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        if (((PFILE_DISPOSITION_INFORMATION)buffer)->DeleteFile) {
+            *Flags = RG_DELETE_DISPOSITION_DELETE;
+        }
+        return STATUS_SUCCESS;
+    }
+
+    if (infoClass == FileDispositionInformationEx) {
+        if (length < sizeof(ULONG)) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        *Flags = *(PULONG)buffer;
+        return STATUS_SUCCESS;
+    }
+
+    return STATUS_INVALID_INFO_CLASS;
 }
 
 static VOID RgPopulateRenameDestination(PRG_EVENT Event, PFLT_CALLBACK_DATA Data,
@@ -625,6 +691,38 @@ static NTSTATUS RgCreateTruncatePostContext(PFLT_CALLBACK_DATA Data,
     context->PostEventType = RgEventTruncateResult;
     context->FileInformationClass =
         (ULONG)Data->Iopb->Parameters.SetFileInformation.FileInformationClass;
+    *PostContext = context;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS RgCreateDeletePostContext(PFLT_CALLBACK_DATA Data,
+                                          ULONGLONG RequestSequence,
+                                          PRG_POST_CONTEXT *PostContext)
+{
+    PRG_POST_CONTEXT context = NULL;
+    ULONG dispositionFlags = 0;
+    NTSTATUS status;
+
+    *PostContext = NULL;
+    status = RgReadDeleteDispositionFlags(Data, &dispositionFlags);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    context = (PRG_POST_CONTEXT)ExAllocatePool2(
+        POOL_FLAG_NON_PAGED,
+        sizeof(RG_POST_CONTEXT),
+        RG_POOL_TAG);
+    if (context == NULL) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    RtlZeroMemory(context, sizeof(*context));
+    context->RequestSequence = RequestSequence;
+    context->PostEventType = RgEventDeleteDispositionResult;
+    context->FileInformationClass =
+        (ULONG)Data->Iopb->Parameters.SetFileInformation.FileInformationClass;
+    context->DispositionFlags = dispositionFlags;
     *PostContext = context;
     return STATUS_SUCCESS;
 }
@@ -818,9 +916,184 @@ FLT_POSTOP_CALLBACK_STATUS RgPostCreate(PFLT_CALLBACK_DATA Data,
 
 static VOID RgStreamContextCleanup(PFLT_CONTEXT Context, FLT_CONTEXT_TYPE ContextType)
 {
-    if (Context != NULL && ContextType == FLT_STREAM_CONTEXT) {
-        RtlSecureZeroMemory(Context, sizeof(RG_STREAM_CONTEXT));
+    if (Context == NULL) {
+        return;
     }
+
+    if (ContextType == FLT_STREAM_CONTEXT) {
+        RtlSecureZeroMemory(Context, sizeof(RG_STREAM_CONTEXT));
+    } else if (ContextType == FLT_STREAMHANDLE_CONTEXT) {
+        RtlSecureZeroMemory(Context, sizeof(RG_DELETE_HANDLE_CONTEXT));
+    }
+}
+
+static VOID RgQueueDeleteFinalization(PRG_DELETE_HANDLE_CONTEXT Context,
+                                      ULONG EventFlags,
+                                      ULONG CompletionStatus,
+                                      ULONGLONG CompletionInformation,
+                                      PFLT_CALLBACK_DATA Data)
+{
+    RG_EVENT event;
+    LARGE_INTEGER systemTime;
+
+    if (Context == NULL || Context->RequestSequence == 0) {
+        return;
+    }
+
+    RtlZeroMemory(&event, sizeof(event));
+    event.ProtocolVersion = RG_PROTOCOL_VERSION;
+    event.EventType = RgEventDeleteFinalized;
+    event.Flags = EventFlags;
+    event.Sequence = (ULONGLONG)InterlockedIncrement64(&gSequence);
+    event.RelatedSequence = Context->RequestSequence;
+    event.FileInformationClass = Context->FileInformationClass;
+    event.CompletionStatus = CompletionStatus;
+    event.CompletionInformation = CompletionInformation;
+    if (Data != NULL) {
+        event.ProcessId = (ULONGLONG)(ULONG_PTR)FltGetRequestorProcessId(Data);
+        event.ThreadId = (ULONGLONG)(ULONG_PTR)PsGetCurrentThreadId();
+    }
+    KeQuerySystemTimePrecise(&systemTime);
+    event.SystemTime100ns = systemTime.QuadPart;
+    RgQueueRawEvent(&event, RgClientLabGate);
+}
+
+static VOID RgAttachDeleteHandleContext(PCFLT_RELATED_OBJECTS FltObjects,
+                                        ULONGLONG RequestSequence,
+                                        ULONG FileInformationClass,
+                                        ULONG DispositionFlags)
+{
+    PRG_DELETE_HANDLE_CONTEXT context = NULL;
+    PRG_DELETE_HANDLE_CONTEXT oldContext = NULL;
+    NTSTATUS status;
+
+    if (FltObjects == NULL || FltObjects->Instance == NULL || FltObjects->FileObject == NULL ||
+        RequestSequence == 0) {
+        InterlockedIncrement(&gDropped);
+        return;
+    }
+
+    status = FltAllocateContext(
+        gFilter,
+        FLT_STREAMHANDLE_CONTEXT,
+        sizeof(RG_DELETE_HANDLE_CONTEXT),
+        NonPagedPoolNx,
+        (PFLT_CONTEXT *)&context);
+    if (!NT_SUCCESS(status) || context == NULL) {
+        InterlockedIncrement(&gDropped);
+        return;
+    }
+
+    RtlZeroMemory(context, sizeof(*context));
+    context->RequestSequence = RequestSequence;
+    context->FileInformationClass = FileInformationClass;
+    context->DispositionFlags = DispositionFlags;
+
+    status = FltSetStreamHandleContext(
+        FltObjects->Instance,
+        FltObjects->FileObject,
+        FLT_SET_CONTEXT_REPLACE_IF_EXISTS,
+        context,
+        (PFLT_CONTEXT *)&oldContext);
+
+    if (!NT_SUCCESS(status)) {
+        InterlockedIncrement(&gDropped);
+    } else if (oldContext != NULL) {
+        // A later delete-disposition request on the same handle supersedes the prior one.
+        RgQueueDeleteFinalization(
+            oldContext,
+            RG_EVENT_FLAG_DELETE_CANCELLED,
+            (ULONG)STATUS_SUCCESS,
+            0,
+            NULL);
+    }
+
+    if (oldContext != NULL) {
+        FltReleaseContext(oldContext);
+    }
+    FltReleaseContext(context);
+}
+
+static VOID RgCancelDeleteHandleContext(PCFLT_RELATED_OBJECTS FltObjects)
+{
+    PRG_DELETE_HANDLE_CONTEXT oldContext = NULL;
+    NTSTATUS status;
+
+    if (FltObjects == NULL || FltObjects->Instance == NULL || FltObjects->FileObject == NULL) {
+        return;
+    }
+
+    status = FltDeleteStreamHandleContext(
+        FltObjects->Instance,
+        FltObjects->FileObject,
+        (PFLT_CONTEXT *)&oldContext);
+    if (!NT_SUCCESS(status) || oldContext == NULL) {
+        return;
+    }
+
+    RgQueueDeleteFinalization(
+        oldContext,
+        RG_EVENT_FLAG_DELETE_CANCELLED,
+        (ULONG)STATUS_SUCCESS,
+        0,
+        NULL);
+    FltReleaseContext(oldContext);
+}
+
+FLT_PREOP_CALLBACK_STATUS RgPreCleanup(PFLT_CALLBACK_DATA Data,
+                                      PCFLT_RELATED_OBJECTS FltObjects,
+                                      PVOID *CompletionContext)
+{
+    PRG_DELETE_HANDLE_CONTEXT context = NULL;
+    NTSTATUS status;
+
+    UNREFERENCED_PARAMETER(Data);
+    *CompletionContext = NULL;
+
+    if (InterlockedCompareExchange(&gUnloading, 0, 0) != 0 ||
+        InterlockedCompareExchange(&gClientConnected, 0, 0) == 0 ||
+        RgCurrentClientMode() != RgClientLabGate ||
+        FltObjects == NULL || FltObjects->Instance == NULL || FltObjects->FileObject == NULL) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    status = FltGetStreamHandleContext(
+        FltObjects->Instance,
+        FltObjects->FileObject,
+        (PFLT_CONTEXT *)&context);
+    if (!NT_SUCCESS(status) || context == NULL) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    // FltGetStreamHandleContext returns a referenced context. Pass that reference to post-cleanup.
+    *CompletionContext = context;
+    return FLT_PREOP_SUCCESS_WITH_CALLBACK;
+}
+
+FLT_POSTOP_CALLBACK_STATUS RgPostCleanup(PFLT_CALLBACK_DATA Data,
+                                         PCFLT_RELATED_OBJECTS FltObjects,
+                                         PVOID CompletionContext,
+                                         FLT_POST_OPERATION_FLAGS Flags)
+{
+    PRG_DELETE_HANDLE_CONTEXT context = (PRG_DELETE_HANDLE_CONTEXT)CompletionContext;
+
+    UNREFERENCED_PARAMETER(FltObjects);
+
+    if (context == NULL) {
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    }
+
+    if (!FlagOn(Flags, FLTFL_POST_OPERATION_DRAINING)) {
+        RgQueueDeleteFinalization(
+            context,
+            RG_EVENT_FLAG_DELETE_CLEANUP,
+            (ULONG)Data->IoStatus.Status,
+            (ULONGLONG)Data->IoStatus.Information,
+            Data);
+    }
+
+    FltReleaseContext(context);
+    return FLT_POSTOP_FINISHED_PROCESSING;
 }
 
 static VOID RgAttachPagingStreamContext(PCFLT_RELATED_OBJECTS FltObjects,
@@ -1032,7 +1305,8 @@ static FLT_POSTOP_CALLBACK_STATUS RgPostSetInformationSafe(PFLT_CALLBACK_DATA Da
     }
 
     if (context->PostEventType != RgEventRenameResult &&
-        context->PostEventType != RgEventTruncateResult) {
+        context->PostEventType != RgEventTruncateResult &&
+        context->PostEventType != RgEventDeleteDispositionResult) {
         RgFreePostContext(context);
         InterlockedIncrement(&gDropped);
         return FLT_POSTOP_FINISHED_PROCESSING;
@@ -1108,6 +1382,40 @@ static FLT_POSTOP_CALLBACK_STATUS RgPostSetInformationSafe(PFLT_CALLBACK_DATA Da
             }
         } else {
             event.IdentityStatus = RgIdentityQueryFailed;
+        }
+    } else if (context->PostEventType == RgEventDeleteDispositionResult &&
+               NT_SUCCESS(Data->IoStatus.Status)) {
+        // A successful disposition call is authoritative only for disposition acceptance.
+        // Actual pathname deletion is finalized later from the exact handle cleanup context.
+        if (KeGetCurrentIrql() == PASSIVE_LEVEL && !KeAreAllApcsDisabled() &&
+            FltObjects != NULL && FltObjects->Instance != NULL && FltObjects->FileObject != NULL) {
+            RgPopulatePostOperationIdentity(&event, FltObjects);
+            RtlZeroMemory(&standardInfo, sizeof(standardInfo));
+            status = FltQueryInformationFile(
+                FltObjects->Instance,
+                FltObjects->FileObject,
+                &standardInfo,
+                sizeof(standardInfo),
+                FileStandardInformation,
+                &returned);
+            if (NT_SUCCESS(status) && returned >= (ULONG)sizeof(standardInfo)) {
+                event.Flags |= RG_EVENT_FLAG_DELETE_STATE_RESOLVED;
+                if (standardInfo.DeletePending) {
+                    event.Flags |= RG_EVENT_FLAG_DELETE_PENDING;
+                }
+            }
+        } else {
+            event.IdentityStatus = RgIdentityQueryFailed;
+        }
+
+        if (FlagOn(context->DispositionFlags, RG_DELETE_DISPOSITION_DELETE)) {
+            RgAttachDeleteHandleContext(
+                FltObjects,
+                context->RequestSequence,
+                context->FileInformationClass,
+                context->DispositionFlags);
+        } else {
+            RgCancelDeleteHandleContext(FltObjects);
         }
     }
 

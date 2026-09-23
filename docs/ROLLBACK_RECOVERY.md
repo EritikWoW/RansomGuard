@@ -38,7 +38,7 @@ Only two action kinds may ever be `Ready`:
 1. `RestoreFullPreimageCopy`
 2. `RestoreRangeCowCopy`
 
-CREATE/RENAME/TRUNCATE/topology actions are never executed automatically.
+CREATE/RENAME/TRUNCATE/DELETE/topology actions are never executed automatically.
 
 ## Full pre-image recovery
 
@@ -86,7 +86,9 @@ For a pending CREATE/RENAME with no authoritative completion, 0.7.19 checks `res
 
 Protocol v14 applies the same boundary to TRUNCATE through its separate truncate-state restart journal. Exact EOF evidence can make a pending transaction Review-only; allocation-size/VDL loss stays unresolved. The executor never changes a live EOF/allocation/VDL value.
 
-This assessment never writes a CREATE/RENAME completion journal entry and never turns a topology action into `Ready`. The executor therefore still cannot delete incident-created paths, reverse renames, overwrite live objects, or restore in place.
+Protocol v15 applies an additional lifecycle boundary to DELETE. `DeleteDispositionResult` is authoritative only for the SetInformation result. Exact-handle `CleanupObserved` is persisted separately and does not prove pathname deletion. A bounded live topology probe, or a later restart probe for an unsettled transaction, may observe the original pathname missing, the same FILE_ID still present, or ambiguous/replacement topology. Consistent evidence can make `ReviewDeleteTransaction` reviewable, while cleanup-only or conflicting evidence stays Blocked. No probe writes the DELETE completion journal.
+
+This assessment never writes a CREATE/RENAME/DELETE authoritative completion journal entry and never turns a topology action into `Ready`. The executor therefore still cannot delete incident-created paths, recreate deleted paths, reverse renames, overwrite live objects, or restore in place.
 
 ## Plan identity and stale-plan refusal
 

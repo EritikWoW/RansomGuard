@@ -920,6 +920,184 @@ try
     Check(new TruncateOperationStore(truncateStateRoot).Intents.Count == 2,
         "TRUNCATE transaction journals rebuild after reopen");
 
+    var deleteStateRoot = Path.Combine(root, "restart-delete-state");
+    var deleteState = new DeleteOperationStore(deleteStateRoot);
+    var deletePath = Path.Combine(sourceDir, "restart-delete.bin");
+    var deleteIntent = await deleteState.RecordIntentAsync(
+        305,
+        deletePath,
+        DeleteOperationStore.FileDispositionInformationEx,
+        DeleteOperationStore.FileDispositionDelete,
+        sourceIdentity,
+        false,
+        new string('E', 64));
+    Check(DeleteOperationStore.ClassifyPathObservation(
+              deleteIntent,
+              RestartPathState.Missing,
+              null) == DeleteFinalizationState.DeletedObserved,
+        "restart DELETE evidence recognizes the original pathname as absent");
+    Check(DeleteOperationStore.ClassifyPathObservation(
+              deleteIntent,
+              RestartPathState.File,
+              sourceIdentity) == DeleteFinalizationState.StillPresentSameIdentity,
+        "restart DELETE evidence recognizes the same FILE_ID still present");
+    Check(DeleteOperationStore.ClassifyPathObservation(
+              deleteIntent,
+              RestartPathState.File,
+              destinationIdentity) == DeleteFinalizationState.Ambiguous,
+        "restart DELETE evidence refuses a replacement FILE_ID at the original pathname");
+    var replacementDeleteIntent = await deleteState.RecordIntentAsync(
+        307,
+        Path.Combine(sourceDir, "replacement-delete.bin"),
+        DeleteOperationStore.FileDispositionInformation,
+        DeleteOperationStore.FileDispositionDelete,
+        sourceIdentity,
+        false,
+        new string('7', 64));
+    var replacementObservation = await deleteState.RecordFinalizationAsync(
+        replacementDeleteIntent,
+        DeleteFinalizationSource.RestartProbe,
+        DeleteFinalizationState.Ambiguous,
+        RestartPathState.File,
+        destinationIdentity);
+    Check(replacementObservation.CurrentIdentity == destinationIdentity &&
+          deleteState.AssessFinalization(replacementDeleteIntent).State ==
+              DeleteFinalizationAssessmentState.Unresolved &&
+          deleteState.UnsettledIntents.Any(x =>
+              x.RequestSequence == replacementDeleteIntent.RequestSequence),
+        "DELETE restart persists replacement FILE_ID as ambiguous evidence instead of rejecting it");
+
+    var mismatchedDeleteIntentRejected = false;
+    try
+    {
+        _ = await deleteState.RecordFinalizationAsync(
+            deleteIntent with { OriginalPath = Path.Combine(sourceDir, "different-delete.bin") },
+            DeleteFinalizationSource.RestartProbe,
+            DeleteFinalizationState.DeletedObserved,
+            RestartPathState.Missing,
+            null);
+    }
+    catch (InvalidDataException) { mismatchedDeleteIntentRejected = true; }
+    Check(mismatchedDeleteIntentRejected,
+        "DELETE finalization rejects a cloned intent whose path does not match the committed record");
+
+    var cleanupObservation = await deleteState.RecordFinalizationAsync(
+        deleteIntent,
+        DeleteFinalizationSource.KernelCleanup,
+        DeleteFinalizationState.CleanupObserved,
+        RestartPathState.QueryFailed,
+        null);
+    var cleanupOnlyAssessment = deleteState.AssessFinalization(deleteIntent);
+    Check(cleanupOnlyAssessment.State == DeleteFinalizationAssessmentState.CleanupObservedOnly &&
+          cleanupOnlyAssessment.LatestRecordSha256 == cleanupObservation.RecordSha256,
+        "DELETE exact-handle cleanup is durable but does not claim pathname deletion");
+
+    var deletedObservation = await deleteState.RecordFinalizationAsync(
+        deleteIntent,
+        DeleteFinalizationSource.RestartProbe,
+        DeleteFinalizationState.DeletedObserved,
+        RestartPathState.Missing,
+        null);
+    var duplicateDeletedObservation = await deleteState.RecordFinalizationAsync(
+        deleteIntent,
+        DeleteFinalizationSource.RestartProbe,
+        DeleteFinalizationState.DeletedObserved,
+        RestartPathState.Missing,
+        null);
+    var deleteAssessment = deleteState.AssessFinalization(deleteIntent);
+    Check(duplicateDeletedObservation.Sequence == deletedObservation.Sequence &&
+          deleteAssessment.State == DeleteFinalizationAssessmentState.ConsistentDeletedObserved &&
+          deleteAssessment.LatestRecordSha256 == deletedObservation.RecordSha256,
+        "DELETE topology finalization is idempotent and remains separate from cleanup evidence");
+
+    _ = await deleteState.RecordCompletionAsync(
+        deleteIntent.RequestSequence,
+        DeleteDispositionCompletionState.AcceptedDeletePending,
+        0,
+        0,
+        true,
+        null);
+    Check(!deleteState.PendingIntents.Any(x =>
+              x.RequestSequence == deleteIntent.RequestSequence) &&
+          !deleteState.UnsettledIntents.Any(x =>
+              x.RequestSequence == deleteIntent.RequestSequence),
+        "authoritative DELETE disposition plus observed pathname absence settles the correlated transaction");
+
+    var conflictingDeleteIntent = await deleteState.RecordIntentAsync(
+        306,
+        Path.Combine(sourceDir, "conflicting-delete.bin"),
+        DeleteOperationStore.FileDispositionInformation,
+        DeleteOperationStore.FileDispositionDelete,
+        sourceIdentity,
+        false,
+        new string('F', 64));
+    _ = await deleteState.RecordCompletionAsync(
+        conflictingDeleteIntent.RequestSequence,
+        DeleteDispositionCompletionState.AcceptedDeletePending,
+        0,
+        0,
+        true,
+        sourceIdentity);
+    _ = await deleteState.RecordFinalizationAsync(
+        conflictingDeleteIntent,
+        DeleteFinalizationSource.RestartProbe,
+        DeleteFinalizationState.StillPresentSameIdentity,
+        RestartPathState.File,
+        sourceIdentity);
+    _ = await deleteState.RecordFinalizationAsync(
+        conflictingDeleteIntent,
+        DeleteFinalizationSource.DispositionCancellation,
+        DeleteFinalizationState.Cancelled,
+        RestartPathState.QueryFailed,
+        null);
+    Check(deleteState.AssessFinalization(conflictingDeleteIntent).State ==
+              DeleteFinalizationAssessmentState.Unresolved &&
+          deleteState.UnsettledIntents.Any(x =>
+              x.RequestSequence == conflictingDeleteIntent.RequestSequence),
+        "conflicting DELETE topology/cancellation evidence remains unresolved and retention-protected");
+
+    var delayedDeleteIntent = await deleteState.RecordIntentAsync(
+        308,
+        Path.Combine(sourceDir, "delayed-delete.bin"),
+        DeleteOperationStore.FileDispositionInformationEx,
+        DeleteOperationStore.FileDispositionDelete,
+        sourceIdentity,
+        false,
+        new string('8', 64));
+    _ = await deleteState.RecordCompletionAsync(
+        delayedDeleteIntent.RequestSequence,
+        DeleteDispositionCompletionState.AcceptedDeletePending,
+        0,
+        0,
+        true,
+        sourceIdentity);
+    _ = await deleteState.RecordFinalizationAsync(
+        delayedDeleteIntent,
+        DeleteFinalizationSource.LivePostCleanupProbe,
+        DeleteFinalizationState.StillPresentSameIdentity,
+        RestartPathState.File,
+        sourceIdentity);
+    var delayedDeleteMissing = await deleteState.RecordFinalizationAsync(
+        delayedDeleteIntent,
+        DeleteFinalizationSource.RestartProbe,
+        DeleteFinalizationState.DeletedObserved,
+        RestartPathState.Missing,
+        null);
+    Check(deleteState.AssessFinalization(delayedDeleteIntent).State ==
+              DeleteFinalizationAssessmentState.ConsistentDeletedObserved &&
+          deleteState.AssessFinalization(delayedDeleteIntent).LatestRecordSha256 ==
+              delayedDeleteMissing.RecordSha256 &&
+          !deleteState.UnsettledIntents.Any(x =>
+              x.RequestSequence == delayedDeleteIntent.RequestSequence),
+        "DELETE finalization accepts monotonic same-FILE_ID-present to pathname-missing transition");
+
+    deleteState.VerifyAll();
+    var reopenedDeleteState = new DeleteOperationStore(deleteStateRoot);
+    Check(reopenedDeleteState.Intents.Count == 4 &&
+          reopenedDeleteState.Completions.Count == 3 &&
+          reopenedDeleteState.Finalizations.Count == 7,
+        "DELETE intent/completion/finalization hash chains rebuild after reopen");
+
     var restartStateRoot = Path.Combine(root, "restart-evidence");
     var restartState = new RestartReconciliationStore(restartStateRoot);
     var createObservation = await restartState.RecordObservationAsync(
@@ -1492,10 +1670,77 @@ try
         planIdentity,
         1024);
 
+    var planDelete = new DeleteOperationStore(
+        Path.Combine(planSession.Root, "delete-state"));
+    var authoritativeDeleteIntent = await planDelete.RecordIntentAsync(
+        9301,
+        fullPlanPath,
+        DeleteOperationStore.FileDispositionInformationEx,
+        DeleteOperationStore.FileDispositionDelete,
+        planIdentity,
+        false,
+        fullCapture.RecordSha256);
+    _ = await planDelete.RecordCompletionAsync(
+        authoritativeDeleteIntent.RequestSequence,
+        DeleteDispositionCompletionState.AcceptedDeletePending,
+        0,
+        0,
+        true,
+        planIdentity);
+    _ = await planDelete.RecordFinalizationAsync(
+        authoritativeDeleteIntent,
+        DeleteFinalizationSource.KernelCleanup,
+        DeleteFinalizationState.CleanupObserved,
+        RestartPathState.QueryFailed,
+        null);
+    var authoritativeDeleteTopology = await planDelete.RecordFinalizationAsync(
+        authoritativeDeleteIntent,
+        DeleteFinalizationSource.RestartProbe,
+        DeleteFinalizationState.DeletedObserved,
+        RestartPathState.Missing,
+        null);
+
+    var pendingDeleteIntent = await planDelete.RecordIntentAsync(
+        9302,
+        originallyAbsent,
+        DeleteOperationStore.FileDispositionInformation,
+        DeleteOperationStore.FileDispositionDelete,
+        planIdentity,
+        true,
+        string.Empty);
+    var pendingDeleteTopology = await planDelete.RecordFinalizationAsync(
+        pendingDeleteIntent,
+        DeleteFinalizationSource.RestartProbe,
+        DeleteFinalizationState.DeletedObserved,
+        RestartPathState.Missing,
+        null);
+
+    var cleanupOnlyDeleteIntent = await planDelete.RecordIntentAsync(
+        9303,
+        Path.Combine(planSource, "delete-cleanup-only.bin"),
+        DeleteOperationStore.FileDispositionInformationEx,
+        DeleteOperationStore.FileDispositionDelete,
+        planIdentity,
+        true,
+        string.Empty);
+    _ = await planDelete.RecordCompletionAsync(
+        cleanupOnlyDeleteIntent.RequestSequence,
+        DeleteDispositionCompletionState.AcceptedStateUnresolved,
+        0,
+        0,
+        null,
+        null);
+    var cleanupOnlyDeleteEvidence = await planDelete.RecordFinalizationAsync(
+        cleanupOnlyDeleteIntent,
+        DeleteFinalizationSource.KernelCleanup,
+        DeleteFinalizationState.CleanupObserved,
+        RestartPathState.QueryFailed,
+        null);
+
     var recoveryPlan = RollbackRecoveryPlanner.Build(planRepoRoot, "plan_case");
     Check(recoveryPlan.ReadyCount == 2 &&
-          recoveryPlan.ReviewCount == 6 &&
-          recoveryPlan.BlockedCount == 1 &&
+          recoveryPlan.ReviewCount == 8 &&
+          recoveryPlan.BlockedCount == 2 &&
           !recoveryPlan.AutomaticTopologyMutationAllowed,
         "recovery planner separates copy-out readiness from review/blocked topology");
     Check(recoveryPlan.Actions.Any(x =>
@@ -1548,6 +1793,24 @@ try
             x.EvidenceSequence == 9201 &&
             x.EvidenceRecordSha256 == truncateCrashEvidence.RecordSha256),
         "consistent restart TRUNCATE evidence becomes review-only and never a live length mutation");
+    Check(recoveryPlan.Actions.Any(x =>
+            x.Kind == RecoveryActionKind.ReviewDeleteTransaction &&
+            x.State == RecoveryActionState.Review &&
+            x.EvidenceSequence == 9301 &&
+            x.EvidenceRecordSha256 == authoritativeDeleteTopology.RecordSha256),
+        "authoritative DELETE plus observed pathname absence is topology review, never automatic recreation");
+    Check(recoveryPlan.Actions.Any(x =>
+            x.Kind == RecoveryActionKind.ReviewDeleteTransaction &&
+            x.State == RecoveryActionState.Review &&
+            x.EvidenceSequence == 9302 &&
+            x.EvidenceRecordSha256 == pendingDeleteTopology.RecordSha256),
+        "lost DELETE disposition completion with restart absence evidence remains review-only");
+    Check(recoveryPlan.Actions.Any(x =>
+            x.Kind == RecoveryActionKind.ReviewDeleteTransaction &&
+            x.State == RecoveryActionState.Blocked &&
+            x.EvidenceSequence == 9303 &&
+            x.EvidenceRecordSha256 == cleanupOnlyDeleteEvidence.RecordSha256),
+        "cleanup-only DELETE evidence remains blocked until pathname topology is proven");
     Check(recoveryPlan.PlanId.Length == 64 &&
           recoveryPlan.JournalEvidenceSha256.Length == 64,
         "recovery plan binds deterministic SHA-256 plan/evidence digests");
@@ -1564,8 +1827,8 @@ try
           execution.RequestedReadyActions == 2 &&
           execution.SucceededActions == 2 &&
           execution.FailedActions == 0 &&
-          execution.ReviewActionsNotExecuted == 6 &&
-          execution.BlockedActionsNotExecuted == 1 &&
+          execution.ReviewActionsNotExecuted == 8 &&
+          execution.BlockedActionsNotExecuted == 2 &&
           !execution.AutomaticTopologyMutationPerformed,
         "recovery executor performs only ready copy-out actions");
 
@@ -1766,6 +2029,33 @@ try
     _ = await new RollbackSessionLifecycleStore(pendingTruncateSession.Root)
         .MarkCompletedAsync("synthetic-invalid-truncate-completed");
 
+    var pendingDeleteSession = retentionRepo.CreateSession("pending_delete_completed");
+    var pendingDeleteOps = new DeleteOperationStore(
+        Path.Combine(pendingDeleteSession.Root, "delete-state"));
+    var retentionPendingDeleteIntent = await pendingDeleteOps.RecordIntentAsync(
+        12003,
+        Path.Combine(retentionSource, "pending-delete.bin"),
+        DeleteOperationStore.FileDispositionInformationEx,
+        DeleteOperationStore.FileDispositionDelete,
+        new DurableFileIdentity(new string('3', 16), new string('4', 32)),
+        true,
+        string.Empty);
+    _ = await pendingDeleteOps.RecordCompletionAsync(
+        retentionPendingDeleteIntent.RequestSequence,
+        DeleteDispositionCompletionState.AcceptedDeletePending,
+        0,
+        0,
+        true,
+        null);
+    _ = await pendingDeleteOps.RecordFinalizationAsync(
+        retentionPendingDeleteIntent,
+        DeleteFinalizationSource.KernelCleanup,
+        DeleteFinalizationState.CleanupObserved,
+        RestartPathState.QueryFailed,
+        null);
+    _ = await new RollbackSessionLifecycleStore(pendingDeleteSession.Root)
+        .MarkCompletedAsync("synthetic-invalid-delete-completed");
+
     var retentionPlanHeld = RollbackRetentionPlanner.Build(retentionRepoRoot);
     Check(retentionPlanHeld.Actions.Any(x =>
               x.Kind == RollbackRetentionActionKind.PurgeCompletedSession &&
@@ -1774,17 +2064,21 @@ try
           !retentionPlanHeld.Actions.Any(x => x.SessionId == "active_session") &&
           !retentionPlanHeld.Actions.Any(x => x.SessionId == "faulted_session") &&
           !retentionPlanHeld.Actions.Any(x => x.SessionId == "pending_completed") &&
-          !retentionPlanHeld.Actions.Any(x => x.SessionId == "pending_truncate_completed"),
+          !retentionPlanHeld.Actions.Any(x => x.SessionId == "pending_truncate_completed") &&
+          !retentionPlanHeld.Actions.Any(x => x.SessionId == "pending_delete_completed"),
         "retention planner selects only eligible completed unheld sessions");
     Check(retentionPlanHeld.HeldSessions == 1 &&
-          retentionPlanHeld.ProtectedSessions >= 4 &&
+          retentionPlanHeld.ProtectedSessions >= 5 &&
           retentionPlanHeld.Issues.Any(x =>
               x.SessionId == "pending_completed" &&
-              x.Reason.Contains("pending CREATE/RENAME/TRUNCATE", StringComparison.Ordinal)) &&
+              x.Reason.Contains("pending CREATE/RENAME/TRUNCATE/DELETE", StringComparison.Ordinal)) &&
           retentionPlanHeld.Issues.Any(x =>
               x.SessionId == "pending_truncate_completed" &&
-              x.Reason.Contains("pending CREATE/RENAME/TRUNCATE", StringComparison.Ordinal)),
-        "retention planner protects pending CREATE and TRUNCATE transaction sessions");
+              x.Reason.Contains("pending CREATE/RENAME/TRUNCATE/DELETE", StringComparison.Ordinal)) &&
+          retentionPlanHeld.Issues.Any(x =>
+              x.SessionId == "pending_delete_completed" &&
+              x.Reason.Contains("pending CREATE/RENAME/TRUNCATE/DELETE", StringComparison.Ordinal)),
+        "retention planner protects pending CREATE, TRUNCATE and cleanup-only DELETE transaction sessions");
 
     var staleRetentionPlan = retentionPlanHeld;
     _ = await oldLifecycle.SetHoldAsync("temporary-hold-after-plan");

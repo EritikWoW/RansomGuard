@@ -335,6 +335,8 @@ public static class RollbackRecoveryPlanner
                             "DELETE intent has no authoritative disposition completion, but a later handle-scoped disposition superseded/cancelled it. Manual review remains required because the missing completion is not reconstructed.",
                         DeleteFinalizationAssessmentState.Unresolved =>
                             "DELETE intent has no authoritative disposition completion and finalization evidence is ambiguous or conflicting.",
+                        DeleteFinalizationAssessmentState.CleanupObservedOnly =>
+                            "DELETE intent has no authoritative disposition completion. Exact-handle cleanup is durable, but pathname topology has not yet been proven by a live/restart probe.",
                         _ =>
                             "DELETE intent has no authoritative disposition completion and no durable finalization evidence."
                     };
@@ -400,6 +402,8 @@ public static class RollbackRecoveryPlanner
                         "DELETE disposition was accepted, then a later handle-scoped disposition superseded/cancelled it. Manual review is required; topology remains untouched.",
                     DeleteFinalizationAssessmentState.Unresolved =>
                         "DELETE disposition was accepted, but finalization evidence is ambiguous or conflicting. Topology recovery is blocked.",
+                    DeleteFinalizationAssessmentState.CleanupObservedOnly =>
+                        "DELETE disposition was accepted and exact-handle cleanup is durable, but pathname topology has not yet been proven. Topology recovery is blocked.",
                     _ =>
                         "DELETE disposition was accepted, but no handle-cleanup/restart finalization evidence is durable yet. Topology recovery is blocked."
                 };

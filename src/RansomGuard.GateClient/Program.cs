@@ -915,6 +915,125 @@ static class TruncateReconciliation
     private static bool NtSuccess(uint status) => (status & 0x80000000u) == 0;
 }
 
+static class DeleteReconciliation
+{
+    private const uint DeletePendingFlag = 0x00000004;
+    private const uint DeleteCancelledFlag = 0x00000008;
+    private const uint DeleteCleanupFlag = 0x00000010;
+    private const uint DeleteStateResolvedFlag = 0x00000020;
+
+    public static async Task<DeleteDispositionCompletion> HandleDispositionAsync(
+        RgEvent ev,
+        DeleteOperationStore store,
+        CancellationToken cancellationToken)
+    {
+        if (ev.ProtocolVersion != 15 || ev.RelatedSequence == 0)
+            throw new InvalidDataException("Invalid DELETE disposition completion correlation.");
+
+        var intent = store.Intents.SingleOrDefault(x => x.RequestSequence == ev.RelatedSequence)
+            ?? throw new InvalidDataException("DELETE disposition result has no committed intent.");
+        if (ev.FileInformationClass != intent.FileInformationClass)
+            throw new InvalidDataException("DELETE disposition result information class does not match its intent.");
+
+        if (!NtSuccess(ev.CompletionStatus))
+        {
+            return await store.RecordCompletionAsync(
+                    ev.RelatedSequence,
+                    DeleteDispositionCompletionState.Failed,
+                    ev.CompletionStatus,
+                    ev.CompletionInformation,
+                    null,
+                    null,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        DurableFileIdentity? identity = null;
+        if (ev.IdentityStatus == (uint)RgIdentityStatus.Resolved &&
+            (ev.VolumeSerialNumber != 0 || ev.FileIdLow != 0 || ev.FileIdHigh != 0))
+        {
+            identity = new DurableFileIdentity(
+                ev.VolumeSerialNumber.ToString("X16"),
+                ev.FileIdLow.ToString("X16") + ev.FileIdHigh.ToString("X16"));
+        }
+
+        var stateResolved = (ev.Flags & DeleteStateResolvedFlag) != 0;
+        bool? deletePending = stateResolved
+            ? (ev.Flags & DeletePendingFlag) != 0
+            : null;
+
+        var state = deletePending switch
+        {
+            true => DeleteDispositionCompletionState.AcceptedDeletePending,
+            false => DeleteDispositionCompletionState.AcceptedDeleteNotPending,
+            null => DeleteDispositionCompletionState.AcceptedStateUnresolved
+        };
+
+        return await store.RecordCompletionAsync(
+                ev.RelatedSequence,
+                state,
+                ev.CompletionStatus,
+                ev.CompletionInformation,
+                deletePending,
+                identity,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public static async Task<DeleteFinalizationObservation> HandleFinalizationAsync(
+        RgEvent ev,
+        DeleteOperationStore store,
+        CancellationToken cancellationToken)
+    {
+        if (ev.ProtocolVersion != 15 || ev.RelatedSequence == 0)
+            throw new InvalidDataException("Invalid DELETE finalization correlation.");
+
+        var intent = store.Intents.SingleOrDefault(x => x.RequestSequence == ev.RelatedSequence)
+            ?? throw new InvalidDataException("DELETE finalization has no committed intent.");
+
+        if ((ev.Flags & DeleteCancelledFlag) != 0)
+        {
+            return await store.RecordFinalizationAsync(
+                    intent,
+                    DeleteFinalizationSource.DispositionCancellation,
+                    DeleteFinalizationState.Cancelled,
+                    RestartPathState.QueryFailed,
+                    null,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        if ((ev.Flags & DeleteCleanupFlag) == 0)
+            throw new InvalidDataException("DELETE finalization is neither cancellation nor cleanup evidence.");
+
+        if (!NtSuccess(ev.CompletionStatus))
+        {
+            return await store.RecordFinalizationAsync(
+                    intent,
+                    DeleteFinalizationSource.KernelCleanup,
+                    DeleteFinalizationState.Ambiguous,
+                    RestartPathState.QueryFailed,
+                    null,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        var current = PathProbe.ObserveForRestart(intent.OriginalPath);
+        var state = DeleteOperationStore.ClassifyPathObservation(
+            intent, current.State, current.Identity);
+        return await store.RecordFinalizationAsync(
+                intent,
+                DeleteFinalizationSource.KernelCleanup,
+                state,
+                current.State,
+                current.Identity,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static bool NtSuccess(uint status) => (status & 0x80000000u) == 0;
+}
+
 static class GateMessagePolicy
 {
     public static bool RequiresReply(RgEventType type) =>

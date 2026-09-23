@@ -145,6 +145,52 @@ function Wait-StressGroup([object[]]$Group,[int]$Seconds,[string]$Phase){
     }
 }
 
+function Wait-StressGroupAllowAccessDenied([object[]]$Group,[int]$Seconds,[string]$Phase){
+    $deadline=(Get-Date).AddSeconds($Seconds)
+    while((Get-Date) -lt $deadline){
+        $running=@($Group | Where-Object {-not $_.Process.HasExited})
+        if($running.Count -eq 0){break}
+        Start-Sleep -Milliseconds 100
+    }
+
+    $still=@($Group | Where-Object {-not $_.Process.HasExited})
+    if($still.Count -gt 0){
+        foreach($item in $still){
+            Stop-Process -Id $item.Process.Id -Force -ErrorAction SilentlyContinue
+        }
+        throw "$Phase admission probe timed out with $($still.Count) helper process(es) still running."
+    }
+
+    $allowed=@()
+    $denied=@()
+    $unexpected=@()
+    foreach($item in $Group){
+        if($item.Process.ExitCode -eq 0){
+            $allowed+=@($item)
+            continue
+        }
+
+        $err=if(Test-Path -LiteralPath $item.Err){Get-Content -LiteralPath $item.Err -Raw}else{''}
+        if($item.Process.ExitCode -eq 20 -and
+           $err -match 'Win32Error:\s*5' -and
+           $err -match 'CreateFileW\(CREATE_NEW\) failed'){
+            $denied+=@($item)
+            continue
+        }
+
+        $unexpected+=("$($item.Name):exit=$($item.Process.ExitCode):$err")
+    }
+
+    if($unexpected.Count -gt 0){
+        throw "$Phase admission probe had unexpected helper failures: $($unexpected -join ' | ')"
+    }
+
+    return [pscustomobject]@{
+        Allowed=@($allowed)
+        Denied=@($denied)
+    }
+}
+
 function Start-Helper([string]$Name,[string[]]$Arguments){
     $safeName=$Name -replace '[^A-Za-z0-9_.-]','_'
     $out=Join-Path $ResultsDirectory ("helper-$safeName.out.log")
@@ -233,6 +279,33 @@ function Assert-CreateEvidence([string[]]$Targets,[object[]]$Intents,[object[]]$
         })
         if($completion.Count -ne 1 -or -not(Nt-Success $completion[0].completionStatus)){
             throw "CREATE stress completion is missing/failed for $target request=$request"
+        }
+    }
+}
+
+function Assert-OverflowDeniedEvidence(
+    [string[]]$Targets,
+    [object[]]$Intents,
+    [object[]]$Completions
+){
+    foreach($target in $Targets){
+        if(Test-Path -LiteralPath $target){
+            throw "Admission-overflow target must remain absent after fail-closed denial: $target"
+        }
+        $key=Path-Key $target
+        $intent=@($Intents | Where-Object {
+            -not [string]::IsNullOrWhiteSpace([string]$_.originalPath) -and
+            (Path-Key ([string]$_.originalPath)) -eq $key
+        })
+        if($intent.Count -ne 0){
+            throw "Admission-overflow denial unexpectedly reached durable CREATE intent handling: $target"
+        }
+        $completion=@($Completions | Where-Object {
+            -not [string]::IsNullOrWhiteSpace([string]$_.finalPath) -and
+            (Path-Key ([string]$_.finalPath)) -eq $key
+        })
+        if($completion.Count -ne 0){
+            throw "Admission-overflow denial unexpectedly produced CREATE completion evidence: $target"
         }
     }
 }
@@ -381,6 +454,11 @@ $summary=[ordered]@{
     parallelism=$Parallelism
     gateWorkers=8
     kernelGateCap=8
+    qualificationParallelism=8
+    admissionOverflowPassed=$false
+    overflowRounds=0
+    overflowAllowed=0
+    overflowDenied=0
     createPassed=$false
     renamePassed=$false
     truncatePassed=$false
@@ -406,14 +484,17 @@ try{
     New-Item -ItemType Directory -Path $root,$store -Force | Out-Null
     Prepare-GateRoot $gateExe $root
 
+    $overflowAllowedTargets=@()
+    $overflowDeniedTargets=@()
     $createTargets=@()
     $renameSources=@()
     $renameDestinations=@()
     $truncateTargets=@()
     $deleteTargets=@()
     $mappedTargets=@()
+    $qualificationParallelism=8
 
-    for($i=0;$i -lt $Parallelism;$i++){
+    for($i=0;$i -lt $qualificationParallelism;$i++){
         $createTargets+=Join-Path $root ("create-{0:D2}.bin" -f $i)
 
         $renameSource=Join-Path $root ("rename-source-{0:D2}.bin" -f $i)
@@ -449,20 +530,60 @@ try{
     Wait-LogPattern $gateOut 'Bounded gate workers\s*:\s*8' $gate 45
     Wait-LogPattern $gateOut 'kernel gate ACTIVE' $gate 45
 
+    $overflowRound=0
+    while($overflowRound -lt 3 -and $overflowDeniedTargets.Count -eq 0){
+        $overflowRound++
+        $group=@()
+        $roundTargets=@()
+        for($i=0;$i -lt $Parallelism;$i++){
+            $target=Join-Path $root ("overflow-r{0:D2}-{1:D2}.bin" -f $overflowRound,$i)
+            $roundTargets+=@($target)
+            $item=Start-Helper ("overflow-r{0:D2}-{1:D2}" -f $overflowRound,$i) @(
+                'create-new','--file',(Quote-Arg $target))
+            $group+=@($item)
+            $allHelpers.Add($item)
+        }
+
+        $probe=Wait-StressGroupAllowAccessDenied $group 60 'CREATE overflow'
+        for($i=0;$i -lt $group.Count;$i++){
+            $item=$group[$i]
+            $target=$roundTargets[$i]
+            if($item.Process.ExitCode -eq 0){
+                if(-not(Test-Path -LiteralPath $target -PathType Leaf)){
+                    throw "Admission probe helper succeeded but CREATE target is missing: $target"
+                }
+                $overflowAllowedTargets+=@($target)
+            }else{
+                if(Test-Path -LiteralPath $target){
+                    throw "Admission probe helper was denied but target exists: $target"
+                }
+                $overflowDeniedTargets+=@($target)
+            }
+        }
+        $summary.overflowRounds=$overflowRound
+    }
+
+    if($overflowDeniedTargets.Count -lt 1){
+        throw "Admission overflow probe did not observe a fail-closed denial after $($summary.overflowRounds) round(s) at parallelism=$Parallelism."
+    }
+    $summary.overflowAllowed=$overflowAllowedTargets.Count
+    $summary.overflowDenied=$overflowDeniedTargets.Count
+    $summary.admissionOverflowPassed=$true
+
     $group=@()
-    for($i=0;$i -lt $Parallelism;$i++){
+    for($i=0;$i -lt $qualificationParallelism;$i++){
         $item=Start-Helper ("create-{0:D2}" -f $i) @('create-new','--file',(Quote-Arg $createTargets[$i]))
         $group+=$item
         $allHelpers.Add($item)
     }
-    Wait-StressGroup $group 60 'CREATE'
+    Wait-StressGroup $group 60 'CREATE qualification'
     foreach($path in $createTargets){
-        if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "CREATE stress target missing after helper success: $path"}
+        if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "CREATE qualification target missing after helper success: $path"}
     }
     $summary.createPassed=$true
 
     $group=@()
-    for($i=0;$i -lt $Parallelism;$i++){
+    for($i=0;$i -lt $qualificationParallelism;$i++){
         $item=Start-Helper ("rename-{0:D2}" -f $i) @(
             'rename-file','--source',(Quote-Arg $renameSources[$i]),
             '--destination',(Quote-Arg $renameDestinations[$i]))
@@ -470,7 +591,7 @@ try{
         $allHelpers.Add($item)
     }
     Wait-StressGroup $group 60 'RENAME'
-    for($i=0;$i -lt $Parallelism;$i++){
+    for($i=0;$i -lt $qualificationParallelism;$i++){
         if((Test-Path -LiteralPath $renameSources[$i]) -or
            -not(Test-Path -LiteralPath $renameDestinations[$i] -PathType Leaf)){
             throw "RENAME stress topology mismatch at index $i."
@@ -481,7 +602,7 @@ try{
     $group=@()
     $ready=@()
     $go=@()
-    for($i=0;$i -lt $Parallelism;$i++){
+    for($i=0;$i -lt $qualificationParallelism;$i++){
         $readyPath=Join-Path $ResultsDirectory ("truncate-{0:D2}.ready" -f $i)
         $goPath=Join-Path $ResultsDirectory ("truncate-{0:D2}.go" -f $i)
         $ready+=$readyPath
@@ -503,7 +624,7 @@ try{
     $group=@()
     $ready=@()
     $go=@()
-    for($i=0;$i -lt $Parallelism;$i++){
+    for($i=0;$i -lt $qualificationParallelism;$i++){
         $readyPath=Join-Path $ResultsDirectory ("delete-{0:D2}.ready" -f $i)
         $goPath=Join-Path $ResultsDirectory ("delete-{0:D2}.go" -f $i)
         $ready+=$readyPath
@@ -527,7 +648,7 @@ try{
     $summary.deletePassed=$true
 
     $group=@()
-    for($i=0;$i -lt $Parallelism;$i++){
+    for($i=0;$i -lt $qualificationParallelism;$i++){
         $item=Start-Helper ("mapped-{0:D2}" -f $i) @('map-write','--file',(Quote-Arg $mappedTargets[$i]))
         $group+=$item
         $allHelpers.Add($item)
@@ -568,7 +689,9 @@ try{
     Assert-NoPendingTransactions $deleteIntents $deleteCompletions 'DELETE disposition store'
     $summary.noPendingTransactionsPassed=$true
 
-    Assert-CreateEvidence $createTargets $createIntents $createCompletions
+    $allSuccessfulCreateTargets=@($overflowAllowedTargets)+@($createTargets)
+    Assert-CreateEvidence $allSuccessfulCreateTargets $createIntents $createCompletions
+    Assert-OverflowDeniedEvidence $overflowDeniedTargets $createIntents $createCompletions
     Assert-RenameEvidence $renameSources $renameDestinations $renameIntents $renameCompletions
     Assert-TruncateEvidence $truncateTargets $truncateIntents $truncateCompletions
     Assert-DeleteEvidence $deleteTargets $deleteIntents $deleteCompletions $deleteFinalizations
@@ -576,7 +699,8 @@ try{
 
     $summary.transactionCorrelationPassed=$true
     $summary.preimageHashPassed=$true
-    $summary.passed=$summary.createPassed -and $summary.renamePassed -and
+    $summary.passed=$summary.admissionOverflowPassed -and
+        $summary.createPassed -and $summary.renamePassed -and
         $summary.truncatePassed -and $summary.deletePassed -and
         $summary.mappedWritePassed -and $summary.transactionCorrelationPassed -and
         $summary.noPendingTransactionsPassed -and $summary.preimageHashPassed -and
@@ -614,4 +738,4 @@ if(-not $summary.passed){
     throw "Concurrency stress failed. error='$($summary.error)' cleanup='$($summary.cleanupError)' Evidence: $ResultsDirectory"
 }
 
-Write-Host "CONCURRENCY STRESS LAB PASSED. parallelism=$Parallelism gate-workers=8 kernel-cap=8. Evidence: $ResultsDirectory" -ForegroundColor Green
+Write-Host "CONCURRENCY STRESS LAB PASSED. overflow-width=$Parallelism denied=$($summary.overflowDenied) allowed=$($summary.overflowAllowed); qualification-parallelism=8; gate-workers=8 kernel-cap=8. Evidence: $ResultsDirectory" -ForegroundColor Green

@@ -97,6 +97,9 @@ foreach($required in @(
   'TruncateEndOfFile(',
   'SetFileInformationByHandle(',
   'FileEndOfFileInfo',
+  'readyMarker',
+  'goMarker',
+  'Timed out waiting for durable CREATE completion before TRUNCATE.',
   'exactly one successful EOF mutation followed by a deliberately lost TruncateResult'
 )){
   if($helper -notmatch [regex]::Escape($required)){throw "RuntimeHarness TRUNCATE completion-loss trigger invariant missing: $required"}
@@ -155,6 +158,9 @@ foreach($required in @(
   "'--drop-first-truncate-completion'",
   "'truncate-eof'",
   'TRUNCATE EOF must complete before completion evidence is intentionally dropped',
+  'Wait-File $truncateReady $truncateTrigger 30',
+  "Wait-LogPattern $truncateGateOut 'CreateResult\s+request=' $truncateGate 30",
+  "Set-Content -LiteralPath $truncateGo -Value 'go'",
   'truncate-state\truncate-intent-journal.jsonl',
   'truncate-state\truncate-completion-journal.jsonl',
   'truncate-state\truncate-restart-journal.jsonl',

@@ -80,7 +80,15 @@ foreach($required in @(
     '$summary.passed=$summary.ntfsPassed',
     '((-not $summary.refsSupported) -or $summary.refsPassed)',
     'cleanupPassed=$true',
-    'FILESYSTEM MATRIX LAB PASSED'
+    'FILESYSTEM MATRIX LAB PASSED',
+    '$prepareOutput=@(& $GateExe --root $Root --prepare-root 2>&1)',
+    "& $installScript -Volume $volume -PackageDirectory $DriverPackageDirectory -Confirmation 'LAB-MINIFILTER' | Out-Host",
+    '& $helperExe create-new --file $createTarget | Out-Host',
+    '& $helperExe rename-file --source $renameSource --destination $renameDestination | Out-Host',
+    '& $helperExe map-write --file $mappedTarget | Out-Host',
+    'return [pscustomobject][ordered]@{',
+    '$scenario -is [Array]',
+    'filesystem matrix scenario must return exactly one structured result object.'
 )){
     if($script -notmatch [regex]::Escape($required)){
         throw "Filesystem matrix invariant missing: $required"
@@ -116,6 +124,24 @@ if($script -match '(?im)\bFormat-Volume\b[^\r\n]*-DriveLetter\s+[A-Z](?:\s|$)'){
 }
 if($script -notmatch [regex]::Escape('$vhdPath=Join-Path $ScratchDirectory')){
     throw 'Disposable VHD must be created under the guarded scratch directory.'
+}
+
+$scenarioFunctionStart=$script.IndexOf('function Run-FileSystemScenario(')
+$scenarioFunctionEnd=$script.IndexOf('Assert-Administrator',$scenarioFunctionStart)
+if($scenarioFunctionStart -lt 0 -or $scenarioFunctionEnd -lt 0){
+    throw 'Filesystem matrix scenario function bounds are missing.'
+}
+$scenarioFunction=$script.Substring(
+    $scenarioFunctionStart,
+    $scenarioFunctionEnd-$scenarioFunctionStart)
+foreach($unsafeOutput in @(
+    '& $helperExe create-new --file $createTarget' + [Environment]::NewLine,
+    '& $helperExe rename-file --source $renameSource --destination $renameDestination' + [Environment]::NewLine,
+    '& $helperExe map-write --file $mappedTarget' + [Environment]::NewLine
+)){
+    if($scenarioFunction.Contains($unsafeOutput)){
+        throw 'Runtime helper stdout must not leak into Run-FileSystemScenario structured return values.'
+    }
 }
 if($script -notmatch [regex]::Escape('if($full -notmatch ''(?i)RansomGuard'')')){
     throw 'Scratch/results paths must retain the explicit RansomGuard name guard.'

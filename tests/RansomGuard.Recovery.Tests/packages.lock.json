@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "ransomguard.core": {
+        "type": "Project"
+      },
+      "RansomGuard.CryptoRecovery": {
+        "type": "Project"
+      }
+    }
+  }
+}

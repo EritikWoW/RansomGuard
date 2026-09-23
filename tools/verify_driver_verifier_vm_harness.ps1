@@ -10,7 +10,7 @@ $workflow=Get-Content -LiteralPath (Join-Path $repo '.github\workflows\minifilte
 foreach($required in @(
     "TargetDriver='RansomGuardMinifilter.sys'",
     '$StandardMask=[uint32]0x000209BB',
-    "Invoke-Verifier @('/standard','/driver',$TargetDriver)",
+    'Invoke-Verifier @(''/standard'',''/driver'',$TargetDriver)',
     "Invoke-Verifier @('/bootmode','oneboot')",
     'VerifyDrivers',
     'VerifyDriverLevel',
@@ -41,7 +41,7 @@ foreach($required in @(
     'noBugcheckAfterStress',
     "Invoke-Verifier @('/reset')",
     'persistentSettingsCleared',
-    "phase=if($summary.stressPassed -and $summary.noBugcheckAfterStress){'runtime-reset'}else{'runtime-failed-reset'}",
+    'phase=if($summary.stressPassed -and $summary.noBugcheckAfterStress){''runtime-reset''}else{''runtime-failed-reset''}',
     'resetStateDurable',
     'rebootRequired'
 )){
@@ -122,7 +122,7 @@ if($runtime -notmatch [regex]::Escape('Driver Verifier current activity did not 
 if($runtime -notmatch [regex]::Escape('Driver Verifier stress invariant')){
     throw 'Driver Verifier runtime must require the bounded concurrency stress evidence contract.'
 }
-if($clear -notmatch [regex]::Escape("Driver Verifier current activity still names '$TargetDriver'")){
+if($clear -notmatch [regex]::Escape('Driver Verifier current activity still names ''$TargetDriver''')){
     throw 'Driver Verifier CLEAR must prove current verification activity is gone after the reset reboot.'
 }
 

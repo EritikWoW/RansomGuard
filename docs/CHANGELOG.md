@@ -1,3 +1,14 @@
+# RansomGuard 0.7.28.0
+
+- Added a separate manual disposable-VM concurrency stress campaign without changing minifilter protocol v15.
+- GateClient runs with the maximum 8 user-mode workers while each phase launches 16 independent helpers, deliberately exceeding the kernel cap of 8 simultaneous blocking gate requests.
+- Stress phases cover CREATE, RENAME, barrier-synchronized EOF TRUNCATE, barrier-synchronized DELETE and mapped-write operations on distinct protected files.
+- Durable evidence validation is target-specific rather than count-only: every CREATE/RENAME/TRUNCATE/DELETE operation must bind to exactly one matching intent/request and one authoritative successful completion; each delete must also reach durable DeletedObserved topology finalization.
+- Mapped-write stress requires a committed full pre-image for every target, verifies the stored object SHA-256 against the journal, and requires BaselineVerified writable-section plus paging-write evidence.
+- Added a source gate that parses and validates the stress harness/workflow, requires default parallelism 16 > gate cap 8, and forbids formatting, reboot/shutdown, boot-policy or Driver Verifier commands in this milestone.
+- Added a dedicated manual `Minifilter concurrency stress VM lab` workflow using the exact checked-out commit, signed LAB driver provenance, bounded cleanup and evidence artifact upload.
+- Bumped userspace/LAB and driver package version to 0.7.28.0.
+
 # RansomGuard 0.7.27.0
 
 - Hardened build reproducibility without changing minifilter protocol v15.

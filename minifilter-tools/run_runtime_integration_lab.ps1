@@ -130,6 +130,66 @@ function Wait-JournalMatch(
     throw "Timed out waiting for $Description in $Path"
 }
 
+function Read-JsonJournal([string]$Path,[string]$Description){
+    if(-not(Test-Path -LiteralPath $Path -PathType Leaf)){
+        throw "Missing $Description journal: $Path"
+    }
+    $records=@()
+    foreach($line in Get-Content -LiteralPath $Path){
+        if([string]::IsNullOrWhiteSpace($line)){continue}
+        try{$records+=@($line | ConvertFrom-Json -Depth 30)}
+        catch{throw "Invalid JSON in $Description journal '$Path': $($_.Exception.Message)"}
+    }
+    if($records.Count -eq 0){throw "$Description journal is empty: $Path"}
+    return @($records)
+}
+
+function Wait-StressProcesses([object[]]$Entries,[int]$Seconds){
+    $deadline=(Get-Date).AddSeconds($Seconds)
+    foreach($entry in $Entries){
+        $remaining=[int][Math]::Max(0,[Math]::Ceiling(($deadline-(Get-Date)).TotalMilliseconds))
+        if(-not $entry.Process.WaitForExit($remaining)){
+            throw "Concurrency stress process timed out: kind=$($entry.Kind) index=$($entry.Index) pid=$($entry.Process.Id)"
+        }
+        if($entry.Process.ExitCode -ne 0){
+            $err=if(Test-Path -LiteralPath $entry.StdErr){Get-Content -LiteralPath $entry.StdErr -Raw -ErrorAction SilentlyContinue}else{''}
+            throw "Concurrency stress process failed: kind=$($entry.Kind) index=$($entry.Index) exit=$($entry.Process.ExitCode). $err"
+        }
+    }
+}
+
+function Assert-CorrelatedJournalPair(
+    [object[]]$Intents,
+    [object[]]$Completions,
+    [string]$Description,
+    [int]$ExactCount=0,
+    [int]$MinimumCount=1
+){
+    if($ExactCount -gt 0 -and ($Intents.Count -ne $ExactCount -or $Completions.Count -ne $ExactCount)){
+        throw "$Description expected exactly $ExactCount intents/completions. intents=$($Intents.Count) completions=$($Completions.Count)"
+    }
+    if($Intents.Count -lt $MinimumCount){
+        throw "$Description produced too few intents: $($Intents.Count), minimum=$MinimumCount"
+    }
+
+    $intentSet=[Collections.Generic.HashSet[uint64]]::new()
+    foreach($record in $Intents){
+        $seq=[uint64]$record.requestSequence
+        if($seq -eq 0 -or -not $intentSet.Add($seq)){throw "$Description contains duplicate/zero intent requestSequence=$seq"}
+    }
+    $completionSet=[Collections.Generic.HashSet[uint64]]::new()
+    foreach($record in $Completions){
+        $seq=[uint64]$record.requestSequence
+        if($seq -eq 0 -or -not $completionSet.Add($seq)){throw "$Description contains duplicate/zero completion requestSequence=$seq"}
+    }
+    if($intentSet.Count -ne $completionSet.Count){
+        throw "$Description intent/completion set size mismatch: intents=$($intentSet.Count) completions=$($completionSet.Count)"
+    }
+    foreach($seq in $intentSet){
+        if(-not $completionSet.Contains($seq)){throw "$Description missing completion for requestSequence=$seq"}
+    }
+}
+
 function New-TestFile([string]$Path){
     $parent=Split-Path -Parent $Path
     New-Item -ItemType Directory -Path $parent -Force | Out-Null
@@ -222,11 +282,13 @@ $preRoot=Join-Path $RootBase "preexisting-$stamp"
 $postRoot=Join-Path $RootBase "postactivation-$stamp"
 $containRoot=Join-Path $RootBase "containment-$stamp"
 $transitionRoot=Join-Path $RootBase "containment-transition-$stamp"
+$stressRoot=Join-Path $RootBase "concurrency-stress-$stamp"
 $dirStore=Join-Path $ResultsDirectory 'predirectory-store'
 $preStore=Join-Path $ResultsDirectory 'preexisting-store'
 $postStore=Join-Path $ResultsDirectory 'postactivation-store'
 $containStore=Join-Path $ResultsDirectory 'containment-store'
 $transitionStore=Join-Path $ResultsDirectory 'containment-transition-store'
+$stressStore=Join-Path $ResultsDirectory 'concurrency-stress-store'
 $volume=[IO.Path]::GetPathRoot($RootBase).TrimEnd('\')
 $installScript=Join-Path $PSScriptRoot 'install_minifilter_lab.ps1'
 $unloadScript=Join-Path $PSScriptRoot 'unload_minifilter_lab.ps1'
@@ -253,6 +315,14 @@ $summary=[ordered]@{
     transitionRequested=$false
     transitionKernelActive=$false
     transitionDeniedNextWrite=$false
+    concurrencyStressPassed=$false
+    concurrencyCreateCorrelated=$false
+    concurrencyRenameCorrelated=$false
+    concurrencyTruncateCorrelated=$false
+    concurrencyDeleteCorrelated=$false
+    concurrencyMappedEvidence=$false
+    concurrencyGateWorkers=4
+    concurrencyProcessCount=20
     cleanupPassed=$false
     cleanupError=$null
     passed=$false
@@ -266,12 +336,15 @@ $gatePre=$null
 $gatePost=$null
 $gateContain=$null
 $gateTransition=$null
+$gateStress=$null
 $containProbe=$null
 $transitionProbe=$null
 $dirRelease=$null
 $release=$null
 $containGo=$null
 $transitionGo=$null
+$stressProcesses=@()
+$stressGoMarkers=@()
 $runtimeFailure=$null
 $cleanupFailure=$null
 try{
@@ -567,6 +640,217 @@ try{
     Wait-LogPattern $transitionOut 'LAB CONTAINMENT ACTIVE' $gateTransition 30
     $transitionProbe=$null
 
+    # Scenario 5: mixed high-concurrency stress. The kernel admits at most 8 blocking
+    # gate requests while GateClient is explicitly fixed at 4 workers. TRUNCATE and
+    # DELETE helpers first prove their write/delete-capable CREATE completion, then
+    # all destructive SetInformation operations are released into the same burst.
+    Stop-LabProcess $gateTransition 'event-bound containment gate'
+    $gateTransition=$null
+
+    Prepare-GateRoot $gateExe $stressRoot
+    $stressCount=4
+    $renameSources=@()
+    $renameDestinations=@()
+    $truncateFiles=@()
+    $deleteFiles=@()
+    $mappedFiles=@()
+    $mappedOriginalHashes=@{}
+    for($i=0;$i -lt $stressCount;$i++){
+        $renameSource=Join-Path $stressRoot ("rename-source-{0:D2}.bin" -f $i)
+        $renameDestination=Join-Path $stressRoot ("rename-destination-{0:D2}.bin" -f $i)
+        $truncateFile=Join-Path $stressRoot ("truncate-{0:D2}.bin" -f $i)
+        $deleteFile=Join-Path $stressRoot ("delete-{0:D2}.bin" -f $i)
+        $mappedFile=Join-Path $stressRoot ("mapped-{0:D2}.bin" -f $i)
+        New-TestFile $renameSource
+        New-TestFile $truncateFile
+        New-TestFile $deleteFile
+        New-TestFile $mappedFile
+        $renameSources+=@($renameSource)
+        $renameDestinations+=@($renameDestination)
+        $truncateFiles+=@($truncateFile)
+        $deleteFiles+=@($deleteFile)
+        $mappedFiles+=@($mappedFile)
+        $mappedOriginalHashes[$mappedFile]=(Get-FileHash -LiteralPath $mappedFile -Algorithm SHA256).Hash
+    }
+
+    $stressOut=Join-Path $ResultsDirectory 'concurrency-stress-gate.out.log'
+    $stressErr=$stressOut+'.err'
+    $gateStress=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $stressRoot),
+        '--store',(Quote-Arg $stressStore),
+        '--session','concurrency-stress',
+        '--gate-workers','4'
+    ) $stressOut $stressErr
+    Wait-LogPattern $stressOut 'Bounded gate workerss+: 4' $gateStress 45
+    Wait-LogPattern $stressOut 'kernel gate ACTIVE' $gateStress 45
+
+    $stressSession=Join-Path $stressStore 'Sessionsconcurrency-stress'
+    $createCompletionJournal=Join-Path $stressSession 'create-statecreate-completion-journal.jsonl'
+
+    # Hold 8 mutation-capable handles after their CREATEs have reached durable completion.
+    for($i=0;$i -lt $stressCount;$i++){
+        $truncateReady=Join-Path $ResultsDirectory ("stress-truncate-{0:D2}.ready" -f $i)
+        $truncateGo=Join-Path $ResultsDirectory ("stress-truncate-{0:D2}.go" -f $i)
+        $truncateOut=Join-Path $ResultsDirectory ("stress-truncate-{0:D2}.out.log" -f $i)
+        $truncateErr=Join-Path $ResultsDirectory ("stress-truncate-{0:D2}.err.log" -f $i)
+        $p=Start-LoggedProcess $helperExe @(
+            'truncate-eof','--file',(Quote-Arg $truncateFiles[$i]),'--length','4096',
+            '--ready',(Quote-Arg $truncateReady),'--go',(Quote-Arg $truncateGo)
+        ) $truncateOut $truncateErr
+        $stressProcesses+=@([pscustomobject]@{Kind='truncate';Index=$i;Process=$p;StdErr=$truncateErr})
+        $stressGoMarkers+=@($truncateGo)
+
+        $deleteReady=Join-Path $ResultsDirectory ("stress-delete-{0:D2}.ready" -f $i)
+        $deleteGo=Join-Path $ResultsDirectory ("stress-delete-{0:D2}.go" -f $i)
+        $deleteOut=Join-Path $ResultsDirectory ("stress-delete-{0:D2}.out.log" -f $i)
+        $deleteErr=Join-Path $ResultsDirectory ("stress-delete-{0:D2}.err.log" -f $i)
+        $p=Start-LoggedProcess $helperExe @(
+            'delete-file','--file',(Quote-Arg $deleteFiles[$i]),
+            '--ready',(Quote-Arg $deleteReady),'--go',(Quote-Arg $deleteGo)
+        ) $deleteOut $deleteErr
+        $stressProcesses+=@([pscustomobject]@{Kind='delete';Index=$i;Process=$p;StdErr=$deleteErr})
+        $stressGoMarkers+=@($deleteGo)
+
+        Wait-Path $truncateReady 30 "stress truncate ready $i"
+        Wait-Path $deleteReady 30 "stress delete ready $i"
+    }
+
+    foreach($path in @($truncateFiles+$deleteFiles)){
+        $null=Wait-JournalMatch $createCompletionJournal {
+            param($x)
+            [string]::Equals([IO.Path]::GetFullPath([string]$x.finalPath),$path,[StringComparison]::OrdinalIgnoreCase) -and
+            [int]$x.state -ne 5
+        } 45 "durable stress CREATE completion for $path"
+    }
+
+    # Add 12 immediate operations, then release all 8 waiting SetInformation calls.
+    for($i=0;$i -lt $stressCount;$i++){
+        $createPath=Join-Path $stressRoot ("created-{0:D2}.bin" -f $i)
+        $out=Join-Path $ResultsDirectory ("stress-create-{0:D2}.out.log" -f $i)
+        $err=Join-Path $ResultsDirectory ("stress-create-{0:D2}.err.log" -f $i)
+        $p=Start-LoggedProcess $helperExe @('create-new','--file',(Quote-Arg $createPath)) $out $err
+        $stressProcesses+=@([pscustomobject]@{Kind='create';Index=$i;Process=$p;StdErr=$err})
+
+        $out=Join-Path $ResultsDirectory ("stress-rename-{0:D2}.out.log" -f $i)
+        $err=Join-Path $ResultsDirectory ("stress-rename-{0:D2}.err.log" -f $i)
+        $p=Start-LoggedProcess $helperExe @(
+            'rename-file','--source',(Quote-Arg $renameSources[$i]),
+            '--destination',(Quote-Arg $renameDestinations[$i])
+        ) $out $err
+        $stressProcesses+=@([pscustomobject]@{Kind='rename';Index=$i;Process=$p;StdErr=$err})
+
+        $out=Join-Path $ResultsDirectory ("stress-map-{0:D2}.out.log" -f $i)
+        $err=Join-Path $ResultsDirectory ("stress-map-{0:D2}.err.log" -f $i)
+        $p=Start-LoggedProcess $helperExe @('map-write','--file',(Quote-Arg $mappedFiles[$i])) $out $err
+        $stressProcesses+=@([pscustomobject]@{Kind='map';Index=$i;Process=$p;StdErr=$err})
+    }
+    foreach($marker in $stressGoMarkers){
+        New-Item -ItemType File -Path $marker -Force | Out-Null
+    }
+
+    Wait-StressProcesses $stressProcesses 90
+    if($gateStress.HasExited){
+        $err=if(Test-Path -LiteralPath $stressErr){Get-Content -LiteralPath $stressErr -Raw -ErrorAction SilentlyContinue}else{''}
+        throw "GateClient exited during concurrency stress. exit=$($gateStress.ExitCode). $err"
+    }
+
+    for($i=0;$i -lt $stressCount;$i++){
+        $created=Join-Path $stressRoot ("created-{0:D2}.bin" -f $i)
+        if(-not(Test-Path -LiteralPath $created -PathType Leaf)){throw "Stress CREATE target missing: $created"}
+        if(Test-Path -LiteralPath $renameSources[$i]){throw "Stress RENAME source still exists: $($renameSources[$i])"}
+        if(-not(Test-Path -LiteralPath $renameDestinations[$i] -PathType Leaf)){throw "Stress RENAME destination missing: $($renameDestinations[$i])"}
+        if((Get-Item -LiteralPath $truncateFiles[$i]).Length -ne 4096){throw "Stress TRUNCATE length mismatch: $($truncateFiles[$i])"}
+        $deleteDeadline=(Get-Date).AddSeconds(10)
+        while((Get-Date) -lt $deleteDeadline -and (Test-Path -LiteralPath $deleteFiles[$i])){Start-Sleep -Milliseconds 100}
+        if(Test-Path -LiteralPath $deleteFiles[$i]){throw "Stress DELETE target still exists: $($deleteFiles[$i])"}
+        $mappedAfterHash=(Get-FileHash -LiteralPath $mappedFiles[$i] -Algorithm SHA256).Hash
+        if([string]::Equals($mappedAfterHash,[string]$mappedOriginalHashes[$mappedFiles[$i]],[StringComparison]::OrdinalIgnoreCase)){
+            throw "Stress mapped-write did not mutate: $($mappedFiles[$i])"
+        }
+    }
+
+    # Wait for the authoritative journals required by the 20-process burst.
+    $renameCompletionJournal=Join-Path $stressSession 'rename-stateename-completion-journal.jsonl'
+    $truncateCompletionJournal=Join-Path $stressSession 'truncate-state	runcate-completion-journal.jsonl'
+    $deleteCompletionJournal=Join-Path $stressSession 'delete-statedelete-completion-journal.jsonl'
+    $deleteFinalizationJournal=Join-Path $stressSession 'delete-statedelete-finalization-journal.jsonl'
+    $sectionJournal=Join-Path $stressSession 'section-statewritable-section-journal.jsonl'
+    $pagingJournal=Join-Path $stressSession 'paging-statepaging-write-journal.jsonl'
+    $rollbackJournal=Join-Path $stressSession 'journal.jsonl'
+
+    for($i=0;$i -lt $stressCount;$i++){
+        $null=Wait-JournalMatch $renameCompletionJournal {
+            param($x)
+            [string]::Equals([IO.Path]::GetFullPath([string]$x.finalDestinationPath),$renameDestinations[$i],[StringComparison]::OrdinalIgnoreCase) -and
+            [int]$x.state -ne 5
+        } 45 "stress RENAME completion $i"
+        $null=Wait-JournalMatch $truncateCompletionJournal {
+            param($x)
+            [int64]$x.observedLength -eq 4096
+        } 45 "stress TRUNCATE completion $i"
+        $deleteCompletion=Wait-JournalMatch $deleteCompletionJournal {
+            param($x)
+            [int]$x.state -ne 1
+        } 45 "stress DELETE completion $i"
+        $null=Wait-JournalMatch $deleteFinalizationJournal {
+            param($x)
+            [uint64]$x.requestSequence -eq [uint64]$deleteCompletion.requestSequence -and
+            [int]$x.state -eq 1
+        } 45 "stress DELETE finalization $i"
+        $null=Wait-JournalMatch $sectionJournal {
+            param($x)
+            [int]$x.state -eq 1 -and
+            [string]::Equals([IO.Path]::GetFullPath([string]$x.trackedPath),$mappedFiles[$i],[StringComparison]::OrdinalIgnoreCase)
+        } 45 "stress writable-section evidence $i"
+        $null=Wait-JournalMatch $pagingJournal {
+            param($x)
+            [uint64]$x.length -gt 0 -and
+            [string]::Equals([IO.Path]::GetFullPath([string]$x.trackedPath),$mappedFiles[$i],[StringComparison]::OrdinalIgnoreCase)
+        } 45 "stress paging-write evidence $i"
+        $capture=Wait-JournalMatch $rollbackJournal {
+            param($x)
+            [string]::Equals([IO.Path]::GetFullPath([string]$x.originalPath),$mappedFiles[$i],[StringComparison]::OrdinalIgnoreCase)
+        } 45 "stress mapped pre-image $i"
+        $snapshot=Join-Path $stressSession ([string]$capture.snapshotRelativePath)
+        if(-not(Test-Path -LiteralPath $snapshot -PathType Leaf)){throw "Stress mapped pre-image object missing: $snapshot"}
+        $snapshotHash=(Get-FileHash -LiteralPath $snapshot -Algorithm SHA256).Hash
+        if(-not [string]::Equals($snapshotHash,[string]$mappedOriginalHashes[$mappedFiles[$i]],[StringComparison]::OrdinalIgnoreCase)){
+            throw "Stress mapped pre-image hash mismatch for $($mappedFiles[$i])"
+        }
+    }
+    $summary.concurrencyMappedEvidence=$true
+
+    $createIntents=Read-JsonJournal (Join-Path $stressSession 'create-statecreate-intent-journal.jsonl') 'stress CREATE intent'
+    $createCompletions=Read-JsonJournal $createCompletionJournal 'stress CREATE completion'
+    Assert-CorrelatedJournalPair $createIntents $createCompletions 'stress CREATE' 0 16
+    $summary.concurrencyCreateCorrelated=$true
+
+    $renameIntents=Read-JsonJournal (Join-Path $stressSession 'rename-stateename-journal.jsonl') 'stress RENAME intent'
+    $renameCompletions=Read-JsonJournal $renameCompletionJournal 'stress RENAME completion'
+    Assert-CorrelatedJournalPair $renameIntents $renameCompletions 'stress RENAME' 4 4
+    $summary.concurrencyRenameCorrelated=$true
+
+    $truncateIntents=Read-JsonJournal (Join-Path $stressSession 'truncate-state	runcate-intent-journal.jsonl') 'stress TRUNCATE intent'
+    $truncateCompletions=Read-JsonJournal $truncateCompletionJournal 'stress TRUNCATE completion'
+    Assert-CorrelatedJournalPair $truncateIntents $truncateCompletions 'stress TRUNCATE' 4 4
+    $summary.concurrencyTruncateCorrelated=$true
+
+    $deleteIntents=Read-JsonJournal (Join-Path $stressSession 'delete-statedelete-intent-journal.jsonl') 'stress DELETE intent'
+    $deleteCompletions=Read-JsonJournal $deleteCompletionJournal 'stress DELETE completion'
+    Assert-CorrelatedJournalPair $deleteIntents $deleteCompletions 'stress DELETE' 4 4
+    $summary.concurrencyDeleteCorrelated=$true
+
+    if(Test-Path -LiteralPath $stressErr){
+        $stressErrors=Get-Content -LiteralPath $stressErr -Raw -ErrorAction SilentlyContinue
+        if($stressErrors -match 'Gate worker failed:'){
+            throw "GateClient reported a worker failure during concurrency stress: $stressErrors"
+        }
+    }
+    $summary.concurrencyStressPassed=$true
+
+    Stop-LabProcess $gateStress 'concurrency stress gate'
+    $gateStress=$null
+
     $summary.passed=$true
 }
 catch{
@@ -589,7 +873,15 @@ finally{
         if($transitionGo){New-Item -ItemType File -Path $transitionGo -Force -ErrorAction SilentlyContinue | Out-Null}
         Stop-Process -Id $transitionProbe.Id -Force -ErrorAction SilentlyContinue
     }
-    foreach($p in @($gateDir,$gatePre,$gatePost,$gateContain,$gateTransition)){
+    foreach($marker in $stressGoMarkers){
+        if($marker){New-Item -ItemType File -Path $marker -Force -ErrorAction SilentlyContinue | Out-Null}
+    }
+    foreach($entry in $stressProcesses){
+        if($entry.Process -and -not $entry.Process.HasExited){
+            Stop-Process -Id $entry.Process.Id -Force -ErrorAction SilentlyContinue
+        }
+    }
+    foreach($p in @($gateDir,$gatePre,$gatePost,$gateContain,$gateTransition,$gateStress)){
         if($p -and -not $p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}
     }
 

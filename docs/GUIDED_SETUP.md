@@ -1,6 +1,6 @@
-# RansomGuard 0.7.1.0 - guided setup
+# RansomGuard 0.7.27.0 - guided setup
 
-This update changes administrative presentation. It does not enable automatic
+This document describes the current audit-only guided setup. It does not enable automatic
 blocking, install/load the kernel driver, change Defender, or widen trust rules.
 The dashboard, chosen icons, Ukrainian/English languages and theme palettes remain.
 
@@ -32,7 +32,7 @@ an in-place explanation:
 
 The administrator must acknowledge these consequences before clicking the specific
 preserve-and-create button. The old state is renamed by the SAME fixed-path,
-handle-verified recovery implementation used by 0.6.3.0. It is not a confidential
+handle-verified recovery implementation used by the legacy state-recovery path. It is not a confidential
 archive, no data is imported/deleted, and the old root ACL is restricted to SYSTEM/Administrators before archival; child ACLs and already-open handles are not rewritten.
 
 Recovery does not install or start the service. For installation, the pane returns
@@ -82,7 +82,7 @@ The UI test remains mandatory; a failed test never becomes a passed build.
 
 This source update was not compiled or executed on Windows in the authoring
 environment. See VALIDATION.json for actual checks, distinct from included tests.
-## 0.7.1.0 recovery note
+## Legacy state recovery note
 
 If an older store has an extra writable user ACE, the wizard does not reuse it. It first
 restricts the old root DACL to SYSTEM/Administrators, then archives that root. The

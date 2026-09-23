@@ -1,0 +1,333 @@
+name: Minifilter fault campaign VM lab
+
+on:
+  workflow_dispatch:
+    inputs:
+      campaign:
+        description: Fault campaign phase.
+        required: true
+        default: completion-loss
+        type: choice
+        options:
+          - completion-loss
+          - low-disk
+          - reboot-arm
+          - reboot-verify
+      root_base:
+        description: Disposable VM-only completion-loss root base. Must contain RansomGuard.
+        required: true
+        default: C:\RansomGuard-VM-Crash
+        type: string
+      low_disk_root_base:
+        description: Disposable VM-only protected root base for isolated low-disk VHD testing.
+        required: true
+        default: C:\RansomGuard-VM-Fault
+        type: string
+      reboot_root_base:
+        description: Persistent disposable VM path shared by reboot ARM and VERIFY.
+        required: true
+        default: C:\RansomGuard-VM-Reboot
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ransomguard-fault-campaign-launcher
+  cancel-in-progress: false
+
+jobs:
+  crash-runtime:
+    environment: ransomguard-lab-vm
+    runs-on: [self-hosted, Windows, X64, ransomguard-lab-vm]
+    timeout-minutes: 15
+    env:
+      RANSOMGUARD_LAB_VM: I_UNDERSTAND
+      RANSOMGUARD_LAB_CERT_THUMBPRINT: ${{ secrets.RANSOMGUARD_LAB_CERT_THUMBPRINT }}
+      RG_FAULT_CAMPAIGN: ${{ inputs.campaign }}
+      RG_CRASH_ROOT_BASE: ${{ inputs.root_base || 'C:\\RansomGuard-VM-Crash' }}
+      RG_LOW_DISK_ROOT_BASE: ${{ inputs.low_disk_root_base || 'C:\\RansomGuard-VM-Fault' }}
+      RG_REBOOT_ROOT_BASE: ${{ inputs.reboot_root_base || 'C:\\RansomGuard-VM-Reboot' }}
+
+    steps:
+      - name: Checkout exact PR 39 fault-campaign head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned # v4 pinned
+        with:
+          ref: c3ff980805e8c43c92da7cfec2377866c5874013
+          fetch-depth: 1
+
+      - name: Bind exact checked-out commit
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $expected='c3ff980805e8c43c92da7cfec2377866c5874013'
+          $actual=(& git rev-parse --verify HEAD).Trim()
+          if($LASTEXITCODE -ne 0 -or -not [string]::Equals($actual,$expected,[StringComparison]::OrdinalIgnoreCase)){
+            throw "Fault campaign launcher expected '$expected' but checked out '$actual'."
+          }
+          Write-Host "Fault campaign target commit: $actual"
+          "RG_WORKFLOW_SHA=$actual" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Audit PowerShell and crash harness
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          .\tools\verify_powershell_automation.ps1
+          .\tools\verify_supply_chain.ps1
+          .\tools\verify_fault_campaign_vm_harness.ps1
+          .\tools\verify_crash_vm_harness.ps1
+
+      - name: Verify runtime VM runner readiness
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          if([string]::IsNullOrWhiteSpace($env:RANSOMGUARD_LAB_CERT_THUMBPRINT)){throw 'Environment secret RANSOMGUARD_LAB_CERT_THUMBPRINT is required.'}
+          .\minifilter-tools\verify_runtime_runner_readiness.ps1 -CertificateThumbprint $env:RANSOMGUARD_LAB_CERT_THUMBPRINT
+
+      - name: Clear stale LAB minifilter from prior failed run
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $root=[IO.Path]::GetFullPath($env:RG_CRASH_ROOT_BASE)
+          $volume=[IO.Path]::GetPathRoot($root).TrimEnd('\')
+          $filters=(& fltmc filters 2>$null | Out-String)
+          if($LASTEXITCODE -ne 0){throw "Unable to query Filter Manager before crash lab, exit=$LASTEXITCODE"}
+          if($filters -match '(?m)^\s*RansomGuardMinifilter\b'){
+            throw 'STALE KERNEL STATE: RansomGuardMinifilter is still loaded from an earlier crash/fault run. Do not attempt repeated unloads of an unknown stale driver generation. Revert the disposable VM checkpoint, start the runner again, then rerun this workflow.'
+          }
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0 node24 pinned # v4 pinned
+        with:
+          dotnet-version: 10.0.401
+
+      - name: Build Engineering LAB userspace bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          .\build_lab.cmd
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          $lab=Get-ChildItem .\release -Directory -Filter 'RansomGuard-Lab-v*' | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+          if(-not $lab){throw 'Engineering LAB release directory not found.'}
+          "RG_LAB_RELEASE=$($lab.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build and sign exact-commit runtime driver package
+        if: ${{ inputs.campaign != 'reboot-verify' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $package=Join-Path $env:RUNNER_TEMP 'ransomguard-crash-driver'
+          .\minifilter-tools\prepare_runtime_driver_package.ps1 -CertificateThumbprint $env:RANSOMGUARD_LAB_CERT_THUMBPRINT -OutputDirectory $package
+          $provenance=Get-Content -LiteralPath (Join-Path $package 'runtime-package.json') -Raw | ConvertFrom-Json
+          if([int]$provenance.schema -ne 2){throw "Runtime package provenance schema must be 2. Found '$($provenance.schema)'."}
+          if($provenance.commit -ne $env:RG_WORKFLOW_SHA){throw "Runtime driver provenance commit '$($provenance.commit)' does not match workflow commit '$env:RG_WORKFLOW_SHA'."}
+          $expectedThumb=$env:RANSOMGUARD_LAB_CERT_THUMBPRINT.Replace(' ','').ToUpperInvariant()
+          if([string]$provenance.certificateThumbprint -ne $expectedThumb){throw "Runtime package certificate thumbprint '$($provenance.certificateThumbprint)' does not match the configured LAB certificate '$expectedThumb'."}
+          foreach($artifact in @(
+            @('sysSha256',(Join-Path $package 'RansomGuardMinifilter.sys')),
+            @('infSha256',(Join-Path $package 'RansomGuardMinifilter.inf')),
+            @('catSha256',(Join-Path $package 'RansomGuardMinifilter.cat'))
+          )){
+            $expected=[string]$provenance.($artifact[0])
+            $actual=(Get-FileHash -LiteralPath $artifact[1] -Algorithm SHA256).Hash
+            if(-not [string]::Equals($expected,$actual,[StringComparison]::OrdinalIgnoreCase)){
+              throw "Runtime package artifact hash mismatch for $($artifact[1])."
+            }
+          }
+          "RG_DRIVER_PACKAGE=$package" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run CREATE, RENAME, TRUNCATE and DELETE completion-loss restart reconciliation
+        if: ${{ inputs.campaign == 'completion-loss' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $results=Join-Path $env:RUNNER_TEMP 'ransomguard-crash-results'
+          if(Test-Path -LiteralPath $results){
+            Remove-Item -LiteralPath $results -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $results -Force | Out-Null
+          .\minifilter-tools\run_crash_reconciliation_lab.ps1 -LabReleaseDirectory $env:RG_LAB_RELEASE -DriverPackageDirectory $env:RG_DRIVER_PACKAGE -RootBase $env:RG_CRASH_ROOT_BASE -ResultsDirectory $results
+          $summary=Get-Content -LiteralPath (Join-Path $results 'crash-runtime-result.json') -Raw | ConvertFrom-Json
+          foreach($name in @(
+            'completionLossObserved',
+            'createIntentDurable',
+            'createCompletionAbsent',
+            'targetCreated',
+            'restartObserved',
+            'restartSupportsCompleted',
+            'recoveryTransactionNotReady',
+            'renameCompletionLossObserved',
+            'renameIntentDurable',
+            'renameCompletionAbsent',
+            'renameTopologyChanged',
+            'renameRestartObserved',
+            'renameRestartSupportsCompleted',
+            'renameRecoveryTopologyNotReady',
+            'truncateCompletionLossObserved',
+            'truncateIntentDurable',
+            'truncateCompletionAbsent',
+            'truncateLengthChanged',
+            'truncateRestartObserved',
+            'truncateRestartSupportsCompleted',
+            'truncateRecoveryTransactionNotReady',
+            'deleteCompletionLossObserved',
+            'deleteIntentDurable',
+            'deleteCompletionAbsent',
+            'deleteTargetRemoved',
+            'deleteRestartObserved',
+            'deleteRestartSupportsCompleted',
+            'deleteRecoveryTransactionNotReady',
+            'cleanupPassed',
+            'passed'
+          )){
+            if($summary.$name -ne $true){throw "Crash runtime result invariant '$name' was not true."}
+          }
+          if(-not [string]::IsNullOrWhiteSpace([string]$summary.cleanupError)){
+            throw "Crash runtime cleanup reported an error: $($summary.cleanupError)"
+          }
+          "RG_CRASH_RESULTS=$results" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run isolated low-disk storage-pressure fault campaign
+        if: ${{ inputs.campaign == 'low-disk' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $results=Join-Path $env:RUNNER_TEMP 'ransomguard-low-disk-results'
+          $scratch=Join-Path $env:RUNNER_TEMP 'RansomGuard-LowDisk-Scratch'
+          if(Test-Path -LiteralPath $results){Remove-Item -LiteralPath $results -Recurse -Force}
+          if(Test-Path -LiteralPath $scratch){Remove-Item -LiteralPath $scratch -Recurse -Force}
+          New-Item -ItemType Directory -Path $results,$scratch -Force | Out-Null
+          .\minifilter-tools\run_low_disk_fault_lab.ps1 -LabReleaseDirectory $env:RG_LAB_RELEASE -DriverPackageDirectory $env:RG_DRIVER_PACKAGE -RootBase $env:RG_LOW_DISK_ROOT_BASE -ScratchDirectory $scratch -ResultsDirectory $results
+          $summary=Get-Content -LiteralPath (Join-Path $results 'low-disk-result.json') -Raw | ConvertFrom-Json
+          foreach($name in @(
+            'failClosedObserved','sourcePreservedOnDenial','destinationAbsentOnDenial',
+            'budgetDenialObserved','deniedIntentAbsent','deniedCompletionAbsent',
+            'gateStayedAlive','retryPassed','retryEvidenceDurable','preimageHashMatched',
+            'preimageObjectVerified','cleanupPassed','passed'
+          )){
+            if($summary.$name -ne $true){throw "Low-disk result invariant '$name' was not true."}
+          }
+          if(-not [string]::IsNullOrWhiteSpace([string]$summary.cleanupError)){throw "Low-disk cleanup reported: $($summary.cleanupError)"}
+          "RG_LOW_DISK_RESULTS=$results" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: ARM durable TRUNCATE evidence for real VM reboot
+        if: ${{ inputs.campaign == 'reboot-arm' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $results=Join-Path $env:RUNNER_TEMP 'ransomguard-reboot-arm-results'
+          if(Test-Path -LiteralPath $results){Remove-Item -LiteralPath $results -Recurse -Force}
+          New-Item -ItemType Directory -Path $results -Force | Out-Null
+          .\minifilter-tools\arm_reboot_reconciliation_lab.ps1 -LabReleaseDirectory $env:RG_LAB_RELEASE -DriverPackageDirectory $env:RG_DRIVER_PACKAGE -RootBase $env:RG_REBOOT_ROOT_BASE -ResultsDirectory $results
+          $summary=Get-Content -LiteralPath (Join-Path $results 'reboot-arm-result.json') -Raw | ConvertFrom-Json
+          foreach($name in @(
+            'completionLossObserved','truncateIntentDurable','truncateCompletionAbsent',
+            'truncateLengthChanged','preimageHashMatched','preimageObjectVerified',
+            'preservationBindingVerified','stateDurable',
+            'filterLeftLoadedForReboot','rebootRequired','passed'
+          )){
+            if($summary.$name -ne $true){throw "Reboot ARM invariant '$name' was not true."}
+          }
+          "RG_REBOOT_ARM_RESULTS=$results" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: VERIFY durable restart evidence after real VM reboot
+        if: ${{ inputs.campaign == 'reboot-verify' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $results=Join-Path $env:RUNNER_TEMP 'ransomguard-reboot-verify-results'
+          if(Test-Path -LiteralPath $results){Remove-Item -LiteralPath $results -Recurse -Force}
+          New-Item -ItemType Directory -Path $results -Force | Out-Null
+          .\minifilter-tools\verify_reboot_reconciliation_lab.ps1 -LabReleaseDirectory $env:RG_LAB_RELEASE -RootBase $env:RG_REBOOT_ROOT_BASE -ResultsDirectory $results
+          $summary=Get-Content -LiteralPath (Join-Path $results 'reboot-verify-result.json') -Raw | ConvertFrom-Json
+          foreach($name in @(
+            'bootChanged','filterClearedByReboot','targetMutationSurvivedReboot',
+            'intentSurvivedReboot','completionStillAbsent','stateTopologyVerified',
+            'preimageBindingVerified','restartObserved','restartSupportsCompleted',
+            'recoveryTransactionNotReady','readyPreimageCopyOutPresent',
+            'preimageHashMatched','evidenceCopied','activeCampaignArchived','passed'
+          )){
+            if($summary.$name -ne $true){throw "Reboot VERIFY invariant '$name' was not true."}
+          }
+          "RG_REBOOT_VERIFY_RESULTS=$results" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Reboot ARM handoff
+        if: ${{ success() && inputs.campaign == 'reboot-arm' }}
+        shell: pwsh
+        run: |
+          Write-Warning 'ARM PASSED. Reboot the disposable VM now. After Windows returns, restart the self-hosted runner if needed and launch this workflow again with campaign=reboot-verify from the exact same branch/commit.'
+
+      - name: Ensure failed ARM unloads LAB minifilter
+        if: ${{ failure() && inputs.campaign == 'reboot-arm' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $root=[IO.Path]::GetFullPath($env:RG_REBOOT_ROOT_BASE)
+          $volume=[IO.Path]::GetPathRoot($root).TrimEnd('\')
+          $filters=(& fltmc filters 2>$null | Out-String)
+          if($LASTEXITCODE -ne 0){throw "Unable to query Filter Manager after failed reboot ARM, exit=$LASTEXITCODE"}
+          if($filters -match '(?m)^\s*RansomGuardMinifilter\b'){
+            .\minifilter-tools\unload_minifilter_lab.ps1 -Volume $volume
+          }
+
+      - name: Ensure LAB minifilter is unloaded after run
+        if: ${{ always() && inputs.campaign != 'reboot-arm' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $selectedRoot=switch($env:RG_FAULT_CAMPAIGN){
+            'low-disk' {$env:RG_LOW_DISK_ROOT_BASE}
+            'reboot-verify' {$env:RG_REBOOT_ROOT_BASE}
+            default {$env:RG_CRASH_ROOT_BASE}
+          }
+          $root=[IO.Path]::GetFullPath($selectedRoot)
+          $volume=[IO.Path]::GetPathRoot($root).TrimEnd('\')
+          $filters=(& fltmc filters 2>$null | Out-String)
+          if($LASTEXITCODE -ne 0){throw "Unable to query Filter Manager during final cleanup, exit=$LASTEXITCODE"}
+          if($filters -match '(?m)^\s*RansomGuardMinifilter\b'){
+            .\minifilter-tools\unload_minifilter_lab.ps1 -Volume $volume
+          }
+
+      - name: Upload completion-loss evidence
+        if: ${{ always() && inputs.campaign == 'completion-loss' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 node24 pinned # v4 pinned
+        with:
+          name: ransomguard-minifilter-crash-evidence
+          path: ${{ runner.temp }}/ransomguard-crash-results/**
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload low-disk evidence
+        if: ${{ always() && inputs.campaign == 'low-disk' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 node24 pinned # v4 pinned
+        with:
+          name: ransomguard-low-disk-fault-evidence
+          path: ${{ runner.temp }}/ransomguard-low-disk-results/**
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload reboot ARM evidence
+        if: ${{ always() && inputs.campaign == 'reboot-arm' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 node24 pinned # v4 pinned
+        with:
+          name: ransomguard-reboot-arm-evidence
+          path: ${{ runner.temp }}/ransomguard-reboot-arm-results/**
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload reboot VERIFY evidence
+        if: ${{ always() && inputs.campaign == 'reboot-verify' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 node24 pinned # v4 pinned
+        with:
+          name: ransomguard-reboot-verify-evidence
+          path: ${{ runner.temp }}/ransomguard-reboot-verify-results/**
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Remove signed lab package
+        if: ${{ always() && inputs.campaign != 'reboot-verify' }}
+        shell: pwsh
+        run: |
+          if($env:RG_DRIVER_PACKAGE -and (Test-Path -LiteralPath $env:RG_DRIVER_PACKAGE)){
+            Remove-Item -LiteralPath $env:RG_DRIVER_PACKAGE -Recurse -Force -ErrorAction SilentlyContinue
+          }

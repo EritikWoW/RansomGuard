@@ -84,10 +84,9 @@ foreach($required in @(
     'RestartEvidenceState.SupportsNotCompleted',
     'RestartEvidenceState.Indeterminate',
     'RestartEvidenceState.Ambiguous',
-    'AssessRestart(',
-    'restart evidence never'
+    'AssessRestart('
 )){
-    if($truncateText -notmatch [regex]::Escape($required) -and $required -ne 'restart evidence never'){
+    if($truncateText -notmatch [regex]::Escape($required)){
         throw "TRUNCATE recovery invariant missing: $required"
     }
 }

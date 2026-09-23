@@ -109,6 +109,23 @@ $requestedLength=[int64]$state.requestedLength
 $originalLength=[int64]$state.originalLength
 $originalHash=[string]$state.originalSha256
 $originalFileId=[string]$state.originalFileIdHex
+$preservationRecordSha256=[string]$state.preservationRecordSha256
+$snapshotRelativePath=[string]$state.snapshotRelativePath
+$snapshotSha256=[string]$state.snapshotSha256
+
+$expectedRoot=[IO.Path]::GetFullPath((Join-Path $active 'protected'))
+$expectedStore=[IO.Path]::GetFullPath((Join-Path $active 'rollback-store'))
+$expectedTarget=[IO.Path]::GetFullPath((Join-Path $expectedRoot 'truncate-across-reboot.bin'))
+if(-not [string]::Equals($root,$expectedRoot,[StringComparison]::OrdinalIgnoreCase) -or
+   -not [string]::Equals($store,$expectedStore,[StringComparison]::OrdinalIgnoreCase) -or
+   -not [string]::Equals($target,$expectedTarget,[StringComparison]::OrdinalIgnoreCase)){
+    throw 'Reboot ARM state topology does not match the fixed Active/protected/rollback-store campaign layout.'
+}
+if([string]::IsNullOrWhiteSpace($preservationRecordSha256) -or
+   [string]::IsNullOrWhiteSpace($snapshotRelativePath) -or
+   [string]::IsNullOrWhiteSpace($snapshotSha256)){
+    throw 'Reboot ARM state is missing pre-image binding metadata.'
+}
 
 $gateExe=Join-Path $LabReleaseDirectory 'MinifilterLab\GateClient\RansomGuard.GateClient.exe'
 $recoveryExe=Join-Path $LabReleaseDirectory 'RollbackRecovery\RansomGuard.RollbackRecovery.exe'
@@ -130,6 +147,8 @@ $summary=[ordered]@{
     targetMutationSurvivedReboot=$false
     intentSurvivedReboot=$false
     completionStillAbsent=$false
+    stateTopologyVerified=$true
+    preimageBindingVerified=$false
     restartObserved=$false
     restartSupportsCompleted=$false
     recoveryTransactionNotReady=$false
@@ -177,7 +196,8 @@ try{
     if($intent.Count -ne 1){throw "Expected one durable armed TRUNCATE intent after reboot. Found $($intent.Count)."}
     if([int64]$intent[0].requestedLength -ne $requestedLength -or
        [int64]$intent[0].originalObservedLength -ne $originalLength -or
-       -not [string]::Equals([string]$intent[0].originalFileIdHex,$originalFileId,[StringComparison]::OrdinalIgnoreCase)){
+       -not [string]::Equals([string]$intent[0].originalFileIdHex,$originalFileId,[StringComparison]::OrdinalIgnoreCase) -or
+       -not [string]::Equals([string]$intent[0].preservationRecordSha256,$preservationRecordSha256,[StringComparison]::OrdinalIgnoreCase)){
         throw 'Reboot-surviving TRUNCATE intent fields do not match ARM state.'
     }
     $summary.intentSurvivedReboot=$true
@@ -197,10 +217,21 @@ try{
     if(-not [string]::Equals([string]$capture[0].originalSha256,$originalHash,[StringComparison]::OrdinalIgnoreCase)){
         throw "Reboot-surviving pre-image journal hash mismatch. expected=$originalHash actual=$($capture[0].originalSha256)"
     }
-    $snapshot=Join-Path $sessionRoot ([string]$capture[0].snapshotRelativePath)
+    if(-not [string]::Equals([string]$capture[0].recordSha256,$preservationRecordSha256,[StringComparison]::OrdinalIgnoreCase) -or
+       -not [string]::Equals([string]$capture[0].snapshotRelativePath,$snapshotRelativePath,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'Reboot-surviving pre-image journal is not bound to the ARM state and TRUNCATE intent.'
+    }
+    $summary.preimageBindingVerified=$true
+
+    $snapshot=Join-Path $sessionRoot $snapshotRelativePath
     if(-not(Test-Path -LiteralPath $snapshot -PathType Leaf)){throw "Reboot-surviving pre-image object is missing: $snapshot"}
-    if(-not [string]::Equals((Get-FileHash -LiteralPath $snapshot -Algorithm SHA256).Hash,$originalHash,[StringComparison]::OrdinalIgnoreCase)){
-        throw 'Reboot-surviving pre-image object SHA-256 mismatch.'
+    if((Get-Item -LiteralPath $snapshot).Length -ne $originalLength){
+        throw "Reboot-surviving pre-image object length mismatch. expected=$originalLength actual=$((Get-Item -LiteralPath $snapshot).Length)"
+    }
+    $actualSnapshotHash=(Get-FileHash -LiteralPath $snapshot -Algorithm SHA256).Hash
+    if(-not [string]::Equals($actualSnapshotHash,$originalHash,[StringComparison]::OrdinalIgnoreCase) -or
+       -not [string]::Equals($actualSnapshotHash,$snapshotSha256,[StringComparison]::OrdinalIgnoreCase)){
+        throw "Reboot-surviving pre-image object SHA-256 mismatch. original=$originalHash armed=$snapshotSha256 actual=$actualSnapshotHash"
     }
     $summary.preimageHashMatched=$true
 
@@ -274,6 +305,8 @@ try{
         $summary.targetMutationSurvivedReboot -and
         $summary.intentSurvivedReboot -and
         $summary.completionStillAbsent -and
+        $summary.stateTopologyVerified -and
+        $summary.preimageBindingVerified -and
         $summary.restartObserved -and
         $summary.restartSupportsCompleted -and
         $summary.recoveryTransactionNotReady -and

@@ -1808,6 +1808,7 @@ sealed record Options(
     bool DropFirstCreateCompletion,
     bool DropFirstRenameCompletion,
     bool DropFirstTruncateCompletion,
+    bool DropFirstDeleteCompletion,
     bool ReconcileOnly)
 {
     public const int DefaultGateWorkers = 4;
@@ -1835,6 +1836,7 @@ sealed record Options(
         var dropFirstCreateCompletion = false;
         var dropFirstRenameCompletion = false;
         var dropFirstTruncateCompletion = false;
+        var dropFirstDeleteCompletion = false;
         var reconcileOnly = false;
         for (var i = 0; i < args.Length; i++)
         {
@@ -1885,17 +1887,18 @@ sealed record Options(
                 case "--drop-first-create-completion": dropFirstCreateCompletion = true; break;
                 case "--drop-first-rename-completion": dropFirstRenameCompletion = true; break;
                 case "--drop-first-truncate-completion": dropFirstTruncateCompletion = true; break;
+                case "--drop-first-delete-completion": dropFirstDeleteCompletion = true; break;
                 case "--reconcile-only": reconcileOnly = true; break;
                 case "--prepare-root": prepare = true; break;
                 default: throw new ArgumentException($"Unknown/incomplete argument: {args[i]}");
             }
         }
         if (string.IsNullOrWhiteSpace(root)) throw new ArgumentException("Pass --root <disposable-test-directory>.");
-        if (prepare && (containPid.HasValue || containAfterPid.HasValue || dropFirstCreateCompletion || dropFirstRenameCompletion || dropFirstTruncateCompletion || reconcileOnly))
+        if (prepare && (containPid.HasValue || containAfterPid.HasValue || dropFirstCreateCompletion || dropFirstRenameCompletion || dropFirstTruncateCompletion || dropFirstDeleteCompletion || reconcileOnly))
             throw new ArgumentException("Containment/fault/reconciliation options cannot be combined with --prepare-root.");
-        if (reconcileOnly && (containPid.HasValue || containAfterPid.HasValue || dropFirstCreateCompletion || dropFirstRenameCompletion || dropFirstTruncateCompletion || containThresholdSpecified))
+        if (reconcileOnly && (containPid.HasValue || containAfterPid.HasValue || dropFirstCreateCompletion || dropFirstRenameCompletion || dropFirstTruncateCompletion || dropFirstDeleteCompletion || containThresholdSpecified))
             throw new ArgumentException("--reconcile-only cannot be combined with containment or fault injection.");
-        if ((dropFirstCreateCompletion ? 1 : 0) + (dropFirstRenameCompletion ? 1 : 0) + (dropFirstTruncateCompletion ? 1 : 0) > 1)
+        if ((dropFirstCreateCompletion ? 1 : 0) + (dropFirstRenameCompletion ? 1 : 0) + (dropFirstTruncateCompletion ? 1 : 0) + (dropFirstDeleteCompletion ? 1 : 0) > 1)
             throw new ArgumentException("Only one completion-loss injection may be armed per GateClient session.");
         if (containPid.HasValue && containAfterPid.HasValue)
             throw new ArgumentException("--contain-pid and --contain-after-pid are mutually exclusive.");
@@ -1907,7 +1910,8 @@ sealed record Options(
         return new Options(
             root, store, session, prepare, gateWorkers, maxStoreMiB, minFreeMiB,
             containPid, containAfterPid, containAfterEvents, containAfterPaths,
-            dropFirstCreateCompletion, dropFirstRenameCompletion, dropFirstTruncateCompletion, reconcileOnly);
+            dropFirstCreateCompletion, dropFirstRenameCompletion, dropFirstTruncateCompletion,
+            dropFirstDeleteCompletion, reconcileOnly);
     }
 }
 
@@ -2010,7 +2014,7 @@ sealed class DevicePathResolver
 }
 
 enum RgClientMode : uint { Audit = 1, LabGate = 2 }
-enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, RenameResult = 6, CreateResult = 7, PagingWrite = 8, WritableSection = 9, ActivationPreflight = 10, ContainmentActivated = 11, TruncateResult = 12 }
+enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, RenameResult = 6, CreateResult = 7, PagingWrite = 8, WritableSection = 9, ActivationPreflight = 10, ContainmentActivated = 11, TruncateResult = 12, DeleteDispositionResult = 13, DeleteFinalized = 14 }
 enum RgPathStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2, Truncated = 3 }
 enum RgIdentityStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2 }
 enum RgGateDecision : uint { Invalid = 0, SnapshotCommitted = 1, Deny = 2, BaselineCommitted = 3, NoPreservationRequired = 4 }

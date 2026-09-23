@@ -210,7 +210,8 @@ jobs:
           $summary=Get-Content -LiteralPath (Join-Path $results 'reboot-arm-result.json') -Raw | ConvertFrom-Json
           foreach($name in @(
             'completionLossObserved','truncateIntentDurable','truncateCompletionAbsent',
-            'truncateLengthChanged','preimageHashMatched','stateDurable',
+            'truncateLengthChanged','preimageHashMatched','preimageObjectVerified',
+            'preservationBindingVerified','stateDurable',
             'filterLeftLoadedForReboot','rebootRequired','passed'
           )){
             if($summary.$name -ne $true){throw "Reboot ARM invariant '$name' was not true."}
@@ -229,10 +230,10 @@ jobs:
           $summary=Get-Content -LiteralPath (Join-Path $results 'reboot-verify-result.json') -Raw | ConvertFrom-Json
           foreach($name in @(
             'bootChanged','filterClearedByReboot','targetMutationSurvivedReboot',
-            'intentSurvivedReboot','completionStillAbsent','restartObserved',
-            'restartSupportsCompleted','recoveryTransactionNotReady',
-            'readyPreimageCopyOutPresent','preimageHashMatched','evidenceCopied',
-            'activeCampaignArchived','passed'
+            'intentSurvivedReboot','completionStillAbsent','stateTopologyVerified',
+            'preimageBindingVerified','restartObserved','restartSupportsCompleted',
+            'recoveryTransactionNotReady','readyPreimageCopyOutPresent',
+            'preimageHashMatched','evidenceCopied','activeCampaignArchived','passed'
           )){
             if($summary.$name -ne $true){throw "Reboot VERIFY invariant '$name' was not true."}
           }

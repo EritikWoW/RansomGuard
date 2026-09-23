@@ -42,25 +42,24 @@ jobs:
     timeout-minutes: 60
     env:
       RANSOMGUARD_LAB_VM: I_UNDERSTAND
-      RANSOMGUARD_LAB_CERT_THUMBPRINT: \${{ secrets.RANSOMGUARD_LAB_CERT_THUMBPRINT }}
-      RG_VERIFIER_PHASE: \${{ inputs.phase }}
-      RG_VERIFIER_ROOT_BASE: \${{ inputs.root_base }}
-      RG_VERIFIER_STRESS_ROOT_BASE: \${{ inputs.stress_root_base }}
-      RG_VERIFIER_PARALLELISM: \${{ inputs.parallelism }}
-      RG_WORKFLOW_SHA: \${{ github.sha }}
+      RANSOMGUARD_LAB_CERT_THUMBPRINT: ${{ secrets.RANSOMGUARD_LAB_CERT_THUMBPRINT }}
+      RG_VERIFIER_PHASE: ${{ inputs.phase }}
+      RG_VERIFIER_ROOT_BASE: ${{ inputs.root_base }}
+      RG_VERIFIER_STRESS_ROOT_BASE: ${{ inputs.stress_root_base }}
+      RG_VERIFIER_PARALLELISM: ${{ inputs.parallelism }}
 
     steps:
       - name: Checkout exact PR 40 Driver Verifier head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
         with:
-          ref: b1c927028d8f514f7165310834817b32fde11c3b
+          ref: c8d3db8e77a08f517b9b17d1aebbed9472450396
           fetch-depth: 1
 
       - name: Bind exact checked-out commit
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
-          $expected='b1c927028d8f514f7165310834817b32fde11c3b'
+          $expected='c8d3db8e77a08f517b9b17d1aebbed9472450396'
           $actual=(& git rev-parse --verify HEAD).Trim()
           if($LASTEXITCODE -ne 0 -or -not [string]::Equals($actual,$expected,[StringComparison]::OrdinalIgnoreCase)){
             throw "Driver Verifier launcher expected '$expected' but checked out '$actual'."
@@ -94,13 +93,13 @@ jobs:
           }
 
       - name: Setup .NET 10
-        if: \${{ inputs.phase == 'runtime' }}
+        if: ${{ inputs.phase == 'runtime' }}
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0 node24 pinned
         with:
           dotnet-version: 10.0.401
 
       - name: Build Engineering LAB userspace bundle
-        if: \${{ inputs.phase == 'runtime' }}
+        if: ${{ inputs.phase == 'runtime' }}
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
@@ -111,7 +110,7 @@ jobs:
           "RG_LAB_RELEASE=$($lab.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build and sign exact-commit runtime driver package
-        if: \${{ inputs.phase == 'runtime' }}
+        if: ${{ inputs.phase == 'runtime' }}
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
@@ -134,7 +133,7 @@ jobs:
           "RG_DRIVER_PACKAGE=$package" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: ARM standard one-boot Driver Verifier
-        if: \${{ inputs.phase == 'arm' }}
+        if: ${{ inputs.phase == 'arm' }}
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
@@ -153,7 +152,7 @@ jobs:
           "RG_VERIFIER_ARM_RESULTS=$results" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Run bounded stress under Driver Verifier and schedule reset
-        if: \${{ inputs.phase == 'runtime' }}
+        if: ${{ inputs.phase == 'runtime' }}
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
@@ -177,7 +176,7 @@ jobs:
           "RG_VERIFIER_RUNTIME_RESULTS=$results" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Prove Driver Verifier is clear after reset reboot
-        if: \${{ inputs.phase == 'clear' }}
+        if: ${{ inputs.phase == 'clear' }}
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
@@ -195,19 +194,19 @@ jobs:
           "RG_VERIFIER_CLEAR_RESULTS=$results" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: ARM reboot handoff
-        if: \${{ success() && inputs.phase == 'arm' }}
+        if: ${{ success() && inputs.phase == 'arm' }}
         shell: pwsh
         run: |
           Write-Warning 'ARM PASSED. Reboot the disposable VM now. Driver Verifier is targeted only at RansomGuardMinifilter.sys and bootmode=oneboot. After Windows returns, restart the self-hosted runner elevated and launch a NEW workflow with phase=runtime on the exact same commit.'
 
       - name: Runtime reset reboot handoff
-        if: \${{ success() && inputs.phase == 'runtime' }}
+        if: ${{ success() && inputs.phase == 'runtime' }}
         shell: pwsh
         run: |
           Write-Warning 'VERIFIER RUNTIME PASSED and verifier /reset succeeded. Reboot the disposable VM once more. After Windows returns, restart the self-hosted runner elevated and launch a NEW workflow with phase=clear on the exact same commit.'
 
       - name: Ensure LAB minifilter is unloaded after runtime/clear
-        if: \${{ always() && inputs.phase != 'arm' }}
+        if: ${{ always() && inputs.phase != 'arm' }}
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
@@ -220,34 +219,34 @@ jobs:
           }
 
       - name: Upload Driver Verifier ARM evidence
-        if: \${{ always() && inputs.phase == 'arm' }}
+        if: ${{ always() && inputs.phase == 'arm' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 node24 pinned
         with:
           name: ransomguard-driver-verifier-arm-evidence
-          path: \${{ runner.temp }}/ransomguard-driver-verifier-arm-results/**
+          path: ${{ runner.temp }}/ransomguard-driver-verifier-arm-results/**
           if-no-files-found: warn
           retention-days: 14
 
       - name: Upload Driver Verifier runtime evidence
-        if: \${{ always() && inputs.phase == 'runtime' }}
+        if: ${{ always() && inputs.phase == 'runtime' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 node24 pinned
         with:
           name: ransomguard-driver-verifier-runtime-evidence
-          path: \${{ runner.temp }}/ransomguard-driver-verifier-runtime-results/**
+          path: ${{ runner.temp }}/ransomguard-driver-verifier-runtime-results/**
           if-no-files-found: warn
           retention-days: 14
 
       - name: Upload Driver Verifier CLEAR evidence
-        if: \${{ always() && inputs.phase == 'clear' }}
+        if: ${{ always() && inputs.phase == 'clear' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 node24 pinned
         with:
           name: ransomguard-driver-verifier-clear-evidence
-          path: \${{ runner.temp }}/ransomguard-driver-verifier-clear-results/**
+          path: ${{ runner.temp }}/ransomguard-driver-verifier-clear-results/**
           if-no-files-found: warn
           retention-days: 14
 
       - name: Remove signed lab package
-        if: \${{ always() && inputs.phase == 'runtime' }}
+        if: ${{ always() && inputs.phase == 'runtime' }}
         shell: pwsh
         run: |
           if($env:RG_DRIVER_PACKAGE -and (Test-Path -LiteralPath $env:RG_DRIVER_PACKAGE)){

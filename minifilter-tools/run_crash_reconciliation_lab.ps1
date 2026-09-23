@@ -93,6 +93,22 @@ function Wait-LogPattern(
     throw "Timed out waiting for log pattern '$Pattern'."
 }
 
+function Wait-File(
+    [string]$Path,
+    [System.Diagnostics.Process]$Process,
+    [int]$Seconds
+){
+    $deadline=(Get-Date).AddSeconds($Seconds)
+    while((Get-Date) -lt $deadline){
+        if(Test-Path -LiteralPath $Path -PathType Leaf){return}
+        if($Process.HasExited){
+            throw "Process exited before expected marker '$Path'. Exit=$($Process.ExitCode)."
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "Timed out waiting for marker '$Path'."
+}
+
 function Prepare-GateRoot([string]$GateExe,[string]$Root){
     New-Item -ItemType Directory -Path $Root -Force | Out-Null
     & $GateExe --root $Root --prepare-root

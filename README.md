@@ -91,7 +91,9 @@ Protocol v13 also removes the previous blind skip of paging-write callbacks. Aft
 
 0.7.27 hardens reproducibility and supply-chain inputs without changing protocol v15. `global.json` pins .NET SDK 10.0.401 with roll-forward disabled; CI installs that exact SDK; every third-party GitHub Action is referenced by a reviewed full commit SHA rather than a mutable version tag. A dedicated source gate rejects floating SDK/action references and verifies secret-bearing file patterns stay ignored. NuGet dependency graphs are committed as `packages.lock.json` files and restore runs in locked mode so an unreviewed graph change fails the build instead of silently resolving different transitive packages.
 
-0.7.28 adds a separate manual self-hosted concurrency-stress workflow without changing protocol v15. The stress harness configures GateClient at its maximum 8 workers, then launches 16 helpers per phase so admission pressure exceeds the kernel's 8 simultaneous blocking gate requests. CREATE, RENAME, synchronized TRUNCATE, synchronized DELETE and mapped-write phases must all finish successfully. The harness re-opens the durable JSONL evidence, requires unique request correlations and authoritative successful completions for every targeted mutation, requires DeletedObserved finalization for each delete, and verifies each mapped target's committed pre-image SHA-256 plus BaselineVerified writable-section and paging-write evidence. The test is VM-only and deliberately excludes formatting, reboot, boot-policy and Driver Verifier operations; those remain separate fault campaigns.
+0.7.28 adds a separate manual self-hosted concurrency-stress workflow without changing protocol v15. The stress harness configures GateClient at its maximum 8 workers. A dedicated 16-wide CREATE overload probe must observe bounded fail-closed admission above the kernel cap without creating denied pathnames or durable transactions. The full CREATE, RENAME, synchronized TRUNCATE, synchronized DELETE and mapped-write qualification then runs at the supported concurrency ceiling of 8. The harness re-opens the durable JSONL evidence, requires unique request correlations and authoritative successful completions for every admitted mutation, requires DeletedObserved finalization for each delete, rejects GateClient worker failures, and verifies each mapped target's committed pre-image SHA-256 plus BaselineVerified writable-section and paging-write evidence.
+
+0.7.29 adds a combined manual fault campaign without changing protocol v15. Low-disk testing uses only a newly created expandable NTFS VHD as the rollback-store volume: after gate activation the harness consumes scratch-volume free space below the configured reserve, requires an in-scope RENAME to fail closed with unchanged topology, then removes the filler and requires the same RENAME to succeed with a hash-verified full pre-image. Real reboot recovery is split into ARM and VERIFY phases because a self-hosted Actions job cannot resume through a VM reboot. ARM persists a completion-lost TRUNCATE intent, verified full pre-image and SHA-256-bound campaign state while deliberately leaving the LAB filter loaded. After the operator reboots the disposable VM, VERIFY requires a newer Windows boot time, proves the EOF mutation plus durable pending evidence survived, runs reconcile-only restart observation, and confirms the transaction remains Review-only while verified pre-image copy-out remains Ready. The workflow itself never issues reboot/shutdown, boot-policy or Driver Verifier commands.
 
 
 ## Recovery safety
@@ -145,7 +147,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.7.28.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.7.29.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 Manual disposable-VM runtime workflows:
 
@@ -168,7 +170,6 @@ Bounded concurrent gate admission/workers are now implemented with a kernel cap 
 
 Restart evidence for pending/missing CREATE/RENAME/TRUNCATE completion events and unsettled DELETE lifecycle transactions is durable and conservative; authoritative completion is never inferred from a restart or topology probe. DELETE cleanup is handle-lifecycle evidence only, while pathname state is observed separately. The recovery planner may expose exact, fully consistent evidence as `Review` only, while cleanup-only, ambiguous, indeterminate or conflicting evidence stays `Blocked`. Paging writes on streams opened through the LAB gate are visible as durable evidence without synchronously blocking the paging path.
 
-Remaining core work includes broader fault-injection beyond the validated CREATE/RENAME/TRUNCATE/DELETE completion-loss cases,
-additional filesystem/runtime fault campaigns beyond the isolated compatibility/concurrency proofs (including reboot/crash, storage-pressure and Driver Verifier campaigns),
+Remaining core work includes Driver Verifier qualification and broader long-duration/mixed-workload stress,
 production retention UI/policy integration, production detector-to-containment authorization/policy, process-state capture, adaptive crypto reconstruction, production recovery UI/topology orchestration,
 driver signing and Microsoft-assigned production altitude.

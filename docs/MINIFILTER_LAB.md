@@ -254,7 +254,7 @@ The manual workflow `.github\workflows\minifilter-verifier-vm.yml` is a separate
 
 The campaign has three explicit phases on one unchanged commit:
 
-1. `arm` refuses any pre-existing Driver Verifier configuration, selects only `RansomGuardMinifilter.sys`, enables the Windows standard Driver Verifier profile, sets `bootmode=oneboot`, and writes durable exact-commit state under `C:\RansomGuard-VM-Verifier\Active`.
+1. `arm` refuses any pre-existing Driver Verifier configuration, registers the exact signed driver package without loading/attaching it, selects only `RansomGuardMinifilter.sys`, enables the Windows standard Driver Verifier profile, sets `bootmode=oneboot`, and writes durable exact-commit state under `C:\RansomGuard-VM-Verifier\Active`. Verifier exit code `2` is the documented reboot-required success result and is accepted only together with postcondition checks.
 2. Reboot the VM manually. Start the self-hosted runner elevated again, then launch a NEW workflow with `phase=runtime`. The runtime phase proves the loaded RansomGuard driver appears in current verifier activity and runs the bounded-concurrency CREATE/RENAME/TRUNCATE/DELETE/mapped-write qualification. A bugcheck in this window is a failed qualification, not a pass. On a clean run it executes `verifier /reset`.
 3. Reboot the VM manually a second time. Start the runner elevated and launch a NEW workflow with `phase=clear`. CLEAR requires the second boot transition, proves scheduled/current verifier activity no longer names the target driver, proves the minifilter is unloaded, and archives the campaign.
 

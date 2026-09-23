@@ -1613,10 +1613,77 @@ try
         planIdentity,
         1024);
 
+    var planDelete = new DeleteOperationStore(
+        Path.Combine(planSession.Root, "delete-state"));
+    var authoritativeDeleteIntent = await planDelete.RecordIntentAsync(
+        9301,
+        fullPlanPath,
+        DeleteOperationStore.FileDispositionInformationEx,
+        DeleteOperationStore.FileDispositionDelete,
+        planIdentity,
+        false,
+        fullCapture.RecordSha256);
+    _ = await planDelete.RecordCompletionAsync(
+        authoritativeDeleteIntent.RequestSequence,
+        DeleteDispositionCompletionState.AcceptedDeletePending,
+        0,
+        0,
+        true,
+        planIdentity);
+    _ = await planDelete.RecordFinalizationAsync(
+        authoritativeDeleteIntent,
+        DeleteFinalizationSource.KernelCleanup,
+        DeleteFinalizationState.CleanupObserved,
+        RestartPathState.QueryFailed,
+        null);
+    var authoritativeDeleteTopology = await planDelete.RecordFinalizationAsync(
+        authoritativeDeleteIntent,
+        DeleteFinalizationSource.RestartProbe,
+        DeleteFinalizationState.DeletedObserved,
+        RestartPathState.Missing,
+        null);
+
+    var pendingDeleteIntent = await planDelete.RecordIntentAsync(
+        9302,
+        originallyAbsent,
+        DeleteOperationStore.FileDispositionInformation,
+        DeleteOperationStore.FileDispositionDelete,
+        planIdentity,
+        true,
+        string.Empty);
+    var pendingDeleteTopology = await planDelete.RecordFinalizationAsync(
+        pendingDeleteIntent,
+        DeleteFinalizationSource.RestartProbe,
+        DeleteFinalizationState.DeletedObserved,
+        RestartPathState.Missing,
+        null);
+
+    var cleanupOnlyDeleteIntent = await planDelete.RecordIntentAsync(
+        9303,
+        Path.Combine(planSource, "delete-cleanup-only.bin"),
+        DeleteOperationStore.FileDispositionInformationEx,
+        DeleteOperationStore.FileDispositionDelete,
+        planIdentity,
+        true,
+        string.Empty);
+    _ = await planDelete.RecordCompletionAsync(
+        cleanupOnlyDeleteIntent.RequestSequence,
+        DeleteDispositionCompletionState.AcceptedStateUnresolved,
+        0,
+        0,
+        null,
+        null);
+    var cleanupOnlyDeleteEvidence = await planDelete.RecordFinalizationAsync(
+        cleanupOnlyDeleteIntent,
+        DeleteFinalizationSource.KernelCleanup,
+        DeleteFinalizationState.CleanupObserved,
+        RestartPathState.QueryFailed,
+        null);
+
     var recoveryPlan = RollbackRecoveryPlanner.Build(planRepoRoot, "plan_case");
     Check(recoveryPlan.ReadyCount == 2 &&
-          recoveryPlan.ReviewCount == 6 &&
-          recoveryPlan.BlockedCount == 1 &&
+          recoveryPlan.ReviewCount == 8 &&
+          recoveryPlan.BlockedCount == 2 &&
           !recoveryPlan.AutomaticTopologyMutationAllowed,
         "recovery planner separates copy-out readiness from review/blocked topology");
     Check(recoveryPlan.Actions.Any(x =>
@@ -1669,6 +1736,24 @@ try
             x.EvidenceSequence == 9201 &&
             x.EvidenceRecordSha256 == truncateCrashEvidence.RecordSha256),
         "consistent restart TRUNCATE evidence becomes review-only and never a live length mutation");
+    Check(recoveryPlan.Actions.Any(x =>
+            x.Kind == RecoveryActionKind.ReviewDeleteTransaction &&
+            x.State == RecoveryActionState.Review &&
+            x.EvidenceSequence == 9301 &&
+            x.EvidenceRecordSha256 == authoritativeDeleteTopology.RecordSha256),
+        "authoritative DELETE plus observed pathname absence is topology review, never automatic recreation");
+    Check(recoveryPlan.Actions.Any(x =>
+            x.Kind == RecoveryActionKind.ReviewDeleteTransaction &&
+            x.State == RecoveryActionState.Review &&
+            x.EvidenceSequence == 9302 &&
+            x.EvidenceRecordSha256 == pendingDeleteTopology.RecordSha256),
+        "lost DELETE disposition completion with restart absence evidence remains review-only");
+    Check(recoveryPlan.Actions.Any(x =>
+            x.Kind == RecoveryActionKind.ReviewDeleteTransaction &&
+            x.State == RecoveryActionState.Blocked &&
+            x.EvidenceSequence == 9303 &&
+            x.EvidenceRecordSha256 == cleanupOnlyDeleteEvidence.RecordSha256),
+        "cleanup-only DELETE evidence remains blocked until pathname topology is proven");
     Check(recoveryPlan.PlanId.Length == 64 &&
           recoveryPlan.JournalEvidenceSha256.Length == 64,
         "recovery plan binds deterministic SHA-256 plan/evidence digests");
@@ -1685,8 +1770,8 @@ try
           execution.RequestedReadyActions == 2 &&
           execution.SucceededActions == 2 &&
           execution.FailedActions == 0 &&
-          execution.ReviewActionsNotExecuted == 6 &&
-          execution.BlockedActionsNotExecuted == 1 &&
+          execution.ReviewActionsNotExecuted == 8 &&
+          execution.BlockedActionsNotExecuted == 2 &&
           !execution.AutomaticTopologyMutationPerformed,
         "recovery executor performs only ready copy-out actions");
 

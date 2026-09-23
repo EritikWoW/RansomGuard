@@ -17,6 +17,7 @@ try {
     Write-Host '[preflight] Parse and audit repository PowerShell automation.'
     & (Join-Path $PSScriptRoot 'tools\verify_powershell_automation.ps1') -RepositoryRoot $PSScriptRoot
     & (Join-Path $PSScriptRoot 'tools\verify_supply_chain.ps1') -RepositoryRoot $PSScriptRoot
+    & (Join-Path $PSScriptRoot 'tools\verify_docs_consistency.ps1') -RepositoryRoot $PSScriptRoot
 
     if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { throw 'Install .NET 10 SDK on the BUILD PC. Target PCs do not need a runtime.' }
     $version = (& dotnet --version).Trim()

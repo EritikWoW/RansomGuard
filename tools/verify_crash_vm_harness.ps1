@@ -10,12 +10,15 @@ foreach($required in @(
   '--drop-first-create-completion',
   '--drop-first-rename-completion',
   '--drop-first-truncate-completion',
+  '--drop-first-delete-completion',
   'LAB COMPLETION LOSS: intentionally dropping authoritative CREATE result',
   'LAB COMPLETION LOSS: intentionally dropping authoritative RENAME result',
   'LAB COMPLETION LOSS: intentionally dropping authoritative TRUNCATE result',
+  'LAB COMPLETION LOSS: intentionally dropping authoritative DELETE disposition result',
   'Interlocked.CompareExchange(ref droppedCreateCompletion, 1, 0) == 0',
   'Interlocked.CompareExchange(ref droppedRenameCompletion, 1, 0) == 0',
   'Interlocked.CompareExchange(ref droppedTruncateCompletion, 1, 0) == 0',
+  'Interlocked.CompareExchange(ref droppedDeleteCompletion, 1, 0) == 0',
   'Only one completion-loss injection may be armed per GateClient session.',
   'cts.Cancel();',
   'Native.Cancel(port);',
@@ -56,6 +59,15 @@ $truncatePersist=$gate.IndexOf('TruncateReconciliation.HandleAsync(',$truncateRe
 if($truncateResult -lt 0 -or $truncateDrop -lt 0 -or $truncateCancel -lt 0 -or $truncatePersist -lt 0 -or
    $truncateResult -gt $truncateDrop -or $truncateDrop -gt $truncateCancel -or $truncateCancel -gt $truncatePersist){
   throw 'TRUNCATE completion-loss injection must run after receiving TruncateResult but before authoritative completion persistence.'
+}
+
+$deleteResult=$gate.IndexOf('if ((RgEventType)ev.EventType == RgEventType.DeleteDispositionResult)')
+$deleteDrop=$gate.IndexOf('if (options.DropFirstDeleteCompletion',$deleteResult)
+$deleteCancel=$gate.IndexOf('cts.Cancel();',$deleteDrop)
+$deletePersist=$gate.IndexOf('DeleteReconciliation.HandleDispositionAsync(',$deleteResult)
+if($deleteResult -lt 0 -or $deleteDrop -lt 0 -or $deleteCancel -lt 0 -or $deletePersist -lt 0 -or
+   $deleteResult -gt $deleteDrop -or $deleteDrop -gt $deleteCancel -or $deleteCancel -gt $deletePersist){
+  throw 'DELETE completion-loss injection must run after receiving DeleteDispositionResult but before authoritative completion persistence.'
 }
 
 $restart=$gate.IndexOf('RestartReconciliation.ObservePendingAsync(')
@@ -105,13 +117,38 @@ foreach($required in @(
   if($helper -notmatch [regex]::Escape($required)){throw "RuntimeHarness TRUNCATE completion-loss trigger invariant missing: $required"}
 }
 $truncateHelperStart=$helper.IndexOf('static void TruncateEndOfFile(string filePath, long length, string readyMarker, string goMarker)')
-$truncateHelperEnd=$helper.IndexOf('static void MapAndWrite(string filePath)',$truncateHelperStart)
+$truncateHelperEnd=$helper.IndexOf('static void DeleteFileByDisposition(string filePath, string readyMarker, string goMarker)',$truncateHelperStart)
 if($truncateHelperStart -lt 0 -or $truncateHelperEnd -lt 0){
   throw 'TruncateEndOfFile source block missing.'
 }
 $truncateHelperBlock=$helper.Substring($truncateHelperStart,$truncateHelperEnd-$truncateHelperStart)
 if($truncateHelperBlock -match [regex]::Escape('Native.WriteFile')){
   throw 'Completion-loss TRUNCATE trigger must not issue a follow-up WRITE after EOF mutation.'
+}
+
+foreach($required in @(
+  'case "delete-file":',
+  'DeleteFileByDisposition(',
+  'const uint DeleteAccess = 0x00010000',
+  'const int FileDispositionInfo = 4',
+  'FileDispositionInfo { DeleteFile = true }',
+  'Timed out waiting for durable CREATE completion before DELETE disposition.',
+  'SetFileInformationByHandle(FileDispositionInfo) failed',
+  'Disposing this exact handle drives IRP_MJ_CLEANUP'
+)){
+  if($helper -notmatch [regex]::Escape($required)){throw "RuntimeHarness DELETE completion-loss trigger invariant missing: $required"}
+}
+$deleteHelperStart=$helper.IndexOf('static void DeleteFileByDisposition(string filePath, string readyMarker, string goMarker)')
+$deleteHelperEnd=$helper.IndexOf('static void MapAndWrite(string filePath)',$deleteHelperStart)
+if($deleteHelperStart -lt 0 -or $deleteHelperEnd -lt 0){
+  throw 'DeleteFileByDisposition source block missing.'
+}
+$deleteHelperBlock=$helper.Substring($deleteHelperStart,$deleteHelperEnd-$deleteHelperStart)
+if($deleteHelperBlock -match [regex]::Escape('Native.WriteFile')){
+  throw 'Completion-loss DELETE trigger must not issue a follow-up WRITE after disposition.'
+}
+if($deleteHelperBlock -match [regex]::Escape('File.Delete(filePath)')){
+  throw 'Completion-loss DELETE trigger must use the exact handle disposition, not a second high-level delete.'
 }
 
 foreach($required in @(
@@ -178,6 +215,32 @@ foreach($required in @(
   'truncateRestartObserved',
   'truncateRestartSupportsCompleted',
   'truncateRecoveryTransactionNotReady',
+  "'--drop-first-delete-completion'",
+  "'delete-file'",
+  'Wait-File $deleteReady $deleteTrigger 30',
+  'Wait-LogPattern $deleteGateOut ''CreateResult\s+request='' $deleteGate 30',
+  'Set-Content -LiteralPath $deleteGo -Value ''go''',
+  'DELETE disposition must complete before completion evidence is intentionally dropped',
+  'DELETE pathname still exists after the disposition handle closed',
+  'delete-state\delete-intent-journal.jsonl',
+  'delete-state\delete-completion-journal.jsonl',
+  'delete-state\delete-finalization-journal.jsonl',
+  'Pre-restart DELETE finalization may only be exact-handle CleanupObserved evidence',
+  'Restart DELETE evidence must never manufacture an authoritative disposition completion',
+  '[int]$_.source -eq 2',
+  '[int]$deleteRestartRecord.state -ne 1',
+  '[int]$deleteRestartRecord.pathState -ne 1',
+  '[int]$_.kind -eq 7',
+  '[int]$deleteTransaction[0].state -eq 1',
+  '[int]$deleteTransaction[0].state -ne 2',
+  'DELETE must retain exactly one verified Ready full-preimage copy-out action',
+  'deleteCompletionLossObserved',
+  'deleteIntentDurable',
+  'deleteCompletionAbsent',
+  'deleteTargetRemoved',
+  'deleteRestartObserved',
+  'deleteRestartSupportsCompleted',
+  'deleteRecoveryTransactionNotReady',
   'unload_minifilter_lab.ps1',
   'crash-runtime-result.json'
 )){
@@ -214,6 +277,13 @@ foreach($required in @(
   'truncateRestartObserved',
   'truncateRestartSupportsCompleted',
   'truncateRecoveryTransactionNotReady',
+  'deleteCompletionLossObserved',
+  'deleteIntentDurable',
+  'deleteCompletionAbsent',
+  'deleteTargetRemoved',
+  'deleteRestartObserved',
+  'deleteRestartSupportsCompleted',
+  'deleteRecoveryTransactionNotReady',
   'cleanupPassed',
   'Upload crash evidence',
   'Ensure LAB minifilter is unloaded after run'
@@ -238,4 +308,4 @@ if($workflow -notmatch [regex]::Escape('STALE KERNEL STATE: RansomGuardMinifilte
   throw 'VM startup must fail fast on an already-loaded stale LAB minifilter.'
 }
 
-Write-Host 'Completion-loss VM harness source check PASSED: CREATE, RENAME and TRUNCATE completed, authoritative results intentionally omitted, restart evidence remains conservative, live mutation transactions stay non-Ready.'
+Write-Host 'Completion-loss VM harness source check PASSED: CREATE, RENAME, TRUNCATE and DELETE completed, authoritative results intentionally omitted, restart/finalization evidence remains conservative, live mutation transactions stay non-Ready.'

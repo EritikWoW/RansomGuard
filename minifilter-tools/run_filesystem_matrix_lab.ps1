@@ -523,27 +523,42 @@ try{
         }
 
         $summary[$supportedKey]=$true
-        $scenario=Run-FileSystemScenario $activeVhd
-        if($null -eq $scenario -or $scenario -is [Array] -or
-           $scenario.PSObject.Properties.Name -notcontains 'passed'){
-            throw "$fs filesystem matrix scenario must return exactly one structured result object."
-        }
-        $summary.scenarios+=@($scenario)
-        $summary[$passedKey]=[bool]$scenario.passed
-
+        $scenario=$null
+        $scenarioFailure=$null
         try{
-            & $unloadScript -Volume ([string]$activeVhd.Volume)
-            $scenario.cleanupPassed=$true
-        }catch{
-            $summary.cleanupPassed=$false
-            throw "$fs minifilter unload failed before VHD detach: $($_.Exception.Message)"
+            $scenario=Run-FileSystemScenario $activeVhd
+            if($null -eq $scenario -or $scenario -is [Array] -or
+               $scenario.PSObject.Properties.Name -notcontains 'passed'){
+                throw "$fs filesystem matrix scenario must return exactly one structured result object."
+            }
+            $summary.scenarios+=@($scenario)
+            $summary[$passedKey]=[bool]$scenario.passed
+            if(-not $scenario.passed){
+                throw "$fs filesystem matrix scenario failed: $($scenario.error)"
+            }
+        }
+        catch{
+            $scenarioFailure=$_
+        }
+        finally{
+            try{
+                & $unloadScript -Volume ([string]$activeVhd.Volume) | Out-Host
+                if($null -ne $scenario -and $scenario -isnot [Array] -and
+                   $scenario.PSObject.Properties.Name -contains 'cleanupPassed'){
+                    $scenario.cleanupPassed=$true
+                }
+            }
+            catch{
+                $summary.cleanupPassed=$false
+                throw "$fs minifilter unload failed before VHD detach: $($_.Exception.Message)"
+            }
         }
 
         Remove-ScratchVhd $activeVhd
         $activeVhd=$null
 
-        if(-not $scenario.passed){
-            throw "$fs filesystem matrix scenario failed: $($scenario.error)"
+        if($null -ne $scenarioFailure){
+            throw $scenarioFailure
         }
     }
 

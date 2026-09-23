@@ -40,6 +40,9 @@ static NTSTATUS RgCreateRenamePostContext(_Inout_ PFLT_CALLBACK_DATA Data,
 static NTSTATUS RgCreateTruncatePostContext(_Inout_ PFLT_CALLBACK_DATA Data,
                                             _In_ ULONGLONG RequestSequence,
                                             _Outptr_ PRG_POST_CONTEXT *PostContext);
+static NTSTATUS RgCreateDeletePostContext(_Inout_ PFLT_CALLBACK_DATA Data,
+                                          _In_ ULONGLONG RequestSequence,
+                                          _Outptr_ PRG_POST_CONTEXT *PostContext);
 static NTSTATUS RgCreateCreatePostContext(_Inout_ PFLT_CALLBACK_DATA Data,
                                           _In_ ULONGLONG RequestSequence,
                                           _Outptr_ PRG_POST_CONTEXT *PostContext);
@@ -90,12 +93,18 @@ static VOID RgAttachPagingStreamContext(_In_ PCFLT_RELATED_OBJECTS FltObjects,
                                         _In_ ULONGLONG CreateRequestSequence);
 static VOID RgObserveWritableSection(_Inout_ PFLT_CALLBACK_DATA Data,
                                      _In_ PCFLT_RELATED_OBJECTS FltObjects);
+static VOID RgAttachDeleteHandleContext(_In_ PCFLT_RELATED_OBJECTS FltObjects,
+                                        _In_ ULONGLONG RequestSequence,
+                                        _In_ ULONG FileInformationClass,
+                                        _In_ ULONG DispositionFlags);
+static VOID RgCancelDeleteHandleContext(_In_ PCFLT_RELATED_OBJECTS FltObjects);
 static VOID RgStreamContextCleanup(_In_ PFLT_CONTEXT Context,
                                    _In_ FLT_CONTEXT_TYPE ContextType);
 static FLT_PREOP_CALLBACK_STATUS RgCompleteDenied(_Inout_ PFLT_CALLBACK_DATA Data);
 
 static const FLT_CONTEXT_REGISTRATION gContexts[] = {
     { FLT_STREAM_CONTEXT, 0, RgStreamContextCleanup, sizeof(RG_STREAM_CONTEXT), RG_POOL_TAG },
+    { FLT_STREAMHANDLE_CONTEXT, 0, RgStreamContextCleanup, sizeof(RG_DELETE_HANDLE_CONTEXT), RG_POOL_TAG },
     { FLT_CONTEXT_END }
 };
 
@@ -103,6 +112,7 @@ static const FLT_OPERATION_REGISTRATION gCallbacks[] = {
     { IRP_MJ_CREATE, 0, RgPreCreate, RgPostCreate, NULL },
     { IRP_MJ_WRITE, 0, RgPreWrite, NULL, NULL },
     { IRP_MJ_SET_INFORMATION, 0, RgPreSetInformation, RgPostSetInformation, NULL },
+    { IRP_MJ_CLEANUP, 0, RgPreCleanup, RgPostCleanup, NULL },
     { IRP_MJ_ACQUIRE_FOR_SECTION_SYNCHRONIZATION, 0, RgPreAcquireForSectionSynchronization, NULL, NULL },
     { IRP_MJ_OPERATION_END }
 };
@@ -818,8 +828,14 @@ FLT_POSTOP_CALLBACK_STATUS RgPostCreate(PFLT_CALLBACK_DATA Data,
 
 static VOID RgStreamContextCleanup(PFLT_CONTEXT Context, FLT_CONTEXT_TYPE ContextType)
 {
-    if (Context != NULL && ContextType == FLT_STREAM_CONTEXT) {
+    if (Context == NULL) {
+        return;
+    }
+
+    if (ContextType == FLT_STREAM_CONTEXT) {
         RtlSecureZeroMemory(Context, sizeof(RG_STREAM_CONTEXT));
+    } else if (ContextType == FLT_STREAMHANDLE_CONTEXT) {
+        RtlSecureZeroMemory(Context, sizeof(RG_DELETE_HANDLE_CONTEXT));
     }
 }
 

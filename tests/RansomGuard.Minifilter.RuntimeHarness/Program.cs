@@ -5,7 +5,7 @@ if (!OperatingSystem.IsWindows())
     throw new PlatformNotSupportedException("RansomGuard minifilter runtime harness is Windows-only.");
 
 if (args.Length == 0)
-    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | map-write --file <path> | create-new --file <path> | rename-file --source <path> --destination <path> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker> | containment-transition --file-a <path> --file-b <path> --ready <marker> --go <marker> --result <marker>");
+    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | map-write --file <path> | create-new --file <path> | rename-file --source <path> --destination <path> | truncate-eof --file <path> --length <bytes> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker> | containment-transition --file-a <path> --file-b <path> --ready <marker> --go <marker> --result <marker>");
 
 var command = args[0].ToLowerInvariant();
 var options = Parse(args.Skip(1).ToArray());
@@ -36,6 +36,11 @@ try
             RenameFile(
                 Require(options, "--source"),
                 Require(options, "--destination"));
+            break;
+        case "truncate-eof":
+            TruncateEndOfFile(
+                Require(options, "--file"),
+                RequireInt64(options, "--length"));
             break;
         case "containment-probe":
             ContainmentProbe(
@@ -84,6 +89,14 @@ static string Require(Dictionary<string, string> options, string name) =>
     options.TryGetValue(name, out var value) && !string.IsNullOrWhiteSpace(value)
         ? Path.GetFullPath(value)
         : throw new ArgumentException($"Missing {name}.");
+
+static long RequireInt64(Dictionary<string, string> options, string name) =>
+    options.TryGetValue(name, out var value) &&
+    long.TryParse(value, System.Globalization.NumberStyles.None,
+        System.Globalization.CultureInfo.InvariantCulture, out var parsed) &&
+    parsed >= 0
+        ? parsed
+        : throw new ArgumentException($"Missing/invalid nonnegative {name}.");
 
 static void HoldMappedView(string filePath, string readyMarker, string releaseMarker)
 {
@@ -363,6 +376,47 @@ static void RenameFile(string sourcePath, string destinationPath)
     File.Move(sourcePath, destinationPath, overwrite: false);
 }
 
+static void TruncateEndOfFile(string filePath, long length)
+{
+    EnsureFile(filePath);
+    var originalLength = new FileInfo(filePath).Length;
+    if (length >= originalLength)
+        throw new ArgumentOutOfRangeException(nameof(length),
+            "truncate-eof requires a target length smaller than the current file.");
+
+    const uint GenericWrite = 0x40000000;
+    const uint ShareRead = 0x00000001;
+    const uint ShareWrite = 0x00000002;
+    const uint ShareDelete = 0x00000004;
+    const uint OpenExisting = 3;
+    const uint FileAttributeNormal = 0x00000080;
+    const int FileEndOfFileInfo = 6;
+
+    using var file = Native.CreateFileW(
+        filePath,
+        GenericWrite,
+        ShareRead | ShareWrite | ShareDelete,
+        IntPtr.Zero,
+        OpenExisting,
+        FileAttributeNormal,
+        IntPtr.Zero);
+    if (file.IsInvalid)
+        throw new System.ComponentModel.Win32Exception(
+            Marshal.GetLastWin32Error(), $"CreateFileW for truncate failed for '{filePath}'.");
+
+    var info = new Native.FileEndOfFileInfo { EndOfFile = length };
+    if (!Native.SetFileInformationByHandle(
+            file,
+            FileEndOfFileInfo,
+            ref info,
+            checked((uint)Marshal.SizeOf<Native.FileEndOfFileInfo>())))
+        throw new System.ComponentModel.Win32Exception(
+            Marshal.GetLastWin32Error(), $"SetFileInformationByHandle(FileEndOfFileInfo) failed for '{filePath}'.");
+
+    // This helper must perform no follow-up WRITE. The completion-loss scenario validates
+    // exactly one successful EOF mutation followed by a deliberately lost TruncateResult.
+}
+
 static void MapAndWrite(string filePath)
 {
     EnsureFile(filePath);
@@ -445,6 +499,12 @@ static void EnsureFile(string path)
 
 static class Native
 {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct FileEndOfFileInfo
+    {
+        public long EndOfFile;
+    }
+
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern SafeFileHandle CreateFileW(
         string lpFileName,
@@ -454,6 +514,14 @@ static class Native
         uint dwCreationDisposition,
         uint dwFlagsAndAttributes,
         IntPtr hTemplateFile);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetFileInformationByHandle(
+        SafeFileHandle hFile,
+        int fileInformationClass,
+        ref FileEndOfFileInfo fileInformation,
+        uint bufferSize);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern IntPtr CreateFileMappingW(

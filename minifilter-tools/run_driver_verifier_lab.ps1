@@ -174,7 +174,7 @@ $summary=[ordered]@{
     armBootUtc=$armBoot.ToString('o')
     currentBootUtc=$currentBoot.ToString('o')
     bootChanged=$true
-    standardSettingsPersisted=$false
+    armStandardSettingsBound=$false
     verifierObservedTargetLoaded=$false
     noBugcheckBeforeStress=$false
     stressPassed=$false
@@ -192,15 +192,25 @@ $probeLoaded=$false
 $resetAttempted=$false
 $stressResults=Join-Path $ResultsDirectory 'stress'
 try{
+    if(-not [string]::Equals([string]$state.standardMask,('0x{0:X8}' -f $StandardMask),[StringComparison]::OrdinalIgnoreCase)){
+        throw "ARM state does not bind the expected standard Driver Verifier mask. armed='$($state.standardMask)' expected='$('{0:X8}' -f $StandardMask)'."
+    }
+    $summary.armStandardSettingsBound=$true
+
+    # oneboot is allowed to change how settings are represented for future boots. If
+    # persistent registry values remain visible on this verified boot, they may name
+    # only our target and may not weaken the standard mask. Current activity is proven
+    # authoritatively below after the exact driver is loaded with verifier /query.
     $reg=Get-VerifierRegistryState
-    if($reg.DriverTokens.Count -ne 1 -or
-       -not [string]::Equals([string]$reg.DriverTokens[0],$TargetDriver,[StringComparison]::OrdinalIgnoreCase)){
-        throw "Driver Verifier target after reboot is not exactly '$TargetDriver'. VerifyDrivers='$($reg.Drivers)'."
+    if($reg.DriverTokens.Count -gt 0){
+        if($reg.DriverTokens.Count -ne 1 -or
+           -not [string]::Equals([string]$reg.DriverTokens[0],$TargetDriver,[StringComparison]::OrdinalIgnoreCase)){
+            throw "Unexpected Driver Verifier target set after reboot. VerifyDrivers='$($reg.Drivers)'."
+        }
     }
-    if(($reg.Level -band $StandardMask) -ne $StandardMask){
-        throw "Driver Verifier standard mask is incomplete after reboot. level=0x$('{0:X8}' -f $reg.Level)"
+    if($reg.Level -ne 0 -and ($reg.Level -band $StandardMask) -ne $StandardMask){
+        throw "Visible Driver Verifier level after reboot weakens the armed standard mask. level=0x$('{0:X8}' -f $reg.Level)"
     }
-    $summary.standardSettingsPersisted=$true
 
     $armedUtc=[DateTime]::Parse([string]$state.armedUtc,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
     $beforeBugchecks=@(Get-BugCheckEvents $armedUtc)
@@ -312,7 +322,7 @@ finally{
     $summary.passed=[string]::IsNullOrWhiteSpace([string]$summary.error) -and
         [string]::IsNullOrWhiteSpace([string]$summary.cleanupError) -and
         $summary.bootChanged -and
-        $summary.standardSettingsPersisted -and
+        $summary.armStandardSettingsBound -and
         $summary.verifierObservedTargetLoaded -and
         $summary.noBugcheckBeforeStress -and
         $summary.stressPassed -and

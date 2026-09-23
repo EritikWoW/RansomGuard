@@ -88,7 +88,11 @@ foreach($required in @(
     '& $helperExe map-write --file $mappedTarget | Out-Host',
     'return [pscustomobject][ordered]@{',
     '$scenario -is [Array]',
-    'filesystem matrix scenario must return exactly one structured result object.'
+    'filesystem matrix scenario must return exactly one structured result object.',
+    '$scenarioFailure=$null',
+    '& $unloadScript -Volume ([string]$activeVhd.Volume) | Out-Host',
+    'if($null -ne $scenarioFailure)',
+    'throw $scenarioFailure'
 )){
     if($script -notmatch [regex]::Escape($required)){
         throw "Filesystem matrix invariant missing: $required"
@@ -152,11 +156,16 @@ if($script -notmatch [regex]::Escape('if(-not $activeVhd.Provisioned)') -or
 }
 
 $scenarioStart=$script.IndexOf('$scenario=Run-FileSystemScenario $activeVhd')
-$unload=$script.IndexOf('& $unloadScript -Volume ([string]$activeVhd.Volume)',$scenarioStart)
+$scenarioCatch=$script.IndexOf('$scenarioFailure=$_',$scenarioStart)
+$scenarioFinally=$script.IndexOf('finally{',$scenarioCatch)
+$unload=$script.IndexOf('& $unloadScript -Volume ([string]$activeVhd.Volume) | Out-Host',$scenarioFinally)
 $detach=$script.IndexOf('Remove-ScratchVhd $activeVhd',$unload)
-if($scenarioStart -lt 0 -or $unload -lt 0 -or $detach -lt 0 -or
-   $scenarioStart -gt $unload -or $unload -gt $detach){
-    throw 'Filesystem matrix must unload the minifilter before detaching/deleting a supported scratch VHD.'
+$rethrow=$script.IndexOf('throw $scenarioFailure',$detach)
+if($scenarioStart -lt 0 -or $scenarioCatch -lt 0 -or $scenarioFinally -lt 0 -or
+   $unload -lt 0 -or $detach -lt 0 -or $rethrow -lt 0 -or
+   $scenarioStart -gt $scenarioCatch -or $scenarioCatch -gt $scenarioFinally -or
+   $scenarioFinally -gt $unload -or $unload -gt $detach -or $detach -gt $rethrow){
+    throw 'Filesystem matrix must guarantee minifilter unload in finally before VHD detach and only then rethrow a scenario failure.'
 }
 
 $workflow=Get-Content -LiteralPath $workflowPath -Raw

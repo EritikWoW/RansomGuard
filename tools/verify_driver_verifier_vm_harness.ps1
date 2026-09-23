@@ -112,7 +112,7 @@ foreach($required in @(
 if($workflow -match '(?m)^\s*push\s*:'){
     throw 'Driver Verifier VM workflow must remain manual-only.'
 }
-if($workflow.Contains('\\${{')){
+if($workflow.Contains('\${{')){
     throw 'Driver Verifier workflow contains an escaped GitHub expression and would pass a literal instead of evaluating inputs/secrets.'
 }
 

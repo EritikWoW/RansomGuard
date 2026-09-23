@@ -157,7 +157,7 @@ public sealed class TruncateOperationStore
                         existing.CompletionStatus == completionStatus &&
                         existing.CompletionInformation == completionInformation &&
                         existing.ObservedLength == observedLength &&
-                        Nullable.Equals(existing.FinalIdentity, finalIdentity))
+                        object.Equals(existing.FinalIdentity, finalIdentity))
                         return existing;
 
                     throw new InvalidDataException("Conflicting duplicate TRUNCATE completion.");
@@ -215,7 +215,7 @@ public sealed class TruncateOperationStore
                     x.IntentRecordSha256.Equals(intent.RecordSha256, StringComparison.OrdinalIgnoreCase) &&
                     x.Evidence == evidence &&
                     x.PathState == pathState &&
-                    Nullable.Equals(x.CurrentIdentity, currentIdentity) &&
+                    object.Equals(x.CurrentIdentity, currentIdentity) &&
                     x.ObservedLength == observedLength);
                 if (duplicate is not null) return duplicate;
             }
@@ -613,7 +613,7 @@ public sealed class TruncateOperationStore
             throw new InvalidDataException("TRUNCATE restart evidence does not match the conservative classifier.");
     }
 
-    private T Deserialize<T>(string raw, string label)
+    private T Deserialize<T>(string raw, string label) where T : class
     {
         try
         {

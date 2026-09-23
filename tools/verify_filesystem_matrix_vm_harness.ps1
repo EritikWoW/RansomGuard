@@ -33,9 +33,11 @@ foreach($required in @(
     'RansomGuard-*.vhd',
     'Get-DiskImage -ImagePath $staleVhd.FullName -ErrorAction Stop',
     'if($image.Attached)',
-    'Recovered detached stale filesystem-matrix VHD',
+    'Dismount-DiskImage -ImagePath $staleVhd.FullName -ErrorAction Stop | Out-Host',
+    'RansomGuardMinifilter is loaded',
+    'remained attached after Dismount-DiskImage',
+    'Removed stale filesystem-matrix VHD',
     'unable to verify whether scratch VHD is detached',
-    'scratch VHD is still attached',
     'RGFSNTFS',
     'RGFSREFS',
     'Provisioned=$false',
@@ -138,13 +140,20 @@ if($script -notmatch [regex]::Escape('$vhdPath=Join-Path $ScratchDirectory')){
 $staleStart=$script.IndexOf('$staleVhds=@(Get-ChildItem -LiteralPath $ScratchDirectory')
 $staleImage=$script.IndexOf('Get-DiskImage -ImagePath $staleVhd.FullName -ErrorAction Stop',$staleStart)
 $staleAttached=$script.IndexOf('if($image.Attached)',$staleImage)
-$staleDelete=$script.IndexOf('Remove-Item -LiteralPath $staleVhd.FullName -Force -ErrorAction Stop',$staleAttached)
+$staleFilterCheck=$script.IndexOf("if($filters -match '(?m)^\s*RansomGuardMinifilter\b')",$staleAttached)
+$staleDismount=$script.IndexOf('Dismount-DiskImage -ImagePath $staleVhd.FullName -ErrorAction Stop | Out-Host',$staleFilterCheck)
+$staleRequery=$script.IndexOf('$image=Get-DiskImage -ImagePath $staleVhd.FullName -ErrorAction Stop',$staleDismount)
+$staleRecheck=$script.IndexOf('if($image.Attached)',$staleRequery)
+$staleDelete=$script.IndexOf('Remove-Item -LiteralPath $staleVhd.FullName -Force -ErrorAction Stop',$staleRecheck)
 $staleVolumeCheck=$script.IndexOf('$staleVolumes=@(Get-Volume',$staleDelete)
 if($staleStart -lt 0 -or $staleImage -lt 0 -or $staleAttached -lt 0 -or
-   $staleDelete -lt 0 -or $staleVolumeCheck -lt 0 -or
+   $staleFilterCheck -lt 0 -or $staleDismount -lt 0 -or $staleRequery -lt 0 -or
+   $staleRecheck -lt 0 -or $staleDelete -lt 0 -or $staleVolumeCheck -lt 0 -or
    $staleStart -gt $staleImage -or $staleImage -gt $staleAttached -or
-   $staleAttached -gt $staleDelete -or $staleDelete -gt $staleVolumeCheck){
-    throw 'Stale VHD recovery must prove the guarded scratch VHD is detached before deleting it.'
+   $staleAttached -gt $staleFilterCheck -or $staleFilterCheck -gt $staleDismount -or
+   $staleDismount -gt $staleRequery -or $staleRequery -gt $staleRecheck -or
+   $staleRecheck -gt $staleDelete -or $staleDelete -gt $staleVolumeCheck){
+    throw 'Stale VHD recovery must verify minifilter unload, dismount the guarded scratch image, re-check Attached=false, and only then delete it.'
 }
 
 $scenarioFunctionStart=$script.IndexOf('function Run-FileSystemScenario(')

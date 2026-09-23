@@ -103,4 +103,36 @@ if($script -notmatch [regex]::Escape("if($full -notmatch '(?i)RansomGuard')") -o
     throw 'Concurrency stress root safety checks are missing.'
 }
 
+
+$workflowPath=Join-Path $RepositoryRoot '.github\workflows\minifilter-stress-vm.yml'
+if(-not(Test-Path -LiteralPath $workflowPath -PathType Leaf)){
+    throw 'Concurrency stress VM workflow is missing.'
+}
+$workflow=Get-Content -LiteralPath $workflowPath -Raw
+foreach($required in @(
+    'name: Minifilter concurrency stress VM lab',
+    'workflow_dispatch:',
+    'default: C:\RansomGuard-VM-Stress',
+    "default: '16'",
+    'runs-on: [self-hosted, Windows, X64, ransomguard-lab-vm]',
+    'RANSOMGUARD_LAB_VM: I_UNDERSTAND',
+    '.\tools\verify_concurrency_stress_vm_harness.ps1',
+    '.\minifilter-tools\run_concurrency_stress_lab.ps1',
+    'transactionCorrelationPassed',
+    'preimageHashPassed',
+    'gateStayedAlive',
+    'cleanupPassed',
+    'ransomguard-concurrency-stress-evidence'
+)){
+    if(-not $workflow.Contains($required)){
+        throw "Concurrency stress workflow invariant missing: $required"
+    }
+}
+if($workflow -match '(?m)^\s*(push|pull_request|schedule):'){
+    throw 'Concurrency stress VM workflow must remain manual-only.'
+}
+if($workflow -match '(?im)\b(verifier(?:\.exe)?|shutdown(?:\.exe)?|Restart-Computer|Stop-Computer|Format-Volume|diskpart(?:\.exe)?)\b'){
+    throw 'Concurrency stress VM workflow must not reboot, enable Driver Verifier, or format/manage disks.'
+}
+
 Write-Host 'Concurrency stress source gate PASSED: default parallelism=16 exceeds kernel cap=8, all destructive/mapped phases are correlated to durable evidence, pre-images are hash-checked, cleanup is bounded, and reboot/disk/verifier operations are absent.'

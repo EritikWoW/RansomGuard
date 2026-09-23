@@ -294,33 +294,41 @@ public sealed class DeleteOperationStore
             return new DeleteFinalizationAssessment(
                 DeleteFinalizationAssessmentState.Unresolved, matches.Length, matches[^1].RecordSha256);
 
-        var last = matches[^1];
-        var hasCancellation = matches.Any(x => x.State == DeleteFinalizationState.Cancelled);
-        var hasTopologyEvidence = matches.Any(x => x.State != DeleteFinalizationState.Cancelled);
+        var decisive = matches
+            .Where(x => x.State != DeleteFinalizationState.CleanupObserved)
+            .ToArray();
+        if (decisive.Length == 0)
+            return new DeleteFinalizationAssessment(
+                DeleteFinalizationAssessmentState.CleanupObservedOnly,
+                matches.Length,
+                matches[^1].RecordSha256);
+
+        var hasCancellation = decisive.Any(x => x.State == DeleteFinalizationState.Cancelled);
+        var topology = decisive.Where(x => x.State is
+                DeleteFinalizationState.DeletedObserved or
+                DeleteFinalizationState.StillPresentSameIdentity)
+            .ToArray();
         if (hasCancellation)
         {
             return new DeleteFinalizationAssessment(
-                hasTopologyEvidence
-                    ? DeleteFinalizationAssessmentState.Unresolved
-                    : DeleteFinalizationAssessmentState.ConsistentCancelled,
+                topology.Length == 0
+                    ? DeleteFinalizationAssessmentState.ConsistentCancelled
+                    : DeleteFinalizationAssessmentState.Unresolved,
                 matches.Length,
-                last.RecordSha256);
+                matches[^1].RecordSha256);
         }
 
-        var topologyStates = matches
-            .Select(x => x.State)
-            .Distinct()
-            .ToArray();
+        var topologyStates = topology.Select(x => x.State).Distinct().ToArray();
         if (topologyStates.Length != 1)
             return new DeleteFinalizationAssessment(
-                DeleteFinalizationAssessmentState.Unresolved, matches.Length, last.RecordSha256);
+                DeleteFinalizationAssessmentState.Unresolved, matches.Length, matches[^1].RecordSha256);
 
         return new DeleteFinalizationAssessment(
             topologyStates[0] == DeleteFinalizationState.DeletedObserved
                 ? DeleteFinalizationAssessmentState.ConsistentDeletedObserved
                 : DeleteFinalizationAssessmentState.ConsistentStillPresent,
             matches.Length,
-            last.RecordSha256);
+            matches[^1].RecordSha256);
     }
 
     public static DeleteFinalizationState ClassifyPathObservation(
@@ -362,15 +370,21 @@ public sealed class DeleteOperationStore
                 x.RequestSequence == intent.RequestSequence &&
                 x.IntentRecordSha256.Equals(intent.RecordSha256, StringComparison.OrdinalIgnoreCase))
             .OrderBy(x => x.Sequence).ToArray();
-        if (matches.Length == 0 || matches.Any(x => x.State == DeleteFinalizationState.Ambiguous))
+        if (matches.Length == 0 ||
+            matches.Any(x => x.State is DeleteFinalizationState.Ambiguous or
+                DeleteFinalizationState.StillPresentSameIdentity))
             return true;
 
-        var hasCancellation = matches.Any(x => x.State == DeleteFinalizationState.Cancelled);
-        var hasTopologyEvidence = matches.Any(x => x.State != DeleteFinalizationState.Cancelled);
-        if (hasCancellation)
-            return hasTopologyEvidence;
+        var decisive = matches
+            .Where(x => x.State != DeleteFinalizationState.CleanupObserved)
+            .Select(x => x.State)
+            .Distinct()
+            .ToArray();
+        if (decisive.Length != 1)
+            return true;
 
-        return matches.Select(x => x.State).Distinct().Count() != 1;
+        return decisive[0] is not
+            (DeleteFinalizationState.DeletedObserved or DeleteFinalizationState.Cancelled);
     }
 
     private void LoadAndValidateIntents(bool rebuildState = true)
@@ -599,8 +613,8 @@ public sealed class DeleteOperationStore
         switch (state)
         {
             case DeleteDispositionCompletionState.AcceptedDeletePending:
-                if (!intent.RequestDelete || deletePending != true || identity is null)
-                    throw new InvalidDataException("DeletePending completion requires a delete request, true state and identity.");
+                if (!intent.RequestDelete || deletePending != true)
+                    throw new InvalidDataException("DeletePending completion requires a delete request and explicit true state.");
                 break;
             case DeleteDispositionCompletionState.AcceptedDeleteNotPending:
                 if (deletePending != false)
@@ -625,6 +639,14 @@ public sealed class DeleteOperationStore
         if (!Enum.IsDefined(source) || !Enum.IsDefined(state) || !Enum.IsDefined(pathState))
             throw new InvalidDataException("Invalid DELETE finalization enum state.");
 
+        if (state == DeleteFinalizationState.CleanupObserved)
+        {
+            if (source != DeleteFinalizationSource.KernelCleanup ||
+                pathState != RestartPathState.QueryFailed || identity is not null)
+                throw new InvalidDataException("DELETE cleanup observation has invalid fields.");
+            return;
+        }
+
         if (state == DeleteFinalizationState.Cancelled)
         {
             if (source != DeleteFinalizationSource.DispositionCancellation ||
@@ -633,8 +655,18 @@ public sealed class DeleteOperationStore
             return;
         }
 
-        if (!intent.RequestDelete || source == DeleteFinalizationSource.DispositionCancellation)
-            throw new InvalidDataException("DELETE topology finalization requires an actual delete request.");
+        if (!intent.RequestDelete || source is
+            DeleteFinalizationSource.KernelCleanup or DeleteFinalizationSource.DispositionCancellation)
+            throw new InvalidDataException("DELETE topology finalization requires an actual delete request and a topology probe.");
+
+        if (state == DeleteFinalizationState.Ambiguous)
+        {
+            if (pathState is not
+                (RestartPathState.QueryFailed or RestartPathState.ReparsePoint or RestartPathState.Directory) ||
+                identity is not null)
+                throw new InvalidDataException("Ambiguous DELETE topology observation has invalid fields.");
+            return;
+        }
 
         if (pathState == RestartPathState.File)
         {
@@ -717,7 +749,8 @@ public enum DeleteFinalizationSource
 {
     KernelCleanup = 1,
     RestartProbe = 2,
-    DispositionCancellation = 3
+    DispositionCancellation = 3,
+    LivePostCleanupProbe = 4
 }
 
 public enum DeleteFinalizationState
@@ -725,7 +758,8 @@ public enum DeleteFinalizationState
     DeletedObserved = 1,
     StillPresentSameIdentity = 2,
     Cancelled = 3,
-    Ambiguous = 4
+    Ambiguous = 4,
+    CleanupObserved = 5
 }
 
 public enum DeleteFinalizationAssessmentState
@@ -734,7 +768,8 @@ public enum DeleteFinalizationAssessmentState
     ConsistentDeletedObserved = 1,
     ConsistentStillPresent = 2,
     ConsistentCancelled = 3,
-    Unresolved = 4
+    Unresolved = 4,
+    CleanupObservedOnly = 5
 }
 
 public sealed record DeleteFinalizationAssessment(

@@ -104,6 +104,9 @@ foreach($required in @(
     'concurrencyProcessCount=20',
     'concurrency-stress',
     "'--gate-workers','4'",
+    "'Bounded gate workers\s+: 4'",
+    "'Sessions\concurrency-stress'",
+    "'create-state\create-completion-journal.jsonl'",
     '$stressCount=4',
     'Wait-StressProcesses $stressProcesses 90',
     'Assert-CorrelatedJournalPair',
@@ -163,6 +166,21 @@ foreach($binding in @(
 )){
     if($runtime -notmatch [regex]::Escape($binding)){
         throw "Concurrency stress exact path/requestSequence binding missing: $binding"
+    }
+}
+
+foreach($damaged in @(
+    'Bounded gate workerss+: 4',
+    'Sessionsconcurrency-stress',
+    'create-statecreate-completion-journal.jsonl',
+    'rename-staterename-completion-journal.jsonl',
+    'truncate-statetruncate-completion-journal.jsonl',
+    'delete-statedelete-completion-journal.jsonl',
+    'section-statewritable-section-journal.jsonl',
+    'paging-statepaging-write-journal.jsonl'
+)){
+    if($runtime.Contains($damaged)){
+        throw "Concurrency stress contains an escaped-path/log corruption marker: $damaged"
     }
 }
 

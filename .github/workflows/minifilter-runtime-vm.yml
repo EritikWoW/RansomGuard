@@ -124,11 +124,23 @@ jobs:
             'transitionRequested',
             'transitionKernelActive',
             'transitionDeniedNextWrite',
+            'concurrencyStressPassed',
+            'concurrencyCreateCorrelated',
+            'concurrencyRenameCorrelated',
+            'concurrencyTruncateCorrelated',
+            'concurrencyDeleteCorrelated',
+            'concurrencyMappedEvidence',
             'cleanupPassed',
             'passed'
           )
           foreach($name in $requiredTrue){
             if($summary.$name -ne $true){throw "Runtime result invariant '$name' was not true."}
+          }
+          if([int]$summary.concurrencyGateWorkers -ne 4){
+            throw "Runtime concurrency worker invariant mismatch: $($summary.concurrencyGateWorkers)"
+          }
+          if([int]$summary.concurrencyProcessCount -ne 20){
+            throw "Runtime concurrency process-count invariant mismatch: $($summary.concurrencyProcessCount)"
           }
           if(-not [string]::IsNullOrWhiteSpace([string]$summary.cleanupError)){
             throw "Runtime cleanup reported an error: $($summary.cleanupError)"

@@ -1,4 +1,4 @@
-RansomGuard 0.7.29.0 - audit-only quick start
+RansomGuard 0.7.30.0 - audit-only quick start
 
 Open UI\RansomGuard.Ui.exe normally.
 Go to Settings -> Background monitoring -> Set up RansomGuard and approve UAC.

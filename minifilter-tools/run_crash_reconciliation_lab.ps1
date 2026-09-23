@@ -245,7 +245,7 @@ try{
     $sessionRoot=Join-Path $store "Sessions\$session"
     $intentJournal=Join-Path $sessionRoot 'create-state\create-intent-journal.jsonl'
     $completionJournal=Join-Path $sessionRoot 'create-state\create-completion-journal.jsonl'
-    $intents=Read-JsonLines $intentJournal
+    $intents=@(Read-JsonLines $intentJournal)
     if($intents.Count -ne 1){
         throw "Expected exactly one durable CREATE intent after crash. Found $($intents.Count)."
     }
@@ -258,7 +258,7 @@ try{
     }
     $summary.createIntentDurable=$true
 
-    $completions=Read-JsonLines $completionJournal
+    $completions=@(Read-JsonLines $completionJournal)
     if($completions.Count -ne 0){
         throw "Authoritative CREATE completion must be absent after intentional result loss. Found $($completions.Count)."
     }
@@ -285,7 +285,7 @@ try{
     $summary.restartObserved=$true
 
     $restartJournal=Join-Path $sessionRoot 'restart-state\restart-reconciliation-journal.jsonl'
-    $restart=Read-JsonLines $restartJournal
+    $restart=@(Read-JsonLines $restartJournal)
     if($restart.Count -ne 1){
         throw "Expected exactly one restart observation. Found $($restart.Count)."
     }

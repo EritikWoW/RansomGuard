@@ -43,6 +43,8 @@ foreach($required in @(
     'Get-FreeDriveLetter',
     'Remove-ScratchVhd',
     'detach vdisk',
+    'if(-not $detach.Succeeded)',
+    'leaving the VHD file intact for VM checkpoint recovery',
     'minifilter unload failed before VHD detach',
     'refusing to detach/delete the active scratch VHD',
     'install_minifilter_lab.ps1',

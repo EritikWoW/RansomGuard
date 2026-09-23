@@ -194,7 +194,7 @@ function New-ScratchVhd([string]$FileSystem){
     $supported=$true
     $reason=''
     try{
-        $null=Format-Volume -DriveLetter $letter -FileSystem $FileSystem -NewFileSystemLabel ("RG{0}" -f $FileSystem.ToUpperInvariant()) -AllocationUnitSize 4096 -Confirm:$false -Force -ErrorAction Stop
+        $null=Format-Volume -DriveLetter $letter -FileSystem $FileSystem -NewFileSystemLabel ("RG{0}" -f $FileSystem.ToUpperInvariant()) -Confirm:$false -Force -ErrorAction Stop
     }
     catch{
         $supported=$false

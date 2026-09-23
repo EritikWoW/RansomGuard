@@ -19,6 +19,8 @@ typedef struct _RG_POST_CONTEXT {
     ULONGLONG RequestSequence;
     ULONG GateDecision;
     ULONG ActivationPreflight;
+    ULONG PostEventType;
+    ULONG FileInformationClass;
     PFLT_FILE_NAME_INFORMATION PreDestinationNameInfo;
     PFLT_FILE_NAME_INFORMATION PreCreateNameInfo;
 } RG_POST_CONTEXT, *PRG_POST_CONTEXT;

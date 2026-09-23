@@ -1,5 +1,6 @@
 [CmdletBinding()]
 param(
+    [Parameter(Mandatory=$true)][string]$DriverPackageDirectory,
     [string]$RootBase='C:\RansomGuard-VM-Verifier',
     [string]$ResultsDirectory=''
 )
@@ -9,6 +10,7 @@ Set-StrictMode -Version Latest
 
 $TargetDriver='RansomGuardMinifilter.sys'
 $StandardMask=[uint32]0x000209BB
+$stageScript=Join-Path $PSScriptRoot 'install_minifilter_lab.ps1'
 $VerifierRegistry='HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management'
 
 function Assert-Administrator {
@@ -100,6 +102,13 @@ Assert-Administrator
 $vm=Assert-DisposableVm
 if([string]::IsNullOrWhiteSpace($env:RG_WORKFLOW_SHA)){throw 'RG_WORKFLOW_SHA is required for exact Driver Verifier commit binding.'}
 if(-not(Test-Path -LiteralPath "$env:SystemRoot\System32\verifier.exe" -PathType Leaf)){throw 'verifier.exe is not available.'}
+if(-not(Test-Path -LiteralPath $stageScript -PathType Leaf)){throw "Driver staging helper missing: $stageScript"}
+$DriverPackageDirectory=[IO.Path]::GetFullPath($DriverPackageDirectory)
+foreach($required in @('RansomGuardMinifilter.inf','RansomGuardMinifilter.sys','RansomGuardMinifilter.cat')){
+    if(-not(Test-Path -LiteralPath (Join-Path $DriverPackageDirectory $required) -PathType Leaf)){
+        throw "Driver Verifier ARM package file missing: $required"
+    }
+}
 
 $RootBase=Assert-SafePath $RootBase 'RootBase'
 if(-not $ResultsDirectory){
@@ -122,6 +131,7 @@ $summary=[ordered]@{
     targetDriver=$TargetDriver
     standardMask=('0x{0:X8}' -f $StandardMask)
     cleanVerifierState=$false
+    driverPackageRegistered=$false
     targetOnlyConfigured=$false
     standardFlagsConfigured=$false
     querySettingsConfirmed=$false
@@ -154,6 +164,14 @@ try{
     if($preExistingDriverNames.Count -gt 0){
         throw "REFUSED: verifier /querysettings already names driver target(s): $($preExistingDriverNames -join ', '). Revert/clean the disposable VM instead of overwriting verifier state."
     }
+
+    & $stageScript -PackageDirectory $DriverPackageDirectory -Confirmation 'LAB-MINIFILTER' -StageOnly | Out-Host
+    $filtersAfterStage=(& fltmc filters 2>$null | Out-String)
+    if($LASTEXITCODE -ne 0){throw "Unable to query Filter Manager after Driver Verifier staging, exit=$LASTEXITCODE"}
+    if($filtersAfterStage -match '(?m)^\s*RansomGuardMinifilter\b'){
+        throw 'StageOnly unexpectedly loaded RansomGuardMinifilter before Driver Verifier reboot.'
+    }
+    $summary.driverPackageRegistered=$true
 
     $configure=Invoke-Verifier @('/standard','/driver',$TargetDriver) 'configure-standard'
     if($configure.ExitCode -ne 0){throw "verifier /standard /driver $TargetDriver failed. exit=$($configure.ExitCode). Output: $($configure.Output)"}
@@ -198,6 +216,7 @@ try{
     $summary.stateDurable=$true
     $summary.rebootRequired=$true
     $summary.passed=$summary.cleanVerifierState -and
+        $summary.driverPackageRegistered -and
         $summary.targetOnlyConfigured -and
         $summary.standardFlagsConfigured -and
         $summary.querySettingsConfirmed -and

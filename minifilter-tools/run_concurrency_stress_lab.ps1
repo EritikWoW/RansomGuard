@@ -200,6 +200,26 @@ function Assert-RequestUnique([object[]]$Records,[string]$Description){
     }
 }
 
+function Assert-NoPendingTransactions(
+    [object[]]$Intents,
+    [object[]]$Completions,
+    [string]$Description
+){
+    $completionIds=@($Completions | ForEach-Object {[uint64]$_.requestSequence})
+    foreach($intent in $Intents){
+        $request=[uint64]$intent.requestSequence
+        if(@($completionIds | Where-Object {$_ -eq $request}).Count -ne 1){
+            throw "$Description has an intent without exactly one authoritative completion: request=$request"
+        }
+    }
+    foreach($completion in $Completions){
+        $request=[uint64]$completion.requestSequence
+        if(@($Intents | Where-Object {[uint64]$_.requestSequence -eq $request}).Count -ne 1){
+            throw "$Description has an orphan completion without exactly one durable intent: request=$request"
+        }
+    }
+}
+
 function Assert-CreateEvidence([string[]]$Targets,[object[]]$Intents,[object[]]$Completions){
     foreach($target in $Targets){
         $key=Path-Key $target
@@ -367,6 +387,7 @@ $summary=[ordered]@{
     deletePassed=$false
     mappedWritePassed=$false
     transactionCorrelationPassed=$false
+    noPendingTransactionsPassed=$false
     preimageHashPassed=$false
     gateStayedAlive=$false
     cleanupPassed=$false
@@ -541,6 +562,12 @@ try{
     Assert-RequestUnique $deleteIntents 'DELETE intents'
     Assert-RequestUnique $deleteCompletions 'DELETE completions'
 
+    Assert-NoPendingTransactions $createIntents $createCompletions 'CREATE store'
+    Assert-NoPendingTransactions $renameIntents $renameCompletions 'RENAME store'
+    Assert-NoPendingTransactions $truncateIntents $truncateCompletions 'TRUNCATE store'
+    Assert-NoPendingTransactions $deleteIntents $deleteCompletions 'DELETE disposition store'
+    $summary.noPendingTransactionsPassed=$true
+
     Assert-CreateEvidence $createTargets $createIntents $createCompletions
     Assert-RenameEvidence $renameSources $renameDestinations $renameIntents $renameCompletions
     Assert-TruncateEvidence $truncateTargets $truncateIntents $truncateCompletions
@@ -552,7 +579,8 @@ try{
     $summary.passed=$summary.createPassed -and $summary.renamePassed -and
         $summary.truncatePassed -and $summary.deletePassed -and
         $summary.mappedWritePassed -and $summary.transactionCorrelationPassed -and
-        $summary.preimageHashPassed -and $summary.gateStayedAlive
+        $summary.noPendingTransactionsPassed -and $summary.preimageHashPassed -and
+        $summary.gateStayedAlive
 }
 catch{
     $summary.error=$_.Exception.Message

@@ -2,9 +2,7 @@
   "version": 1,
   "dependencies": {
     "net10.0": {
-      "ransomguard.rollback": {
-        "type": "Project"
-      }
+      "ransomguard.rollback": {"type": "Project"}
     },
     "net10.0/win-x64": {}
   }

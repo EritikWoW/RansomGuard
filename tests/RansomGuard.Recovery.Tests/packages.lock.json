@@ -2,12 +2,9 @@
   "version": 1,
   "dependencies": {
     "net10.0": {
-      "ransomguard.core": {
-        "type": "Project"
-      },
-      "RansomGuard.CryptoRecovery": {
-        "type": "Project"
-      }
-    }
+      "ransomguard.core": {"type": "Project"},
+      "RansomGuard.CryptoRecovery": {"type": "Project"}
+    },
+    "net10.0/win-x64": {}
   }
 }

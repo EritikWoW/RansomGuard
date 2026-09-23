@@ -101,7 +101,8 @@ foreach($required in @(
     'concurrencyDeleteCorrelated',
     'concurrencyMappedEvidence',
     'concurrencyGateWorkers=4',
-    'concurrencyProcessCount=20',
+    '$summary.concurrencyProcessCount=$stressProcesses.Count',
+    'Concurrency stress launched an unexpected helper count',
     'concurrency-stress',
     "'--gate-workers','4'",
     "'Bounded gate workers\s+: 4'",
@@ -109,6 +110,8 @@ foreach($required in @(
     "'create-state\create-completion-journal.jsonl'",
     '$stressCount=4',
     'Wait-StressProcesses $stressProcesses 90',
+    'Wait-CorrelatedJournalPair',
+    'Timed out waiting for correlated $Description journals',
     'foreach($targetPath in @($truncateFiles+$deleteFiles))',
     'durable stress CREATE completion for $targetPath',
     'Assert-CorrelatedJournalPair',
@@ -147,7 +150,7 @@ $stressCreateCompletion=$runtime.IndexOf('$createCompletionJournal',$stressReady
 $stressImmediate=$runtime.IndexOf('# Add 12 immediate operations',$stressCreateCompletion)
 $stressRelease=$runtime.IndexOf('foreach($marker in $stressGoMarkers)',$stressImmediate)
 $stressWait=$runtime.IndexOf('Wait-StressProcesses $stressProcesses 90',$stressRelease)
-$stressCorrelation=$runtime.IndexOf('Assert-CorrelatedJournalPair $renameIntents $renameCompletions ''stress RENAME'' 4 4',$stressWait)
+$stressCorrelation=$runtime.IndexOf('Wait-CorrelatedJournalPair (Join-Path $stressSession ''rename-state\rename-journal.jsonl'') $renameCompletionJournal ''stress RENAME'' 45 4 4',$stressWait)
 $stressStop=$runtime.IndexOf('Stop-LabProcess $gateStress ''concurrency stress gate''',$stressCorrelation)
 if($stressStart -lt 0 -or $stressStopTransition -lt 0 -or $stressGateStart -lt 0 -or
    $stressReady -lt 0 -or $stressCreateCompletion -lt 0 -or $stressImmediate -lt 0 -or

@@ -1,3 +1,16 @@
+# RansomGuard 0.7.30.0
+
+- Added a dedicated manual disposable-VM Driver Verifier qualification without changing minifilter protocol v15.
+- ARM refuses any pre-existing verifier configuration, targets only `RansomGuardMinifilter.sys`, enables the Windows standard Driver Verifier profile, switches verifier boot mode to `oneboot`, and writes SHA-256-bound exact-commit campaign state before reboot.
+- The runtime phase refuses to proceed unless a real reboot occurred after ARM, then loads the exact signed driver and requires `verifier /query` to name that loaded target before exercising the existing bounded-concurrency qualification.
+- Verifier runtime covers admission overflow plus concurrent CREATE, RENAME, TRUNCATE, DELETE and mapped-write paths with the same durable transaction/pre-image/section/paging evidence requirements as 0.7.28.
+- Any Windows bugcheck event in the Driver Verifier qualification window fails the campaign rather than being treated as a successful stress result.
+- A successful runtime phase executes `verifier /reset`, verifies persistent settings are cleared for the next boot, and persists a reset-bound campaign state.
+- CLEAR requires a second real reboot, proves both scheduled and current verifier activity no longer names the RansomGuard driver, proves the minifilter is unloaded, and archives the completed campaign.
+- Added a dedicated source gate that forbids `/all`, wildcard driver selection, volatile/persistent verifier modes, direct VerifyDrivers/VerifyDriverLevel registry mutation, automatic reboot/shutdown and BCD mutation.
+- Added `.github/workflows/minifilter-verifier-vm.yml` with explicit `arm`, `runtime` and `clear` phases. The workflow never reboots the VM itself.
+- Bumped userspace/LAB and driver package version to 0.7.30.0.
+
 # RansomGuard 0.7.29.0
 
 - Added a combined manual disposable-VM fault campaign without changing minifilter protocol v15.

@@ -154,7 +154,7 @@ jobs:
           .\minifilter-tools\run_driver_verifier_lab.ps1 -LabReleaseDirectory $env:RG_LAB_RELEASE -DriverPackageDirectory $env:RG_DRIVER_PACKAGE -RootBase $env:RG_VERIFIER_ROOT_BASE -StressRootBase $env:RG_VERIFIER_STRESS_ROOT_BASE -ResultsDirectory $results -Parallelism $parallel
           $summary=Get-Content -LiteralPath (Join-Path $results 'driver-verifier-runtime-result.json') -Raw | ConvertFrom-Json
           foreach($name in @(
-            'bootChanged','standardSettingsPersisted','verifierObservedTargetLoaded',
+            'bootChanged','armStandardSettingsBound','verifierObservedTargetLoaded',
             'noBugcheckBeforeStress','stressPassed','noBugcheckAfterStress',
             'resetCommandSucceeded','persistentSettingsCleared','resetStateDurable',
             'rebootRequired','passed'

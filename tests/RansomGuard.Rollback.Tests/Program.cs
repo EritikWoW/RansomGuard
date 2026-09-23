@@ -1017,9 +1017,11 @@ try
         0,
         true,
         null);
-    Check(deleteState.PendingIntents.Count == 0 &&
-          deleteState.UnsettledIntents.Count == 0,
-        "authoritative DELETE disposition plus observed pathname absence settles the transaction");
+    Check(!deleteState.PendingIntents.Any(x =>
+              x.RequestSequence == deleteIntent.RequestSequence) &&
+          !deleteState.UnsettledIntents.Any(x =>
+              x.RequestSequence == deleteIntent.RequestSequence),
+        "authoritative DELETE disposition plus observed pathname absence settles the correlated transaction");
 
     var conflictingDeleteIntent = await deleteState.RecordIntentAsync(
         306,

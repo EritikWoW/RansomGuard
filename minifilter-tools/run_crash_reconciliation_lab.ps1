@@ -203,6 +203,21 @@ $truncateReconcileOut=Join-Path $ResultsDirectory 'truncate-reconcile-only.out.l
 $truncateReconcileErr=$truncateReconcileOut + '.err'
 $truncatePlanPath=Join-Path $ResultsDirectory 'truncate-recovery-plan.json'
 
+$deleteRoot=Join-Path $RootBase "delete-result-loss-$stamp"
+$deleteStore=Join-Path $ResultsDirectory 'delete-result-loss-store'
+$deleteSession='delete-result-loss'
+$deleteTarget=Join-Path $deleteRoot 'delete-before-completion-loss.bin'
+$deleteOriginalLength=8192
+$deleteGateOut=Join-Path $ResultsDirectory 'delete-gate.out.log'
+$deleteGateErr=$deleteGateOut + '.err'
+$deleteTriggerOut=Join-Path $ResultsDirectory 'delete-trigger.out.log'
+$deleteTriggerErr=$deleteTriggerOut + '.err'
+$deleteReady=Join-Path $ResultsDirectory 'delete-open.ready'
+$deleteGo=Join-Path $ResultsDirectory 'delete-open.go'
+$deleteReconcileOut=Join-Path $ResultsDirectory 'delete-reconcile-only.out.log'
+$deleteReconcileErr=$deleteReconcileOut + '.err'
+$deletePlanPath=Join-Path $ResultsDirectory 'delete-recovery-plan.json'
+
 $installScript=Join-Path $PSScriptRoot 'install_minifilter_lab.ps1'
 $unloadScript=Join-Path $PSScriptRoot 'unload_minifilter_lab.ps1'
 
@@ -235,6 +250,13 @@ $summary=[ordered]@{
     truncateRestartObserved=$false
     truncateRestartSupportsCompleted=$false
     truncateRecoveryTransactionNotReady=$false
+    deleteCompletionLossObserved=$false
+    deleteIntentDurable=$false
+    deleteCompletionAbsent=$false
+    deleteTargetRemoved=$false
+    deleteRestartObserved=$false
+    deleteRestartSupportsCompleted=$false
+    deleteRecoveryTransactionNotReady=$false
     cleanupPassed=$false
     cleanupError=$null
     passed=$false
@@ -247,6 +269,8 @@ $renameGate=$null
 $renameTrigger=$null
 $truncateGate=$null
 $truncateTrigger=$null
+$deleteGate=$null
+$deleteTrigger=$null
 $runtimeFailure=$null
 $cleanupFailure=$null
 
@@ -673,13 +697,179 @@ try{
     }
     $summary.truncateRecoveryTransactionNotReady=$true
 
+    # Scenario 4: a DELETE disposition is accepted and the exact handle later closes, but the
+    # authoritative DeleteDispositionResult is intentionally omitted before user-mode persistence.
+    # Handle cleanup is not treated as deletion proof. Restart must separately observe pathname
+    # absence and recovery must remain review-only while the verified full pre-image is copy-out Ready.
+    Prepare-GateRoot $gateExe $deleteRoot
+    [IO.File]::WriteAllBytes($deleteTarget,[byte[]]::new($deleteOriginalLength))
+    if((Get-Item -LiteralPath $deleteTarget).Length -ne $deleteOriginalLength){
+        throw "DELETE source length setup mismatch: $deleteTarget"
+    }
+
+    $deleteGate=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $deleteRoot),
+        '--store',(Quote-Arg $deleteStore),
+        '--session',$deleteSession,
+        '--drop-first-delete-completion'
+    ) $deleteGateOut $deleteGateErr
+
+    Wait-LogPattern $deleteGateOut 'LAB completion-loss injection\s+: ARMED for the first authoritative DELETE disposition result' $deleteGate 45
+    Wait-LogPattern $deleteGateOut 'kernel gate ACTIVE' $deleteGate 45
+
+    $deleteTrigger=Start-LoggedProcess $helperExe @(
+        'delete-file',
+        '--file',(Quote-Arg $deleteTarget),
+        '--ready',(Quote-Arg $deleteReady),
+        '--go',(Quote-Arg $deleteGo)
+    ) $deleteTriggerOut $deleteTriggerErr
+
+    Wait-File $deleteReady $deleteTrigger 30
+    Wait-LogPattern $deleteGateOut 'CreateResult\s+request=' $deleteGate 30
+    Set-Content -LiteralPath $deleteGo -Value 'go' -Encoding ASCII
+
+    if(-not $deleteTrigger.WaitForExit(45000)){
+        Stop-Process -Id $deleteTrigger.Id -Force -ErrorAction SilentlyContinue
+        throw 'DELETE completion-loss trigger did not return.'
+    }
+    if($deleteTrigger.ExitCode -ne 0){
+        $err=Get-Content -LiteralPath $deleteTriggerErr -Raw -ErrorAction SilentlyContinue
+        throw "DELETE disposition must complete before completion evidence is intentionally dropped. exit=$($deleteTrigger.ExitCode). $err"
+    }
+
+    if(-not $deleteGate.WaitForExit(30000)){
+        Stop-Process -Id $deleteGate.Id -Force -ErrorAction SilentlyContinue
+        throw 'GateClient did not exit cleanly after dropping the authoritative DELETE disposition result.'
+    }
+    if($deleteGate.ExitCode -ne 0){
+        throw "GateClient DELETE completion-loss injection should exit cleanly. exit=$($deleteGate.ExitCode)"
+    }
+
+    $deleteGateCombined=(Get-Content -LiteralPath $deleteGateOut -Raw -ErrorAction SilentlyContinue)+[Environment]::NewLine+
+        (Get-Content -LiteralPath $deleteGateErr -Raw -ErrorAction SilentlyContinue)
+    if($deleteGateCombined -notmatch 'LAB COMPLETION LOSS: intentionally dropping authoritative DELETE disposition result'){
+        throw "GateClient did not prove the intended DELETE completion-loss point. Output: $deleteGateCombined"
+    }
+    $summary.deleteCompletionLossObserved=$true
+
+    $deleteGoneDeadline=(Get-Date).AddSeconds(10)
+    while((Get-Date) -lt $deleteGoneDeadline -and (Test-Path -LiteralPath $deleteTarget)){
+        Start-Sleep -Milliseconds 100
+    }
+    if(Test-Path -LiteralPath $deleteTarget){
+        throw "DELETE pathname still exists after the disposition handle closed: $deleteTarget"
+    }
+    $summary.deleteTargetRemoved=$true
+
+    $deleteSessionRoot=Join-Path $deleteStore "Sessions\$deleteSession"
+    $deleteIntentJournal=Join-Path $deleteSessionRoot 'delete-state\delete-intent-journal.jsonl'
+    $deleteCompletionJournal=Join-Path $deleteSessionRoot 'delete-state\delete-completion-journal.jsonl'
+    $deleteFinalizationJournal=Join-Path $deleteSessionRoot 'delete-state\delete-finalization-journal.jsonl'
+    $deleteIntents=@(Read-JsonLines $deleteIntentJournal)
+    if($deleteIntents.Count -ne 1){
+        throw "Expected exactly one durable DELETE intent after result loss. Found $($deleteIntents.Count)."
+    }
+    $deleteIntent=$deleteIntents[0]
+    if(-not [string]::Equals([IO.Path]::GetFullPath([string]$deleteIntent.originalPath),$deleteTarget,[StringComparison]::OrdinalIgnoreCase) -or
+       [uint64]$deleteIntent.requestSequence -eq 0 -or
+       [uint32]$deleteIntent.fileInformationClass -ne 13 -or
+       [uint32]$deleteIntent.dispositionFlags -ne 1 -or
+       $deleteIntent.requestDelete -ne $true){
+        throw "Durable DELETE intent mismatch: $($deleteIntent | ConvertTo-Json -Compress -Depth 20)"
+    }
+    $summary.deleteIntentDurable=$true
+
+    $deleteCompletions=@(Read-JsonLines $deleteCompletionJournal)
+    if($deleteCompletions.Count -ne 0){
+        throw "Authoritative DELETE disposition completion must be absent after intentional result loss. Found $($deleteCompletions.Count)."
+    }
+    $summary.deleteCompletionAbsent=$true
+
+    # Cleanup evidence may or may not have reached user mode before the deliberate disconnect.
+    # Either way, it is never accepted as proof of pathname deletion. Restart must append a
+    # separate RestartProbe observation.
+    $deleteFinalizationsBefore=@(Read-JsonLines $deleteFinalizationJournal)
+    foreach($record in $deleteFinalizationsBefore){
+        if([int]$record.state -ne 5 -or [int]$record.source -ne 1){
+            throw "Pre-restart DELETE finalization may only be exact-handle CleanupObserved evidence: $($record | ConvertTo-Json -Compress -Depth 20)"
+        }
+    }
+
+    $deleteReconcile=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $deleteRoot),
+        '--store',(Quote-Arg $deleteStore),
+        '--reconcile-only'
+    ) $deleteReconcileOut $deleteReconcileErr
+    if(-not $deleteReconcile.WaitForExit(30000)){
+        Stop-Process -Id $deleteReconcile.Id -Force -ErrorAction SilentlyContinue
+        throw 'DELETE reconcile-only GateClient did not exit.'
+    }
+    if($deleteReconcile.ExitCode -ne 0){
+        $err=Get-Content -LiteralPath $deleteReconcileErr -Raw -ErrorAction SilentlyContinue
+        throw "DELETE reconcile-only GateClient failed, exit=$($deleteReconcile.ExitCode). $err"
+    }
+
+    $deleteReconcileText=(Get-Content -LiteralPath $deleteReconcileOut -Raw)
+    if($deleteReconcileText -notmatch 'RECONCILE ONLY: observed=1; completed-evidence=1; not-completed-evidence=0; ambiguous=0'){
+        throw "Unexpected DELETE restart reconciliation summary: $deleteReconcileText"
+    }
+    $summary.deleteRestartObserved=$true
+
+    $deleteCompletionsAfter=@(Read-JsonLines $deleteCompletionJournal)
+    if($deleteCompletionsAfter.Count -ne 0){
+        throw 'Restart DELETE evidence must never manufacture an authoritative disposition completion.'
+    }
+
+    $deleteFinalizations=@(Read-JsonLines $deleteFinalizationJournal)
+    $deleteRestart=@($deleteFinalizations | Where-Object {
+        [uint64]$_.requestSequence -eq [uint64]$deleteIntent.requestSequence -and
+        [int]$_.source -eq 2
+    })
+    if($deleteRestart.Count -ne 1){
+        throw "Expected exactly one DELETE RestartProbe finalization. Found $($deleteRestart.Count)."
+    }
+    $deleteRestartRecord=$deleteRestart[0]
+    if([int]$deleteRestartRecord.state -ne 1 -or
+       [int]$deleteRestartRecord.pathState -ne 1 -or
+       -not [string]::IsNullOrEmpty([string]$deleteRestartRecord.currentFileIdHex)){
+        throw "Restart observation is not exact DELETE DeletedObserved evidence: $($deleteRestartRecord | ConvertTo-Json -Compress -Depth 20)"
+    }
+    $summary.deleteRestartSupportsCompleted=$true
+
+    & $recoveryExe plan --repository $deleteStore --session $deleteSession --output $deletePlanPath
+    if($LASTEXITCODE -ne 0){throw "DELETE recovery planner failed, exit=$LASTEXITCODE"}
+    $deletePlan=Get-Content -LiteralPath $deletePlanPath -Raw | ConvertFrom-Json -Depth 40
+    $deleteTransaction=@($deletePlan.actions | Where-Object {
+        [int]$_.kind -eq 7 -and [uint64]$_.evidenceSequence -eq [uint64]$deleteIntent.requestSequence
+    })
+    if($deleteTransaction.Count -ne 1){
+        throw "Expected exactly one ReviewDeleteTransaction action bound to the pending DELETE intent. Found $($deleteTransaction.Count)."
+    }
+    if([int]$deleteTransaction[0].state -eq 1){
+        throw 'Crash-reconciled DELETE transaction was incorrectly promoted to Ready.'
+    }
+    if([int]$deleteTransaction[0].state -ne 2){
+        throw "Consistent DeletedObserved DELETE transaction should be Review, found state=$($deleteTransaction[0].state)."
+    }
+    $deleteCopyOut=@($deletePlan.actions | Where-Object {
+        [int]$_.kind -eq 1 -and [int]$_.state -eq 1 -and
+        [string]::Equals([IO.Path]::GetFullPath([string]$_.primaryPath),$deleteTarget,[StringComparison]::OrdinalIgnoreCase)
+    })
+    if($deleteCopyOut.Count -ne 1){
+        throw "DELETE must retain exactly one verified Ready full-preimage copy-out action. Found $($deleteCopyOut.Count)."
+    }
+    if($deletePlan.automaticTopologyMutationAllowed -ne $false){
+        throw 'Recovery planner must not enable automatic topology mutation for crash-reconciled DELETE.'
+    }
+    $summary.deleteRecoveryTransactionNotReady=$true
+
     $summary.passed=$true
 }
 catch{
     $runtimeFailure=$_
 }
 finally{
-    foreach($p in @($trigger,$gate,$renameTrigger,$renameGate,$truncateTrigger,$truncateGate)){
+    foreach($p in @($trigger,$gate,$renameTrigger,$renameGate,$truncateTrigger,$truncateGate,$deleteTrigger,$deleteGate)){
         if($p -and -not $p.HasExited){
             Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
         }
@@ -709,4 +899,4 @@ if($cleanupFailure){throw $cleanupFailure}
 if($runtimeFailure){throw $runtimeFailure}
 if(-not $summary.passed){throw 'Crash/fault runtime harness did not pass all invariants.'}
 
-Write-Host "CREATE/RENAME/TRUNCATE completion-loss restart reconciliation LAB PASSED. Evidence: $ResultsDirectory"
+Write-Host "CREATE/RENAME/TRUNCATE/DELETE completion-loss restart reconciliation LAB PASSED. Evidence: $ResultsDirectory"

@@ -69,6 +69,15 @@ function Invoke-Verifier([string[]]$Arguments,[string]$Name){
     return [pscustomobject]@{ExitCode=$p.ExitCode;Output=($out+[Environment]::NewLine+$err).Trim()}
 }
 
+function Assert-VerifierMutationResult($Result,[string]$Name){
+    if($Result.ExitCode -ne 0 -and $Result.ExitCode -ne 2){
+        throw "verifier $Name failed. exit=$($Result.ExitCode). Output: $($Result.Output)"
+    }
+    if($Result.ExitCode -eq 2){
+        Write-Host "verifier $Name returned EXIT_CODE_REBOOT_NEEDED (2), which is a successful mutation requiring reboot."
+    }
+}
+
 function Get-VerifierRegistryState {
     $p=Get-ItemProperty -LiteralPath $VerifierRegistry -ErrorAction Stop
     $drivers=''
@@ -279,7 +288,8 @@ finally{
     try{
         $reset=Invoke-Verifier @('/reset') 'reset-after-runtime'
         $resetAttempted=$true
-        if($reset.ExitCode -ne 0){throw "verifier /reset failed. exit=$($reset.ExitCode). Output: $($reset.Output)"}
+        Assert-VerifierMutationResult $reset '/reset'
+        $summary.resetCommandExitCode=[int]$reset.ExitCode
         $summary.resetCommandSucceeded=$true
 
         $postReset=Get-VerifierRegistryState

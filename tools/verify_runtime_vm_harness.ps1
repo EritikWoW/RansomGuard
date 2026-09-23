@@ -109,6 +109,8 @@ foreach($required in @(
     "'create-state\create-completion-journal.jsonl'",
     '$stressCount=4',
     'Wait-StressProcesses $stressProcesses 90',
+    'foreach($targetPath in @($truncateFiles+$deleteFiles))',
+    'durable stress CREATE completion for $targetPath',
     'Assert-CorrelatedJournalPair',
     '[System.Collections.Generic.HashSet[uint64]]::new()',
     '$truncateIntent.requestSequence',
@@ -167,6 +169,10 @@ foreach($binding in @(
     if($runtime -notmatch [regex]::Escape($binding)){
         throw "Concurrency stress exact path/requestSequence binding missing: $binding"
     }
+}
+
+if($runtime -match [regex]::Escape('foreach($path in @($truncateFiles+$deleteFiles))')){
+    throw 'Concurrency stress must use a dedicated targetPath variable when waiting for CREATE completion evidence.'
 }
 
 foreach($damaged in @(

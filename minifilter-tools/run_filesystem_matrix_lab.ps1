@@ -179,6 +179,7 @@ function Invoke-DiskPartScript([string[]]$Lines,[string]$Description,[bool]$Allo
 function New-ScratchVhd([string]$FileSystem){
     $letter=Get-FreeDriveLetter
     $vhdPath=Join-Path $ScratchDirectory ("RansomGuard-{0}-{1}.vhd" -f $FileSystem.ToLowerInvariant(),[Guid]::NewGuid().ToString('N'))
+    $volume=("{0}:" -f $letter)
     if(Test-Path -LiteralPath $vhdPath){throw "Refusing to overwrite existing VHD: $vhdPath"}
 
     $create=Invoke-DiskPartScript @(
@@ -187,44 +188,47 @@ function New-ScratchVhd([string]$FileSystem){
         'attach vdisk',
         'create partition primary',
         "assign letter=$letter"
-    ) "create isolated $FileSystem VHD"
+    ) "create isolated $FileSystem VHD" $true
 
-    if(-not $create.Succeeded){throw "Could not create isolated $FileSystem VHD."}
-
-    $supported=$true
-    $reason=''
-    try{
-        $null=Format-Volume -DriveLetter $letter -FileSystem $FileSystem -NewFileSystemLabel ("RGFS{0}" -f $FileSystem.ToUpperInvariant()) -Confirm:$false -Force -ErrorAction Stop
-    }
-    catch{
-        $supported=$false
-        $reason=$_.Exception.Message
-    }
-
-    $volume=("{0}:" -f $letter)
-    if(-not $supported){
+    if(-not $create.Succeeded){
         return [pscustomobject]@{
             FileSystem=$FileSystem
             DriveLetter=$letter
             Volume=$volume
             VhdPath=$vhdPath
+            Provisioned=$false
             Supported=$false
-            Reason=$reason
+            Reason=("VHD provisioning failed: " + $create.Output)
         }
     }
 
-    $volumeInfo=Get-Volume -DriveLetter $letter -ErrorAction Stop
-    if(-not [string]::Equals([string]$volumeInfo.FileSystem,$FileSystem,[StringComparison]::OrdinalIgnoreCase)){
-        throw "Formatted filesystem mismatch. expected=$FileSystem actual=$($volumeInfo.FileSystem)"
-    }
+    try{
+        $null=Format-Volume -DriveLetter $letter -FileSystem $FileSystem -NewFileSystemLabel ("RGFS{0}" -f $FileSystem.ToUpperInvariant()) -Confirm:$false -Force -ErrorAction Stop
+        $volumeInfo=Get-Volume -DriveLetter $letter -ErrorAction Stop
+        if(-not [string]::Equals([string]$volumeInfo.FileSystem,$FileSystem,[StringComparison]::OrdinalIgnoreCase)){
+            throw "Formatted filesystem mismatch. expected=$FileSystem actual=$($volumeInfo.FileSystem)"
+        }
 
-    return [pscustomobject]@{
-        FileSystem=$FileSystem
-        DriveLetter=$letter
-        Volume=$volume
-        VhdPath=$vhdPath
-        Supported=$true
-        Reason=''
+        return [pscustomobject]@{
+            FileSystem=$FileSystem
+            DriveLetter=$letter
+            Volume=$volume
+            VhdPath=$vhdPath
+            Provisioned=$true
+            Supported=$true
+            Reason=''
+        }
+    }
+    catch{
+        return [pscustomobject]@{
+            FileSystem=$FileSystem
+            DriveLetter=$letter
+            Volume=$volume
+            VhdPath=$vhdPath
+            Provisioned=$true
+            Supported=$false
+            Reason=$_.Exception.Message
+        }
     }
 }
 
@@ -492,6 +496,9 @@ try{
         $summary[$attemptKey]=$true
 
         $activeVhd=New-ScratchVhd $fs
+        if(-not $activeVhd.Provisioned){
+            throw "$fs scratch VHD provisioning failed: $($activeVhd.Reason)"
+        }
         if(-not $activeVhd.Supported){
             $summary[$supportedKey]=$false
             if($fs -eq 'ReFS'){

@@ -143,7 +143,6 @@ $active=Join-Path $RootBase 'Active'
 if(Test-Path -LiteralPath $active){
     throw "REFUSED: an existing reboot campaign is already armed or awaiting cleanup: $active"
 }
-New-Item -ItemType Directory -Path $active -Force | Out-Null
 
 $root=Join-Path $active 'protected'
 $store=Join-Path $active 'rollback-store'
@@ -180,7 +179,10 @@ $summary=[ordered]@{
     truncateCompletionAbsent=$false
     truncateLengthChanged=$false
     preimageHashMatched=$false
+    preimageObjectVerified=$false
+    preservationBindingVerified=$false
     stateDurable=$false
+    failedCampaignRemoved=$false
     filterLeftLoadedForReboot=$false
     rebootRequired=$false
     passed=$false
@@ -194,6 +196,7 @@ try{
         throw 'REFUSED: RansomGuardMinifilter is already loaded. Revert/clean the disposable VM before arming reboot proof.'
     }
 
+    New-Item -ItemType Directory -Path $active -Force | Out-Null
     Prepare-GateRoot $gateExe $root
     $bytes=New-Object byte[] $originalLength
     for($i=0;$i -lt $bytes.Length;$i++){$bytes[$i]=[byte](($i*19+71)%251)}
@@ -281,6 +284,31 @@ try{
     }
     $summary.preimageHashMatched=$true
 
+    if([string]::IsNullOrWhiteSpace([string]$intent.preservationRecordSha256) -or
+       -not [string]::Equals(
+            [string]$capture[0].recordSha256,
+            [string]$intent.preservationRecordSha256,
+            [StringComparison]::OrdinalIgnoreCase)){
+        throw 'Reboot TRUNCATE intent is not bound to the durable full pre-image record.'
+    }
+    $summary.preservationBindingVerified=$true
+
+    if([string]::IsNullOrWhiteSpace([string]$capture[0].snapshotRelativePath)){
+        throw 'Reboot target full pre-image journal is missing snapshotRelativePath.'
+    }
+    $snapshot=Join-Path $sessionRoot ([string]$capture[0].snapshotRelativePath)
+    if(-not(Test-Path -LiteralPath $snapshot -PathType Leaf)){
+        throw "Reboot target full pre-image object is missing before reboot: $snapshot"
+    }
+    if((Get-Item -LiteralPath $snapshot).Length -ne $originalLength){
+        throw "Reboot target pre-image object length mismatch. expected=$originalLength actual=$((Get-Item -LiteralPath $snapshot).Length)"
+    }
+    $snapshotHash=(Get-FileHash -LiteralPath $snapshot -Algorithm SHA256).Hash
+    if(-not [string]::Equals($snapshotHash,$originalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw "Reboot target pre-image object SHA-256 mismatch before reboot. expected=$originalHash actual=$snapshotHash"
+    }
+    $summary.preimageObjectVerified=$true
+
     $state=[ordered]@{
         schema=1
         phase='armed'
@@ -297,6 +325,8 @@ try{
         requestSequence=[uint64]$intent.requestSequence
         originalFileIdHex=[string]$intent.originalFileIdHex
         preservationRecordSha256=[string]$intent.preservationRecordSha256
+        snapshotRelativePath=[string]$capture[0].snapshotRelativePath
+        snapshotSha256=$snapshotHash
     }
     $stateHash=Write-DurableJson $statePath $state
     Copy-Item -LiteralPath $statePath,$($statePath+'.sha256') -Destination $ResultsDirectory -Force
@@ -314,6 +344,8 @@ try{
         $summary.truncateCompletionAbsent -and
         $summary.truncateLengthChanged -and
         $summary.preimageHashMatched -and
+        $summary.preimageObjectVerified -and
+        $summary.preservationBindingVerified -and
         $summary.stateDurable -and
         $summary.filterLeftLoadedForReboot
 }
@@ -329,6 +361,17 @@ finally{
         try{
             $volume=[IO.Path]::GetPathRoot($root).TrimEnd('\')
             & $unloadScript -Volume $volume | Out-Host
+        }catch{
+            $summary.cleanupError=$_.Exception.Message
+        }
+    }
+
+    if(-not $summary.passed -and
+       [string]::IsNullOrWhiteSpace([string]$summary.cleanupError) -and
+       (Test-Path -LiteralPath $active)){
+        try{
+            Remove-Item -LiteralPath $active -Recurse -Force -ErrorAction Stop
+            $summary.failedCampaignRemoved=$true
         }catch{
             $summary.cleanupError=$_.Exception.Message
         }

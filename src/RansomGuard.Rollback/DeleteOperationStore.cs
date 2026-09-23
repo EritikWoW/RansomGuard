@@ -295,12 +295,19 @@ public sealed class DeleteOperationStore
                 DeleteFinalizationAssessmentState.Unresolved, matches.Length, matches[^1].RecordSha256);
 
         var last = matches[^1];
-        if (last.State == DeleteFinalizationState.Cancelled)
+        var hasCancellation = matches.Any(x => x.State == DeleteFinalizationState.Cancelled);
+        var hasTopologyEvidence = matches.Any(x => x.State != DeleteFinalizationState.Cancelled);
+        if (hasCancellation)
+        {
             return new DeleteFinalizationAssessment(
-                DeleteFinalizationAssessmentState.ConsistentCancelled, matches.Length, last.RecordSha256);
+                hasTopologyEvidence
+                    ? DeleteFinalizationAssessmentState.Unresolved
+                    : DeleteFinalizationAssessmentState.ConsistentCancelled,
+                matches.Length,
+                last.RecordSha256);
+        }
 
         var topologyStates = matches
-            .Where(x => x.State != DeleteFinalizationState.Cancelled)
             .Select(x => x.State)
             .Distinct()
             .ToArray();
@@ -355,11 +362,15 @@ public sealed class DeleteOperationStore
                 x.RequestSequence == intent.RequestSequence &&
                 x.IntentRecordSha256.Equals(intent.RecordSha256, StringComparison.OrdinalIgnoreCase))
             .OrderBy(x => x.Sequence).ToArray();
-        if (matches.Length == 0)
+        if (matches.Length == 0 || matches.Any(x => x.State == DeleteFinalizationState.Ambiguous))
             return true;
 
-        var last = matches[^1].State;
-        return last == DeleteFinalizationState.Ambiguous;
+        var hasCancellation = matches.Any(x => x.State == DeleteFinalizationState.Cancelled);
+        var hasTopologyEvidence = matches.Any(x => x.State != DeleteFinalizationState.Cancelled);
+        if (hasCancellation)
+            return hasTopologyEvidence;
+
+        return matches.Select(x => x.State).Distinct().Count() != 1;
     }
 
     private void LoadAndValidateIntents(bool rebuildState = true)

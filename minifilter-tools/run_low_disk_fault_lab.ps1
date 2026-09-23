@@ -126,26 +126,45 @@ function New-LowDiskVhd {
     $vhdPath=Join-Path $ScratchDirectory ("RansomGuard-low-disk-{0}.vhd" -f [Guid]::NewGuid().ToString('N'))
     if(Test-Path -LiteralPath $vhdPath){throw "Refusing to overwrite existing VHD: $vhdPath"}
 
-    $created=Invoke-DiskPartScript @(
-        "create vdisk file=""$vhdPath"" maximum=$VhdSizeMiB type=expandable",
-        "select vdisk file=""$vhdPath""",
-        'attach vdisk',
-        'create partition primary',
-        "assign letter=$letter"
-    ) 'create isolated low-disk VHD'
+    try{
+        $created=Invoke-DiskPartScript @(
+            "create vdisk file=""$vhdPath"" maximum=$VhdSizeMiB type=expandable",
+            "select vdisk file=""$vhdPath""",
+            'attach vdisk',
+            'create partition primary',
+            "assign letter=$letter"
+        ) 'create isolated low-disk VHD' $true
 
-    if(-not $created.Succeeded){throw "Unable to provision isolated low-disk VHD: $($created.Output)"}
-    $null=Format-Volume -DriveLetter $letter -FileSystem NTFS -NewFileSystemLabel 'RGLOWDISK' -Confirm:$false -Force -ErrorAction Stop
-    $volumeInfo=Get-Volume -DriveLetter $letter -ErrorAction Stop
-    if(-not [string]::Equals([string]$volumeInfo.FileSystem,'NTFS',[StringComparison]::OrdinalIgnoreCase)){
-        throw "Low-disk VHD filesystem mismatch. actual=$($volumeInfo.FileSystem)"
+        if(-not $created.Succeeded){
+            throw "Unable to provision isolated low-disk VHD: $($created.Output)"
+        }
+
+        $null=Format-Volume -DriveLetter $letter -FileSystem NTFS -NewFileSystemLabel 'RGLOWDISK' -Confirm:$false -Force -ErrorAction Stop
+        $volumeInfo=Get-Volume -DriveLetter $letter -ErrorAction Stop
+        if(-not [string]::Equals([string]$volumeInfo.FileSystem,'NTFS',[StringComparison]::OrdinalIgnoreCase)){
+            throw "Low-disk VHD filesystem mismatch. actual=$($volumeInfo.FileSystem)"
+        }
+
+        return [pscustomobject]@{
+            DriveLetter=$letter
+            Volume=($letter + ':')
+            Root=($letter + ':\')
+            VhdPath=$vhdPath
+        }
     }
-
-    return [pscustomobject]@{
-        DriveLetter=$letter
-        Volume=($letter + ':')
-        Root=($letter + ':\')
-        VhdPath=$vhdPath
+    catch{
+        $setupError=$_.Exception.Message
+        if(Test-Path -LiteralPath $vhdPath){
+            $detach=Invoke-DiskPartScript @(
+                "select vdisk file=""$vhdPath""",
+                'detach vdisk'
+            ) 'cleanup partially provisioned low-disk VHD' $true
+            if(-not $detach.Succeeded){
+                throw "Low-disk VHD setup failed and detach could not be confirmed. Original='$setupError'. Detach='$($detach.Output)'. Revert the disposable VM checkpoint."
+            }
+            Remove-Item -LiteralPath $vhdPath -Force -ErrorAction Stop
+        }
+        throw $setupError
     }
 }
 
@@ -195,6 +214,11 @@ function Read-JsonLines([string]$Path){
         $items+=@($line | ConvertFrom-Json -Depth 40)
     }
     return @($items)
+}
+
+function Nt-Success($Status){
+    $value=[uint64]$Status
+    return (($value -band 0x80000000L) -eq 0)
 }
 
 function Prepare-GateRoot([string]$GateExe,[string]$Root){
@@ -253,9 +277,13 @@ $summary=[ordered]@{
     sourcePreservedOnDenial=$false
     destinationAbsentOnDenial=$false
     budgetDenialObserved=$false
+    deniedIntentAbsent=$false
+    deniedCompletionAbsent=$false
     gateStayedAlive=$false
     retryPassed=$false
+    retryEvidenceDurable=$false
     preimageHashMatched=$false
+    preimageObjectVerified=$false
     cleanupPassed=$false
     passed=$false
     error=$null
@@ -327,6 +355,19 @@ try{
     }
     $summary.budgetDenialObserved=$true
 
+    $renameIntentJournal=Join-Path $sessionRoot 'rename-state\rename-journal.jsonl'
+    $renameCompletionJournal=Join-Path $sessionRoot 'rename-state\rename-completion-journal.jsonl'
+    $deniedIntents=@(Read-JsonLines $renameIntentJournal)
+    if($deniedIntents.Count -ne 0){
+        throw "Low-disk denied RENAME unexpectedly persisted a durable intent before preservation admission. Found=$($deniedIntents.Count)"
+    }
+    $summary.deniedIntentAbsent=$true
+    $deniedCompletions=@(Read-JsonLines $renameCompletionJournal)
+    if($deniedCompletions.Count -ne 0){
+        throw "Low-disk denied RENAME unexpectedly persisted an authoritative completion. Found=$($deniedCompletions.Count)"
+    }
+    $summary.deniedCompletionAbsent=$true
+
     if($gate.HasExited){throw "GateClient exited during low-disk denial. exit=$($gate.ExitCode)"}
     $summary.gateStayedAlive=$true
 
@@ -353,6 +394,43 @@ try{
     }
     $summary.retryPassed=$true
 
+    $renameDeadline=(Get-Date).AddSeconds(20)
+    $renameIntent=$null
+    $renameCompletion=$null
+    while((Get-Date) -lt $renameDeadline -and ($null -eq $renameIntent -or $null -eq $renameCompletion)){
+        $intents=@(Read-JsonLines $renameIntentJournal)
+        $matchingIntents=@($intents | Where-Object {
+            -not [string]::IsNullOrWhiteSpace([string]$_.sourcePath) -and
+            -not [string]::IsNullOrWhiteSpace([string]$_.destinationPath) -and
+            [string]::Equals([IO.Path]::GetFullPath([string]$_.sourcePath),$source,[StringComparison]::OrdinalIgnoreCase) -and
+            [string]::Equals([IO.Path]::GetFullPath([string]$_.destinationPath),$destination,[StringComparison]::OrdinalIgnoreCase)
+        })
+        if($matchingIntents.Count -gt 1){
+            throw "Post-pressure RENAME persisted duplicate matching intents. Found=$($matchingIntents.Count)"
+        }
+        if($matchingIntents.Count -eq 1){
+            $renameIntent=$matchingIntents[0]
+            $completions=@(Read-JsonLines $renameCompletionJournal)
+            $matchingCompletions=@($completions | Where-Object {
+                [uint64]$_.requestSequence -eq [uint64]$renameIntent.requestSequence -and
+                -not [string]::IsNullOrWhiteSpace([string]$_.finalDestinationPath) -and
+                [string]::Equals([IO.Path]::GetFullPath([string]$_.finalDestinationPath),$destination,[StringComparison]::OrdinalIgnoreCase)
+            })
+            if($matchingCompletions.Count -gt 1){
+                throw "Post-pressure RENAME persisted duplicate authoritative completions. Found=$($matchingCompletions.Count)"
+            }
+            if($matchingCompletions.Count -eq 1){$renameCompletion=$matchingCompletions[0]}
+        }
+        if($null -eq $renameIntent -or $null -eq $renameCompletion){Start-Sleep -Milliseconds 150}
+    }
+    if($null -eq $renameIntent -or $null -eq $renameCompletion){
+        throw 'Post-pressure RENAME did not persist exactly one correlated durable intent/completion pair.'
+    }
+    if(-not(Nt-Success $renameCompletion.completionStatus)){
+        throw "Post-pressure RENAME authoritative completion failed. status=$($renameCompletion.completionStatus)"
+    }
+    $summary.retryEvidenceDurable=$true
+
     $deadline=(Get-Date).AddSeconds(20)
     $capture=$null
     while((Get-Date) -lt $deadline -and $null -eq $capture){
@@ -372,6 +450,22 @@ try{
     }
     $summary.preimageHashMatched=$true
 
+    if([string]::IsNullOrWhiteSpace([string]$capture.snapshotRelativePath)){
+        throw 'Post-pressure source pre-image journal did not bind a snapshot object path.'
+    }
+    $snapshot=Join-Path $sessionRoot ([string]$capture.snapshotRelativePath)
+    if(-not(Test-Path -LiteralPath $snapshot -PathType Leaf)){
+        throw "Post-pressure source pre-image object is missing: $snapshot"
+    }
+    $snapshotHash=(Get-FileHash -LiteralPath $snapshot -Algorithm SHA256).Hash
+    if(-not [string]::Equals($snapshotHash,$sourceHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw "Post-pressure source pre-image object SHA-256 mismatch. expected=$sourceHash actual=$snapshotHash"
+    }
+    if((Get-Item -LiteralPath $snapshot).Length -ne 8MB){
+        throw "Post-pressure source pre-image object length mismatch. expected=$([long](8MB)) actual=$((Get-Item -LiteralPath $snapshot).Length)"
+    }
+    $summary.preimageObjectVerified=$true
+
     $evidenceCopy=Join-Path $ResultsDirectory 'store-evidence'
     if(Test-Path -LiteralPath $evidenceCopy){Remove-Item -LiteralPath $evidenceCopy -Recurse -Force}
     Copy-Item -LiteralPath $sessionRoot -Destination $evidenceCopy -Recurse -Force
@@ -380,9 +474,13 @@ try{
         $summary.sourcePreservedOnDenial -and
         $summary.destinationAbsentOnDenial -and
         $summary.budgetDenialObserved -and
+        $summary.deniedIntentAbsent -and
+        $summary.deniedCompletionAbsent -and
         $summary.gateStayedAlive -and
         $summary.retryPassed -and
-        $summary.preimageHashMatched
+        $summary.retryEvidenceDurable -and
+        $summary.preimageHashMatched -and
+        $summary.preimageObjectVerified
 }
 catch{
     $summary.error=$_.Exception.Message

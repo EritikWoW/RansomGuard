@@ -9,10 +9,13 @@ $unload=Get-Content -LiteralPath (Join-Path $root 'minifilter-tools\unload_minif
 foreach($required in @(
   '--drop-first-create-completion',
   '--drop-first-rename-completion',
+  '--drop-first-truncate-completion',
   'LAB COMPLETION LOSS: intentionally dropping authoritative CREATE result',
   'LAB COMPLETION LOSS: intentionally dropping authoritative RENAME result',
+  'LAB COMPLETION LOSS: intentionally dropping authoritative TRUNCATE result',
   'Interlocked.CompareExchange(ref droppedCreateCompletion, 1, 0) == 0',
   'Interlocked.CompareExchange(ref droppedRenameCompletion, 1, 0) == 0',
+  'Interlocked.CompareExchange(ref droppedTruncateCompletion, 1, 0) == 0',
   'Only one completion-loss injection may be armed per GateClient session.',
   'cts.Cancel();',
   'Native.Cancel(port);',
@@ -44,6 +47,15 @@ $renamePersist=$gate.IndexOf('RenameReconciliation.HandleAsync(',$renameResult)
 if($renameResult -lt 0 -or $renameDrop -lt 0 -or $renameCancel -lt 0 -or $renamePersist -lt 0 -or
    $renameResult -gt $renameDrop -or $renameDrop -gt $renameCancel -or $renameCancel -gt $renamePersist){
   throw 'RENAME completion-loss injection must run after receiving RenameResult but before authoritative completion persistence.'
+}
+
+$truncateResult=$gate.IndexOf('if ((RgEventType)ev.EventType == RgEventType.TruncateResult)')
+$truncateDrop=$gate.IndexOf('if (options.DropFirstTruncateCompletion',$truncateResult)
+$truncateCancel=$gate.IndexOf('cts.Cancel();',$truncateDrop)
+$truncatePersist=$gate.IndexOf('TruncateReconciliation.HandleAsync(',$truncateResult)
+if($truncateResult -lt 0 -or $truncateDrop -lt 0 -or $truncateCancel -lt 0 -or $truncatePersist -lt 0 -or
+   $truncateResult -gt $truncateDrop -or $truncateDrop -gt $truncateCancel -or $truncateCancel -gt $truncatePersist){
+  throw 'TRUNCATE completion-loss injection must run after receiving TruncateResult but before authoritative completion persistence.'
 }
 
 $restart=$gate.IndexOf('RestartReconciliation.ObservePendingAsync(')
@@ -78,6 +90,25 @@ foreach($required in @(
   'rename-file destination must start absent'
 )){
   if($helper -notmatch [regex]::Escape($required)){throw "RuntimeHarness RENAME completion-loss trigger invariant missing: $required"}
+}
+
+foreach($required in @(
+  'case "truncate-eof":',
+  'TruncateEndOfFile(',
+  'SetFileInformationByHandle(',
+  'FileEndOfFileInfo',
+  'exactly one successful EOF mutation followed by a deliberately lost TruncateResult'
+)){
+  if($helper -notmatch [regex]::Escape($required)){throw "RuntimeHarness TRUNCATE completion-loss trigger invariant missing: $required"}
+}
+$truncateHelperStart=$helper.IndexOf('static void TruncateEndOfFile(string filePath, long length)')
+$truncateHelperEnd=$helper.IndexOf('static void MapAndWrite(string filePath)',$truncateHelperStart)
+if($truncateHelperStart -lt 0 -or $truncateHelperEnd -lt 0){
+  throw 'TruncateEndOfFile source block missing.'
+}
+$truncateHelperBlock=$helper.Substring($truncateHelperStart,$truncateHelperEnd-$truncateHelperStart)
+if($truncateHelperBlock -match [regex]::Escape('Native.WriteFile')){
+  throw 'Completion-loss TRUNCATE trigger must not issue a follow-up WRITE after EOF mutation.'
 }
 
 foreach($required in @(
@@ -121,6 +152,26 @@ foreach($required in @(
   'renameRestartObserved',
   'renameRestartSupportsCompleted',
   'renameRecoveryTopologyNotReady',
+  "'--drop-first-truncate-completion'",
+  "'truncate-eof'",
+  'TRUNCATE EOF must complete before completion evidence is intentionally dropped',
+  'truncate-state\truncate-intent-journal.jsonl',
+  'truncate-state\truncate-completion-journal.jsonl',
+  'truncate-state\truncate-restart-journal.jsonl',
+  '[int]$truncateRestartRecord.evidence -ne 1',
+  '[int]$truncateRestartRecord.pathState -ne 2',
+  '[int64]$truncateRestartRecord.observedLength -ne $truncateRequestedLength',
+  '[int]$_.kind -eq 6',
+  '[int]$truncateTransaction[0].state -eq 1',
+  '[int]$truncateTransaction[0].state -ne 2',
+  'TRUNCATE must retain exactly one verified Ready full-preimage copy-out action',
+  'truncateCompletionLossObserved',
+  'truncateIntentDurable',
+  'truncateCompletionAbsent',
+  'truncateLengthChanged',
+  'truncateRestartObserved',
+  'truncateRestartSupportsCompleted',
+  'truncateRecoveryTransactionNotReady',
   'unload_minifilter_lab.ps1',
   'crash-runtime-result.json'
 )){
@@ -150,6 +201,13 @@ foreach($required in @(
   'renameRestartObserved',
   'renameRestartSupportsCompleted',
   'renameRecoveryTopologyNotReady',
+  'truncateCompletionLossObserved',
+  'truncateIntentDurable',
+  'truncateCompletionAbsent',
+  'truncateLengthChanged',
+  'truncateRestartObserved',
+  'truncateRestartSupportsCompleted',
+  'truncateRecoveryTransactionNotReady',
   'cleanupPassed',
   'Upload crash evidence',
   'Ensure LAB minifilter is unloaded after run'
@@ -174,4 +232,4 @@ if($workflow -notmatch [regex]::Escape('STALE KERNEL STATE: RansomGuardMinifilte
   throw 'VM startup must fail fast on an already-loaded stale LAB minifilter.'
 }
 
-Write-Host 'Completion-loss VM harness source check PASSED: CREATE and RENAME completed, authoritative results intentionally omitted, restart evidence supports completion, topology transactions remain non-Ready.'
+Write-Host 'Completion-loss VM harness source check PASSED: CREATE, RENAME and TRUNCATE completed, authoritative results intentionally omitted, restart evidence remains conservative, live mutation transactions stay non-Ready.'

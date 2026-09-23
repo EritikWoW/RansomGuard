@@ -240,7 +240,7 @@ There is still no release/bypass command. A missing KernelActive receipt leaves 
 The existing manual workflow `.github\workflows\minifilter-crash-vm.yml` now exposes four campaign choices:
 
 - `completion-loss` — the existing CREATE/RENAME/TRUNCATE/DELETE result-loss reconciliation campaign.
-- `low-disk` — creates a new expandable NTFS VHD under the runner temp RansomGuard scratch directory, uses only that VHD for rollback storage, drives free space below the configured reserve, requires a protected-root RENAME to fail closed with unchanged topology, then removes the filler and proves the same RENAME succeeds with a hash-verified full pre-image.
+- `low-disk` — creates a new expandable NTFS VHD under the runner temp RansomGuard scratch directory, uses only that VHD for rollback storage, drives free space below the configured reserve, and requires a real RENAME attempt to be rejected at the mutation-capable source CREATE/open admission boundary before any RENAME intent is persisted. It then removes the filler and proves the same RENAME succeeds with correlated intent/completion evidence and a physically hash-verified full pre-image object.
 - `reboot-arm` — commits a TRUNCATE intent and full pre-image, deliberately omits the authoritative TruncateResult, writes a SHA-256-bound state record under `C:\RansomGuard-VM-Reboot\Active`, and intentionally leaves the LAB filter loaded.
 - `reboot-verify` — must be run only after a real VM reboot. It requires Windows `LastBootUpTime` to be newer than the ARM record, requires the filter to be absent after reboot, performs reconcile-only restart observation, and proves the transaction remains Review-only while full-preimage copy-out is Ready.
 

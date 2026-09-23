@@ -690,6 +690,38 @@ static NTSTATUS RgCreateTruncatePostContext(PFLT_CALLBACK_DATA Data,
     return STATUS_SUCCESS;
 }
 
+static NTSTATUS RgCreateDeletePostContext(PFLT_CALLBACK_DATA Data,
+                                          ULONGLONG RequestSequence,
+                                          PRG_POST_CONTEXT *PostContext)
+{
+    PRG_POST_CONTEXT context = NULL;
+    ULONG dispositionFlags = 0;
+    NTSTATUS status;
+
+    *PostContext = NULL;
+    status = RgReadDeleteDispositionFlags(Data, &dispositionFlags);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    context = (PRG_POST_CONTEXT)ExAllocatePool2(
+        POOL_FLAG_NON_PAGED,
+        sizeof(RG_POST_CONTEXT),
+        RG_POOL_TAG);
+    if (context == NULL) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    RtlZeroMemory(context, sizeof(*context));
+    context->RequestSequence = RequestSequence;
+    context->PostEventType = RgEventDeleteDispositionResult;
+    context->FileInformationClass =
+        (ULONG)Data->Iopb->Parameters.SetFileInformation.FileInformationClass;
+    context->DispositionFlags = dispositionFlags;
+    *PostContext = context;
+    return STATUS_SUCCESS;
+}
+
 static NTSTATUS RgCreateCreatePostContext(PFLT_CALLBACK_DATA Data,
                                           ULONGLONG RequestSequence,
                                           PRG_POST_CONTEXT *PostContext)

@@ -285,7 +285,7 @@ foreach($required in @(
   'deleteRestartSupportsCompleted',
   'deleteRecoveryTransactionNotReady',
   'cleanupPassed',
-  'Upload crash evidence',
+  'Upload completion-loss evidence',
   'Ensure LAB minifilter is unloaded after run'
 )){
   if($workflow -notmatch [regex]::Escape($required)){throw "Completion-loss VM workflow invariant missing: $required"}

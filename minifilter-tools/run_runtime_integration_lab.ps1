@@ -668,10 +668,11 @@ try{
     Wait-LogPattern $transitionOut 'LAB CONTAINMENT ACTIVE' $gateTransition 30
     $transitionProbe=$null
 
-    # Scenario 5: mixed high-concurrency stress. The kernel admits at most 8 blocking
-    # gate requests while GateClient is explicitly fixed at 4 workers. TRUNCATE and
-    # DELETE helpers first prove their write/delete-capable CREATE completion, then
-    # all destructive SetInformation operations are released into the same burst.
+    # Scenario 5: mixed pressure/correlation stress. The kernel admits at most 8
+    # blocking gate requests. GateClient is fixed at 4 bounded message-processing slots,
+    # while reply-required preservation remains serialized on its single synchronous
+    # Filter Manager handle. TRUNCATE and DELETE helpers first prove their mutation-capable
+    # CREATE completion, then all destructive SetInformation operations are released.
     Stop-LabProcess $gateTransition 'event-bound containment gate'
     $gateTransition=$null
 

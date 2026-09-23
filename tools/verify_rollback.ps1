@@ -8,6 +8,7 @@ $createOperationStore=Join-Path $root 'src\RansomGuard.Rollback\CreateOperationS
 $createPolicy=Join-Path $root 'src\RansomGuard.Rollback\CreateGatePolicy.cs'
 $identityStore=Join-Path $root 'src\RansomGuard.Rollback\FileIdentityStore.cs'
 $renameStore=Join-Path $root 'src\RansomGuard.Rollback\RenameRollbackStore.cs'
+$truncateStore=Join-Path $root 'src\RansomGuard.Rollback\TruncateOperationStore.cs'
 $restartStore=Join-Path $root 'src\RansomGuard.Rollback\RestartReconciliationStore.cs'
 $pagingStore=Join-Path $root 'src\RansomGuard.Rollback\PagingWriteEvidenceStore.cs'
 $sectionStore=Join-Path $root 'src\RansomGuard.Rollback\WritableSectionEvidenceStore.cs'
@@ -20,6 +21,7 @@ if(-not(Test-Path -LiteralPath $createOperationStore)){throw 'CreateOperationSto
 if(-not(Test-Path -LiteralPath $createPolicy)){throw 'CreateGatePolicy.cs missing.'}
 if(-not(Test-Path -LiteralPath $identityStore)){throw 'FileIdentityStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $renameStore)){throw 'RenameRollbackStore.cs missing.'}
+if(-not(Test-Path -LiteralPath $truncateStore)){throw 'TruncateOperationStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $restartStore)){throw 'RestartReconciliationStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $pagingStore)){throw 'PagingWriteEvidenceStore.cs missing.'}
 if(-not(Test-Path -LiteralPath $sectionStore)){throw 'WritableSectionEvidenceStore.cs missing.'}
@@ -108,6 +110,9 @@ $identityText=Get-Content -LiteralPath $identityStore -Raw
 foreach($required in @(
     'GetFileInformationByHandleEx',
     'FileIdInfo',
+    'FileStandardInfo',
+    'QueryPathStandardInfo',
+    'QueryHandleStandardInfo',
     'VolumeSerialHex',
     'FileIdHex',
     'identity-journal.jsonl',
@@ -148,6 +153,35 @@ foreach($required in @(
     'IntentRecordSha256'
 )){
     if($renameText -notmatch [regex]::Escape($required)){throw "Rename rollback source gate missing invariant: $required"}
+}
+
+$truncateText=Get-Content -LiteralPath $truncateStore -Raw
+foreach($required in @(
+    'truncate-intent-journal.jsonl',
+    'truncate-completion-journal.jsonl',
+    'truncate-restart-journal.jsonl',
+    'RecordIntentAsync',
+    'RecordCompletionAsync',
+    'RecordRestartObservationAsync',
+    'PendingIntents',
+    'IntentRecordSha256',
+    'Conflicting duplicate TRUNCATE completion',
+    'TRUNCATE intent hash chain mismatch',
+    'TRUNCATE completion hash chain mismatch',
+    'TRUNCATE restart hash chain mismatch',
+    'ClassifyRestart',
+    'TruncateMetric.EndOfFile',
+    'RestartEvidenceState.SupportsCompleted',
+    'RestartEvidenceState.SupportsNotCompleted',
+    'RestartEvidenceState.Indeterminate',
+    'RestartEvidenceState.Ambiguous',
+    'FileOptions.WriteThrough',
+    'Flush(true)'
+)){
+    if($truncateText -notmatch [regex]::Escape($required)){throw "TRUNCATE operation source gate missing invariant: $required"}
+}
+if($truncateText -match '\b(File\.Delete|Directory\.Delete|File\.Move|Directory\.Move)\s*\('){
+    throw 'TRUNCATE transaction store must remain evidence-only and must not mutate live topology.'
 }
 
 $restartText=Get-Content -LiteralPath $restartStore -Raw
@@ -282,12 +316,13 @@ if($repository -notmatch 'new CreateRollbackStore\(createRoot\)\.VerifyAll\(\)')
 if($repository -notmatch 'new CreateOperationStore\(createRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include CREATE intent/completion journals.'}
 if($repository -notmatch 'new FileIdentityStore\(identityRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested identity-state stores.'}
 if($repository -notmatch 'new RenameRollbackStore\(renameRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested rename-state stores.'}
+if($repository -notmatch 'new TruncateOperationStore\(truncateRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include TRUNCATE intent/completion/restart journals.'}
 if($repository -notmatch 'new RestartReconciliationStore\(restartRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested restart-state stores.'}
 if($repository -notmatch 'new PagingWriteEvidenceStore\(pagingRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested paging-state stores.'}
 if($repository -notmatch 'new WritableSectionEvidenceStore\(sectionRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested section-state stores.'}
 if($repository -notmatch 'new ActivationPreflightStore\(activationRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested activation-state stores.'}
 if($repository -notmatch 'new ActivationTopologyStore\(topologyRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested activation-topology-state stores.'}
 if($repository -notmatch 'new ContainmentEvidenceStore\(containmentRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested containment-state stores.'}
-Write-Host 'Rollback source gate PASSED: full-file/range COW, CREATE/RENAME transactions, identity, restart, paging, section, activation, topology and containment transition journals, hashes, write-through commits and copy-only restore.'
+Write-Host 'Rollback source gate PASSED: full-file/range COW, CREATE/RENAME/TRUNCATE transactions, identity, restart, paging, section, activation, topology and containment transition journals, hashes, write-through commits and copy-only restore.'
 Write-Host 'Normal service capture remains disabled; blocking preservation and containment remain inside the explicit Engineering LAB gate. Paging/section callbacks remain evidence-only.'
 

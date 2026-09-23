@@ -9,7 +9,7 @@ on:
         default: C:\RansomGuard-VM-Stress
         type: string
       parallelism:
-        description: Concurrent helper operations per phase. Must be 9-32; default exceeds kernel cap=8.
+        description: Admission-overflow probe width. Must be 9-32; qualification phases run at kernel cap=8.
         required: true
         default: '16'
         type: string
@@ -123,12 +123,14 @@ jobs:
           .\minifilter-tools\run_concurrency_stress_lab.ps1 -LabReleaseDirectory $env:RG_LAB_RELEASE -DriverPackageDirectory $env:RG_DRIVER_PACKAGE -RootBase $env:RG_STRESS_ROOT_BASE -ResultsDirectory $results -Parallelism $parallel
           $summary=Get-Content -LiteralPath (Join-Path $results 'concurrency-stress-result.json') -Raw | ConvertFrom-Json
           foreach($name in @(
-            'createPassed','renamePassed','truncatePassed','deletePassed','mappedWritePassed',
+            'admissionOverflowPassed','createPassed','renamePassed','truncatePassed','deletePassed','mappedWritePassed',
             'transactionCorrelationPassed','noPendingTransactionsPassed','preimageHashPassed','gateStayedAlive','cleanupPassed','passed'
           )){
             if($summary.$name -ne $true){throw "Concurrency stress invariant '$name' was not true."}
           }
           if([int]$summary.parallelism -ne $parallel){throw "Concurrency stress summary parallelism '$($summary.parallelism)' does not match requested '$parallel'."}
+          if([int]$summary.qualificationParallelism -ne 8){throw "Concurrency stress qualification parallelism '$($summary.qualificationParallelism)' was not 8."}
+          if([int]$summary.overflowDenied -lt 1){throw 'Concurrency stress did not observe a fail-closed admission denial above the kernel gate cap.'}
           if([int]$summary.gateWorkers -ne 8 -or [int]$summary.kernelGateCap -ne 8){throw 'Concurrency stress did not run against the intended 8-worker/8-request gate bound.'}
           if(-not [string]::IsNullOrWhiteSpace([string]$summary.cleanupError)){throw "Concurrency stress cleanup reported an error: $($summary.cleanupError)"}
           "RG_STRESS_RESULTS=$results" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append

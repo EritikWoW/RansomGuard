@@ -257,12 +257,21 @@ public sealed class TruncateOperationStore
 
     public RestartEvidenceAssessment AssessRestart(TruncateOperationIntent intent)
     {
+        TruncateOperationIntent committedIntent;
         TruncateRestartObservation[] matches;
         lock (_intents)
         {
+            committedIntent = _intents.SingleOrDefault(x => x.RequestSequence == intent.RequestSequence)
+                ?? throw new InvalidDataException("TRUNCATE restart assessment references a missing intent.");
+            if (!committedIntent.RecordSha256.Equals(intent.RecordSha256, StringComparison.OrdinalIgnoreCase) ||
+                !committedIntent.OriginalPath.Equals(
+                    NormalizePath(intent.OriginalPath), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("TRUNCATE restart assessment intent binding mismatch.");
+
             matches = _restart.Where(x =>
                     x.RequestSequence == committedIntent.RequestSequence &&
-                    x.IntentRecordSha256.Equals(committedIntent.RecordSha256, StringComparison.OrdinalIgnoreCase))
+                    x.IntentRecordSha256.Equals(
+                        committedIntent.RecordSha256, StringComparison.OrdinalIgnoreCase))
                 .OrderBy(x => x.Sequence).ToArray();
         }
 

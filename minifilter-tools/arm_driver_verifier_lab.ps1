@@ -150,6 +150,10 @@ try{
     New-Item -ItemType Directory -Path $active -Force | Out-Null
     $queryBefore=Invoke-Verifier @('/querysettings') 'querysettings-before'
     if($queryBefore.ExitCode -ne 0){throw "verifier /querysettings failed before ARM. exit=$($queryBefore.ExitCode). Output: $($queryBefore.Output)"}
+    $preExistingDriverNames=@([regex]::Matches($queryBefore.Output,'(?i)\b[A-Za-z0-9_.-]+\.sys\b') | ForEach-Object {$_.Value} | Select-Object -Unique)
+    if($preExistingDriverNames.Count -gt 0){
+        throw "REFUSED: verifier /querysettings already names driver target(s): $($preExistingDriverNames -join ', '). Revert/clean the disposable VM instead of overwriting verifier state."
+    }
 
     $configure=Invoke-Verifier @('/standard','/driver',$TargetDriver) 'configure-standard'
     if($configure.ExitCode -ne 0){throw "verifier /standard /driver $TargetDriver failed. exit=$($configure.ExitCode). Output: $($configure.Output)"}

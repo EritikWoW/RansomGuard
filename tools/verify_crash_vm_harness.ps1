@@ -46,9 +46,16 @@ foreach($required in @(
   'CreateNewFile(Require(options, "--file"))',
   'const uint CreateNew = 1',
   'CreateFileW(CREATE_NEW)',
-  'Native.WriteFile'
+  'The completion-loss scenario is about CREATE transaction reconciliation only.'
 )){
   if($helper -notmatch [regex]::Escape($required)){throw "RuntimeHarness completion-loss trigger invariant missing: $required"}
+}
+$createNewStart=$helper.IndexOf('static void CreateNewFile(string filePath)')
+$createNewEnd=$helper.IndexOf('static void MapAndWrite(string filePath)',$createNewStart)
+if($createNewStart -lt 0 -or $createNewEnd -lt 0){throw 'CreateNewFile source block missing.'}
+$createNewBlock=$helper.Substring($createNewStart,$createNewEnd-$createNewStart)
+if($createNewBlock -match [regex]::Escape('Native.WriteFile')){
+  throw 'Completion-loss CREATE trigger must not issue a follow-up WRITE after CREATE_NEW.'
 }
 
 foreach($required in @(

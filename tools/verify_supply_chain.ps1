@@ -65,6 +65,17 @@ if($windowsWorkflow -match 'regenerate_nuget_locks\.ps1|--force-evaluate'){
     throw 'Normal Windows CI must validate committed NuGet locks; lock regeneration is maintenance-only.'
 }
 
+$dependabotPath=Join-Path $RepositoryRoot '.github\dependabot.yml'
+if(-not(Test-Path -LiteralPath $dependabotPath -PathType Leaf)){
+    throw 'Dependabot configuration is required for NuGet and GitHub Actions update PRs.'
+}
+$dependabot=Get-Content -LiteralPath $dependabotPath -Raw
+foreach($ecosystem in @('nuget','github-actions')){
+    if($dependabot -notmatch ('package-ecosystem:\s*["'']?'+[regex]::Escape($ecosystem)+'["'']?')){
+        throw "Dependabot configuration is missing package ecosystem '$ecosystem'."
+    }
+}
+
 $workflowRoot=Join-Path $RepositoryRoot '.github\workflows'
 $workflows=@(Get-ChildItem -LiteralPath $workflowRoot -Filter '*.yml' -File)
 if($workflows.Count -eq 0){throw 'No GitHub Actions workflows found.'}

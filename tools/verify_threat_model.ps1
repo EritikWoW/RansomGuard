@@ -35,11 +35,11 @@ $codeOwners=Get-Content -LiteralPath $codeOwnersPath -Raw
 
 foreach($required in @(
     'ordinary product remains AuditOnly',
-    'unresolved/name-query-failed scope classification currently fails open',
-    'kernel-mode requestors are outside the ordinary observation path',
+    'Intentional fail-open gap',
+    'Kernel-mode requestor / compromised kernel component / BYOVD path',
     'preserve-before-allow',
     'Restart observations can move a pending transaction to Review but do not manufacture a missing authoritative kernel completion',
-    'production detector-to-containment orchestration remains unimplemented',
+    'Production detector-to-containment orchestration remains unimplemented.',
     'one synchronous communication handle',
     'reply-required preservation is deliberately serialized',
     'current runner reported ReFS creation unsupported',

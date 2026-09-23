@@ -67,6 +67,15 @@ function Invoke-Verifier([string[]]$Arguments,[string]$Name){
     return [pscustomobject]@{ExitCode=$p.ExitCode;Output=($out+[Environment]::NewLine+$err).Trim()}
 }
 
+function Assert-VerifierMutationResult($Result,[string]$Name){
+    if($Result.ExitCode -ne 0 -and $Result.ExitCode -ne 2){
+        throw "verifier $Name failed. exit=$($Result.ExitCode). Output: $($Result.Output)"
+    }
+    if($Result.ExitCode -eq 2){
+        Write-Host "verifier $Name returned EXIT_CODE_REBOOT_NEEDED (2), which is a successful configuration result requiring reboot."
+    }
+}
+
 function Get-VerifierRegistryState {
     $p=Get-ItemProperty -LiteralPath $VerifierRegistry -ErrorAction Stop
     $drivers=''
@@ -174,11 +183,13 @@ try{
     $summary.driverPackageRegistered=$true
 
     $configure=Invoke-Verifier @('/standard','/driver',$TargetDriver) 'configure-standard'
-    if($configure.ExitCode -ne 0){throw "verifier /standard /driver $TargetDriver failed. exit=$($configure.ExitCode). Output: $($configure.Output)"}
+    Assert-VerifierMutationResult $configure "/standard /driver $TargetDriver"
     $settingsModified=$true
+    $summary.standardCommandExitCode=[int]$configure.ExitCode
 
     $oneBoot=Invoke-Verifier @('/bootmode','oneboot') 'configure-oneboot'
-    if($oneBoot.ExitCode -ne 0){throw "verifier /bootmode oneboot failed. exit=$($oneBoot.ExitCode). Output: $($oneBoot.Output)"}
+    Assert-VerifierMutationResult $oneBoot '/bootmode oneboot'
+    $summary.bootModeCommandExitCode=[int]$oneBoot.ExitCode
     $summary.oneBootCommandSucceeded=$true
 
     $after=Get-VerifierRegistryState
@@ -194,6 +205,9 @@ try{
     if($queryAfter.ExitCode -ne 0){throw "verifier /querysettings failed after ARM. exit=$($queryAfter.ExitCode). Output: $($queryAfter.Output)"}
     if($queryAfter.Output -notmatch [regex]::Escape($TargetDriver)){
         throw "verifier /querysettings did not name the exact target driver '$TargetDriver'. Output: $($queryAfter.Output)"
+    }
+    if($queryAfter.Output -notmatch '(?i)\bOneBoot\b'){
+        throw "verifier /querysettings did not confirm bootmode=OneBoot after configuration. Output: $($queryAfter.Output)"
     }
     $summary.querySettingsConfirmed=$true
 
@@ -231,7 +245,10 @@ finally{
     if(-not $summary.passed -and $settingsModified){
         try{
             $reset=Invoke-Verifier @('/reset') 'failure-reset'
-            if($reset.ExitCode -ne 0){throw "verifier /reset failed after ARM failure. exit=$($reset.ExitCode). Output: $($reset.Output)"}
+            Assert-VerifierMutationResult $reset '/reset after ARM failure'
+            $summary.cleanupResetIssued=$true
+            $summary.cleanupResetExitCode=[int]$reset.ExitCode
+            $summary.cleanupRebootRequired=($reset.ExitCode -eq 2)
             $postReset=Get-VerifierRegistryState
             if($postReset.DriverTokens.Count -ne 0 -or $postReset.Level -ne 0){
                 throw "Driver Verifier persistent settings remain after failure reset. VerifyDrivers='$($postReset.Drivers)' level=0x$('{0:X8}' -f $postReset.Level)."

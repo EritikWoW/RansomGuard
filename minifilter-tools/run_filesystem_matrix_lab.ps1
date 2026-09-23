@@ -194,7 +194,7 @@ function New-ScratchVhd([string]$FileSystem){
     $supported=$true
     $reason=''
     try{
-        $null=Format-Volume -DriveLetter $letter -FileSystem $FileSystem -NewFileSystemLabel ("RG{0}" -f $FileSystem.ToUpperInvariant()) -Confirm:$false -Force -ErrorAction Stop
+        $null=Format-Volume -DriveLetter $letter -FileSystem $FileSystem -NewFileSystemLabel ("RGFS{0}" -f $FileSystem.ToUpperInvariant()) -Confirm:$false -Force -ErrorAction Stop
     }
     catch{
         $supported=$false
@@ -443,6 +443,17 @@ $ScratchDirectory=Assert-SafeScratchPath $ScratchDirectory 'ScratchDirectory'
 $ResultsDirectory=Assert-SafeScratchPath $ResultsDirectory 'ResultsDirectory'
 New-Item -ItemType Directory -Path $ScratchDirectory -Force | Out-Null
 New-Item -ItemType Directory -Path $ResultsDirectory -Force | Out-Null
+
+$staleVhds=@(Get-ChildItem -LiteralPath $ScratchDirectory -Filter 'RansomGuard-*.vhd' -File -ErrorAction SilentlyContinue)
+if($staleVhds.Count -gt 0){
+    throw "STALE MATRIX STATE: scratch VHD file(s) remain from an earlier run: $($staleVhds.Name -join ', '). Revert the disposable VM checkpoint before retrying."
+}
+$staleVolumes=@(Get-Volume -ErrorAction SilentlyContinue | Where-Object {
+    [string]$_.FileSystemLabel -in @('RGFSNTFS','RGFSREFS')
+})
+if($staleVolumes.Count -gt 0){
+    throw "STALE MATRIX STATE: an RGFSNTFS/RGFSREFS scratch volume is still mounted. Revert the disposable VM checkpoint before retrying."
+}
 
 $gateExe=Join-Path $LabReleaseDirectory 'MinifilterLab\GateClient\RansomGuard.GateClient.exe'
 $helperExe=Join-Path $LabReleaseDirectory 'MinifilterLab\RuntimeHarness\RansomGuard.Minifilter.RuntimeHarness.exe'

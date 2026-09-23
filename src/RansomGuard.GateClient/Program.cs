@@ -352,6 +352,24 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
                 ev, deleteStore, cts.Token).ConfigureAwait(false);
             Console.WriteLine(
                 $"{DateTime.Now:HH:mm:ss.fff} {RgEventType.DeleteFinalized,-20} request={ev.RelatedSequence,-7} {finalization.State,-28} source={finalization.Source} path-state={finalization.PathState}");
+
+            if (finalization.State == DeleteFinalizationState.CleanupObserved)
+            {
+                // Cleanup is handle-lifecycle evidence, not proof that the pathname has vanished.
+                // Give Close a short bounded window to finish, then probe topology separately.
+                await Task.Delay(100, cts.Token).ConfigureAwait(false);
+                await using var topologyReservation = await storageBudget.ReserveAsync(
+                    RollbackStorageBudget.MetadataReservationBytes,
+                    "delete-live-topology-evidence",
+                    cts.Token).ConfigureAwait(false);
+                var topology = await DeleteReconciliation.ObserveTopologyAsync(
+                    ev.RelatedSequence,
+                    DeleteFinalizationSource.LivePostCleanupProbe,
+                    deleteStore,
+                    cts.Token).ConfigureAwait(false);
+                Console.WriteLine(
+                    $"{DateTime.Now:HH:mm:ss.fff} DELETE topology probe       request={ev.RelatedSequence,-7} {topology.State,-28} source={topology.Source} path-state={topology.PathState}");
+            }
             return;
         }
 
@@ -1008,25 +1026,38 @@ static class DeleteReconciliation
 
         if ((ev.Flags & DeleteCleanupFlag) == 0)
             throw new InvalidDataException("DELETE finalization is neither cancellation nor cleanup evidence.");
-
         if (!NtSuccess(ev.CompletionStatus))
-        {
-            return await store.RecordFinalizationAsync(
-                    intent,
-                    DeleteFinalizationSource.KernelCleanup,
-                    DeleteFinalizationState.Ambiguous,
-                    RestartPathState.QueryFailed,
-                    null,
-                    cancellationToken)
-                .ConfigureAwait(false);
-        }
+            throw new InvalidDataException(
+                $"DELETE cleanup callback failed with NTSTATUS 0x{ev.CompletionStatus:X8}.");
 
+        return await store.RecordFinalizationAsync(
+                intent,
+                DeleteFinalizationSource.KernelCleanup,
+                DeleteFinalizationState.CleanupObserved,
+                RestartPathState.QueryFailed,
+                null,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public static async Task<DeleteFinalizationObservation> ObserveTopologyAsync(
+        ulong requestSequence,
+        DeleteFinalizationSource source,
+        DeleteOperationStore store,
+        CancellationToken cancellationToken)
+    {
+        if (source is not
+            (DeleteFinalizationSource.LivePostCleanupProbe or DeleteFinalizationSource.RestartProbe))
+            throw new ArgumentOutOfRangeException(nameof(source));
+
+        var intent = store.Intents.SingleOrDefault(x => x.RequestSequence == requestSequence)
+            ?? throw new InvalidDataException("DELETE topology probe has no committed intent.");
         var current = PathProbe.ObserveForRestart(intent.OriginalPath);
         var state = DeleteOperationStore.ClassifyPathObservation(
             intent, current.State, current.Identity);
         return await store.RecordFinalizationAsync(
                 intent,
-                DeleteFinalizationSource.KernelCleanup,
+                source,
                 state,
                 current.State,
                 current.Identity,

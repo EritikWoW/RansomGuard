@@ -681,11 +681,11 @@ try{
         '--session','concurrency-stress',
         '--gate-workers','4'
     ) $stressOut $stressErr
-    Wait-LogPattern $stressOut 'Bounded gate workerss+: 4' $gateStress 45
+    Wait-LogPattern $stressOut 'Bounded gate workers\s+: 4' $gateStress 45
     Wait-LogPattern $stressOut 'kernel gate ACTIVE' $gateStress 45
 
-    $stressSession=Join-Path $stressStore 'Sessionsconcurrency-stress'
-    $createCompletionJournal=Join-Path $stressSession 'create-statecreate-completion-journal.jsonl'
+    $stressSession=Join-Path $stressStore 'Sessions\concurrency-stress'
+    $createCompletionJournal=Join-Path $stressSession 'create-state\create-completion-journal.jsonl'
 
     # Hold 8 mutation-capable handles after their CREATEs have reached durable completion.
     for($i=0;$i -lt $stressCount;$i++){

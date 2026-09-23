@@ -29,6 +29,10 @@ foreach($required in @(
     'Assert-SafeScratchPath',
     'RansomGuard-Filesystem-Matrix-Scratch',
     'RansomGuard-Filesystem-Matrix-Results',
+    'STALE MATRIX STATE',
+    'RansomGuard-*.vhd',
+    'RGFSNTFS',
+    'RGFSREFS',
     'create vdisk file=',
     'type=expandable',
     'attach vdisk',
@@ -135,6 +139,9 @@ foreach($required in @(
     if($workflow -notmatch [regex]::Escape($required)){
         throw "Runtime VM workflow missing filesystem matrix invariant: $required"
     }
+}
+if($workflow -match [regex]::Escape('Remove-Item -LiteralPath $matrixScratch -Recurse -Force')){
+    throw 'Runtime workflow must not blindly delete filesystem matrix scratch before stale-state detection.'
 }
 if($workflow -match '(?m)^\s+(push|pull_request|schedule):'){
     throw 'Filesystem matrix must remain behind the manual runtime VM workflow.'

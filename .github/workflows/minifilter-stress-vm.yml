@@ -124,7 +124,7 @@ jobs:
           $summary=Get-Content -LiteralPath (Join-Path $results 'concurrency-stress-result.json') -Raw | ConvertFrom-Json
           foreach($name in @(
             'admissionOverflowPassed','createPassed','renamePassed','truncatePassed','deletePassed','mappedWritePassed',
-            'transactionCorrelationPassed','noPendingTransactionsPassed','preimageHashPassed','gateStayedAlive','cleanupPassed','passed'
+            'transactionCorrelationPassed','noPendingTransactionsPassed','preimageHashPassed','gateStayedAlive','gateWorkersHealthyPassed','cleanupPassed','passed'
           )){
             if($summary.$name -ne $true){throw "Concurrency stress invariant '$name' was not true."}
           }

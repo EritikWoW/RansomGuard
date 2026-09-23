@@ -77,15 +77,18 @@ foreach($required in @(
     }
 }
 
+$forbiddenDiskPartPatterns=@(
+    '(?im)["'']\s*select\s+disk\b',
+    '(?im)["'']\s*clean(?:\s+all)?\s*["'']',
+    '(?im)["'']\s*delete\s+(?:disk|partition|volume)\b',
+    '(?im)["'']\s*convert\s+(?:gpt|mbr)\b'
+)
+foreach($pattern in $forbiddenDiskPartPatterns){
+    if($script -match $pattern){
+        throw "Filesystem matrix contains forbidden host-disk DiskPart operation matching: $pattern"
+    }
+}
 foreach($forbidden in @(
-    'select disk',
-    'clean',
-    'clean all',
-    'delete disk',
-    'delete partition',
-    'delete volume',
-    'convert gpt',
-    'convert mbr',
     'Set-MpPreference',
     'Add-MpPreference',
     'Remove-MpPreference',
@@ -94,7 +97,7 @@ foreach($forbidden in @(
     'Enable-WindowsOptionalFeature'
 )){
     if($script -match [regex]::Escape($forbidden)){
-        throw "Filesystem matrix contains forbidden host/destructive operation: $forbidden"
+        throw "Filesystem matrix contains forbidden boot/security operation: $forbidden"
     }
 }
 

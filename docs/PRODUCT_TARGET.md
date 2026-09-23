@@ -14,22 +14,22 @@ pre-mutation preservation path.
 
 ## Current milestone
 
-The current engineering branch uses protocol v13 and combines range-aware write COW, CREATE/RENAME completion reconciliation, verified recovery, bounded retention and event-bound LAB containment:
+The current engineering branch uses protocol v15 and combines range-aware write COW, durable CREATE/RENAME/TRUNCATE/DELETE lifecycle reconciliation, verified copy-out recovery, bounded retention, event-bound LAB containment and disposable-VM filesystem qualification:
 
 `CREATE -> classify disposition -> durable existing-file pre-image OR originally-absent baseline -> allow`
 
 `WRITE -> durable original-length baseline + first touched blocks -> allow mutation`.
 
-Rename, delete and truncate-class operations remain on a conservative full-file pre-image path.
+Rename, delete and truncate-class operations remain on a conservative full-file pre-image path; TRUNCATE and DELETE additionally have explicit intent/completion/restart-or-finalization journals.
 An originally-absent path is remembered for the whole incident so later writes do not create a false pre-image
 from data that did not exist before the incident.
 
 The gate is intentionally not enabled in the normal bundle and is not production-safe yet. Existing-file
 preservation is now additionally bound to a durable Windows `FILE_ID_INFO` identity journal
 (volume serial + 128-bit file ID), so a path that changes to a different file during one incident is rejected.
-CREATE classification still begins with a path-based pre-operation probe, while protocol v13 retains the durable CREATE intent-before-allow contract and correlates it with a post-operation result containing the tunneled final name and kernel `FileIdInformation` identity when available. Missing or partial reconciliation stays explicit and pending/unknown rather than being inferred.
+CREATE classification still begins with a path-based pre-operation probe, while protocol v15 retains the durable CREATE intent-before-allow contract and correlates it with a post-operation result containing the tunneled final name and kernel `FileIdInformation` identity when available. Missing or partial reconciliation stays explicit and pending/unknown rather than being inferred.
 
-Protocol v11 retains the normalized pre-operation rename destination and correlated post-operation `RenameResult`.
+Protocol v15 retains the normalized pre-operation rename destination and correlated post-operation `RenameResult`.
 Before allowing a rename, the LAB gate preserves the source, preserves an existing destination or commits its absence,
 and durably records a rename intent. After completion, the minifilter resolves the tunneled final name on a safe post-op
 path and, only at PASSIVE_LEVEL with special kernel APCs enabled, queries `FileIdInformation` on the completed kernel
@@ -39,9 +39,9 @@ before allow. A missing or partially resolved result remains explicit; pre-opera
 
 The current LAB gate now uses bounded concurrent preservation: kernel admission caps simultaneous blocking gate sends at 8, while user mode dispatches a configurable 1..8 worker pool (default 4). Slow preservation no longer holds the global port mutex across the 30-second gate wait.
 
-On restart, pending CREATE/RENAME intents are conservatively re-observed under the same explicit LAB root. Current path presence and Windows file identity are appended to a separate hash-chained restart-reconciliation journal and classified as evidence supporting completion, supporting non-completion, indeterminate, or ambiguous. This evidence never becomes an authoritative completion by inference.
+On restart, pending CREATE/RENAME/TRUNCATE/DELETE transactions are conservatively re-observed under the same explicit LAB root. CREATE/RENAME use the shared hash-chained restart journal; TRUNCATE records exact identity/length observations in its transaction store; DELETE records topology finalization evidence separately from disposition completion. Restart evidence can support completed/non-completed review states but never becomes an authoritative kernel completion by inference.
 
-Protocol v11 adds non-blocking visibility for paging writes associated with streams opened through the explicit LAB root. The driver attaches a nonpaged stream context after successful CREATE reconciliation and paging-write callbacks read only that context; they do not perform name queries or synchronously call the user-mode gate. GateClient records these observations in a separate write-through hash-chained paging evidence journal. The paging event itself is evidence only. For handles opened after 0.7.13 policy is active, content-write capable CREATE already committed a full pre-image before the handle returned, so later writable mappings have a conservative recovery baseline.
+Protocol v15 retains non-blocking visibility for paging writes associated with streams opened through the explicit LAB root. The driver attaches a nonpaged stream context after successful CREATE reconciliation and paging-write callbacks read only that context; they do not perform name queries or synchronously call the user-mode gate. GateClient records these observations in a separate write-through hash-chained paging evidence journal. The paging event itself is evidence only. For handles opened after 0.7.13 policy is active, content-write capable CREATE already committed a full pre-image before the handle returned, so later writable mappings have a conservative recovery baseline.
 
 0.7.13 also pre-preserves an existing file before returning any CREATE that requests content-write capable access (FILE_WRITE_DATA, FILE_APPEND_DATA or GENERIC_WRITE). This deliberately trades storage efficiency for correctness on handles that may later back writable memory mappings: the full pre-image and CREATE intent are durable before the application can create the mapping.
 
@@ -65,6 +65,10 @@ Protocol v11 adds non-blocking visibility for paging writes associated with stre
 
 0.7.21 adds the safe runtime bridge needed for later detector integration: an explicitly authorized LAB process can cross a bounded preserved-mutation threshold, after which the containment request is durably journaled and attached to the exact gate reply that produced the evidence. Kernel mode binds the requestor process object for that IRP and emits a correlated activation receipt. This removes the separate user-mode PID-lookup race from the transition path while leaving production detector policy disabled.
 
-The next core milestones are broader NTFS/ReFS runtime/fault-injection coverage (including forced loss of post-operation delivery), production retention UI/policy integration, directory-topology rollback semantics beyond startup handle exclusion,
-production detector-to-containment authorization/orchestration, process-state capture,
-adaptive crypto analysis, and production recovery UI/orchestration across rollback plus crypto evidence.
+0.7.22-0.7.25 extend completion-loss/restart proof across CREATE, RENAME, TRUNCATE and DELETE. The disposable VM deliberately omits the first authoritative post-operation result only after the filesystem operation has succeeded, then proves restart evidence without manufacturing completion records. Recovery keeps topology/length transactions Review/Blocked while verified content copy-out remains the only executable Ready action.
+
+0.7.26 adds isolated VHD filesystem qualification. NTFS is mandatory and the live VM matrix proves authoritative CREATE/RENAME/TRUNCATE/DELETE evidence plus mapped-write pre-image, writable-section and paging-write invariants. ReFS is attempted separately and must either pass the same scenario or be recorded explicitly as unsupported by that Windows runner; unsupported capability is not reported as compatibility.
+
+0.7.27 hardens build provenance rather than changing protocol v15: the repository pins an exact .NET SDK, pins GitHub Actions to reviewed immutable commit SHAs, requires deterministic supply-chain source gates, and moves NuGet restore toward committed locked-mode dependency graphs.
+
+The next core milestones are crash/reboot and low-disk fault campaigns, high-concurrency and rename/mapped-write stress, Driver Verifier qualification, production retention UI/policy integration, directory-topology rollback semantics beyond startup handle exclusion, production detector-to-containment authorization/orchestration, process-state capture, adaptive crypto analysis, and production recovery UI/orchestration across rollback plus crypto evidence.

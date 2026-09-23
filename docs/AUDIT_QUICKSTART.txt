@@ -1,10 +1,20 @@
-RansomGuard 0.6.3.0 - experimental audit build
+RansomGuard 0.7.27.0 - audit-only quick start
 
 Open UI\RansomGuard.Ui.exe normally.
-Settings -> Windows service -> Install -> approve UAC -> select folders -> INSTALL.
-Then Start -> UAC -> START. Check real ETW state in Overview, not only SCM Running.
-Rules -> Add/Edit/Disable/Remove are graphical reviewed UAC operations.
+Go to Settings -> Background monitoring -> Set up RansomGuard and approve UAC.
+Choose explicit data folders, review the full paths, choose whether the service should start
+immediately and/or with Windows, then use the reviewed Install or Install and start action.
+The GUI does not require typing INSTALL, START, QUARANTINE or TRUST command tokens.
+
+After setup, return to Overview and verify actual ETW monitoring health. SCM Running by itself
+is not proof that filesystem telemetry is healthy.
+
+Rules -> Add/Edit/Disable/Remove remain reviewed graphical UAC operations.
 Stop previous run_audit consoles first; never kill processes by name.
-The service installer does not install/load a kernel driver. Ordinary applications
-are audit-only; no claim of complete prevention. Read UI_ADMINISTRATION.md.
-The UI remains in this published folder; keep the complete package for hash pairing.
+
+The normal product bundle does not install or load the Engineering LAB minifilter.
+Ordinary applications remain AuditOnly; this package is not production ransomware blocking.
+Read UI_ADMINISTRATION.md and GUIDED_SETUP.md before administrative changes.
+
+The UI is cryptographically paired to the published service bytes. Keep the complete package
+together; do not mix an older service executable with a newer UI.

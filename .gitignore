@@ -8,3 +8,8 @@ RansomGuard-TestLab/
 *.user
 packages/
 minifilter-ci/
+*.pfx
+*.p12
+*.key
+.env
+.env.*

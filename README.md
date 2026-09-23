@@ -1,4 +1,4 @@
-# RansomGuard 0.7.26.0
+# RansomGuard 0.7.27.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
@@ -6,7 +6,7 @@ and recover data through rollback plus adaptive crypto analysis.
 
 ## Core preservation milestone
 
-0.7.26.0 keeps the protocol-v15 CREATE/RENAME/TRUNCATE/DELETE preservation model and adds a disposable-VHD filesystem compatibility matrix so the same authoritative completion, recovery and mapped-I/O invariants can be exercised on isolated NTFS and, when supported by the runner OS, ReFS volumes.
+0.7.27.0 keeps the protocol-v15 preservation/recovery model and the disposable-VHD filesystem matrix, while hardening build provenance: the repository selects one exact .NET SDK, pins GitHub Actions to reviewed immutable commit SHAs, validates those pins in source gates, and uses committed NuGet dependency lock files for locked-mode restore.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 
@@ -89,6 +89,8 @@ Protocol v13 also removes the previous blind skip of paging-write callbacks. Aft
 
 0.7.26 adds a manual disposable-VM filesystem compatibility matrix without changing protocol v15. The runtime workflow creates an isolated expandable VHD under the guarded runner scratch directory, partitions only that new virtual disk, assigns a temporary unused drive letter, and formats the new volume as NTFS; it then repeats the same attempt for ReFS. NTFS support is mandatory. ReFS capability is detected at runtime: if the Windows edition cannot create ReFS, the result records an explicit unsupported reason rather than claiming compatibility. For each supported filesystem the minifilter is attached only to the scratch volume and must prove authoritative CREATE, RENAME, TRUNCATE and DELETE completion journals plus mapped-write full-preimage, writable-section and paging-write evidence. Cleanup stops GateClient, unloads the filter, detaches the VHD and deletes the VHD file. The harness contains no host-disk clean/select/delete operations and never formats a hard-coded existing drive.
 
+0.7.27 hardens reproducibility and supply-chain inputs without changing protocol v15. `global.json` pins .NET SDK 10.0.401 with roll-forward disabled; CI installs that exact SDK; every third-party GitHub Action is referenced by a reviewed full commit SHA rather than a mutable version tag. A dedicated source gate rejects floating SDK/action references and verifies secret-bearing file patterns stay ignored. NuGet dependency graphs are committed as `packages.lock.json` files and restore runs in locked mode so an unreviewed graph change fails the build instead of silently resolving different transitive packages.
+
 
 ## Recovery safety
 
@@ -141,7 +143,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.7.26.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.7.27.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 Manual disposable-VM runtime workflows:
 

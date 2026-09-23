@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "ransomguard.core": {"type": "Project"}
+    },
+    "net10.0/win-x64": {}
+  }
+}

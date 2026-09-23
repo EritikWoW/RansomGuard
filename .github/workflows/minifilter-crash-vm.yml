@@ -98,7 +98,7 @@ jobs:
           }
           "RG_DRIVER_PACKAGE=$package" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Run CREATE, RENAME and TRUNCATE completion-loss restart reconciliation
+      - name: Run CREATE, RENAME, TRUNCATE and DELETE completion-loss restart reconciliation
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
@@ -131,6 +131,13 @@ jobs:
             'truncateRestartObserved',
             'truncateRestartSupportsCompleted',
             'truncateRecoveryTransactionNotReady',
+            'deleteCompletionLossObserved',
+            'deleteIntentDurable',
+            'deleteCompletionAbsent',
+            'deleteTargetRemoved',
+            'deleteRestartObserved',
+            'deleteRestartSupportsCompleted',
+            'deleteRecoveryTransactionNotReady',
             'cleanupPassed',
             'passed'
           )){

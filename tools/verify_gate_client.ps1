@@ -279,12 +279,11 @@ $truncateStandard=$text.IndexOf('FileIdentityStore.QueryPathStandardInfo(path, i
 $truncateCapture=$text.IndexOf('CapturePreimageAsync(',$truncateStandard)
 $truncateIntent=$text.IndexOf('truncateStore.RecordIntentAsync(',$truncateStandard)
 $truncateAllow=$text.IndexOf('return Allow(',$truncateIntent)
-if($truncateEvaluate -lt 0 -or $truncateStandard -lt 0 -or $truncateIntent -lt 0 -or $truncateAllow -lt 0 -or
-   $truncateEvaluate -gt $truncateStandard -or $truncateStandard -gt $truncateIntent -or $truncateIntent -gt $truncateAllow){
-  throw 'TRUNCATE must bind standard info and durably commit its transaction intent before allow.'
-}
-if($truncateCapture -ge 0 -and $truncateCapture -gt $truncateIntent){
-  throw 'Pre-existing TRUNCATE full pre-image must be committed before the TRUNCATE intent.'
+if($truncateEvaluate -lt 0 -or $truncateStandard -lt 0 -or $truncateCapture -lt 0 -or
+   $truncateIntent -lt 0 -or $truncateAllow -lt 0 -or
+   $truncateEvaluate -gt $truncateStandard -or $truncateStandard -gt $truncateCapture -or
+   $truncateCapture -gt $truncateIntent -or $truncateIntent -gt $truncateAllow){
+  throw 'Pre-existing TRUNCATE must bind standard info, commit a full pre-image, commit its durable intent, then allow.'
 }
 
 $connect=$text.IndexOf('using var port = Native.Connect(')

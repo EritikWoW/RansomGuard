@@ -118,6 +118,55 @@ function Wait-AllPaths([string[]]$Paths,[int]$Seconds,[string]$Description){
     throw "Timed out waiting for $Description. Missing=$($stillMissing -join ', ')"
 }
 
+function Assert-GateWorkersHealthy([string]$ErrorPath){
+    if(-not(Test-Path -LiteralPath $ErrorPath -PathType Leaf)){return}
+    $text=Get-Content -LiteralPath $ErrorPath -Raw -ErrorAction SilentlyContinue
+    if($text -match 'Gate worker failed:'){
+        throw "GateClient worker failure detected during concurrency stress: $text"
+    }
+}
+
+function Wait-DeleteFinalizations(
+    [string]$JournalPath,
+    [string[]]$Targets,
+    [System.Diagnostics.Process]$GateProcess,
+    [string]$GateErrorPath,
+    [int]$Seconds
+){
+    $deadline=(Get-Date).AddSeconds($Seconds)
+    while((Get-Date) -lt $deadline){
+        Assert-GateWorkersHealthy $GateErrorPath
+        if($GateProcess.HasExited){
+            throw "GateClient exited while waiting for durable DELETE topology finalization. exit=$($GateProcess.ExitCode)"
+        }
+
+        if(Test-Path -LiteralPath $JournalPath -PathType Leaf){
+            $records=@()
+            try{$records=Read-JsonLines $JournalPath 'DELETE finalization'}
+            catch{
+                Start-Sleep -Milliseconds 100
+                continue
+            }
+
+            $missing=@()
+            foreach($target in $Targets){
+                $key=Path-Key $target
+                $found=@($records | Where-Object {
+                    [int]$_.state -eq 1 -and
+                    -not [string]::IsNullOrWhiteSpace([string]$_.originalPath) -and
+                    (Path-Key ([string]$_.originalPath)) -eq $key
+                })
+                if($found.Count -lt 1){$missing+=@($target)}
+            }
+            if($missing.Count -eq 0){return}
+        }
+        Start-Sleep -Milliseconds 100
+    }
+
+    Assert-GateWorkersHealthy $GateErrorPath
+    throw "Timed out waiting for durable DeletedObserved finalization for all DELETE targets."
+}
+
 function Wait-StressGroup([object[]]$Group,[int]$Seconds,[string]$Phase){
     $deadline=(Get-Date).AddSeconds($Seconds)
     while((Get-Date) -lt $deadline){
@@ -468,6 +517,7 @@ $summary=[ordered]@{
     noPendingTransactionsPassed=$false
     preimageHashPassed=$false
     gateStayedAlive=$false
+    gateWorkersHealthyPassed=$false
     cleanupPassed=$false
     passed=$false
     error=$null
@@ -645,6 +695,8 @@ try{
     }
     $remaining=@($deleteTargets | Where-Object {Test-Path -LiteralPath $_})
     if($remaining.Count -gt 0){throw "DELETE stress left pathname(s) present: $($remaining -join ', ')"}
+    $deleteFinalizationJournal=Join-Path $sessionRoot 'delete-state\delete-finalization-journal.jsonl'
+    Wait-DeleteFinalizations $deleteFinalizationJournal $deleteTargets $gate $gateErr 20
     $summary.deletePassed=$true
 
     $group=@()
@@ -658,6 +710,8 @@ try{
 
     if($gate.HasExited){throw "GateClient exited unexpectedly during concurrency stress. exit=$($gate.ExitCode)"}
     $summary.gateStayedAlive=$true
+    Assert-GateWorkersHealthy $gateErr
+    $summary.gateWorkersHealthyPassed=$true
 
     Start-Sleep -Milliseconds 1500
 
@@ -704,7 +758,7 @@ try{
         $summary.truncatePassed -and $summary.deletePassed -and
         $summary.mappedWritePassed -and $summary.transactionCorrelationPassed -and
         $summary.noPendingTransactionsPassed -and $summary.preimageHashPassed -and
-        $summary.gateStayedAlive
+        $summary.gateStayedAlive -and $summary.gateWorkersHealthyPassed
 }
 catch{
     $summary.error=$_.Exception.Message

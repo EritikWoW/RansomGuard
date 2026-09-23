@@ -44,6 +44,8 @@ The LAB path consists of:
 
 The minifilter and GateClient trust each other only inside the explicitly negotiated LAB protocol/session. The gate is scoped to one explicit protected root. The rollback store must be outside that root.
 
+The Filter Manager server port currently permits one client connection. GateClient uses one synchronous communication handle. Kernel admission may have multiple blocking requests waiting, but user-mode reply-required preservation is deliberately serialized: the worker handling a gate request must send its reply before the receive loop issues the next blocking `FilterGetMessage`. Configurable GateClient slots bound no-reply completion/evidence processing; they are not a claim of multiple simultaneous preservation replies. This distinction is part of the availability model and must not be blurred in performance or security claims.
+
 The runtime test certificate, TESTSIGNING configuration and unassigned LAB altitude are test infrastructure, not production trust anchors.
 
 ### Recovery
@@ -117,7 +119,7 @@ Several current LAB paths deliberately fail closed:
 - rollback quota/free-space admission failure;
 - containment-bound mutations.
 
-These choices protect evidence integrity but can deny application writes. Production qualification must therefore measure latency, storage amplification, low-disk behavior, timeout behavior and recovery from service/gate failure. Availability is part of the security model, not a secondary concern.
+These choices protect evidence integrity but can deny application writes. Production qualification must therefore measure latency, storage amplification, low-disk behavior, timeout behavior and recovery from service/gate failure. The kernel admission cap is backpressure, not a throughput guarantee: with the current single synchronous GateClient handle, reply-required preservation remains serial even when several kernel requests are admitted and no-reply evidence work uses bounded user-mode slots. Availability is part of the security model, not a secondary concern.
 
 ## Identity and race assumptions
 
@@ -163,28 +165,27 @@ A future enterprise privacy policy should explicitly decide which path/process m
 
 ## Supply-chain assumptions
 
-Source correctness is insufficient if the build inputs can drift. Production-oriented builds should require:
+Source correctness is insufficient if the build inputs can drift. The repository now pins the exact .NET SDK, uses reviewed full-SHA GitHub Action references, commits NuGet lock graphs, restores in locked mode, runs dependency vulnerability auditing, and emits release hashes. Those controls reduce accidental build drift; they do not establish trusted release governance by themselves.
 
-- exact SDK/runtime inputs;
-- immutable full-SHA GitHub Action references;
-- committed NuGet lock graphs and locked restore;
-- dependency vulnerability audit;
-- release hashes/SBOM/provenance;
-- protected main branch and required reviews/checks;
-- production signing key protection;
-- independent review of kernel/security-sensitive changes.
+Production release governance still requires:
 
-Repository policy settings are external to source control. A CODEOWNERS file can route review but does not itself enforce approvals or prevent direct pushes.
+- protected main branch and required checks/reviews enforced in repository settings;
+- independent review of kernel/security-sensitive changes;
+- protected production signing keys and a production signing workflow;
+- release SBOM/provenance and retained build attestations;
+- controlled dependency/action update review.
+
+Repository policy settings are external to source control. A CODEOWNERS file can route review but does not itself enforce approvals or prevent direct pushes. Exact inputs also do not protect against a compromised trusted dependency, action commit, build runner or signing identity.
 
 ## Required production qualification
 
 The project must remain non-production until, at minimum:
 
 - Microsoft assigns the production minifilter altitude and the release driver uses the production signing path;
-- target Windows/Server, NTFS/ReFS and security-feature compatibility is qualified;
+- target Windows/Server and security-feature compatibility is qualified; NTFS has disposable-VM runtime evidence, while the current runner reported ReFS creation unsupported, so ReFS remains unqualified rather than implicitly passed;
 - unresolved/name-query failure policy is reviewed and adversarially tested;
 - crash/reboot, GateClient/service death, timeout, low-disk and torn-journal campaigns pass;
-- high-concurrency, rename/mapped-write storms and large/sparse/compressed/encrypted file cases pass;
+- sustained pressure/queueing, rename/mapped-write storms and large/sparse/compressed/encrypted file cases pass; any concurrency claim distinguishes kernel admission from the serialized single-handle reply-required path;
 - Driver Verifier and native static-analysis campaigns are clean enough for the supported matrix;
 - antivirus/EDR, VSS/backup and BitLocker coexistence is tested;
 - detector-to-containment orchestration is authorized and validated for ordinary applications;

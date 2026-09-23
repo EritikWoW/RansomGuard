@@ -82,7 +82,8 @@ It excludes:
 - Faulted sessions;
 - Held sessions;
 - LegacyUnmanaged sessions;
-- sessions with pending CREATE/RENAME transactions.
+- sessions with pending CREATE/RENAME/TRUNCATE transactions;
+- sessions with unsettled DELETE lifecycle evidence, including missing disposition completion, cleanup-only state, same-FILE_ID presence, or ambiguous/conflicting topology.
 
 Selection reasons are:
 
@@ -146,7 +147,8 @@ Retention never automatically deletes:
 - Faulted evidence;
 - Held evidence;
 - legacy unmanaged evidence;
-- sessions with unresolved CREATE/RENAME transactions.
+- sessions with unresolved CREATE/RENAME/TRUNCATE transactions;
+- sessions with unsettled DELETE lifecycle evidence.
 
 There is no force-delete or ignore-hold command.
 

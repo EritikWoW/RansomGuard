@@ -1,4 +1,4 @@
-# RansomGuard 0.7.25.0
+# RansomGuard 0.7.26.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
@@ -6,7 +6,7 @@ and recover data through rollback plus adaptive crypto analysis.
 
 ## Core preservation milestone
 
-0.7.25.0 retains the preservation/recovery/retention, event-bound containment and CREATE/RENAME/TRUNCATE transaction foundation, and adds a durable DELETE lifecycle that separates disposition acceptance, exact-handle cleanup and pathname-topology evidence.
+0.7.26.0 keeps the protocol-v15 CREATE/RENAME/TRUNCATE/DELETE preservation model and adds a disposable-VHD filesystem compatibility matrix so the same authoritative completion, recovery and mapped-I/O invariants can be exercised on isolated NTFS and, when supported by the runner OS, ReFS volumes.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 
@@ -87,6 +87,9 @@ Protocol v13 also removes the previous blind skip of paging-write callbacks. Aft
 
 0.7.25 introduces protocol v15 and makes DELETE a durable lifecycle rather than treating a successful disposition call as equivalent to pathname deletion. Before allowing `FileDispositionInformation` or `FileDispositionInformationEx`, GateClient binds the exact FILE_ID_INFO, captures/reuses the verified full pre-image for a pre-existing file, records the exact disposition flags and commits `delete-intent-journal.jsonl`. The post-operation callback emits a correlated `DeleteDispositionResult` with authoritative NTSTATUS plus `DeletePending` and identity when they can be queried safely. A successful delete disposition binds a stream-handle context to that exact request; a later disposition-clear/superseding request emits cancellation evidence, while `IRP_MJ_CLEANUP` emits only handle-lifecycle `CleanupObserved` evidence. GateClient then probes pathname topology separately after a bounded delay, and restart reconciliation repeats that conservative probe for unsettled transactions. Missing pathname can support completion and the same FILE_ID still present can support non-completion, but replacement identities, query failures and conflicting evidence remain unresolved. Restart/finalization evidence never manufactures an authoritative disposition completion. Recovery exposes DELETE topology only as Informational/Review/Blocked; verified pre-image copy-out can be `Ready`, and live delete/recreate operations remain disabled.
 
+0.7.26 adds a manual disposable-VM filesystem compatibility matrix without changing protocol v15. The runtime workflow creates an isolated expandable VHD under the guarded runner scratch directory, partitions only that new virtual disk, assigns a temporary unused drive letter, and formats the new volume as NTFS; it then repeats the same attempt for ReFS. NTFS support is mandatory. ReFS capability is detected at runtime: if the Windows edition cannot create ReFS, the result records an explicit unsupported reason rather than claiming compatibility. For each supported filesystem the minifilter is attached only to the scratch volume and must prove authoritative CREATE, RENAME, TRUNCATE and DELETE completion journals plus mapped-write full-preimage, writable-section and paging-write evidence. Cleanup stops GateClient, unloads the filter, detaches the VHD and deletes the VHD file. The harness contains no host-disk clean/select/delete operations and never formats a hard-coded existing drive.
+
+
 ## Recovery safety
 
 Range recovery:
@@ -138,7 +141,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.7.25.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.7.26.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 Manual disposable-VM runtime workflows:
 
@@ -161,7 +164,7 @@ Bounded concurrent gate admission/workers are now implemented with a kernel cap 
 
 Restart evidence for pending/missing CREATE/RENAME/TRUNCATE completion events and unsettled DELETE lifecycle transactions is durable and conservative; authoritative completion is never inferred from a restart or topology probe. DELETE cleanup is handle-lifecycle evidence only, while pathname state is observed separately. The recovery planner may expose exact, fully consistent evidence as `Review` only, while cleanup-only, ambiguous, indeterminate or conflicting evidence stays `Blocked`. Paging writes on streams opened through the LAB gate are visible as durable evidence without synchronously blocking the paging path.
 
-Remaining core work includes live disposable-VM DELETE completion-loss/finalization proof followed by broader fault-injection beyond the validated CREATE/RENAME/TRUNCATE cases,
-broader live NTFS/ReFS coverage beyond the automated disposable-VM mapping and completion-loss harnesses,
+Remaining core work includes broader fault-injection beyond the validated CREATE/RENAME/TRUNCATE/DELETE completion-loss cases,
+additional filesystem/runtime stress beyond the isolated NTFS/ReFS compatibility matrix (including reboot/crash, storage-pressure and Driver Verifier campaigns),
 production retention UI/policy integration, production detector-to-containment authorization/policy, process-state capture, adaptive crypto reconstruction, production recovery UI/topology orchestration,
 driver signing and Microsoft-assigned production altitude.

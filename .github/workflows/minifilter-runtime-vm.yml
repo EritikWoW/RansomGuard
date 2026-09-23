@@ -139,12 +139,11 @@ jobs:
           $ErrorActionPreference='Stop'
           $matrixResults=Join-Path $env:RUNNER_TEMP 'ransomguard-filesystem-matrix-results'
           $matrixScratch=Join-Path $env:RUNNER_TEMP 'RansomGuard-Filesystem-Matrix-Scratch'
-          foreach($path in @($matrixResults,$matrixScratch)){
-            if(Test-Path -LiteralPath $path){
-              Remove-Item -LiteralPath $path -Recurse -Force
-            }
+          if(Test-Path -LiteralPath $matrixResults){
+            Remove-Item -LiteralPath $matrixResults -Recurse -Force
           }
           New-Item -ItemType Directory -Path $matrixResults -Force | Out-Null
+          New-Item -ItemType Directory -Path $matrixScratch -Force | Out-Null
           .\minifilter-tools\run_filesystem_matrix_lab.ps1 -LabReleaseDirectory $env:RG_LAB_RELEASE -DriverPackageDirectory $env:RG_DRIVER_PACKAGE -ScratchDirectory $matrixScratch -ResultsDirectory $matrixResults
           $matrix=Get-Content -LiteralPath (Join-Path $matrixResults 'filesystem-matrix-result.json') -Raw | ConvertFrom-Json
           foreach($name in @('ntfsAttempted','ntfsSupported','ntfsPassed','refsAttempted','cleanupPassed','passed')){

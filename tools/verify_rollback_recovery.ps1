@@ -3,13 +3,14 @@ $root=Split-Path -Parent $PSScriptRoot
 $planner=Join-Path $root 'src\RansomGuard.Rollback\RollbackRecoveryPlan.cs'
 $executor=Join-Path $root 'src\RansomGuard.Rollback\RollbackRecoveryExecutor.cs'
 $restart=Join-Path $root 'src\RansomGuard.Rollback\RestartReconciliationStore.cs'
+$truncate=Join-Path $root 'src\RansomGuard.Rollback\TruncateOperationStore.cs'
 $cli=Join-Path $root 'src\RansomGuard.RollbackRecoveryCli\Program.cs'
 $project=Join-Path $root 'src\RansomGuard.RollbackRecoveryCli\RansomGuard.RollbackRecoveryCli.csproj'
 $build=Join-Path $root 'build_windows.ps1'
 $launcher=Join-Path $root 'rollback_recovery.cmd'
 $tests=Join-Path $root 'tests\RansomGuard.Rollback.Tests\Program.cs'
 
-foreach($path in @($planner,$executor,$restart,$cli,$project,$build,$launcher,$tests)){
+foreach($path in @($planner,$executor,$restart,$truncate,$cli,$project,$build,$launcher,$tests)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Verified rollback recovery source missing: $path"}
 }
 
@@ -23,6 +24,7 @@ foreach($required in @(
     'ReviewOriginallyAbsentPath',
     'ReviewCreateTransaction',
     'ReviewRenameTopology',
+    'ReviewTruncateTransaction',
     'RecoveryActionState.Ready',
     'RecoveryActionState.Review',
     'RecoveryActionState.Blocked',
@@ -31,6 +33,8 @@ foreach($required in @(
     'ComputePlanId',
     'CREATE intent has no authoritative kernel completion',
     'RENAME intent has no authoritative kernel completion',
+    'TRUNCATE intent has no authoritative kernel completion',
+    'truncates.AssessRestart(intent)',
     'restartEvidence?.Assess(',
     'reviewable ? RecoveryActionState.Review : RecoveryActionState.Blocked',
     'restart evidence never becomes a kernel completion',
@@ -64,6 +68,31 @@ foreach($required in @(
 }
 if($restartText -match 'RecordCompletionAsync|RecordCompletion\s*\('){
     throw 'Restart evidence must never expose an authoritative completion writer.'
+}
+
+$truncateText=Get-Content -LiteralPath $truncate -Raw
+foreach($required in @(
+    'truncate-intent-journal.jsonl',
+    'truncate-completion-journal.jsonl',
+    'truncate-restart-journal.jsonl',
+    'RecordIntentAsync(',
+    'RecordCompletionAsync(',
+    'RecordRestartObservationAsync(',
+    'ClassifyRestart(',
+    'TruncateMetric.EndOfFile',
+    'RestartEvidenceState.SupportsCompleted',
+    'RestartEvidenceState.SupportsNotCompleted',
+    'RestartEvidenceState.Indeterminate',
+    'RestartEvidenceState.Ambiguous',
+    'AssessRestart(',
+    'restart evidence never'
+)){
+    if($truncateText -notmatch [regex]::Escape($required) -and $required -ne 'restart evidence never'){
+        throw "TRUNCATE recovery invariant missing: $required"
+    }
+}
+if($truncateText -match '\b(File\.Delete|Directory\.Delete|File\.Move|Directory\.Move)\s*\('){
+    throw 'TRUNCATE transaction store must remain evidence-only and must not mutate live topology.'
 }
 
 $executorText=Get-Content -LiteralPath $executor -Raw
@@ -100,7 +129,8 @@ foreach($allowed in @(
 foreach($forbidden in @(
     'case RecoveryActionKind.ReviewOriginallyAbsentPath:',
     'case RecoveryActionKind.ReviewCreateTransaction:',
-    'case RecoveryActionKind.ReviewRenameTopology:'
+    'case RecoveryActionKind.ReviewRenameTopology:',
+    'case RecoveryActionKind.ReviewTruncateTransaction:'
 )){
     if($readyBlock -match [regex]::Escape($forbidden)){throw "Recovery executor must not execute topology review action: $forbidden"}
 }
@@ -158,9 +188,13 @@ foreach($required in @(
     'consistent restart CREATE evidence becomes review-only crash recovery',
     'consistent restart RENAME evidence becomes review-only crash recovery',
     'ambiguous restart RENAME evidence remains blocked',
+    'restart TRUNCATE EOF evidence recognizes requested length on the same FILE_ID',
+    'restart TRUNCATE EOF evidence recognizes unchanged original length',
+    'TRUNCATE restart evidence is idempotent and assessment binds the exact intent',
+    'consistent restart TRUNCATE evidence becomes review-only and never a live length mutation',
     'stale recovery plan is rejected before any output is created'
 )){
     if($testText -notmatch [regex]::Escape($required)){throw "Crash reconciliation recovery test invariant missing: $required"}
 }
 
-Write-Host 'Verified rollback recovery source gate PASSED: deterministic plans, consistent restart-evidence review, copy-out-only Ready actions, stale-plan refusal, no manufactured completion, no automatic delete/rename/overwrite.' -ForegroundColor Green
+Write-Host 'Verified rollback recovery source gate PASSED: CREATE/RENAME/TRUNCATE restart review, copy-out-only Ready actions, stale-plan refusal, no manufactured completion or automatic live mutation.' -ForegroundColor Green

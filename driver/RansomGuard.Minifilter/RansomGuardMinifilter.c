@@ -1305,7 +1305,8 @@ static FLT_POSTOP_CALLBACK_STATUS RgPostSetInformationSafe(PFLT_CALLBACK_DATA Da
     }
 
     if (context->PostEventType != RgEventRenameResult &&
-        context->PostEventType != RgEventTruncateResult) {
+        context->PostEventType != RgEventTruncateResult &&
+        context->PostEventType != RgEventDeleteDispositionResult) {
         RgFreePostContext(context);
         InterlockedIncrement(&gDropped);
         return FLT_POSTOP_FINISHED_PROCESSING;
@@ -1381,6 +1382,40 @@ static FLT_POSTOP_CALLBACK_STATUS RgPostSetInformationSafe(PFLT_CALLBACK_DATA Da
             }
         } else {
             event.IdentityStatus = RgIdentityQueryFailed;
+        }
+    } else if (context->PostEventType == RgEventDeleteDispositionResult &&
+               NT_SUCCESS(Data->IoStatus.Status)) {
+        // A successful disposition call is authoritative only for disposition acceptance.
+        // Actual pathname deletion is finalized later from the exact handle cleanup context.
+        if (KeGetCurrentIrql() == PASSIVE_LEVEL && !KeAreAllApcsDisabled() &&
+            FltObjects != NULL && FltObjects->Instance != NULL && FltObjects->FileObject != NULL) {
+            RgPopulatePostOperationIdentity(&event, FltObjects);
+            RtlZeroMemory(&standardInfo, sizeof(standardInfo));
+            status = FltQueryInformationFile(
+                FltObjects->Instance,
+                FltObjects->FileObject,
+                &standardInfo,
+                sizeof(standardInfo),
+                FileStandardInformation,
+                &returned);
+            if (NT_SUCCESS(status) && returned >= (ULONG)sizeof(standardInfo)) {
+                event.Flags |= RG_EVENT_FLAG_DELETE_STATE_RESOLVED;
+                if (standardInfo.DeletePending) {
+                    event.Flags |= RG_EVENT_FLAG_DELETE_PENDING;
+                }
+            }
+        } else {
+            event.IdentityStatus = RgIdentityQueryFailed;
+        }
+
+        if (FlagOn(context->DispositionFlags, RG_DELETE_DISPOSITION_DELETE)) {
+            RgAttachDeleteHandleContext(
+                FltObjects,
+                context->RequestSequence,
+                context->FileInformationClass,
+                context->DispositionFlags);
+        } else {
+            RgCancelDeleteHandleContext(FltObjects);
         }
     }
 

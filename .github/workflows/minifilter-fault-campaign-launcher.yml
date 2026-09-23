@@ -53,14 +53,14 @@ jobs:
       - name: Checkout exact PR 39 fault-campaign head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned # v4 pinned
         with:
-          ref: c3ff980805e8c43c92da7cfec2377866c5874013
+          ref: 9ce901ac53e1d4cf0b533e0d0cb6e3c224682073
           fetch-depth: 1
 
       - name: Bind exact checked-out commit
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
-          $expected='c3ff980805e8c43c92da7cfec2377866c5874013'
+          $expected='9ce901ac53e1d4cf0b533e0d0cb6e3c224682073'
           $actual=(& git rev-parse --verify HEAD).Trim()
           if($LASTEXITCODE -ne 0 -or -not [string]::Equals($actual,$expected,[StringComparison]::OrdinalIgnoreCase)){
             throw "Fault campaign launcher expected '$expected' but checked out '$actual'."

@@ -1054,11 +1054,46 @@ try
               x.RequestSequence == conflictingDeleteIntent.RequestSequence),
         "conflicting DELETE topology/cancellation evidence remains unresolved and retention-protected");
 
+    var delayedDeleteIntent = await deleteState.RecordIntentAsync(
+        308,
+        Path.Combine(sourceDir, "delayed-delete.bin"),
+        DeleteOperationStore.FileDispositionInformationEx,
+        DeleteOperationStore.FileDispositionDelete,
+        sourceIdentity,
+        false,
+        new string('8', 64));
+    _ = await deleteState.RecordCompletionAsync(
+        delayedDeleteIntent.RequestSequence,
+        DeleteDispositionCompletionState.AcceptedDeletePending,
+        0,
+        0,
+        true,
+        sourceIdentity);
+    _ = await deleteState.RecordFinalizationAsync(
+        delayedDeleteIntent,
+        DeleteFinalizationSource.LivePostCleanupProbe,
+        DeleteFinalizationState.StillPresentSameIdentity,
+        RestartPathState.File,
+        sourceIdentity);
+    var delayedDeleteMissing = await deleteState.RecordFinalizationAsync(
+        delayedDeleteIntent,
+        DeleteFinalizationSource.RestartProbe,
+        DeleteFinalizationState.DeletedObserved,
+        RestartPathState.Missing,
+        null);
+    Check(deleteState.AssessFinalization(delayedDeleteIntent).State ==
+              DeleteFinalizationAssessmentState.ConsistentDeletedObserved &&
+          deleteState.AssessFinalization(delayedDeleteIntent).LatestRecordSha256 ==
+              delayedDeleteMissing.RecordSha256 &&
+          !deleteState.UnsettledIntents.Any(x =>
+              x.RequestSequence == delayedDeleteIntent.RequestSequence),
+        "DELETE finalization accepts monotonic same-FILE_ID-present to pathname-missing transition");
+
     deleteState.VerifyAll();
     var reopenedDeleteState = new DeleteOperationStore(deleteStateRoot);
-    Check(reopenedDeleteState.Intents.Count == 3 &&
-          reopenedDeleteState.Completions.Count == 2 &&
-          reopenedDeleteState.Finalizations.Count == 5,
+    Check(reopenedDeleteState.Intents.Count == 4 &&
+          reopenedDeleteState.Completions.Count == 3 &&
+          reopenedDeleteState.Finalizations.Count == 7,
         "DELETE intent/completion/finalization hash chains rebuild after reopen");
 
     var restartStateRoot = Path.Combine(root, "restart-evidence");

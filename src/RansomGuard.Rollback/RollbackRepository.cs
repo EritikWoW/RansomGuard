@@ -71,6 +71,10 @@ public sealed class RollbackRepository
             if (Directory.Exists(renameRoot))
                 new RenameRollbackStore(renameRoot).VerifyAll();
 
+            var truncateRoot = Path.Combine(store.Root, "truncate-state");
+            if (Directory.Exists(truncateRoot))
+                new TruncateOperationStore(truncateRoot).VerifyAll();
+
             var restartRoot = Path.Combine(store.Root, "restart-state");
             if (Directory.Exists(restartRoot))
                 new RestartReconciliationStore(restartRoot).VerifyAll();

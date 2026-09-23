@@ -21,9 +21,16 @@ typedef struct _RG_POST_CONTEXT {
     ULONG ActivationPreflight;
     ULONG PostEventType;
     ULONG FileInformationClass;
+    ULONG DispositionFlags;
     PFLT_FILE_NAME_INFORMATION PreDestinationNameInfo;
     PFLT_FILE_NAME_INFORMATION PreCreateNameInfo;
 } RG_POST_CONTEXT, *PRG_POST_CONTEXT;
+
+typedef struct _RG_DELETE_HANDLE_CONTEXT {
+    ULONGLONG RequestSequence;
+    ULONG FileInformationClass;
+    ULONG DispositionFlags;
+} RG_DELETE_HANDLE_CONTEXT, *PRG_DELETE_HANDLE_CONTEXT;
 
 typedef struct _RG_STREAM_CONTEXT {
     ULONG PathStatus;
@@ -57,3 +64,8 @@ FLT_PREOP_CALLBACK_STATUS RgPreAcquireForSectionSynchronization(
 FLT_POSTOP_CALLBACK_STATUS RgPostSetInformation(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects,
                                                 _In_opt_ PVOID CompletionContext,
                                                 _In_ FLT_POST_OPERATION_FLAGS Flags);
+FLT_PREOP_CALLBACK_STATUS RgPreCleanup(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects,
+                                      _Flt_CompletionContext_Outptr_ PVOID *CompletionContext);
+FLT_POSTOP_CALLBACK_STATUS RgPostCleanup(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects,
+                                         _In_opt_ PVOID CompletionContext,
+                                         _In_ FLT_POST_OPERATION_FLAGS Flags);

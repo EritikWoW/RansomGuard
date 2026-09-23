@@ -136,7 +136,9 @@ foreach($required in @(
     "'ntfsAttempted','ntfsSupported','ntfsPassed','refsAttempted','cleanupPassed','passed'",
     'refsUnsupportedReason',
     'ransomguard-filesystem-matrix-evidence',
-    'Upload filesystem matrix evidence'
+    'Upload filesystem matrix evidence',
+    'STALE MATRIX KERNEL STATE',
+    'Do not retry unload; revert the disposable VM checkpoint.'
 )){
     if($workflow -notmatch [regex]::Escape($required)){
         throw "Runtime VM workflow missing filesystem matrix invariant: $required"

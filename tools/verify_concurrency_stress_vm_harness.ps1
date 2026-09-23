@@ -32,6 +32,12 @@ foreach($required in @(
     "RootBase='C:\RansomGuard-VM-Stress'",
     "'--gate-workers','8'",
     'kernelGateCap=8',
+    'qualificationParallelism=8',
+    'admissionOverflowPassed',
+    'overflowDenied',
+    'Wait-StressGroupAllowAccessDenied',
+    'Assert-OverflowDeniedEvidence',
+    'Win32Error:\s*5',
     'create-new',
     'rename-file',
     'truncate-eof',
@@ -121,6 +127,9 @@ foreach($required in @(
     '.\tools\verify_concurrency_stress_vm_harness.ps1',
     '.\minifilter-tools\run_concurrency_stress_lab.ps1',
     'transactionCorrelationPassed',
+    'admissionOverflowPassed',
+    'qualificationParallelism',
+    'overflowDenied',
     'noPendingTransactionsPassed',
     'preimageHashPassed',
     'gateStayedAlive',
@@ -138,4 +147,4 @@ if($workflow -match '(?im)\b(verifier(?:\.exe)?|shutdown(?:\.exe)?|Restart-Compu
     throw 'Concurrency stress VM workflow must not reboot, enable Driver Verifier, or format/manage disks.'
 }
 
-Write-Host 'Concurrency stress source gate PASSED: default parallelism=16 exceeds kernel cap=8, all destructive/mapped phases are correlated to durable evidence, pre-images are hash-checked, cleanup is bounded, and reboot/disk/verifier operations are absent.'
+Write-Host 'Concurrency stress source gate PASSED: overflow width 16 exceeds kernel cap 8 and must prove fail-closed admission denial, qualification phases run at cap=8, destructive/mapped operations are correlated to durable evidence, pre-images are hash-checked, cleanup is bounded, and reboot/disk/verifier operations are absent.'

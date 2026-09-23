@@ -2032,7 +2032,7 @@ try
     var pendingDeleteSession = retentionRepo.CreateSession("pending_delete_completed");
     var pendingDeleteOps = new DeleteOperationStore(
         Path.Combine(pendingDeleteSession.Root, "delete-state"));
-    var pendingDeleteIntent = await pendingDeleteOps.RecordIntentAsync(
+    var retentionPendingDeleteIntent = await pendingDeleteOps.RecordIntentAsync(
         12003,
         Path.Combine(retentionSource, "pending-delete.bin"),
         DeleteOperationStore.FileDispositionInformationEx,
@@ -2041,14 +2041,14 @@ try
         true,
         string.Empty);
     _ = await pendingDeleteOps.RecordCompletionAsync(
-        pendingDeleteIntent.RequestSequence,
+        retentionPendingDeleteIntent.RequestSequence,
         DeleteDispositionCompletionState.AcceptedDeletePending,
         0,
         0,
         true,
         null);
     _ = await pendingDeleteOps.RecordFinalizationAsync(
-        pendingDeleteIntent,
+        retentionPendingDeleteIntent,
         DeleteFinalizationSource.KernelCleanup,
         DeleteFinalizationState.CleanupObserved,
         RestartPathState.QueryFailed,

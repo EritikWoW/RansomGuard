@@ -40,6 +40,8 @@ Queues/windows are intentionally bounded. Event loss, queue drops, stale evidenc
 
 For resolved, in-scope ordinary user-mode mutations while the LAB gate is connected and activated, destructive I/O follows preserve-before-allow and failures in preservation/admission/gate handling fail closed.
 
+The current LAB communication path has one Filter Manager client connection and one synchronous GateClient handle. Multiple kernel requests can encounter the bounded admission path, while user-mode reply-required preservation is serialized so each `FilterReplyMessage` completes before the next blocking receive. Configurable message slots bound no-reply evidence/completion work; they are not a claim of parallel preservation decisions.
+
 Important exceptions are explicit in THREAT_MODEL.md:
 
 - unresolved/name-query-failed scope classification currently fails open;
@@ -65,6 +67,8 @@ The read-only local pipe exposes bounded health/incident metadata and has no mut
 ## Build and release boundary
 
 Source gates are regression checks, not independent security proofs. Kernel loadability, Filter Manager ordering, filesystem semantics, ACL/UAC behavior and recovery behavior require real Windows/runtime qualification.
+
+The repository now pins the .NET SDK, immutable GitHub Action commits and locked NuGet dependency graphs, and runs dependency/source provenance gates. These controls reduce build drift but do not replace protected-branch policy, independent review, protected production signing keys, SBOM/provenance retention or a trusted build environment.
 
 Release-oriented engineering requires exact build inputs, immutable action references, locked dependency graphs, artifact hashes/provenance, protected branches, enforced review and protected signing keys. Repository settings such as branch/ruleset enforcement are not established merely by files in this tree.
 

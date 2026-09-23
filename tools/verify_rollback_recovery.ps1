@@ -4,13 +4,14 @@ $planner=Join-Path $root 'src\RansomGuard.Rollback\RollbackRecoveryPlan.cs'
 $executor=Join-Path $root 'src\RansomGuard.Rollback\RollbackRecoveryExecutor.cs'
 $restart=Join-Path $root 'src\RansomGuard.Rollback\RestartReconciliationStore.cs'
 $truncate=Join-Path $root 'src\RansomGuard.Rollback\TruncateOperationStore.cs'
+$delete=Join-Path $root 'src\RansomGuard.Rollback\DeleteOperationStore.cs'
 $cli=Join-Path $root 'src\RansomGuard.RollbackRecoveryCli\Program.cs'
 $project=Join-Path $root 'src\RansomGuard.RollbackRecoveryCli\RansomGuard.RollbackRecoveryCli.csproj'
 $build=Join-Path $root 'build_windows.ps1'
 $launcher=Join-Path $root 'rollback_recovery.cmd'
 $tests=Join-Path $root 'tests\RansomGuard.Rollback.Tests\Program.cs'
 
-foreach($path in @($planner,$executor,$restart,$truncate,$cli,$project,$build,$launcher,$tests)){
+foreach($path in @($planner,$executor,$restart,$truncate,$delete,$cli,$project,$build,$launcher,$tests)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Verified rollback recovery source missing: $path"}
 }
 
@@ -25,6 +26,7 @@ foreach($required in @(
     'ReviewCreateTransaction',
     'ReviewRenameTopology',
     'ReviewTruncateTransaction',
+    'ReviewDeleteTransaction',
     'RecoveryActionState.Ready',
     'RecoveryActionState.Review',
     'RecoveryActionState.Blocked',
@@ -34,6 +36,10 @@ foreach($required in @(
     'CREATE intent has no authoritative kernel completion',
     'RENAME intent has no authoritative kernel completion',
     'TRUNCATE intent has no authoritative kernel completion',
+    'DELETE intent has no authoritative disposition completion',
+    'DELETE disposition was accepted',
+    'deletes.AssessFinalization(intent)',
+    'DeleteFinalizationAssessmentState.CleanupObservedOnly',
     'truncates.AssessRestart(intent)',
     'restartEvidence?.Assess(',
     'reviewable ? RecoveryActionState.Review : RecoveryActionState.Blocked',
@@ -97,6 +103,32 @@ if($truncateText -match '\b(File\.Delete|Directory\.Delete|File\.Move|Directory\
     throw 'TRUNCATE transaction store must remain evidence-only and must not mutate live topology.'
 }
 
+$deleteText=Get-Content -LiteralPath $delete -Raw
+foreach($required in @(
+    'delete-intent-journal.jsonl',
+    'delete-completion-journal.jsonl',
+    'delete-finalization-journal.jsonl',
+    'RecordIntentAsync(',
+    'RecordCompletionAsync(',
+    'RecordFinalizationAsync(',
+    'AssessFinalization(',
+    'ClassifyPathObservation(',
+    'DeleteFinalizationState.CleanupObserved',
+    'DeleteFinalizationSource.LivePostCleanupProbe',
+    'DeleteFinalizationAssessmentState.CleanupObservedOnly',
+    'DeleteFinalizationAssessmentState.ConsistentDeletedObserved',
+    'DeleteFinalizationAssessmentState.ConsistentStillPresent',
+    'DeleteFinalizationAssessmentState.Unresolved',
+    'DELETE finalization assessment intent binding mismatch'
+)){
+    if($deleteText -notmatch [regex]::Escape($required)){
+        throw "DELETE recovery invariant missing: $required"
+    }
+}
+if($deleteText -match '\b(File\.Delete|Directory\.Delete|File\.Move|Directory\.Move)\s*\('){
+    throw 'DELETE transaction store must remain evidence-only and must not mutate live topology.'
+}
+
 $executorText=Get-Content -LiteralPath $executor -Raw
 foreach($required in @(
     'RollbackRecoveryPlanner.Build(repositoryFull, requestedPlan.SessionId)',
@@ -132,7 +164,8 @@ foreach($forbidden in @(
     'case RecoveryActionKind.ReviewOriginallyAbsentPath:',
     'case RecoveryActionKind.ReviewCreateTransaction:',
     'case RecoveryActionKind.ReviewRenameTopology:',
-    'case RecoveryActionKind.ReviewTruncateTransaction:'
+    'case RecoveryActionKind.ReviewTruncateTransaction:',
+    'case RecoveryActionKind.ReviewDeleteTransaction:'
 )){
     if($readyBlock -match [regex]::Escape($forbidden)){throw "Recovery executor must not execute topology review action: $forbidden"}
 }
@@ -195,9 +228,15 @@ foreach($required in @(
     'TRUNCATE restart evidence is idempotent and assessment binds the exact intent',
     'TRUNCATE restart evidence rejects a cloned intent whose path does not match the committed record',
     'consistent restart TRUNCATE evidence becomes review-only and never a live length mutation',
+    'DELETE finalization rejects a cloned intent whose path does not match the committed record',
+    'DELETE exact-handle cleanup is durable but does not claim pathname deletion',
+    'conflicting DELETE topology/cancellation evidence remains unresolved and retention-protected',
+    'authoritative DELETE plus observed pathname absence is topology review, never automatic recreation',
+    'lost DELETE disposition completion with restart absence evidence remains review-only',
+    'cleanup-only DELETE evidence remains blocked until pathname topology is proven',
     'stale recovery plan is rejected before any output is created'
 )){
     if($testText -notmatch [regex]::Escape($required)){throw "Crash reconciliation recovery test invariant missing: $required"}
 }
 
-Write-Host 'Verified rollback recovery source gate PASSED: CREATE/RENAME/TRUNCATE restart review, copy-out-only Ready actions, stale-plan refusal, no manufactured completion or automatic live mutation.' -ForegroundColor Green
+Write-Host 'Verified rollback recovery source gate PASSED: CREATE/RENAME/TRUNCATE/DELETE restart/finalization review, copy-out-only Ready actions, stale-plan refusal, no manufactured completion or automatic live mutation.' -ForegroundColor Green

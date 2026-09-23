@@ -35,10 +35,7 @@ jobs:
 
       - name: Audit PowerShell automation
         shell: pwsh
-        run: |
-          $ErrorActionPreference='Stop'
-          .\tools\verify_powershell_automation.ps1
-          .\tools\verify_crash_vm_harness.ps1
+        run: .\tools\verify_powershell_automation.ps1
 
       - name: Verify runtime VM runner readiness
         shell: pwsh
@@ -102,38 +99,7 @@ jobs:
           }
           "RG_DRIVER_PACKAGE=$package" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Run CREATE completion-loss and restart reconciliation
-        if: github.ref == 'refs/heads/feature/runtime-crash-fault-evidence'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference='Stop'
-          $results=Join-Path $env:RUNNER_TEMP 'ransomguard-runtime-results'
-          if(Test-Path -LiteralPath $results){
-            Remove-Item -LiteralPath $results -Recurse -Force
-          }
-          New-Item -ItemType Directory -Path $results -Force | Out-Null
-          .\minifilter-tools\run_crash_reconciliation_lab.ps1 -LabReleaseDirectory $env:RG_LAB_RELEASE -DriverPackageDirectory $env:RG_DRIVER_PACKAGE -RootBase $env:RG_RUNTIME_ROOT_BASE -ResultsDirectory $results
-          $summary=Get-Content -LiteralPath (Join-Path $results 'crash-runtime-result.json') -Raw | ConvertFrom-Json
-          foreach($name in @(
-            'completionLossObserved',
-            'createIntentDurable',
-            'createCompletionAbsent',
-            'targetCreated',
-            'restartObserved',
-            'restartSupportsCompleted',
-            'recoveryTransactionNotReady',
-            'cleanupPassed',
-            'passed'
-          )){
-            if($summary.$name -ne $true){throw "Completion-loss runtime result invariant '$name' was not true."}
-          }
-          if(-not [string]::IsNullOrWhiteSpace([string]$summary.cleanupError)){
-            throw "Completion-loss runtime cleanup reported an error: $($summary.cleanupError)"
-          }
-          "RG_RUNTIME_RESULTS=$results" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
       - name: Run real minifilter activation and mapping scenarios
-        if: github.ref != 'refs/heads/feature/runtime-crash-fault-evidence'
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'

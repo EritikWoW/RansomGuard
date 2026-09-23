@@ -33,6 +33,12 @@ jobs:
         with:
           dotnet-version: 10.0.401
 
+      - name: Bootstrap exact NuGet lock graphs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          .\tools\regenerate_nuget_locks.ps1
+
       - name: Build and test normal + LAB userspace bundle
         shell: pwsh
         run: |

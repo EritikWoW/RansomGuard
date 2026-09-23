@@ -254,7 +254,6 @@ function Run-FileSystemScenario($Vhd){
     $gateOut=Join-Path $ResultsDirectory ("{0}-gate.out.log" -f $fs.ToLowerInvariant())
     $gateErr=$gateOut+'.err'
     $gate=$null
-    $installed=$false
 
     $createTarget=Join-Path $root 'created.bin'
     $renameSource=Join-Path $root 'rename-source.bin'
@@ -275,7 +274,6 @@ function Run-FileSystemScenario($Vhd){
         New-TestFile $mappedTarget 65536
         $mappedOriginalHash=(Get-FileHash -LiteralPath $mappedTarget -Algorithm SHA256).Hash
 
-        $installed=$true
         & $installScript -Volume $volume -PackageDirectory $DriverPackageDirectory -Confirmation 'LAB-MINIFILTER'
 
         $gate=Start-LoggedProcess $gateExe @(
@@ -392,7 +390,7 @@ function Run-FileSystemScenario($Vhd){
             deletePassed=$true
             mappedWritePassed=$true
             deleteDispositionState=[int]$deleteCompletionRecord.state
-            cleanupPassed=$true
+            cleanupPassed=$false
             error=$null
         }
     }
@@ -415,13 +413,6 @@ function Run-FileSystemScenario($Vhd){
     }
     finally{
         try{Stop-LabProcess $gate "$fs GateClient"}catch{}
-        if($installed){
-            try{
-                & $unloadScript -Volume $volume
-            }catch{
-                Write-Warning "$fs minifilter cleanup failed: $($_.Exception.Message)"
-            }
-        }
     }
 }
 
@@ -513,12 +504,21 @@ try{
         $scenario=Run-FileSystemScenario $activeVhd
         $summary.scenarios+=@($scenario)
         $summary[$passedKey]=[bool]$scenario.passed
-        if(-not $scenario.passed){
-            throw "$fs filesystem matrix scenario failed: $($scenario.error)"
+
+        try{
+            & $unloadScript -Volume ([string]$activeVhd.Volume)
+            $scenario.cleanupPassed=$true
+        }catch{
+            $summary.cleanupPassed=$false
+            throw "$fs minifilter unload failed before VHD detach: $($_.Exception.Message)"
         }
 
         Remove-ScratchVhd $activeVhd
         $activeVhd=$null
+
+        if(-not $scenario.passed){
+            throw "$fs filesystem matrix scenario failed: $($scenario.error)"
+        }
     }
 
     $summary.passed=$summary.ntfsPassed -and
@@ -531,18 +531,20 @@ catch{
 }
 finally{
     if($activeVhd){
-        try{Remove-ScratchVhd $activeVhd}catch{
+        $filters=(& fltmc filters 2>$null | Out-String)
+        if($LASTEXITCODE -ne 0){
             $summary.cleanupPassed=$false
-            Write-Warning "VHD cleanup failed: $($_.Exception.Message)"
+            Write-Warning 'Filter Manager state could not be verified; leaving the scratch VHD attached for VM checkpoint recovery.'
         }
-    }
-    $filters=(& fltmc filters 2>$null | Out-String)
-    if($LASTEXITCODE -eq 0 -and $filters -match '(?m)^\s*RansomGuardMinifilter\b'){
-        try{
-            & $unloadScript -Volume 'C:'
-        }catch{
+        elseif($filters -match '(?m)^\s*RansomGuardMinifilter\b'){
             $summary.cleanupPassed=$false
-            Write-Warning "Final minifilter cleanup failed: $($_.Exception.Message)"
+            Write-Warning 'RansomGuardMinifilter is still loaded; refusing to detach/delete the active scratch VHD. Revert the disposable VM checkpoint.'
+        }
+        else{
+            try{Remove-ScratchVhd $activeVhd}catch{
+                $summary.cleanupPassed=$false
+                Write-Warning "VHD cleanup failed after confirmed minifilter unload: $($_.Exception.Message)"
+            }
         }
     }
     $summary.finishedUtc=[DateTime]::UtcNow.ToString('o')

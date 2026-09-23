@@ -17,6 +17,11 @@ foreach($required in @(
     'Assert-OnlyTargetDriver',
     'querysettings-after',
     'preExistingDriverNames',
+    'DriverPackageDirectory',
+    'install_minifilter_lab.ps1',
+    '-StageOnly',
+    'driverPackageRegistered',
+    'StageOnly unexpectedly loaded RansomGuardMinifilter',
     "phase='armed'",
     'bootMode=''oneboot''',
     'stateDurable',
@@ -94,6 +99,9 @@ foreach($required in @(
     '- runtime',
     '- clear',
     'arm_driver_verifier_lab.ps1',
+    '-DriverPackageDirectory $env:RG_DRIVER_PACKAGE',
+    "inputs.phase == 'arm' || inputs.phase == 'runtime'",
+    'driverPackageRegistered',
     'run_driver_verifier_lab.ps1',
     'verify_driver_verifier_clear_lab.ps1',
     "inputs.phase == 'arm'",
@@ -118,6 +126,12 @@ if($workflow.Contains('\${{')){
 
 if($arm -notmatch [regex]::Escape('Driver Verifier already has persistent settings')){
     throw 'Driver Verifier ARM must refuse pre-existing verifier state instead of overwriting it.'
+}
+if($arm -match '(?i)fltmc\s+(load|attach)'){
+    throw 'Driver Verifier ARM must not load or attach the minifilter before the verifier reboot.'
+}
+if($arm -notmatch [regex]::Escape('-StageOnly')){
+    throw 'Driver Verifier ARM must register the exact signed driver package without loading it.'
 }
 if($runtime -notmatch [regex]::Escape('Driver Verifier current activity did not name loaded target')){
     throw 'Driver Verifier runtime must prove the exact loaded RansomGuard driver is under current verification.'

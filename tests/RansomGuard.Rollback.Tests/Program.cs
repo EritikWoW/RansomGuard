@@ -826,6 +826,86 @@ try
     Check(renameNotCompletedEvidence == RestartEvidenceState.SupportsNotCompleted,
         "restart RENAME evidence recognizes unchanged source and absent destination");
 
+    var truncateStateRoot = Path.Combine(root, "restart-truncate-state");
+    var truncateState = new TruncateOperationStore(truncateStateRoot);
+    var truncatePath = Path.Combine(sourceDir, "restart-truncate.bin");
+    var truncateIntent = await truncateState.RecordIntentAsync(
+        303,
+        truncatePath,
+        TruncateOperationStore.FileEndOfFileInformation,
+        1024,
+        4096,
+        sourceIdentity,
+        false,
+        new string('C', 64));
+    var truncateCompletedEvidence = TruncateOperationStore.ClassifyRestart(
+        truncateIntent,
+        RestartPathState.File,
+        sourceIdentity,
+        1024);
+    Check(truncateCompletedEvidence == RestartEvidenceState.SupportsCompleted,
+        "restart TRUNCATE EOF evidence recognizes requested length on the same FILE_ID");
+    var truncateNotCompletedEvidence = TruncateOperationStore.ClassifyRestart(
+        truncateIntent,
+        RestartPathState.File,
+        sourceIdentity,
+        4096);
+    Check(truncateNotCompletedEvidence == RestartEvidenceState.SupportsNotCompleted,
+        "restart TRUNCATE EOF evidence recognizes unchanged original length");
+    Check(TruncateOperationStore.ClassifyRestart(
+              truncateIntent,
+              RestartPathState.File,
+              sourceIdentity,
+              2048) == RestartEvidenceState.Ambiguous,
+        "restart TRUNCATE EOF evidence keeps an unexpected third length ambiguous");
+
+    var allocationIntent = await truncateState.RecordIntentAsync(
+        304,
+        truncatePath,
+        TruncateOperationStore.FileAllocationInformation,
+        4096,
+        8192,
+        sourceIdentity,
+        false,
+        new string('D', 64));
+    Check(TruncateOperationStore.ClassifyRestart(
+              allocationIntent,
+              RestartPathState.File,
+              sourceIdentity,
+              -1) == RestartEvidenceState.Indeterminate,
+        "restart allocation-size evidence stays indeterminate instead of guessing filesystem rounding");
+
+    var truncateRestart = await truncateState.RecordRestartObservationAsync(
+        truncateIntent,
+        truncateCompletedEvidence,
+        RestartPathState.File,
+        sourceIdentity,
+        1024);
+    var duplicateTruncateRestart = await truncateState.RecordRestartObservationAsync(
+        truncateIntent,
+        truncateCompletedEvidence,
+        RestartPathState.File,
+        sourceIdentity,
+        1024);
+    var truncateAssessment = truncateState.AssessRestart(truncateIntent);
+    Check(duplicateTruncateRestart.Sequence == truncateRestart.Sequence &&
+          truncateState.RestartObservations.Count == 1 &&
+          truncateAssessment.State == RestartEvidenceAssessmentState.ConsistentSupportsCompleted &&
+          truncateAssessment.LatestRecordSha256 == truncateRestart.RecordSha256,
+        "TRUNCATE restart evidence is idempotent and assessment binds the exact intent");
+    _ = await truncateState.RecordCompletionAsync(
+        truncateIntent.RequestSequence,
+        TruncateCompletionState.Succeeded,
+        0,
+        0,
+        1024,
+        sourceIdentity);
+    Check(truncateState.PendingIntents.Single().RequestSequence == allocationIntent.RequestSequence,
+        "authoritative TRUNCATE completion closes only its correlated pending intent");
+    truncateState.VerifyAll();
+    Check(new TruncateOperationStore(truncateStateRoot).Intents.Count == 2,
+        "TRUNCATE transaction journals rebuild after reopen");
+
     var restartStateRoot = Path.Combine(root, "restart-evidence");
     var restartState = new RestartReconciliationStore(restartStateRoot);
     var createObservation = await restartState.RecordObservationAsync(
@@ -1380,9 +1460,27 @@ try
         ambiguousRenameIntent.DestinationPath,
         new RestartPathObservation(RestartPathState.Missing, null));
 
+    var planTruncate = new TruncateOperationStore(
+        Path.Combine(planSession.Root, "truncate-state"));
+    var pendingTruncateIntent = await planTruncate.RecordIntentAsync(
+        9201,
+        fullPlanPath,
+        TruncateOperationStore.FileEndOfFileInformation,
+        1024,
+        fullOriginalBytes.LongLength,
+        planIdentity,
+        false,
+        fullCapture.RecordSha256);
+    var truncateCrashEvidence = await planTruncate.RecordRestartObservationAsync(
+        pendingTruncateIntent,
+        RestartEvidenceState.SupportsCompleted,
+        RestartPathState.File,
+        planIdentity,
+        1024);
+
     var recoveryPlan = RollbackRecoveryPlanner.Build(planRepoRoot, "plan_case");
     Check(recoveryPlan.ReadyCount == 2 &&
-          recoveryPlan.ReviewCount == 5 &&
+          recoveryPlan.ReviewCount == 6 &&
           recoveryPlan.BlockedCount == 1 &&
           !recoveryPlan.AutomaticTopologyMutationAllowed,
         "recovery planner separates copy-out readiness from review/blocked topology");
@@ -1430,6 +1528,12 @@ try
             x.State == RecoveryActionState.Blocked &&
             x.EvidenceSequence == 9103),
         "ambiguous restart RENAME evidence remains blocked");
+    Check(recoveryPlan.Actions.Any(x =>
+            x.Kind == RecoveryActionKind.ReviewTruncateTransaction &&
+            x.State == RecoveryActionState.Review &&
+            x.EvidenceSequence == 9201 &&
+            x.EvidenceRecordSha256 == truncateCrashEvidence.RecordSha256),
+        "consistent restart TRUNCATE evidence becomes review-only and never a live length mutation");
     Check(recoveryPlan.PlanId.Length == 64 &&
           recoveryPlan.JournalEvidenceSha256.Length == 64,
         "recovery plan binds deterministic SHA-256 plan/evidence digests");
@@ -1446,7 +1550,7 @@ try
           execution.RequestedReadyActions == 2 &&
           execution.SucceededActions == 2 &&
           execution.FailedActions == 0 &&
-          execution.ReviewActionsNotExecuted == 5 &&
+          execution.ReviewActionsNotExecuted == 6 &&
           execution.BlockedActionsNotExecuted == 1 &&
           !execution.AutomaticTopologyMutationPerformed,
         "recovery executor performs only ready copy-out actions");

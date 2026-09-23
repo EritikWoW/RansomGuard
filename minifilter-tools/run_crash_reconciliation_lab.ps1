@@ -181,6 +181,8 @@ $truncateGateOut=Join-Path $ResultsDirectory 'truncate-gate.out.log'
 $truncateGateErr=$truncateGateOut + '.err'
 $truncateTriggerOut=Join-Path $ResultsDirectory 'truncate-trigger.out.log'
 $truncateTriggerErr=$truncateTriggerOut + '.err'
+$truncateReady=Join-Path $ResultsDirectory 'truncate-open.ready'
+$truncateGo=Join-Path $ResultsDirectory 'truncate-open.go'
 $truncateReconcileOut=Join-Path $ResultsDirectory 'truncate-reconcile-only.out.log'
 $truncateReconcileErr=$truncateReconcileOut + '.err'
 $truncatePlanPath=Join-Path $ResultsDirectory 'truncate-recovery-plan.json'
@@ -528,8 +530,14 @@ try{
     $truncateTrigger=Start-LoggedProcess $helperExe @(
         'truncate-eof',
         '--file',(Quote-Arg $truncateTarget),
-        '--length',([string]$truncateRequestedLength)
+        '--length',([string]$truncateRequestedLength),
+        '--ready',(Quote-Arg $truncateReady),
+        '--go',(Quote-Arg $truncateGo)
     ) $truncateTriggerOut $truncateTriggerErr
+
+    Wait-File $truncateReady $truncateTrigger 30
+    Wait-LogPattern $truncateGateOut 'CreateResult\s+request=' $truncateGate 30
+    Set-Content -LiteralPath $truncateGo -Value 'go' -Encoding ASCII
 
     if(-not $truncateTrigger.WaitForExit(45000)){
         Stop-Process -Id $truncateTrigger.Id -Force -ErrorAction SilentlyContinue

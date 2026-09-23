@@ -261,8 +261,8 @@ public sealed class FileIdentityStore
         public long AllocationSize;
         public long EndOfFile;
         public uint NumberOfLinks;
-        [MarshalAs(UnmanagedType.Bool)] public bool DeletePending;
-        [MarshalAs(UnmanagedType.Bool)] public bool Directory;
+        public byte DeletePending;
+        public byte Directory;
     }
 
     [DllImport("kernel32.dll", EntryPoint = "GetFileInformationByHandleEx", SetLastError = true)]

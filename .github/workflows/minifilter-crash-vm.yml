@@ -62,6 +62,7 @@ jobs:
           $ErrorActionPreference='Stop'
           .\tools\verify_powershell_automation.ps1
           .\tools\verify_supply_chain.ps1
+          .\tools\verify_fault_campaign_vm_harness.ps1
           .\tools\verify_crash_vm_harness.ps1
 
       - name: Verify runtime VM runner readiness

@@ -142,7 +142,7 @@ foreach($required in @(
     if($runtime -notmatch [regex]::Escape($required)){throw "Runtime integration script missing invariant: $required"}
 }
 
-$stressStart=$runtime.IndexOf('# Scenario 5: mixed high-concurrency stress.')
+$stressStart=$runtime.IndexOf('# Scenario 5: mixed pressure/correlation stress.')
 $stressStopTransition=$runtime.IndexOf('Stop-LabProcess $gateTransition ''event-bound containment gate''',$stressStart)
 $stressGateStart=$runtime.IndexOf('''--gate-workers'',''4''',$stressStopTransition)
 $stressReady=$runtime.IndexOf('Wait-Path $truncateReady 30',$stressGateStart)

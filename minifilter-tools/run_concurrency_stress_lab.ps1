@@ -208,6 +208,7 @@ function Assert-CreateEvidence([string[]]$Targets,[object[]]$Intents,[object[]]$
         $request=[uint64]$intent[0].requestSequence
         $completion=@($Completions | Where-Object {
             [uint64]$_.requestSequence -eq $request -and
+            -not [string]::IsNullOrWhiteSpace([string]$_.finalPath) -and
             (Path-Key ([string]$_.finalPath)) -eq $key
         })
         if($completion.Count -ne 1 -or -not(Nt-Success $completion[0].completionStatus)){
@@ -233,6 +234,7 @@ function Assert-RenameEvidence(
         $request=[uint64]$intent[0].requestSequence
         $completion=@($Completions | Where-Object {
             [uint64]$_.requestSequence -eq $request -and
+            -not [string]::IsNullOrWhiteSpace([string]$_.finalDestinationPath) -and
             (Path-Key ([string]$_.finalDestinationPath)) -eq $destinationKey
         })
         if($completion.Count -ne 1 -or -not(Nt-Success $completion[0].completionStatus)){
@@ -530,14 +532,14 @@ try{
     $sections=Read-JsonLines (Join-Path $sessionRoot 'section-state\writable-section-journal.jsonl') 'writable-section'
     $paging=Read-JsonLines (Join-Path $sessionRoot 'paging-state\paging-write-journal.jsonl') 'paging-write'
 
-    foreach($pair in @(
-        @($createIntents,'CREATE intents'),@($createCompletions,'CREATE completions'),
-        @($renameIntents,'RENAME intents'),@($renameCompletions,'RENAME completions'),
-        @($truncateIntents,'TRUNCATE intents'),@($truncateCompletions,'TRUNCATE completions'),
-        @($deleteIntents,'DELETE intents'),@($deleteCompletions,'DELETE completions')
-    )){
-        Assert-RequestUnique @($pair[0]) ([string]$pair[1])
-    }
+    Assert-RequestUnique $createIntents 'CREATE intents'
+    Assert-RequestUnique $createCompletions 'CREATE completions'
+    Assert-RequestUnique $renameIntents 'RENAME intents'
+    Assert-RequestUnique $renameCompletions 'RENAME completions'
+    Assert-RequestUnique $truncateIntents 'TRUNCATE intents'
+    Assert-RequestUnique $truncateCompletions 'TRUNCATE completions'
+    Assert-RequestUnique $deleteIntents 'DELETE intents'
+    Assert-RequestUnique $deleteCompletions 'DELETE completions'
 
     Assert-CreateEvidence $createTargets $createIntents $createCompletions
     Assert-RenameEvidence $renameSources $renameDestinations $renameIntents $renameCompletions

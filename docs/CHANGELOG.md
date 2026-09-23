@@ -1,3 +1,16 @@
+# RansomGuard 0.7.28.0
+
+- Added a separate manual disposable-VM concurrency stress campaign without changing minifilter protocol v15.
+- GateClient runs with the maximum 8 user-mode workers. A dedicated CREATE admission-overflow probe launches 16 helpers against the kernel cap of 8 and requires at least one excess request to fail closed with access denied, no created pathname and no durable user-mode transaction.
+- After the overflow proof, qualification phases run at the supported concurrency ceiling of 8 and cover CREATE, RENAME, barrier-synchronized EOF TRUNCATE, barrier-synchronized DELETE and mapped-write operations on distinct protected files.
+- Durable evidence validation is target-specific rather than count-only: every admitted CREATE/RENAME/TRUNCATE/DELETE operation must bind to exactly one matching intent/request and one authoritative successful completion; each delete must also reach durable DeletedObserved topology finalization, while denied overflow CREATEs must remain absent and leave no intent/completion record.
+- Mapped-write qualification requires a committed full pre-image for every admitted target, verifies the stored object SHA-256 against the journal, and requires BaselineVerified writable-section plus paging-write evidence.
+- Added a source gate that parses and validates the stress harness/workflow, requires overflow width 16 > gate cap 8, requires cap-level qualification at 8, and forbids formatting, reboot/shutdown, boot-policy or Driver Verifier commands in this milestone.
+- Added a dedicated manual `Minifilter concurrency stress VM lab` workflow using the exact checked-out commit, signed LAB driver provenance, bounded cleanup and evidence artifact upload.
+- Fixed a real concurrency race found by the VM campaign: storage-budget measurement can enumerate a transient pre-image `.tmp` immediately before another gate worker atomically renames it to the committed object. Such already-reservation-accounted transient names no longer fault unrelated evidence workers.
+- DELETE qualification now waits for durable `DeletedObserved` finalization before advancing, and any GateClient worker failure is a hard stress-test failure.
+- Bumped userspace/LAB and driver package version to 0.7.28.0.
+
 # RansomGuard 0.7.27.0
 
 - Hardened build reproducibility without changing minifilter protocol v15.

@@ -193,14 +193,37 @@ public sealed class RollbackStorageBudget
 
             foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.TopDirectoryOnly))
             {
-                RejectReparse(file);
-                total = checked(total + new FileInfo(file).Length);
+                try
+                {
+                    RejectReparse(file);
+                    total = checked(total + new FileInfo(file).Length);
+                }
+                catch (FileNotFoundException)
+                {
+                    // Preservation commits write to a uniquely named .tmp and atomically rename it
+                    // to the committed object. A concurrent budget scan can observe the directory
+                    // entry immediately before that rename. The in-flight reservation still covers
+                    // those bytes, so treating that transient name as already moved is conservative.
+                }
+                catch (DirectoryNotFoundException)
+                {
+                    // Same race as above if an ancestor entry disappeared between enumeration
+                    // and metadata lookup. Active preservation bytes remain reservation-accounted.
+                }
             }
 
             foreach (var child in Directory.EnumerateDirectories(directory, "*", SearchOption.TopDirectoryOnly))
             {
-                RejectReparse(child);
-                pending.Push(child);
+                try
+                {
+                    RejectReparse(child);
+                    pending.Push(child);
+                }
+                catch (DirectoryNotFoundException)
+                {
+                    // Ignore only a child that vanished after enumeration. Other I/O failures
+                    // remain fail-closed and propagate to the caller.
+                }
             }
         }
 

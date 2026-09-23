@@ -202,7 +202,7 @@ The runtime harness performs three required scenarios:
 
 Only logs/journals and `runtime-result.json` are retained as workflow artifacts. The signed test driver package is deleted.
 
-A successful run proves the expected ordering on that VM image. It still does not prove reboot behavior, Driver Verifier stability, storage-pressure handling, all NTFS/ReFS edge cases, production signing, or Microsoft altitude suitability.
+A successful ordinary runtime run proves the expected ordering on that VM image. Separate 0.7.29 campaigns cover real reboot recovery and isolated storage pressure; 0.7.30 adds targeted Driver Verifier qualification for `RansomGuardMinifilter.sys`. None of these proofs establishes all NTFS/ReFS edge cases, production signing, Microsoft altitude suitability, or production-wide ransomware prevention.
 
 
 
@@ -223,3 +223,12 @@ Static minifilter gates require protocol v13, the single known reply flag, fail-
 GateClient source checks require an exact process handle for `--contain-after-pid`, bounded event/path thresholds, durable Requested evidence before the reply flag, no reply to the `ContainmentActivated` evidence event, a linked KernelActive receipt, and lifecycle faulting when the receipt is missing.
 
 The disposable-VM runtime harness adds an event-bound transition scenario. The target helper starts before GateClient but holds no protected-root handle during activation. After activation it opens two files for write and performs preserved mutations. With the explicit threshold set to four preserved events across two paths, the threshold event is allowed only after preservation and atomically latches its exact requestor; the helper's next write must receive access denial. The containment journal must contain matching Requested and KernelActive records for the same gate sequence and process.
+
+## 0.7.30 Driver Verifier coverage
+
+The Driver Verifier campaign is manual and disposable-VM-only. ARM requires a clean verifier state, targets only `RansomGuardMinifilter.sys`, enables the Windows standard profile and one-boot mode, and binds that configuration to the exact commit.
+
+After the required reboot, the runtime phase first loads the exact signed driver and requires Driver Verifier current activity to name that driver. It then reuses the bounded-concurrency qualification: admission overflow above the kernel cap, concurrent CREATE/RENAME/TRUNCATE/DELETE, mapped writes, durable transaction correlation, delete finalization, verified pre-image hashes, writable-section evidence, paging-write evidence, healthy GateClient workers and bounded cleanup. Any Windows bugcheck event recorded after ARM fails the campaign.
+
+A clean runtime pass executes `verifier /reset`; a second real reboot is mandatory. CLEAR proves persistent verifier settings are absent, `verifier /querysettings` does not name the target, `verifier /query` does not show current target activity, and the minifilter is not loaded. The workflow itself never reboots Windows.
+

@@ -122,11 +122,20 @@ foreach($required in @(
     if($runtime -notmatch [regex]::Escape($required)){throw "Runtime integration script missing invariant: $required"}
 }
 
-$hardStop=$runtime.IndexOf("Stop-LabProcess $gatePost 'post-activation gate'")
+$hardStop=$runtime.IndexOf('Stop-LabProcess $gatePost ''post-activation gate''')
+if($hardStop -lt 0){
+    throw 'Runtime GateClient-death qualification is missing the intentional hard-stop of the active client.'
+}
 $degradedWrite=$runtime.IndexOf('$summary.degradedWriteDenied=$true',$hardStop)
+if($degradedWrite -lt 0){
+    throw 'Runtime GateClient-death qualification is missing the degraded write-denial proof.'
+}
 $degradedReconnect=$runtime.IndexOf('$summary.degradedReconnectDenied=$true',$degradedWrite)
+if($degradedReconnect -lt 0){
+    throw 'Runtime GateClient-death qualification is missing the degraded reconnect-denial proof.'
+}
 $degradedReset=$runtime.IndexOf('Reset-LabFilterAfterDegradedStop',$degradedReconnect)
-if($hardStop -lt 0 -or $degradedWrite -lt 0 -or $degradedReconnect -lt 0 -or $degradedReset -lt 0 -or
+if($degradedReset -lt 0 -or
    $hardStop -gt $degradedWrite -or $degradedWrite -gt $degradedReconnect -or $degradedReconnect -gt $degradedReset){
     throw 'Runtime GateClient-death qualification must hard-stop the active client, prove write denial, prove reconnect denial, then reset the driver.'
 }

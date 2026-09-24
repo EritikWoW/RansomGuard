@@ -324,7 +324,7 @@ if($observeBlock -notmatch [regex]::Escape('InterlockedCompareExchange(&gFailSaf
     throw 'Observation predicate must retain the activated fail-safe path after GateClient loss.'
 }
 
-$rootMatchStart=$src.IndexOf('static BOOLEAN RgEventPathMatchesGateRoot(')
+$rootMatchStart=$src.LastIndexOf('static BOOLEAN RgEventPathMatchesGateRoot(')
 $rootMatchEnd=$src.IndexOf('static BOOLEAN RgEventIsInsideGateRoot',$rootMatchStart)
 if($rootMatchStart -lt 0 -or $rootMatchEnd -lt 0){throw 'Gate-root matcher block missing.'}
 $rootMatchBlock=$src.Substring($rootMatchStart,$rootMatchEnd-$rootMatchStart)

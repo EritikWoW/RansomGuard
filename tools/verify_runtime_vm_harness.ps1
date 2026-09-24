@@ -152,6 +152,11 @@ foreach($required in @(
     'Win32_ComputerSystem',
     'install_minifilter_lab.ps1',
     'unload_minifilter_lab.ps1',
+    'client-spoof',
+    'spoofedClientProcessIdRejected',
+    'connect-spoof',
+    'forged GateClient PID',
+    '^rejected:0x[0-9A-F]{8}$',
     'predirectory',
     'preexistingDirectoryHandleRejected',
     'prewritehandle',
@@ -325,6 +330,12 @@ foreach($requiredDiagnostic in @(
 }
 
 foreach($required in @(
+    'connect-spoof',
+    'ConnectSpoof',
+    'FilterConnectCommunicationPort',
+    'RgConnectContext',
+    'ClientProcessId',
+    'QueryDosDevice',
     'hold-map',
     'hold-write-handle',
     'CreateFileW writable handle failed',
@@ -487,4 +498,4 @@ foreach($required in @('where.exe pwsh.exe','set "PS_EXE=pwsh.exe"','powershell.
     if($buildWrapperText -notmatch [regex]::Escape($required)){throw "Windows build wrapper missing PowerShell host invariant: $required"}
 }
 
-Write-Host 'Runtime VM harness source gate PASSED: manual self-hosted VM only, exact-commit signed driver provenance, protocol-v18 LAB/ProductionGate regressions plus hard-link and data-mutating FSCTL preservation evidence, no boot/trust/Defender mutation.' -ForegroundColor Green
+Write-Host 'Runtime VM harness source gate PASSED: manual self-hosted VM only, exact-commit signed driver provenance, kernel-bound GateClient process identity plus protocol-v18 LAB/ProductionGate, hard-link and data-mutating FSCTL regressions, no boot/trust/Defender mutation.' -ForegroundColor Green

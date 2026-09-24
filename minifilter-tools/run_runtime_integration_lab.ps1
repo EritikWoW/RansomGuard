@@ -255,6 +255,7 @@ Assert-NoReparsePath -Path $ResultsDirectory -Label 'ResultsDirectory'
 New-Item -ItemType Directory -Path $RootBase -Force | Out-Null
 Assert-NoReparsePath -Path $RootBase -Label 'RootBase'
 
+$spoofRoot=Join-Path $RootBase "client-spoof-$stamp"
 $dirRoot=Join-Path $RootBase "predirectory-$stamp"
 $dormantRoot=Join-Path $RootBase "prewritehandle-$stamp"
 $hardPreRoot=Join-Path $RootBase "prehardlink-$stamp"
@@ -302,6 +303,7 @@ $summary=[ordered]@{
     driverSysSha256=$actualSysSha256
     driverInfSha256=$actualInfSha256
     driverCatSha256=$actualCatSha256
+    spoofedClientProcessIdRejected=$false
     preexistingDirectoryHandleRejected=$false
     dormantWritableHandleRejected=$false
     preexistingHardLinkRejected=$false
@@ -394,6 +396,19 @@ try{
     # install_minifilter_lab.ps1 throws on failure. Do not inspect $LASTEXITCODE here:
     # it belongs to the last native command executed inside the child script and may remain
     # nonzero even after the script has independently verified a successful load/attach.
+
+    # Scenario -1: the kernel must bind the communication client to the actual connecting
+    # process object/PID. A valid protocol/root/volume context with a forged ClientProcessId
+    # must be rejected before any protection session can be established.
+    Prepare-GateRoot $gateExe $spoofRoot
+    $spoofResult=Join-Path $ResultsDirectory 'client-spoof.result'
+    & $helperExe connect-spoof --root $spoofRoot --claimed-pid 4294967294 --result $spoofResult
+    if($LASTEXITCODE -ne 0){throw "GateClient PID spoof probe helper failed, exit=$LASTEXITCODE"}
+    $spoofOutcome=(Get-Content -LiteralPath $spoofResult -Raw).Trim()
+    if($spoofOutcome -notmatch '^rejected:0x[0-9A-F]{8}$'){
+        throw "Kernel accepted or ambiguously handled a forged GateClient PID. outcome=$spoofOutcome"
+    }
+    $summary.spoofedClientProcessIdRejected=$true
 
     # Scenario 0: a directory handle that already owns DELETE access must prevent activation.
     Prepare-GateRoot $gateExe $dirRoot

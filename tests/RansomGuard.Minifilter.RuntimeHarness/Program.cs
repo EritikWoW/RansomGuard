@@ -5,7 +5,7 @@ if (!OperatingSystem.IsWindows())
     throw new PlatformNotSupportedException("RansomGuard minifilter runtime harness is Windows-only.");
 
 if (args.Length == 0)
-    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-write-handle --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | hard-link --existing <path> --link <path> --result <marker> [--ready <marker> --go <marker>] | hard-link-ex --existing <path> --link <path> --result <marker> [--ready <marker> --go <marker>] | fsctl-zero --file <path> --offset <bytes> --length <bytes> --result <marker> | map-write --file <path> [--ready <marker> --go <marker>] | create-new --file <path> [--ready <marker> --go <marker>] | rename-file --source <path> --destination <path> [--ready <marker> --go <marker>] | truncate-eof --file <path> --length <bytes> --ready <marker> --go <marker> | delete-file --file <path> --ready <marker> --go <marker> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker> | containment-transition --file-a <path> --file-b <path> --ready <marker> --go <marker> --result <marker>");
+    throw new ArgumentException("Use: connect-spoof --root <path> --claimed-pid <pid> --result <marker> | hold-map --file <path> --ready <marker> --release <marker> | hold-write-handle --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | hard-link --existing <path> --link <path> --result <marker> [--ready <marker> --go <marker>] | hard-link-ex --existing <path> --link <path> --result <marker> [--ready <marker> --go <marker>] | fsctl-zero --file <path> --offset <bytes> --length <bytes> --result <marker> | map-write --file <path> [--ready <marker> --go <marker>] | create-new --file <path> [--ready <marker> --go <marker>] | rename-file --source <path> --destination <path> [--ready <marker> --go <marker>] | truncate-eof --file <path> --length <bytes> --ready <marker> --go <marker> | delete-file --file <path> --ready <marker> --go <marker> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker> | containment-transition --file-a <path> --file-b <path> --ready <marker> --go <marker> --result <marker>");
 
 var command = args[0].ToLowerInvariant();
 var options = Parse(args.Skip(1).ToArray());
@@ -14,6 +14,12 @@ try
 {
     switch (command)
     {
+        case "connect-spoof":
+            ConnectSpoof(
+                Require(options, "--root"),
+                RequireUInt64(options, "--claimed-pid"),
+                Require(options, "--result"));
+            break;
         case "hold-map":
             HoldMappedView(
                 Require(options, "--file"),
@@ -171,6 +177,61 @@ static long RequireInt64(Dictionary<string, string> options, string name) =>
     parsed >= 0
         ? parsed
         : throw new ArgumentException($"Missing/invalid nonnegative {name}.");
+
+static ulong RequireUInt64(Dictionary<string, string> options, string name) =>
+    options.TryGetValue(name, out var value) &&
+    ulong.TryParse(value, System.Globalization.NumberStyles.None,
+        System.Globalization.CultureInfo.InvariantCulture, out var parsed) &&
+    parsed != 0
+        ? parsed
+        : throw new ArgumentException($"Missing/invalid nonzero {name}.");
+
+
+static void ConnectSpoof(string rootPath, ulong claimedPid, string resultMarker)
+{
+    var resultParent = Path.GetDirectoryName(resultMarker);
+    if (!string.IsNullOrWhiteSpace(resultParent)) Directory.CreateDirectory(resultParent);
+    if (File.Exists(resultMarker)) File.Delete(resultMarker);
+
+    var full = Path.GetFullPath(rootPath).TrimEnd('\\');
+    var drive = Path.GetPathRoot(full)?.TrimEnd('\\')
+        ?? throw new InvalidOperationException("Spoof probe root has no local drive.");
+    if (drive.Length != 2 || drive[1] != ':')
+        throw new InvalidOperationException("Spoof probe requires a local drive root.");
+
+    var sb = new System.Text.StringBuilder(1024);
+    if (Native.QueryDosDevice(drive, sb, sb.Capacity) == 0)
+        throw new System.ComponentModel.Win32Exception(
+            Marshal.GetLastWin32Error(), "QueryDosDevice failed for spoof probe.");
+    var volume = sb.ToString().Split('\0')[0];
+    if (string.IsNullOrWhiteSpace(volume) ||
+        !volume.StartsWith(@"\Device\", StringComparison.OrdinalIgnoreCase))
+        throw new InvalidOperationException($"Unexpected NT volume for spoof probe: '{volume}'.");
+
+    var ntRoot = volume + full[drive.Length..];
+    var context = new Native.RgConnectContext
+    {
+        ProtocolVersion = 18,
+        ClientMode = 2,
+        ClientProcessId = claimedPid,
+        GateRootLengthBytes = checked((uint)(ntRoot.Length * 2)),
+        GateVolumeLengthBytes = checked((uint)(volume.Length * 2)),
+        GateRoot = ntRoot
+    };
+
+    var hr = Native.TryConnect(@"\RansomGuardMinifilterPort", context, out var handle);
+    using (handle)
+    {
+        if (hr == 0 && handle is not null && !handle.IsInvalid)
+        {
+            File.WriteAllText(resultMarker, "accepted");
+            Environment.ExitCode = 13;
+            return;
+        }
+    }
+
+    File.WriteAllText(resultMarker, $"rejected:0x{unchecked((uint)hr):X8}");
+}
 
 static void HoldMappedView(string filePath, string readyMarker, string releaseMarker)
 {
@@ -888,6 +949,60 @@ static void EnsureFile(string path)
 
 static class Native
 {
+    [StructLayout(LayoutKind.Sequential, Pack = 1, CharSet = CharSet.Unicode)]
+    public struct RgConnectContext
+    {
+        public uint ProtocolVersion;
+        public uint ClientMode;
+        public ulong ClientProcessId;
+        public uint GateRootLengthBytes;
+        public uint GateVolumeLengthBytes;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string GateRoot;
+    }
+
+    [DllImport("fltlib.dll", CharSet = CharSet.Unicode)]
+    private static extern int FilterConnectCommunicationPort(
+        string lpPortName,
+        uint dwOptions,
+        IntPtr lpContext,
+        ushort wSizeOfContext,
+        IntPtr lpSecurityAttributes,
+        out SafeFileHandle hPort);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern uint QueryDosDevice(
+        string lpDeviceName,
+        System.Text.StringBuilder lpTargetPath,
+        int ucchMax);
+
+    public static int TryConnect(string portName, RgConnectContext context, out SafeFileHandle? handle)
+    {
+        const uint FltPortFlagSyncHandle = 0x00000001;
+        var size = Marshal.SizeOf<RgConnectContext>();
+        if (size != 544)
+            throw new InvalidOperationException($"Unexpected spoof connect context size: {size}.");
+
+        var ptr = Marshal.AllocHGlobal(size);
+        try
+        {
+            Marshal.StructureToPtr(context, ptr, false);
+            var hr = FilterConnectCommunicationPort(
+                portName,
+                FltPortFlagSyncHandle,
+                ptr,
+                checked((ushort)size),
+                IntPtr.Zero,
+                out var connected);
+            handle = connected;
+            return hr;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(ptr);
+        }
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     public struct FileEndOfFileInfo
     {

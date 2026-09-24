@@ -20,6 +20,7 @@ static volatile LONG gClientConnected = 0;
 static volatile LONG gClientMode = 0;
 static volatile LONG gProtectedClientMode = 0;
 static volatile LONG64 gClientProcessId = 0;
+static PEPROCESS gClientProcess = NULL;
 static PEPROCESS gContainedProcess = NULL;
 static volatile LONG64 gContainedProcessId = 0;
 static PEPROCESS gScopeAmbiguityProcess = NULL;
@@ -108,6 +109,7 @@ static BOOLEAN RgIsOnGateVolume(_In_ PCFLT_RELATED_OBJECTS FltObjects);
 static RG_SCOPE_CLASSIFICATION RgClassifyMutationScope(
     _In_ const RG_EVENT *Event,
     _In_ PCFLT_RELATED_OBJECTS FltObjects);
+static BOOLEAN RgIsGateClientRequestor(_In_ PFLT_CALLBACK_DATA Data);
 static BOOLEAN RgIsContainedRequestor(_In_ PFLT_CALLBACK_DATA Data);
 static BOOLEAN RgCreateMayMutate(_In_ const RG_EVENT *Event);
 static VOID RgClearContainedProcess(VOID);
@@ -317,6 +319,9 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
     if (!RgIsGateClientMode(mode) && !degraded) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
+    if (RgIsGateClientRequestor(Data)) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
 
     status = RgPopulateEvent(&event, Data, FltObjects, RgEventCreate, 0);
     if (RgCreateMayMutate(&event)) {
@@ -447,6 +452,9 @@ FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJE
     if (!RgIsGateClientMode(mode) && !degraded) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
+    if (RgIsGateClientRequestor(Data)) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
 
     (void)RgPopulateEvent(&event, Data, FltObjects, RgEventWrite, 0);
     (void)RgInjectScopeAmbiguityProbe(Data, &event);
@@ -536,6 +544,9 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
     }
 
     if (!RgIsGateClientMode(mode) && !degraded) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+    if (RgIsGateClientRequestor(Data)) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
@@ -666,6 +677,9 @@ FLT_PREOP_CALLBACK_STATUS RgPreFileSystemControl(
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
     if (!RgIsGateClientMode(mode) && !degraded) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+    if (RgIsGateClientRequestor(Data)) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
@@ -1916,13 +1930,6 @@ static RG_SCOPE_CLASSIFICATION RgClassifyMutationScope(
         return RgScopeOutside;
     }
 
-    // GateClient owns the rollback store and activation protocol. Never make its own volume I/O
-    // depend on the synchronous gate, even if a name query is temporarily unavailable.
-    if (Event->ProcessId != 0 &&
-        Event->ProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId, 0, 0)) {
-        return RgScopeOutside;
-    }
-
     if (Event->PathStatus == RgPathResolved || Event->PathStatus == RgPathTruncated) {
         sourceScope = RgEventPathMatchesGateRoot(Event) ? RgScopeInside : RgScopeOutside;
     } else {
@@ -1954,6 +1961,22 @@ static RG_SCOPE_CLASSIFICATION RgClassifyMutationScope(
     }
 
     return sourceScope;
+}
+
+static BOOLEAN RgIsGateClientRequestor(PFLT_CALLBACK_DATA Data)
+{
+    PEPROCESS requestor;
+    BOOLEAN client = FALSE;
+
+    requestor = FltGetRequestorProcess(Data);
+    if (requestor == NULL) {
+        return FALSE;
+    }
+
+    ExAcquireFastMutex(&gPortMutex);
+    client = (gClientProcess != NULL && gClientProcess == requestor);
+    ExReleaseFastMutex(&gPortMutex);
+    return client;
 }
 
 static BOOLEAN RgIsContainedRequestor(PFLT_CALLBACK_DATA Data)
@@ -2091,6 +2114,7 @@ static BOOLEAN RgBindContainedRequestor(PFLT_CALLBACK_DATA Data,
 
     requestor = FltGetRequestorProcess(Data);
     if (requestor == NULL ||
+        RgIsGateClientRequestor(Data) ||
         Event->ProcessId <= 4 ||
         (ULONGLONG)(ULONG_PTR)PsGetProcessId(requestor) != Event->ProcessId ||
         Event->ProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId, 0, 0)) {
@@ -2403,6 +2427,8 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
     UNICODE_STRING volumeName;
     PFLT_VOLUME candidateVolume = NULL;
     PFLT_VOLUME releaseVolume = NULL;
+    PEPROCESS candidateClientProcess = NULL;
+    ULONGLONG actualClientProcessId;
 
     UNREFERENCED_PARAMETER(ServerPortCookie);
     *ConnectionPortCookie = NULL;
@@ -2418,10 +2444,19 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
         return STATUS_REVISION_MISMATCH;
     }
 
+    candidateClientProcess = PsGetCurrentProcess();
+    ObReferenceObject(candidateClientProcess);
+    actualClientProcessId = (ULONGLONG)(ULONG_PTR)PsGetProcessId(candidateClientProcess);
+    if (actualClientProcessId == 0 || context->ClientProcessId != actualClientProcessId) {
+        ObDereferenceObject(candidateClientProcess);
+        return STATUS_ACCESS_DENIED;
+    }
+
     rootBytes = context->GateRootLengthBytes;
     volumeBytes = context->GateVolumeLengthBytes;
     if ((rootBytes % sizeof(WCHAR)) != 0 || rootBytes >= sizeof(context->GateRoot) ||
         (volumeBytes % sizeof(WCHAR)) != 0 || volumeBytes >= sizeof(context->GateRoot)) {
+        ObDereferenceObject(candidateClientProcess);
         return STATUS_INVALID_PARAMETER;
     }
 
@@ -2430,15 +2465,18 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
             rootBytes < (4 * sizeof(WCHAR)) ||
             volumeBytes < (4 * sizeof(WCHAR)) ||
             volumeBytes > rootBytes) {
+            ObDereferenceObject(candidateClientProcess);
             return STATUS_INVALID_PARAMETER;
         }
 
         rootChars = rootBytes / sizeof(WCHAR);
         volumeChars = volumeBytes / sizeof(WCHAR);
         if (context->GateRoot[0] != L'\\' || context->GateRoot[rootChars] != L'\0') {
+            ObDereferenceObject(candidateClientProcess);
             return STATUS_INVALID_PARAMETER;
         }
         if (volumeBytes < rootBytes && context->GateRoot[volumeChars] != L'\\') {
+            ObDereferenceObject(candidateClientProcess);
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -2447,6 +2485,7 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
         }
         rootBytes = rootChars * sizeof(WCHAR);
         if (volumeBytes > rootBytes) {
+            ObDereferenceObject(candidateClientProcess);
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -2455,14 +2494,16 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
         volumeName.MaximumLength = (USHORT)volumeBytes;
         status = FltGetVolumeFromName(gFilter, &volumeName, &candidateVolume);
         if (!NT_SUCCESS(status) || candidateVolume == NULL) {
+            ObDereferenceObject(candidateClientProcess);
             return NT_SUCCESS(status) ? STATUS_FLT_VOLUME_NOT_FOUND : status;
         }
     } else if (rootBytes != 0 || volumeBytes != 0) {
+        ObDereferenceObject(candidateClientProcess);
         return STATUS_INVALID_PARAMETER;
     }
 
     ExAcquireFastMutex(&gPortMutex);
-    if (gClientPort != NULL || gContainedProcess != NULL ||
+    if (gClientPort != NULL || gClientProcess != NULL || gContainedProcess != NULL ||
         InterlockedCompareExchange(&gUnloading, 0, 0) != 0) {
         status = STATUS_DEVICE_BUSY;
     } else if (InterlockedCompareExchange(&gProtectionRequired, 0, 0) != 0 &&
@@ -2492,7 +2533,9 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
 
         gClientPort = ClientPort;
         gClientMode = (LONG)context->ClientMode;
-        InterlockedExchange64(&gClientProcessId, (LONG64)context->ClientProcessId);
+        gClientProcess = candidateClientProcess;
+        candidateClientProcess = NULL;
+        InterlockedExchange64(&gClientProcessId, (LONG64)actualClientProcessId);
         InterlockedExchange(&gGateActivated,
             RgIsGateClientMode((LONG)context->ClientMode) ? 0 : 1);
         InterlockedExchange(&gActivationHazard, 0);
@@ -2518,6 +2561,9 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
     }
     ExReleaseFastMutex(&gPortMutex);
 
+    if (candidateClientProcess != NULL) {
+        ObDereferenceObject(candidateClientProcess);
+    }
     if (candidateVolume != NULL) {
         FltObjectDereference(candidateVolume);
     }
@@ -2708,6 +2754,7 @@ static VOID RgDisconnect(PVOID ConnectionCookie)
     LONG protectionRequired;
     LONG gracefulDisconnect;
     PFLT_VOLUME releaseVolume = NULL;
+    PEPROCESS releaseClientProcess = NULL;
 
     UNREFERENCED_PARAMETER(ConnectionCookie);
 
@@ -2726,6 +2773,8 @@ static VOID RgDisconnect(PVOID ConnectionCookie)
 
     InterlockedExchange(&gClientConnected, 0);
     InterlockedExchange(&gClientMode, 0);
+    releaseClientProcess = gClientProcess;
+    gClientProcess = NULL;
     InterlockedExchange64(&gClientProcessId, 0);
     InterlockedExchange(&gGateActivated, 0);
     InterlockedExchange(&gActivationHazard, 0);
@@ -2754,6 +2803,9 @@ static VOID RgDisconnect(PVOID ConnectionCookie)
     ExReleaseFastMutex(&gPortMutex);
 
     RgWaitForPortUsers();
+    if (releaseClientProcess != NULL) {
+        ObDereferenceObject(releaseClientProcess);
+    }
     if (releaseVolume != NULL) {
         FltObjectDereference(releaseVolume);
     }
@@ -2780,6 +2832,7 @@ NTSTATUS RgInstanceSetup(PCFLT_RELATED_OBJECTS FltObjects, FLT_INSTANCE_SETUP_FL
 NTSTATUS RgUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
 {
     PFLT_VOLUME releaseVolume = NULL;
+    PEPROCESS releaseClientProcess = NULL;
 
     UNREFERENCED_PARAMETER(Flags);
     InterlockedExchange(&gUnloading, 1);
@@ -2799,6 +2852,9 @@ NTSTATUS RgUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
     }
 
     ExAcquireFastMutex(&gPortMutex);
+    releaseClientProcess = gClientProcess;
+    gClientProcess = NULL;
+    InterlockedExchange64(&gClientProcessId, 0);
     releaseVolume = gGateVolume;
     gGateVolume = NULL;
     gGateVolumeLengthBytes = 0;
@@ -2809,6 +2865,9 @@ NTSTATUS RgUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
     }
     ExReleaseFastMutex(&gPortMutex);
     RgWaitForPortUsers();
+    if (releaseClientProcess != NULL) {
+        ObDereferenceObject(releaseClientProcess);
+    }
     if (releaseVolume != NULL) {
         FltObjectDereference(releaseVolume);
     }

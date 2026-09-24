@@ -1,7 +1,7 @@
-# RansomGuard 0.8.4.0 - guided setup
+# RansomGuard 0.8.5.0 - guided setup
 
-This document describes the default Audit guided setup. Version 0.8.4 retains protocol-v18 ProductionGate/LAB separation, the single-link protected-file topology policy,
-and adds fail-closed mediation for reviewed data-mutating FSCTL paths, but it still
+This document describes the default Audit guided setup. Version 0.8.5 retains protocol-v18 ProductionGate/LAB separation, single-link and mutating-FSCTL policy,
+and adds kernel-bound GateClient process identity, but it still
 does not install/load/attach the production kernel driver, spawn/supervise GateClient or claim active blocking.
 It does not change Defender or widen trust rules.
 The dashboard, chosen icons, Ukrainian/English languages and theme palettes remain.

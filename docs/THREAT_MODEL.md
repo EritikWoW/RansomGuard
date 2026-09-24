@@ -1,6 +1,6 @@
 # RansomGuard threat model
 
-Status: engineering threat model for RansomGuard 0.7.31.x, covering the current Audit product and Engineering LAB minifilter.
+Status: engineering threat model for RansomGuard 0.7.32.x, covering the current Audit product and Engineering LAB minifilter.
 
 This document describes what the current implementation protects, what it deliberately does not protect, and how ambiguous I/O is handled. It is not a claim of production readiness. The ordinary product remains AuditOnly; the blocking minifilter path is Engineering LAB only.
 
@@ -12,7 +12,7 @@ RansomGuard is built around three distinct goals:
 2. **Contain** further destructive mutations from an explicitly bound process only after a valid containment transition.
 3. **Recover** from durable evidence without guessing topology or overwriting live source data.
 
-The strongest current guarantee is the LAB preservation invariant: for a resolved, in-scope, ordinary user-mode mutation while the LAB gate is connected and activated, the operation is allowed only after the required preservation/evidence commit succeeds. This guarantee does not extend to every Windows I/O path.
+The strongest current guarantee is the LAB preservation invariant: for a resolved, in-scope, ordinary user-mode mutation while the LAB gate is connected and activated, the operation is allowed only after the required preservation/evidence commit succeeds. After a gate has been activated, unexpected GateClient loss no longer erases the protected root: the kernel retains a fail-safe latch so resolved synchronous in-root destructive mutations are denied until the same root is reconnected and re-preflighted or the driver is unloaded. This guarantee does not extend to every Windows I/O path.
 
 ## Assets
 
@@ -73,7 +73,10 @@ The current driver does not mean "driver loaded = protected".
 
 | State/condition | Current behavior | Security interpretation |
 |---|---|---|
-| No GateClient connected or driver unloading | Observation path returns without enforcement | No preservation guarantee |
+| No GateClient has ever activated protection, or driver unloading | Observation path returns without enforcement | No preservation guarantee |
+| Activated LAB gate loses GateClient without orderly authorization | Exact root remains latched; resolved synchronous in-root destructive mutations fail closed | Degraded kernel fail-safe; no user-mode preservation decisions available |
+| Same-root GateClient reconnect after fail-safe loss | Connection is accepted but activation resets to NotActivated; full preflight must run again | External in-root mutations remain denied during revalidation |
+| GateClient requests orderly disconnect after clean durable shutdown | Disconnect is authorized and the latched root/protection state is cleared | Explicit maintenance/shutdown path |
 | Client in Audit mode | Event may be queued; operation continues | Telemetry only |
 | Client mode unknown/not LAB gate | Operation continues | No blocking guarantee |
 | LAB gate, pathname resolved outside root | Operation continues | Explicitly out of scope |
@@ -106,7 +109,13 @@ The ordinary observation predicate rejects `RequestorMode == KernelMode`. This i
 
 ### Gate disconnect/unavailable state
 
-The preservation guarantee exists only while the LAB protocol is connected and activated. Driver presence alone is not sufficient. Production enforcement therefore needs an explicit health/authorization state with operator-visible degradation semantics.
+0.7.32 separates initial connection state from an already armed protection session. Successful `ActivateGate` / `ActivateAndContainProcess` sets a kernel `gProtectionArmed` state. If that activated GateClient disappears without first obtaining orderly-disconnect authorization, `RgDisconnect` preserves the negotiated root and LAB mode, sets a fail-safe latch and keeps the gate logically active. `RgShouldObserve` and root classification continue to recognize that latched state. Because there is no client port to return a preservation allow decision, resolved in-root mutation-capable CREATE and non-paging WRITE/RENAME/TRUNCATE/DELETE requests reach the gate path and are denied.
+
+A replacement client is not allowed to choose a different root while fail-safe is latched. The kernel accepts only the same normalized root, then resets activation to NotActivated so the existing file/directory/writable-mapping preflight must run again. External resolved in-root mutations remain denied during that preflight. If the replacement client dies during revalidation, the previously armed protection state causes fail-safe to latch again.
+
+Orderly shutdown is distinct. GateClient requests `RgControlAuthorizeDisconnect` only after workers are drained, the rollback repository verifies, CREATE/RENAME/TRUNCATE/DELETE state is pending-free, containment acknowledgements are complete and the session lifecycle has been durably marked Completed. The kernel additionally requires an active armed gate, no activation hazard/preflight probe and zero in-flight blocking gate requests before accepting authorization. A subsequent authorized disconnect clears the root and armed state.
+
+This is a significant improvement over `client died -> silently unprotected`, but it is not full production self-protection. A malicious Administrator/SYSTEM process can still attack service/driver lifecycle, unresolved path classification remains intentionally fail-open, and paging/mapped-write callbacks remain non-blocking/evidence-oriented rather than a synchronous fail-safe deny boundary. Production enforcement still needs authenticated maintenance, operator-visible health, tamper events and a qualified service-restart policy.
 
 ## Fail-closed analysis and availability risk
 
@@ -189,6 +198,8 @@ These results are regression/qualification evidence for the tested build and env
 
 0.7.31 adds a separate sustained mixed-workload qualification harness. Its default contract keeps one GateClient/rollback session active for 60 waves and releases CREATE/RENAME/TRUNCATE/DELETE/mapped-write operations together in every wave, with 10-second inter-round pauses. Source presence is not qualification evidence: this threat model treats the endurance milestone as runtime evidence only after an exact-head disposable-VM run proves all rounds completed, the configured elapsed-time budget was consumed, the gate/workers stayed healthy, durable transaction stores have no pending operations, mapped pre-images and section/paging evidence verify, and cleanup succeeds.
 
+0.7.32 adds the source implementation for activated GateClient-loss fail-safe latching and same-root revalidation. Source presence and hosted compilation are not sufficient qualification evidence. The milestone requires a disposable-VM runtime campaign that activates a root, kills GateClient without orderly authorization, proves resolved in-root destructive operations are denied while the client is absent, rejects a different-root reconnect, successfully reconnects the same root through full preflight, and separately proves that an orderly clean disconnect clears the latch without unloading the driver.
+
 ## Required production qualification
 
 The project must remain non-production until, at minimum:
@@ -196,7 +207,7 @@ The project must remain non-production until, at minimum:
 - Microsoft assigns the production minifilter altitude and the release driver uses the production signing path;
 - target Windows/Server and security-feature compatibility is qualified; NTFS has disposable-VM runtime evidence, while the current runner reported ReFS creation unsupported, so ReFS remains unqualified rather than implicitly passed;
 - unresolved/name-query failure policy is reviewed and adversarially tested;
-- the existing completion-loss, low-disk and reboot campaigns are extended into a broader fault matrix that includes GateClient/service death, timeout, torn-journal/power-loss conditions and repeated campaign recovery;
+- the new GateClient-loss fail-safe is runtime-qualified for kill/reconnect/orderly-disconnect behavior and then extended to service death, timeout, torn-journal/power-loss conditions and repeated campaign recovery;
 - sustained pressure/queueing, rename/mapped-write storms and large/sparse/compressed/encrypted file cases pass; any concurrency claim distinguishes kernel admission from the serialized single-handle reply-required path;
 - the existing exact-head Driver Verifier qualification is repeated across the supported Windows/Server/filesystem matrix, and native static-analysis/SDV-style findings are reviewed to an explicit release threshold;
 - antivirus/EDR, VSS/backup and BitLocker coexistence is tested;

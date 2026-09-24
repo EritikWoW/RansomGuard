@@ -143,6 +143,12 @@ foreach($required in @(
     'ObDereferenceObject',
     'RgControlActivateAndContainProcess',
     'RgControlQueryContainment',
+    'RgControlDeactivateGate',
+    'gProtectionRequired',
+    'gDegradedProtected',
+    'gMaintenanceRequested',
+    'gGracefulDisconnectAuthorized',
+    'RgCurrentProtectionState',
     'RG_GATE_REPLY_FLAG_CONTAIN_REQUESTOR',
     'RgEventContainmentActivated',
     'RgBindContainedRequestor'
@@ -166,6 +172,13 @@ if($gateBlock -notmatch 'RgAcquireClientPort\(RgClientLabGate' -or
    $gateBlock -notmatch 'RgReleaseClientPort\(\)'){
     throw 'RgGateEvent must use the short-lived client-port lease around FltSendMessage.'
 }
+$firstMaintenanceGate=$gateBlock.IndexOf('InterlockedCompareExchange(&gMaintenanceRequested, 0, 0) != 0')
+$portLease=$gateBlock.IndexOf('RgAcquireClientPort(RgClientLabGate')
+$secondMaintenanceGate=$gateBlock.IndexOf('InterlockedCompareExchange(&gMaintenanceRequested, 0, 0) != 0',$firstMaintenanceGate+1)
+if($firstMaintenanceGate -lt 0 -or $portLease -lt 0 -or $secondMaintenanceGate -lt 0 -or
+   $firstMaintenanceGate -gt $portLease -or $secondMaintenanceGate -lt $portLease){
+    throw 'Maintenance transition must close new gate admission and reject an already-replied request before allow processing.'
+}
 foreach($required in @(
     'reply.Flags & ~RG_GATE_REPLY_FLAG_CONTAIN_REQUESTOR',
     'FlagOn(reply.Flags, RG_GATE_REPLY_FLAG_CONTAIN_REQUESTOR)',
@@ -182,6 +195,23 @@ if($gateBlock -notmatch [regex]::Escape('else if (allow && RgIsContainedRequesto
     throw 'Sibling in-flight mutations must be denied if containment becomes active while they wait for user mode.'
 }
 
+$queueStart=$src.IndexOf('static VOID RgQueueEvent(PFLT_CALLBACK_DATA Data')
+$rawQueueStart=$src.IndexOf('static VOID RgQueueRawEvent(const RG_EVENT *Event',$queueStart)
+$sendWorkerStart=$src.IndexOf('static VOID RgSendWorker(PVOID Parameter)',$rawQueueStart)
+if($queueStart -lt 0 -or $rawQueueStart -lt 0 -or $sendWorkerStart -lt 0){
+    throw 'Evidence queue source boundaries missing.'
+}
+$queueBlock=$src.Substring($queueStart,$rawQueueStart-$queueStart)
+$rawQueueBlock=$src.Substring($rawQueueStart,$sendWorkerStart-$rawQueueStart)
+foreach($block in @($queueBlock,$rawQueueBlock)){
+    $pendingIncrement=$block.IndexOf('pending = InterlockedIncrement(&gPending)')
+    $maintenanceReject=$block.IndexOf('InterlockedCompareExchange(&gMaintenanceRequested, 0, 0) != 0',$pendingIncrement)
+    $pendingDecrement=$block.IndexOf('InterlockedDecrement(&gPending)',$maintenanceReject)
+    if($pendingIncrement -lt 0 -or $maintenanceReject -lt 0 -or $pendingDecrement -lt 0 -or
+       $pendingIncrement -gt $maintenanceReject -or $maintenanceReject -gt $pendingDecrement){
+        throw 'Maintenance must close new queued evidence admission after reserving gPending so deactivation cannot miss a racing worker.'
+    }
+}
 
 if($src -match 'IRP_MJ_WRITE\s*,\s*FLTFL_OPERATION_REGISTRATION_SKIP_PAGING_IO'){
     throw 'Paging-write visibility requires IRP_MJ_WRITE callbacks to receive paging I/O.'
@@ -253,7 +283,7 @@ if($messageStart -lt 0){throw 'Kernel control-message callback missing.'}
 $messageEnd=$src.IndexOf('static VOID RgDisconnect',$messageStart)
 if($messageEnd -lt 0){throw 'Kernel control-message callback boundary missing.'}
 $messageBlock=$src.Substring($messageStart,$messageEnd-$messageStart)
-foreach($required in @('RgControlActivateGate','RgControlQueryActivation','RgControlArmPreflight','RgControlActivateAndContainProcess','RgControlQueryContainment','TargetProcessId','PsLookupProcessByProcessId','gContainedProcess','gContainedProcessId','gPreflightProbeArmed','gActivationHazard','gGateActivated','STATUS_DEVICE_BUSY')){
+foreach($required in @('RgControlActivateGate','RgControlQueryActivation','RgControlArmPreflight','RgControlActivateAndContainProcess','RgControlQueryContainment','RgControlDeactivateGate','TargetProcessId','PsLookupProcessByProcessId','gContainedProcess','gContainedProcessId','gPreflightProbeArmed','gActivationHazard','gGateActivated','gProtectionRequired','gDegradedProtected','gGracefulDisconnectAuthorized','RgCurrentProtectionState','ProtectionState','STATUS_DEVICE_BUSY')){
     if($messageBlock -notmatch [regex]::Escape($required)){throw "Activation control callback missing invariant: $required"}
 }
 $containmentHelperStart=$src.IndexOf('static BOOLEAN RgIsContainedRequestor(PFLT_CALLBACK_DATA Data)')
@@ -296,8 +326,63 @@ if($messageBlock -notmatch [regex]::Escape('request->TargetProcessId <= 4') -or
    $messageBlock -notmatch [regex]::Escape('request->TargetProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId')){
     throw 'Containment control must reject system PIDs and the GateClient PID.'
 }
+
+$deactivateCommand=$messageBlock.IndexOf('request->Command == RgControlDeactivateGate')
+$deactivateMaintenance=$messageBlock.IndexOf('InterlockedExchange(&gMaintenanceRequested, 1)',$deactivateCommand)
+$deactivateBusy=$messageBlock.IndexOf('InterlockedCompareExchange(&gGateInFlight, 0, 0) != 0',$deactivateCommand)
+$deactivatePending=$messageBlock.IndexOf('InterlockedCompareExchange(&gPending, 0, 0) != 0',$deactivateCommand)
+$deactivateProtection=$messageBlock.IndexOf('InterlockedExchange(&gProtectionRequired, 0)',$deactivateCommand)
+$deactivateAuthorize=$messageBlock.IndexOf('InterlockedExchange(&gGracefulDisconnectAuthorized, 1)',$deactivateCommand)
+if($deactivateCommand -lt 0 -or $deactivateMaintenance -lt 0 -or $deactivateBusy -lt 0 -or
+   $deactivatePending -lt 0 -or $deactivateProtection -lt 0 -or $deactivateAuthorize -lt 0 -or
+   $deactivateCommand -gt $deactivateMaintenance -or $deactivateMaintenance -gt $deactivateBusy -or
+   $deactivateBusy -gt $deactivateProtection -or $deactivatePending -gt $deactivateProtection -or
+   $deactivateProtection -gt $deactivateAuthorize){
+    throw 'Graceful DeactivateGate must close admission before draining, then require zero kernel gate/pending work before authorizing protection release.'
+}
+
+$disconnectStart=$src.IndexOf('static VOID RgDisconnect(PVOID ConnectionCookie)')
+$disconnectEnd=$src.IndexOf('NTSTATUS RgInstanceSetup(',$disconnectStart)
+if($disconnectStart -lt 0 -or $disconnectEnd -lt 0){throw 'Disconnect source block missing.'}
+$disconnectBlock=$src.Substring($disconnectStart,$disconnectEnd-$disconnectStart)
+foreach($required in @(
+    'protectionRequired = InterlockedCompareExchange(&gProtectionRequired, 0, 0)',
+    'gracefulDisconnect = InterlockedCompareExchange(&gGracefulDisconnectAuthorized, 0, 0)',
+    'InterlockedExchange(&gDegradedProtected, 1)',
+    'InterlockedExchange(&gClientConnected, 0)',
+    'if (protectionRequired != 0 && gracefulDisconnect == 0)',
+    'InterlockedExchange(&gMaintenanceRequested, 0)',
+    'gGateRootLengthBytes = 0',
+    'RtlSecureZeroMemory(gGateRoot, sizeof(gGateRoot))'
+)){
+    if($disconnectBlock -notmatch [regex]::Escape($required)){throw "Disconnect fail-safe invariant missing: $required"}
+}
+$publishDegraded=$disconnectBlock.IndexOf('InterlockedExchange(&gDegradedProtected, 1)')
+$publishDisconnected=$disconnectBlock.IndexOf('InterlockedExchange(&gClientConnected, 0)')
+if($publishDegraded -lt 0 -or $publishDisconnected -lt 0 -or $publishDegraded -gt $publishDisconnected){
+    throw 'Unexpected disconnect must publish DEGRADED_PROTECTED before publishing client loss.'
+}
+
+$connectStart=$src.IndexOf('static NTSTATUS RgConnect(PFLT_PORT ClientPort')
+$connectEnd=$src.IndexOf('static NTSTATUS RgMessage(PVOID ConnectionCookie',$connectStart)
+if($connectStart -lt 0 -or $connectEnd -lt 0){throw 'Connect source block missing.'}
+$connectBlock=$src.Substring($connectStart,$connectEnd-$connectStart)
+foreach($required in @(
+    'InterlockedCompareExchange(&gProtectionRequired, 0, 0) != 0',
+    'gGateRootLengthBytes != (USHORT)rootBytes',
+    'RtlCompareMemory(gGateRoot, context->GateRoot, rootBytes) != rootBytes',
+    'InterlockedExchange(&gClientConnected, 1)',
+    'InterlockedExchange(&gDegradedProtected, 0)'
+)){
+    if($connectBlock -notmatch [regex]::Escape($required)){throw "Degraded reconnect invariant missing: $required"}
+}
+$publishConnected=$connectBlock.LastIndexOf('InterlockedExchange(&gClientConnected, 1)')
+$clearDegraded=$connectBlock.LastIndexOf('InterlockedExchange(&gDegradedProtected, 0)')
+if($publishConnected -lt 0 -or $clearDegraded -lt 0 -or $publishConnected -gt $clearDegraded){
+    throw 'Reconnect must publish the live client before clearing DEGRADED_PROTECTED.'
+}
 if($proto -match '(?i)ReleaseContainment|ClearContainment' -or $messageBlock -match '(?i)RgControl(Release|Clear)Contain'){
-    throw 'LAB containment must not expose a runtime release/bypass command; disconnect/unload is the release boundary.'
+    throw 'LAB containment must not expose a standalone runtime containment-release/bypass command; whole-session DeactivateGate is the reviewed maintenance transition.'
 }
 
 $preCreateStart=$src.IndexOf('FLT_PREOP_CALLBACK_STATUS RgPreCreate(')
@@ -338,10 +423,10 @@ if($src -notmatch 'FltCreateCommunicationPort\([^;]*RgConnect,\s*RgDisconnect,\s
    $src -notmatch 'RgConnect, RgDisconnect, RgMessage, 1'){
     throw 'Communication port must register RgMessage for activation handshake.'
 }
-if($proto -notmatch '#define\s+RG_PROTOCOL_VERSION\s+15u'){throw 'Minifilter protocol must be v15 for DELETE lifecycle reconciliation.'}
+if($proto -notmatch '#define\s+RG_PROTOCOL_VERSION\s+16u'){throw 'Minifilter protocol must be v16 for disconnect fail-safe state.'}
 if($proto -notmatch 'RG_GATE_ROOT_CHARS'){throw 'Protocol must carry an explicit bounded gate root.'}
-foreach($required in @('RgControlActivateAndContainProcess','RgControlQueryContainment','TargetProcessId','ContainmentActive','ContainedProcessId','RG_GATE_REPLY_FLAG_CONTAIN_REQUESTOR','RgEventContainmentActivated')){
-    if($proto -notmatch [regex]::Escape($required)){throw "Protocol v15 containment field missing: $required"}
+foreach($required in @('RgControlActivateAndContainProcess','RgControlQueryContainment','RgControlDeactivateGate','TargetProcessId','ContainmentActive','ProtectionState','ContainedProcessId','RG_GATE_REPLY_FLAG_CONTAIN_REQUESTOR','RgEventContainmentActivated','RgProtectionDegradedProtected','RgProtectionMaintenance')){
+    if($proto -notmatch [regex]::Escape($required)){throw "Protocol v16 protection/containment field missing: $required"}
 }
 if($src -notmatch 'Unresolved/out-of-root paths fail open'){throw 'LAB gate must document fail-open behavior outside the explicitly resolved gate root.'}
 if($src -notmatch 'requestorPid\s*==\s*\(ULONGLONG\)InterlockedCompareExchange64\(&gClientProcessId'){throw 'Gate client PID must be excluded to prevent rollback-store self-deadlock.'}
@@ -362,7 +447,7 @@ if($src -notmatch 'RgEventRenameResult' -or
 }
 
 if($proto -notmatch 'RgEventTruncateResult'){
-    throw 'Protocol v15 must retain a correlated TruncateResult event.'
+    throw 'Protocol v16 must retain a correlated TruncateResult event.'
 }
 if($src -notmatch [regex]::Escape('context->PostEventType = RgEventTruncateResult') -or
    $src -notmatch [regex]::Escape('event.EventType = context->PostEventType') -or
@@ -391,7 +476,7 @@ if($proto -notmatch 'RgEventDeleteDispositionResult' -or
    $proto -notmatch 'RgEventDeleteFinalized' -or
    $proto -notmatch 'RG_DELETE_DISPOSITION_DELETE' -or
    $proto -notmatch 'RG_EVENT_FLAG_DELETE_CLEANUP'){
-    throw 'Protocol v15 must expose correlated DELETE disposition and cleanup lifecycle evidence.'
+    throw 'Protocol v16 must expose correlated DELETE disposition and cleanup lifecycle evidence.'
 }
 $deletePopulate=$src.IndexOf('} else if (EventType == RgEventDeleteDisposition) {')
 $deleteReadFlags=$src.IndexOf('RgReadDeleteDispositionFlags(Data, &Event->Flags)',$deletePopulate)
@@ -445,7 +530,7 @@ if($proto -notmatch 'RgGateBaselineCommitted' -or $proto -notmatch 'RgGateNoPres
 if($infText -notmatch 'StartType\s*=\s*3'){throw 'Driver must remain demand-start in the lab prototype.'}
 if($infText -notmatch 'Instance1\.Flags\s*=\s*0x1'){throw 'Automatic volume attachment must remain suppressed.'}
 if($infText -notmatch 'Instance1\.Altitude\s*=\s*"370099\.4242"'){throw 'Unexpected LAB altitude. Review altitude policy manually.'}
-Write-Host 'LAB pre-write gate source check PASSED, including protocol-v15 DELETE lifecycle/TRUNCATE reconciliation, event-bound PEPROCESS containment, fail-closed activation preflight, bounded admission and paging/section evidence.' -ForegroundColor Green
+Write-Host 'LAB pre-write gate source check PASSED, including protocol-v16 disconnect fail-safe state, DELETE/TRUNCATE reconciliation, event-bound PEPROCESS containment, fail-closed activation preflight, bounded admission and paging/section evidence.' -ForegroundColor Green
 Write-Host 'Gate scope: one explicit NT root negotiated by the single connected client.'
 Write-Host 'In-scope mutations normally require an explicit preservation decision; an activation-bound contained PEPROCESS is denied before the user-mode gate.'
 Write-Host 'Out-of-scope/unresolved I/O remains fail-open; no process-control or kernel file-writing APIs are present.'

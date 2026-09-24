@@ -23,6 +23,10 @@ static volatile LONG64 gContainedProcessId = 0;
 static volatile LONG gGateActivated = 0;
 static volatile LONG gActivationHazard = 0;
 static volatile LONG gPreflightProbeArmed = 0;
+static volatile LONG gProtectionRequired = 0;
+static volatile LONG gDegradedProtected = 0;
+static volatile LONG gMaintenanceRequested = 0;
+static volatile LONG gGracefulDisconnectAuthorized = 0;
 static volatile LONG gPending = 0;
 static volatile LONG gDropped = 0;
 static volatile LONG64 gSequence = 0;
@@ -85,6 +89,8 @@ static BOOLEAN RgAcquireClientPort(_In_ LONG ExpectedMode);
 static VOID RgReleaseClientPort(VOID);
 static VOID RgWaitForPortUsers(VOID);
 static LONG RgCurrentClientMode(VOID);
+static ULONG RgCurrentProtectionState(VOID);
+static BOOLEAN RgIsDegradedProtected(VOID);
 static BOOLEAN RgIsPagingWrite(_In_ PFLT_CALLBACK_DATA Data);
 static VOID RgObservePagingWrite(_Inout_ PFLT_CALLBACK_DATA Data,
                                  _In_ PCFLT_RELATED_OBJECTS FltObjects);
@@ -164,8 +170,12 @@ static BOOLEAN RgIsInterestingSetInfo(_In_ FILE_INFORMATION_CLASS InformationCla
 
 static BOOLEAN RgShouldObserve(_In_ PFLT_CALLBACK_DATA Data)
 {
-    if (InterlockedCompareExchange(&gUnloading, 0, 0) != 0 ||
-        InterlockedCompareExchange(&gClientConnected, 0, 0) == 0) {
+    if (InterlockedCompareExchange(&gUnloading, 0, 0) != 0) {
+        return FALSE;
+    }
+
+    if (InterlockedCompareExchange(&gClientConnected, 0, 0) == 0 &&
+        InterlockedCompareExchange(&gDegradedProtected, 0, 0) == 0) {
         return FALSE;
     }
 
@@ -186,6 +196,32 @@ static BOOLEAN RgShouldObserve(_In_ PFLT_CALLBACK_DATA Data)
 static LONG RgCurrentClientMode(VOID)
 {
     return InterlockedCompareExchange(&gClientMode, 0, 0);
+}
+
+static BOOLEAN RgIsDegradedProtected(VOID)
+{
+    return InterlockedCompareExchange(&gDegradedProtected, 0, 0) != 0;
+}
+
+static ULONG RgCurrentProtectionState(VOID)
+{
+    if (InterlockedCompareExchange(&gDegradedProtected, 0, 0) != 0) {
+        return RgProtectionDegradedProtected;
+    }
+
+    if (InterlockedCompareExchange(&gMaintenanceRequested, 0, 0) != 0 ||
+        InterlockedCompareExchange(&gGracefulDisconnectAuthorized, 0, 0) != 0) {
+        return RgProtectionMaintenance;
+    }
+
+    if (InterlockedCompareExchange(&gClientConnected, 0, 0) != 0 &&
+        RgCurrentClientMode() == RgClientLabGate) {
+        return InterlockedCompareExchange(&gGateActivated, 0, 0) != 0
+            ? RgProtectionProtected
+            : RgProtectionPreflight;
+    }
+
+    return RgProtectionInactive;
 }
 
 static BOOLEAN RgIsPagingWrite(PFLT_CALLBACK_DATA Data)
@@ -211,6 +247,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
     PRG_POST_CONTEXT postContext = NULL;
     NTSTATUS status;
     LONG mode;
+    BOOLEAN degraded;
     ULONG gateError = 0;
     ULONG gateDecision = RgGateDeny;
 
@@ -219,19 +256,27 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
+    degraded = RgIsDegradedProtected();
     mode = RgCurrentClientMode();
-    if (mode == RgClientAudit) {
+    if (mode == RgClientAudit && !degraded) {
         RgQueueEvent(Data, FltObjects, RgEventCreate, 0);
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    if (mode != RgClientLabGate) {
+    if (mode != RgClientLabGate && !degraded) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
     status = RgPopulateEvent(&event, Data, FltObjects, RgEventCreate, 0);
     if (!NT_SUCCESS(status)) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    if (degraded) {
+        if (!RgEventIsInsideGateRoot(&event) || !RgCreateMayMutate(&event)) {
+            return FLT_PREOP_SUCCESS_NO_CALLBACK;
+        }
+        return RgCompleteDenied(Data);
     }
 
     if (InterlockedCompareExchange(&gGateActivated, 0, 0) == 0 &&
@@ -320,6 +365,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJE
     RG_EVENT event;
     NTSTATUS status;
     LONG mode;
+    BOOLEAN degraded;
     ULONG gateError = 0;
 
     UNREFERENCED_PARAMETER(CompletionContext);
@@ -333,13 +379,14 @@ FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJE
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
+    degraded = RgIsDegradedProtected();
     mode = RgCurrentClientMode();
-    if (mode == RgClientAudit) {
+    if (mode == RgClientAudit && !degraded) {
         RgQueueEvent(Data, FltObjects, RgEventWrite, 0);
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    if (mode != RgClientLabGate) {
+    if (mode != RgClientLabGate && !degraded) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
@@ -347,6 +394,10 @@ FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJE
     if (!NT_SUCCESS(status) || !RgEventIsInsideGateRoot(&event)) {
         // LAB gate is intentionally scoped. Unresolved/out-of-root paths fail open rather than risking OS-wide I/O loss.
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    if (degraded) {
+        return RgCompleteDenied(Data);
     }
 
     if (InterlockedCompareExchange(&gGateActivated, 0, 0) == 0) {
@@ -372,6 +423,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
     PRG_POST_CONTEXT postContext = NULL;
     NTSTATUS status;
     LONG mode;
+    BOOLEAN degraded;
     ULONG gateError = 0;
     ULONG infoClass;
 
@@ -385,19 +437,24 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
+    degraded = RgIsDegradedProtected();
     mode = RgCurrentClientMode();
-    if (mode == RgClientAudit) {
+    if (mode == RgClientAudit && !degraded) {
         RgQueueEvent(Data, FltObjects, eventType, infoClass);
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    if (mode != RgClientLabGate) {
+    if (mode != RgClientLabGate && !degraded) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
     status = RgPopulateEvent(&event, Data, FltObjects, eventType, infoClass);
     if (!NT_SUCCESS(status) || !RgEventIsInsideGateRoot(&event)) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    if (degraded) {
+        return RgCompleteDenied(Data);
     }
 
     if (InterlockedCompareExchange(&gGateActivated, 0, 0) == 0) {
@@ -1441,7 +1498,10 @@ static BOOLEAN RgEventPathMatchesGateRoot(const RG_EVENT *Event)
     RtlInitUnicodeString(&eventPath, Event->Path);
 
     ExAcquireFastMutex(&gPortMutex);
-    if (gClientPort != NULL && gClientMode == RgClientLabGate && gGateRootLengthBytes != 0) {
+    if (gGateRootLengthBytes != 0 &&
+        (gClientMode == RgClientLabGate ||
+         InterlockedCompareExchange(&gProtectionRequired, 0, 0) != 0 ||
+         InterlockedCompareExchange(&gDegradedProtected, 0, 0) != 0)) {
         root.Buffer = gGateRoot;
         root.Length = gGateRootLengthBytes;
         root.MaximumLength = (USHORT)(gGateRootLengthBytes + sizeof(WCHAR));
@@ -1615,6 +1675,13 @@ static BOOLEAN RgGateEvent(PFLT_CALLBACK_DATA Data,
     timeout.QuadPart = -(RG_GATE_TIMEOUT_MS * 10LL * 1000LL);
 
     inFlight = InterlockedIncrement(&gGateInFlight);
+    if (InterlockedCompareExchange(&gMaintenanceRequested, 0, 0) != 0) {
+        InterlockedDecrement(&gGateInFlight);
+        if (ErrorCode != NULL) {
+            *ErrorCode = (ULONG)STATUS_DEVICE_NOT_READY;
+        }
+        return FALSE;
+    }
     if (inFlight > RG_MAX_GATE_INFLIGHT) {
         InterlockedDecrement(&gGateInFlight);
         if (ErrorCode != NULL) {
@@ -1631,6 +1698,13 @@ static BOOLEAN RgGateEvent(PFLT_CALLBACK_DATA Data,
     }
 
     InterlockedDecrement(&gGateInFlight);
+
+    if (InterlockedCompareExchange(&gMaintenanceRequested, 0, 0) != 0) {
+        if (ErrorCode != NULL) {
+            *ErrorCode = (ULONG)STATUS_DEVICE_NOT_READY;
+        }
+        return FALSE;
+    }
 
     if (ErrorCode != NULL) {
         *ErrorCode = NT_SUCCESS(status) ? reply.ErrorCode : (ULONG)status;
@@ -1685,6 +1759,11 @@ static VOID RgQueueEvent(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjec
     }
 
     pending = InterlockedIncrement(&gPending);
+    if (InterlockedCompareExchange(&gMaintenanceRequested, 0, 0) != 0) {
+        InterlockedDecrement(&gPending);
+        ExReleaseRundownProtection(&gRundown);
+        return;
+    }
     if (pending > RG_MAX_PENDING) {
         InterlockedDecrement(&gPending);
         InterlockedIncrement(&gDropped);
@@ -1729,6 +1808,11 @@ static VOID RgQueueRawEvent(const RG_EVENT *Event, LONG ClientMode)
     }
 
     pending = InterlockedIncrement(&gPending);
+    if (InterlockedCompareExchange(&gMaintenanceRequested, 0, 0) != 0) {
+        InterlockedDecrement(&gPending);
+        ExReleaseRundownProtection(&gRundown);
+        return;
+    }
     if (pending > RG_MAX_PENDING) {
         InterlockedDecrement(&gPending);
         InterlockedIncrement(&gDropped);
@@ -1846,6 +1930,11 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
         if (context->GateRoot[0] != L'\\' || context->GateRoot[rootChars] != L'\0') {
             return STATUS_INVALID_PARAMETER;
         }
+
+        while (rootChars > 1 && context->GateRoot[rootChars - 1] == L'\\') {
+            rootChars--;
+        }
+        rootBytes = rootChars * sizeof(WCHAR);
     } else if (rootBytes != 0) {
         return STATUS_INVALID_PARAMETER;
     }
@@ -1854,29 +1943,42 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
     if (gClientPort != NULL || gContainedProcess != NULL ||
         InterlockedCompareExchange(&gUnloading, 0, 0) != 0) {
         status = STATUS_DEVICE_BUSY;
+    } else if (InterlockedCompareExchange(&gProtectionRequired, 0, 0) != 0 &&
+               (context->ClientMode != RgClientLabGate ||
+                gGateRootLengthBytes != (USHORT)rootBytes ||
+                RtlCompareMemory(gGateRoot, context->GateRoot, rootBytes) != rootBytes)) {
+        // A disconnected protected session may reconnect only to the exact retained root.
+        status = STATUS_ACCESS_DENIED;
     } else {
         if (InterlockedExchange(&gPortRundownCompleted, 0) != 0) {
             ExReInitializeRundownProtection(&gPortRundown);
         }
-        RtlZeroMemory(gGateRoot, sizeof(gGateRoot));
-        gGateRootLengthBytes = 0;
+
+        if (InterlockedCompareExchange(&gProtectionRequired, 0, 0) == 0) {
+            RtlZeroMemory(gGateRoot, sizeof(gGateRoot));
+            gGateRootLengthBytes = 0;
+        }
+
         gClientPort = ClientPort;
         gClientMode = (LONG)context->ClientMode;
         InterlockedExchange64(&gClientProcessId, (LONG64)context->ClientProcessId);
         InterlockedExchange(&gGateActivated, context->ClientMode == RgClientLabGate ? 0 : 1);
         InterlockedExchange(&gActivationHazard, 0);
         InterlockedExchange(&gPreflightProbeArmed, 0);
+        InterlockedExchange(&gMaintenanceRequested, 0);
+        InterlockedExchange(&gGracefulDisconnectAuthorized, 0);
 
-        if (context->ClientMode == RgClientLabGate) {
+        if (context->ClientMode == RgClientLabGate &&
+            InterlockedCompareExchange(&gProtectionRequired, 0, 0) == 0) {
             RtlCopyMemory(gGateRoot, context->GateRoot, rootBytes);
-            rootChars = rootBytes / sizeof(WCHAR);
-            while (rootChars > 1 && gGateRoot[rootChars - 1] == L'\\') {
-                gGateRoot[rootChars - 1] = L'\0';
-                rootChars--;
-            }
-            gGateRootLengthBytes = (USHORT)(rootChars * sizeof(WCHAR));
+            gGateRootLengthBytes = (USHORT)rootBytes;
+            gGateRoot[rootBytes / sizeof(WCHAR)] = L'\0';
         }
+
+        // On degraded reconnect publish the live client before clearing the fail-safe latch,
+        // so callbacks never observe both protection indicators false.
         InterlockedExchange(&gClientConnected, 1);
+        InterlockedExchange(&gDegradedProtected, 0);
     }
     ExReleaseFastMutex(&gPortMutex);
     return status;
@@ -1939,6 +2041,10 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
                    InterlockedCompareExchange(&gPreflightProbeArmed, 0, 0) != 0) {
             status = STATUS_DEVICE_BUSY;
         } else {
+            InterlockedExchange(&gProtectionRequired, 1);
+            InterlockedExchange(&gDegradedProtected, 0);
+            InterlockedExchange(&gMaintenanceRequested, 0);
+            InterlockedExchange(&gGracefulDisconnectAuthorized, 0);
             InterlockedExchange(&gGateActivated, 1);
             status = STATUS_SUCCESS;
         }
@@ -1963,10 +2069,38 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
                     gContainedProcess = targetProcess;
                     targetProcess = NULL;
                     InterlockedExchange64(&gContainedProcessId, (LONG64)request->TargetProcessId);
+                    InterlockedExchange(&gProtectionRequired, 1);
+                    InterlockedExchange(&gDegradedProtected, 0);
+                    InterlockedExchange(&gMaintenanceRequested, 0);
+                    InterlockedExchange(&gGracefulDisconnectAuthorized, 0);
                     InterlockedExchange(&gGateActivated, 1);
                     status = STATUS_SUCCESS;
                 }
                 ExReleaseFastMutex(&gPortMutex);
+            }
+        }
+    } else if (request->Command == RgControlDeactivateGate) {
+        if (request->TargetProcessId != 0) {
+            status = STATUS_INVALID_PARAMETER;
+        } else if (InterlockedCompareExchange(&gGateActivated, 0, 0) == 0 &&
+                   InterlockedCompareExchange(&gGracefulDisconnectAuthorized, 0, 0) == 0) {
+            status = STATUS_INVALID_DEVICE_STATE;
+        } else {
+            // Close new gate admission before inspecting outstanding work. This is only a
+            // maintenance request, not release authorization: if the client disappears while
+            // draining, RgDisconnect still retains the root and enters DegradedProtected.
+            InterlockedExchange(&gMaintenanceRequested, 1);
+
+            if (InterlockedCompareExchange(&gGateInFlight, 0, 0) != 0 ||
+                InterlockedCompareExchange(&gPending, 0, 0) != 0) {
+                status = STATUS_DEVICE_BUSY;
+            } else {
+                RgClearContainedProcess();
+                InterlockedExchange(&gGateActivated, 0);
+                InterlockedExchange(&gProtectionRequired, 0);
+                InterlockedExchange(&gDegradedProtected, 0);
+                InterlockedExchange(&gGracefulDisconnectAuthorized, 1);
+                status = STATUS_SUCCESS;
             }
         }
     } else {
@@ -1981,6 +2115,7 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
     reply->Status = (ULONG)status;
     reply->GateActivated = (ULONG)InterlockedCompareExchange(&gGateActivated, 0, 0);
     reply->ContainmentActive = containedProcessId != 0 ? 1u : 0u;
+    reply->ProtectionState = RgCurrentProtectionState();
     reply->ContainedProcessId = containedProcessId;
     *ReturnOutputBufferLength = sizeof(*reply);
     return STATUS_SUCCESS;
@@ -1988,19 +2123,42 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
 
 static VOID RgDisconnect(PVOID ConnectionCookie)
 {
+    LONG protectionRequired;
+    LONG gracefulDisconnect;
+
     UNREFERENCED_PARAMETER(ConnectionCookie);
+
+    protectionRequired = InterlockedCompareExchange(&gProtectionRequired, 0, 0);
+    gracefulDisconnect = InterlockedCompareExchange(&gGracefulDisconnectAuthorized, 0, 0);
 
     RgClearContainedProcess();
 
     ExAcquireFastMutex(&gPortMutex);
+    if (protectionRequired != 0 && gracefulDisconnect == 0) {
+        // Publish the fail-safe latch before publishing client loss. This avoids a transient
+        // connected=0/degraded=0 window that could otherwise let a racing mutation escape.
+        InterlockedExchange(&gDegradedProtected, 1);
+    }
+
     InterlockedExchange(&gClientConnected, 0);
     InterlockedExchange(&gClientMode, 0);
     InterlockedExchange64(&gClientProcessId, 0);
     InterlockedExchange(&gGateActivated, 0);
     InterlockedExchange(&gActivationHazard, 0);
     InterlockedExchange(&gPreflightProbeArmed, 0);
-    gGateRootLengthBytes = 0;
-    RtlSecureZeroMemory(gGateRoot, sizeof(gGateRoot));
+
+    if (protectionRequired != 0 && gracefulDisconnect == 0) {
+        // Keep the negotiated root and fail safe for resolved user-mode mutations.
+        // A replacement v16 GateClient may reconnect only to this exact root and must rerun preflight.
+    } else {
+        InterlockedExchange(&gProtectionRequired, 0);
+        InterlockedExchange(&gDegradedProtected, 0);
+        gGateRootLengthBytes = 0;
+        RtlSecureZeroMemory(gGateRoot, sizeof(gGateRoot));
+    }
+    InterlockedExchange(&gMaintenanceRequested, 0);
+    InterlockedExchange(&gGracefulDisconnectAuthorized, 0);
+
     if (gClientPort != NULL) {
         FltCloseClientPort(gFilter, &gClientPort);
     }
@@ -2033,6 +2191,10 @@ NTSTATUS RgUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
     InterlockedExchange(&gUnloading, 1);
     InterlockedExchange(&gClientConnected, 0);
     InterlockedExchange(&gClientMode, 0);
+    InterlockedExchange(&gProtectionRequired, 0);
+    InterlockedExchange(&gDegradedProtected, 0);
+    InterlockedExchange(&gMaintenanceRequested, 0);
+    InterlockedExchange(&gGracefulDisconnectAuthorized, 0);
     RgClearContainedProcess();
 
     if (gServerPort != NULL) {

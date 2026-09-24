@@ -243,3 +243,11 @@ Every round must finish with the expected filesystem state, a durable DELETE `De
 
 The workflow is manual-only. It does not reboot Windows, enable Driver Verifier, modify boot policy or manage disks. Source/hosted CI proves only the harness contract; the 0.7.31 endurance milestone is runtime-qualified only after the exact unchanged PR head completes this VM workflow and the uploaded evidence artifact is reviewed.
 
+## 0.7.32 GateClient-loss fail-safe coverage
+
+Protocol v16 source gates require an activated session to retain a kernel protection-required latch, require unexpected disconnect to publish `DegradedProtected` before publishing client loss, and require a reconnect to publish the live same-root client before clearing the degraded latch. Static checks also require exact retained-root matching, preflight on reconnect, and an explicit whole-gate `DeactivateGate` maintenance command that is refused while blocking gate sends or queued evidence work remain.
+
+GateClient source checks require lifecycle/transaction cleanliness before `DeactivateGate`, require the kernel reply to report Maintenance with no active containment, and require faulted/incomplete shutdown not to authorize protection release.
+
+These source checks are not sufficient runtime evidence. Before 0.7.32 is merged as a qualified milestone, a disposable-VM exact-head campaign must activate a protected root, terminate GateClient abruptly, prove resolved in-root destructive operations fail with access denial while the client is absent, prove out-of-root/read-only behavior is not converted into a root-wide OS denial, reconnect protocol v16 to the same retained root and rerun preflight, then perform a clean explicit deactivation and prove ordinary mutation succeeds only after authorized release. The campaign must also reject a wrong-root reconnect while protection is retained. Paging/section and unresolved-name behavior remain the separately documented boundary rather than being silently broadened by this campaign.
+

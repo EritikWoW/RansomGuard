@@ -1,4 +1,4 @@
-# RansomGuard 0.7.31.0
+# RansomGuard 0.7.32.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
@@ -6,7 +6,7 @@ and recover data through rollback plus adaptive crypto analysis.
 
 ## Core preservation milestone
 
-0.7.31.0 keeps protocol v15 and the completed 0.7.30 Driver Verifier qualification, then adds a dedicated sustained mixed-workload campaign for the Engineering LAB minifilter. One exact-commit driver load and one GateClient/rollback session first repeat bounded admission/concurrency qualification, then run configurable waves that release CREATE, RENAME, TRUNCATE, DELETE and mapped-write operations together behind a shared barrier. The default manual profile is 60 waves with 10-second inter-round pauses: 300 mixed mutations across roughly ten minutes, with final durable transaction correlation, DELETE finalization, mapped pre-image hashes, writable-section/paging evidence, worker health and cleanup still mandatory.
+0.7.32.0 introduces protocol v16 and the first GateClient-loss fail-safe state for the Engineering LAB minifilter. After a gate has been activated, an unexpected GateClient disconnect retains the exact protected root and enters kernel `DEGRADED_PROTECTED` before publishing client loss. Resolved ordinary user-mode mutation-capable CREATE, non-paging WRITE, RENAME, DELETE and TRUNCATE operations in that retained root are denied until a protocol-v16 GateClient reconnects to the same root and reruns activation preflight. A clean transaction-complete GateClient shutdown uses an explicit whole-gate `DeactivateGate` maintenance transition before closing the port. This does not enable the driver in the normal product, does not close unresolved-path fail-open behavior, and does not claim protection from kernel-mode or Administrator/SYSTEM tampering.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 
@@ -25,7 +25,7 @@ undone by truncating the recovered copy to that length.
 Rename, delete-disposition and explicit truncate/allocation-length operations remain on the conservative
 **full-file pre-image** path for now.
 
-The engineering minifilter protocol is now v15 and reports CREATE, WRITE, RENAME, DELETE and TRUNCATE-class metadata operations. DELETE can emit correlated no-reply `DeleteDispositionResult` and `DeleteFinalized` events without changing the fixed RG_EVENT wire size. A successful disposition result proves only that the filesystem accepted the disposition request; exact-handle cleanup is recorded separately and is not treated as proof that the pathname has disappeared.
+The engineering minifilter protocol is now v16 and reports CREATE, WRITE, RENAME, DELETE and TRUNCATE-class metadata operations; v16 also carries explicit protection-health state and graceful whole-gate deactivation. DELETE can emit correlated no-reply `DeleteDispositionResult` and `DeleteFinalized` events without changing the fixed RG_EVENT wire size. A successful disposition result proves only that the filesystem accepted the disposition request; exact-handle cleanup is recorded separately and is not treated as proof that the pathname has disappeared.
 
 For CREATE, the gate distinguishes Windows create dispositions instead of treating every open as destructive:
 existing `FILE_SUPERSEDE`, `FILE_OVERWRITE` and `FILE_OVERWRITE_IF` require a durable full pre-image;
@@ -149,7 +149,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.7.31.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.7.32.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 Manual disposable-VM runtime workflows:
 
@@ -174,6 +174,4 @@ Bounded concurrent gate admission/workers are now implemented with a kernel cap 
 
 Restart evidence for pending/missing CREATE/RENAME/TRUNCATE completion events and unsettled DELETE lifecycle transactions is durable and conservative; authoritative completion is never inferred from a restart or topology probe. DELETE cleanup is handle-lifecycle evidence only, while pathname state is observed separately. The recovery planner may expose exact, fully consistent evidence as `Review` only, while cleanup-only, ambiguous, indeterminate or conflicting evidence stays `Blocked`. Paging writes on streams opened through the LAB gate are visible as durable evidence without synchronously blocking the paging path.
 
-Remaining core work includes broader long-duration/mixed-workload stress,
-production retention UI/policy integration, production detector-to-containment authorization/policy, process-state capture, adaptive crypto reconstruction, production recovery UI/topology orchestration,
-driver signing and Microsoft-assigned production altitude.
+Remaining core work includes runtime qualification of the new GateClient-loss fail-safe, identity-based resolution of ambiguous protected scope, production Enforce/service lifecycle integration, self-protection, production detector-to-containment authorization/policy, process-state capture, production recovery orchestration, driver signing and a Microsoft-assigned production altitude.

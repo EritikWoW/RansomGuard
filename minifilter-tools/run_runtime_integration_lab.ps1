@@ -57,6 +57,17 @@ function Quote-Arg([string]$Value){
     return '"' + $Value.Replace('"','\"') + '"'
 }
 
+function Test-AccessDeniedException([Exception]$Exception){
+    $cursor=$Exception
+    while($null -ne $cursor){
+        if($cursor -is [UnauthorizedAccessException]){return $true}
+        $win32=([int]$cursor.HResult -band 0xFFFF)
+        if($win32 -eq 5){return $true}
+        $cursor=$cursor.InnerException
+    }
+    return $false
+}
+
 function Start-LoggedProcess(
     [string]$FilePath,
     [string[]]$Arguments,
@@ -76,6 +87,33 @@ function Stop-LabProcess([System.Diagnostics.Process]$Process,[string]$Descripti
     Stop-Process -Id $Process.Id -Force -ErrorAction Stop
     if(-not $Process.WaitForExit(10000)){
         throw "Timed out stopping ${Description} process pid=$($Process.Id)."
+    }
+}
+
+function Stop-GateGracefully(
+    [System.Diagnostics.Process]$Process,
+    [string]$ShutdownFile,
+    [string]$StdOut,
+    [string]$StdErr,
+    [string]$Description
+){
+    if($null -eq $Process){throw "Missing ${Description} process for graceful shutdown."}
+    if($Process.HasExited){throw "${Description} exited before graceful shutdown. Exit=$($Process.ExitCode)"}
+
+    Remove-Item -LiteralPath $ShutdownFile -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType File -Path $ShutdownFile -Force | Out-Null
+    if(-not $Process.WaitForExit(20000)){
+        Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+        throw "Timed out waiting for graceful ${Description} shutdown."
+    }
+
+    $out=if(Test-Path -LiteralPath $StdOut){Get-Content -LiteralPath $StdOut -Raw -ErrorAction SilentlyContinue}else{''}
+    $err=if(Test-Path -LiteralPath $StdErr){Get-Content -LiteralPath $StdErr -Raw -ErrorAction SilentlyContinue}else{''}
+    if($Process.ExitCode -ne 0){
+        throw "Graceful ${Description} shutdown failed. Exit=$($Process.ExitCode). $err"
+    }
+    if($out -notmatch 'Kernel gate graceful deactivation: MAINTENANCE authorized'){
+        throw "Graceful ${Description} shutdown did not prove kernel MAINTENANCE deactivation. $out $err"
     }
 }
 
@@ -222,17 +260,22 @@ $preRoot=Join-Path $RootBase "preexisting-$stamp"
 $postRoot=Join-Path $RootBase "postactivation-$stamp"
 $containRoot=Join-Path $RootBase "containment-$stamp"
 $transitionRoot=Join-Path $RootBase "containment-transition-$stamp"
+$disconnectRoot=Join-Path $RootBase "disconnect-$stamp"
+$disconnectWrongRoot=Join-Path $RootBase "disconnect-wrong-$stamp"
+$disconnectOutside=Join-Path $RootBase "disconnect-outside-$stamp.bin"
 $dirStore=Join-Path $ResultsDirectory 'predirectory-store'
 $preStore=Join-Path $ResultsDirectory 'preexisting-store'
 $postStore=Join-Path $ResultsDirectory 'postactivation-store'
 $containStore=Join-Path $ResultsDirectory 'containment-store'
 $transitionStore=Join-Path $ResultsDirectory 'containment-transition-store'
+$disconnectStore=Join-Path $ResultsDirectory 'disconnect-store'
+$disconnectWrongStore=Join-Path $ResultsDirectory 'disconnect-wrong-store'
 $volume=[IO.Path]::GetPathRoot($RootBase).TrimEnd('\')
 $installScript=Join-Path $PSScriptRoot 'install_minifilter_lab.ps1'
 $unloadScript=Join-Path $PSScriptRoot 'unload_minifilter_lab.ps1'
 
 $summary=[ordered]@{
-    schema=1
+    schema=2
     version=$gateVersion
     startedUtc=(Get-Date).ToUniversalTime().ToString('o')
     vm=$vm
@@ -253,6 +296,14 @@ $summary=[ordered]@{
     transitionRequested=$false
     transitionKernelActive=$false
     transitionDeniedNextWrite=$false
+    disconnectDeniedMutation=$false
+    disconnectPreservedTargetHash=$false
+    disconnectReadAllowed=$false
+    disconnectOutOfRootAllowed=$false
+    wrongRootReconnectRejected=$false
+    sameRootReconnectActivated=$false
+    sameRootMutationAllowed=$false
+    gracefulReleaseSucceeded=$false
     cleanupPassed=$false
     cleanupError=$null
     passed=$false
@@ -266,12 +317,20 @@ $gatePre=$null
 $gatePost=$null
 $gateContain=$null
 $gateTransition=$null
+$gateDisconnect=$null
+$gateWrong=$null
+$gateReconnect=$null
 $containProbe=$null
 $transitionProbe=$null
 $dirRelease=$null
 $release=$null
 $containGo=$null
 $transitionGo=$null
+$postShutdown=$null
+$containShutdown=$null
+$transitionShutdown=$null
+$disconnectShutdown=$null
+$reconnectShutdown=$null
 $runtimeFailure=$null
 $cleanupFailure=$null
 try{
@@ -379,8 +438,10 @@ try{
 
     $postOut=Join-Path $ResultsDirectory 'postactivation-gate.out.log'
     $postErr=$postOut + '.err'
+    $postShutdown=Join-Path $ResultsDirectory 'postactivation.shutdown'
     $gatePost=Start-LoggedProcess $gateExe @(
-        '--root',(Quote-Arg $postRoot),'--store',(Quote-Arg $postStore),'--session','postactivation'
+        '--root',(Quote-Arg $postRoot),'--store',(Quote-Arg $postStore),'--session','postactivation',
+        '--shutdown-file',(Quote-Arg $postShutdown)
     ) $postOut $postErr
     Wait-LogPattern $postOut 'kernel gate ACTIVE' $gatePost 45
 
@@ -424,13 +485,106 @@ try{
     }
     $summary.preimageHashMatched=$true
 
-    # The filter communication port allows one gate client. End this successful
-    # session before activating the next root so the disconnect callback clears
-    # gate/containment state and the next client can connect deterministically.
-    Stop-LabProcess $gatePost 'post-activation gate'
+    # End this successful session through the explicit v16 maintenance transition.
+    Stop-GateGracefully $gatePost $postShutdown $postOut $postErr 'post-activation gate'
     $gatePost=$null
 
-    # Scenario 3: activation-bound containment is scoped to one kernel process identity.
+    # Scenario 3: an abrupt GateClient loss after activation must not silently disable protection.
+    Prepare-GateRoot $gateExe $disconnectRoot
+    Prepare-GateRoot $gateExe $disconnectWrongRoot
+    $disconnectTarget=Join-Path $disconnectRoot 'degraded-target.bin'
+    New-TestFile $disconnectTarget
+    New-TestFile $disconnectOutside
+    $disconnectOriginalHash=(Get-FileHash -LiteralPath $disconnectTarget -Algorithm SHA256).Hash
+
+    $disconnectOut=Join-Path $ResultsDirectory 'disconnect-gate.out.log'
+    $disconnectErr=$disconnectOut + '.err'
+    $disconnectShutdown=Join-Path $ResultsDirectory 'disconnect.shutdown'
+    $gateDisconnect=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $disconnectRoot),
+        '--store',(Quote-Arg $disconnectStore),
+        '--session','disconnect-active',
+        '--shutdown-file',(Quote-Arg $disconnectShutdown)
+    ) $disconnectOut $disconnectErr
+    Wait-LogPattern $disconnectOut 'kernel gate ACTIVE' $gateDisconnect 45
+
+    # This is intentionally NOT graceful: emulate process death after the kernel promised protection.
+    Stop-LabProcess $gateDisconnect 'abrupt GateClient'
+    $gateDisconnect=$null
+
+    $readBytes=[IO.File]::ReadAllBytes($disconnectTarget)
+    if($readBytes.Length -ne 65536){throw 'Read-only access failed or returned unexpected data while protection was degraded.'}
+    $summary.disconnectReadAllowed=$true
+
+    $denied=$false
+    try{
+        $fs=[IO.File]::Open($disconnectTarget,[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::Read)
+        try{$fs.WriteByte(0x5A);$fs.Flush($true)}finally{$fs.Dispose()}
+    }
+    catch{
+        if(Test-AccessDeniedException $_.Exception){$denied=$true}
+        else{throw}
+    }
+    if(-not $denied){throw 'Resolved in-root mutation unexpectedly succeeded after abrupt GateClient loss.'}
+    $summary.disconnectDeniedMutation=$true
+    $disconnectAfterDenied=(Get-FileHash -LiteralPath $disconnectTarget -Algorithm SHA256).Hash
+    if(-not [string]::Equals($disconnectAfterDenied,$disconnectOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'Protected target changed despite degraded fail-safe denial.'
+    }
+    $summary.disconnectPreservedTargetHash=$true
+
+    [IO.File]::WriteAllText($disconnectOutside,'outside-root-write-must-remain-allowed')
+    if((Get-Content -LiteralPath $disconnectOutside -Raw) -ne 'outside-root-write-must-remain-allowed'){
+        throw 'Out-of-root mutation failed while a different retained root was degraded.'
+    }
+    $summary.disconnectOutOfRootAllowed=$true
+
+    # A different root must not be able to replace/release the retained degraded scope.
+    $wrongOut=Join-Path $ResultsDirectory 'disconnect-wrong-gate.out.log'
+    $wrongErr=$wrongOut + '.err'
+    $gateWrong=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $disconnectWrongRoot),
+        '--store',(Quote-Arg $disconnectWrongStore),
+        '--session','disconnect-wrong'
+    ) $wrongOut $wrongErr
+    if(-not $gateWrong.WaitForExit(15000)){
+        Stop-Process -Id $gateWrong.Id -Force -ErrorAction SilentlyContinue
+        throw 'Wrong-root GateClient unexpectedly stayed connected while a degraded root was retained.'
+    }
+    if($gateWrong.ExitCode -eq 0){throw 'Wrong-root GateClient unexpectedly connected while a degraded root was retained.'}
+    $gateWrong=$null
+    $summary.wrongRootReconnectRejected=$true
+
+    # Exact-root recovery must reconnect only to the retained root, rerun preflight, and return Protected.
+    $reconnectOut=Join-Path $ResultsDirectory 'disconnect-reconnect-gate.out.log'
+    $reconnectErr=$reconnectOut + '.err'
+    $reconnectShutdown=Join-Path $ResultsDirectory 'disconnect-reconnect.shutdown'
+    $gateReconnect=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $disconnectRoot),
+        '--store',(Quote-Arg $disconnectStore),
+        '--session','disconnect-reconnect',
+        '--shutdown-file',(Quote-Arg $reconnectShutdown)
+    ) $reconnectOut $reconnectErr
+    Wait-LogPattern $reconnectOut 'kernel gate ACTIVE' $gateReconnect 45
+    $summary.sameRootReconnectActivated=$true
+
+    [IO.File]::WriteAllText($disconnectTarget,'same-root-reconnect-preserved-write')
+    if((Get-Content -LiteralPath $disconnectTarget -Raw) -ne 'same-root-reconnect-preserved-write'){
+        throw 'Same-root mutation did not succeed after v16 reconnect/preflight.'
+    }
+    $summary.sameRootMutationAllowed=$true
+
+    Stop-GateGracefully $gateReconnect $reconnectShutdown $reconnectOut $reconnectErr 'disconnect-reconnect gate'
+    $gateReconnect=$null
+
+    # Only after explicit Maintenance/deactivation may the root behave as ordinary unprotected I/O again.
+    [IO.File]::WriteAllText($disconnectTarget,'released-after-maintenance')
+    if((Get-Content -LiteralPath $disconnectTarget -Raw) -ne 'released-after-maintenance'){
+        throw 'Mutation did not succeed after explicit graceful gate release.'
+    }
+    $summary.gracefulReleaseSucceeded=$true
+
+    # Scenario 4: activation-bound containment is scoped to one kernel process identity.
     Prepare-GateRoot $gateExe $containRoot
     $containedFile=Join-Path $containRoot 'contained-target.bin'
     $peerFile=Join-Path $containRoot 'ordinary-peer.bin'
@@ -454,11 +608,13 @@ try{
 
     $containOut=Join-Path $ResultsDirectory 'containment-gate.out.log'
     $containErr=$containOut + '.err'
+    $containShutdown=Join-Path $ResultsDirectory 'containment.shutdown'
     $gateContain=Start-LoggedProcess $gateExe @(
         '--root',(Quote-Arg $containRoot),
         '--store',(Quote-Arg $containStore),
         '--session','containment',
-        '--contain-pid',([string]$containProbe.Id)
+        '--contain-pid',([string]$containProbe.Id),
+        '--shutdown-file',(Quote-Arg $containShutdown)
     ) $containOut $containErr
     Wait-LogPattern $containOut 'LAB containment\s+: ACTIVE' $gateContain 45
 
@@ -491,10 +647,10 @@ try{
     }
     $summary.containmentAllowedPeer=$true
 
-    Stop-LabProcess $gateContain 'pre-armed containment gate'
+    Stop-GateGracefully $gateContain $containShutdown $containOut $containErr 'pre-armed containment gate'
     $gateContain=$null
 
-    # Scenario 4: a preserved gate reply can atomically transition the exact requestor into containment.
+    # Scenario 5: a preserved gate reply can atomically transition the exact requestor into containment.
     Prepare-GateRoot $gateExe $transitionRoot
     $transitionFileA=Join-Path $transitionRoot 'transition-a.bin'
     $transitionFileB=Join-Path $transitionRoot 'transition-b.bin'
@@ -518,13 +674,15 @@ try{
 
     $transitionOut=Join-Path $ResultsDirectory 'containment-transition-gate.out.log'
     $transitionErr=$transitionOut + '.err'
+    $transitionShutdown=Join-Path $ResultsDirectory 'containment-transition.shutdown'
     $gateTransition=Start-LoggedProcess $gateExe @(
         '--root',(Quote-Arg $transitionRoot),
         '--store',(Quote-Arg $transitionStore),
         '--session','containment-transition',
         '--contain-after-pid',([string]$transitionProbe.Id),
         '--contain-after-events','4',
-        '--contain-after-paths','2'
+        '--contain-after-paths','2',
+        '--shutdown-file',(Quote-Arg $transitionShutdown)
     ) $transitionOut $transitionErr
     Wait-LogPattern $transitionOut 'LAB transition\s+: pid=' $gateTransition 45
     Wait-LogPattern $transitionOut 'kernel gate ACTIVE' $gateTransition 45
@@ -567,6 +725,9 @@ try{
     Wait-LogPattern $transitionOut 'LAB CONTAINMENT ACTIVE' $gateTransition 30
     $transitionProbe=$null
 
+    Stop-GateGracefully $gateTransition $transitionShutdown $transitionOut $transitionErr 'event-bound containment gate'
+    $gateTransition=$null
+
     $summary.passed=$true
 }
 catch{
@@ -589,7 +750,7 @@ finally{
         if($transitionGo){New-Item -ItemType File -Path $transitionGo -Force -ErrorAction SilentlyContinue | Out-Null}
         Stop-Process -Id $transitionProbe.Id -Force -ErrorAction SilentlyContinue
     }
-    foreach($p in @($gateDir,$gatePre,$gatePost,$gateContain,$gateTransition)){
+    foreach($p in @($gateDir,$gatePre,$gatePost,$gateContain,$gateTransition,$gateDisconnect,$gateWrong,$gateReconnect)){
         if($p -and -not $p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}
     }
 

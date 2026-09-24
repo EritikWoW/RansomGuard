@@ -1,6 +1,6 @@
 # RansomGuard threat model
 
-Status: engineering threat model for RansomGuard 0.7.31.x, covering the current Audit product and Engineering LAB minifilter.
+Status: engineering threat model for RansomGuard 0.7.32.x, covering the current Audit product and Engineering LAB minifilter.
 
 This document describes what the current implementation protects, what it deliberately does not protect, and how ambiguous I/O is handled. It is not a claim of production readiness. The ordinary product remains AuditOnly; the blocking minifilter path is Engineering LAB only.
 
@@ -42,7 +42,7 @@ The LAB path consists of:
 
 `user-mode requestor -> Filter Manager/minifilter -> synchronous GateClient decision -> durable rollback store -> allow/deny`
 
-The minifilter and GateClient trust each other only inside the explicitly negotiated LAB protocol/session. The current wire contract is protocol v15; protocol drift is a compatibility/security boundary, not a best-effort condition. The gate is scoped to one explicit protected root. The rollback store must be outside that root.
+The minifilter and GateClient trust each other only inside the explicitly negotiated LAB protocol/session. The current wire contract is protocol v16; protocol drift is a compatibility/security boundary, not a best-effort condition. The gate is scoped to one explicit protected root. The rollback store must be outside that root.
 
 The Filter Manager server port currently permits one client connection. GateClient uses one synchronous communication handle. Kernel admission may have multiple blocking requests waiting, but user-mode reply-required preservation is deliberately serialized: the worker handling a gate request must send its reply before the receive loop issues the next blocking `FilterGetMessage`. Configurable GateClient slots bound no-reply completion/evidence processing; they are not a claim of multiple simultaneous preservation replies. This distinction is part of the availability model and must not be blurred in performance or security claims.
 
@@ -73,14 +73,17 @@ The current driver does not mean "driver loaded = protected".
 
 | State/condition | Current behavior | Security interpretation |
 |---|---|---|
-| No GateClient connected or driver unloading | Observation path returns without enforcement | No preservation guarantee |
+| No GateClient has activated a LAB session, or driver is unloading | Observation path can return without enforcement | No preservation guarantee |
 | Client in Audit mode | Event may be queued; operation continues | Telemetry only |
-| Client mode unknown/not LAB gate | Operation continues | No blocking guarantee |
+| Client mode unknown/not LAB gate without a retained protection latch | Operation continues | No blocking guarantee |
 | LAB gate, pathname resolved outside root | Operation continues | Explicitly out of scope |
-| LAB gate, pathname/name query cannot establish in-root scope | Operation continues | Intentional fail-open gap |
+| LAB gate or degraded state, pathname/name query cannot establish in-root scope | Operation continues | Intentional fail-open gap remains |
 | LAB gate, external in-root mutation before activation completes | Denied | Prevents mutation racing activation preflight |
 | LAB gate active, resolved in-root mutation, containment latch matches requestor | Denied before userspace preservation | Containment enforcement |
 | LAB gate active, resolved in-root mutation, preservation/gate decision fails | Denied | Fail-closed preservation path |
+| Activated LAB gate loses GateClient unexpectedly | Kernel publishes `DegradedProtected`, retains exact root and denies resolved ordinary user-mode mutation-capable CREATE/non-paging WRITE/RENAME/DELETE/TRUNCATE | Prevents silent active-session protection loss |
+| Protocol-v16 GateClient reconnects after degraded loss | Accepted only for exact retained root; returns to Preflight before Protected | Re-establishes user-mode preservation only after activation preflight |
+| Clean transaction-complete GateClient requests DeactivateGate | Kernel first enters Maintenance-requested admission closure; only after gate/pending work drains does it authorize release and allow the subsequent port close to clear the retained root | Explicit two-phase release rather than disconnect-as-disable |
 | LAB storage admission/quota/free-space check fails | Denied | Preservation integrity wins over availability |
 | Paging write on tracked stream | Non-blocking evidence only | Relies on pre-preserved CREATE baseline; paging path is not a synchronous policy gate |
 | Writable section creation on tracked stream | Non-blocking attestation | Attests prior baseline; does not itself preserve/block |
@@ -106,7 +109,11 @@ The ordinary observation predicate rejects `RequestorMode == KernelMode`. This i
 
 ### Gate disconnect/unavailable state
 
-The preservation guarantee exists only while the LAB protocol is connected and activated. Driver presence alone is not sufficient. Production enforcement therefore needs an explicit health/authorization state with operator-visible degradation semantics.
+Protocol v16 removes the previous silent active-session `client died -> protection off` transition for the Engineering LAB root. Once activation succeeds, the kernel sets a protection-required latch. If GateClient disappears without an authorized whole-gate deactivation, the driver publishes `DegradedProtected` before publishing client loss, retains the exact negotiated root, and denies resolved ordinary user-mode mutation-capable CREATE, non-paging WRITE, RENAME, DELETE and TRUNCATE operations in that root. A replacement v16 GateClient may reconnect only to that same retained root and begins again in Preflight.
+
+A clean shutdown is a distinct two-phase maintenance transition. GateClient first requires a clean durable transaction/lifecycle state and then sends `DeactivateGate`. The kernel immediately publishes a maintenance-requested latch that closes new synchronous gate admission, closes new queued evidence admission, and causes any already-replied request racing the transition to be denied. That latch is **not** release authorization: while blocking gate sends or queued evidence work remain, the command returns busy and the protection-required latch stays armed. If GateClient dies during this drain, disconnect still enters `DegradedProtected`. Only after gate/pending work reaches zero does the kernel clear the protection-required latch, authorize graceful disconnect and report Maintenance; the subsequent port close may then clear the root.
+
+This is a fail-safe foundation, not production self-protection. Unresolved/scope-ambiguous paths still fail open, paging/section callbacks retain the existing non-blocking pre-preserved-baseline model, kernel-mode requestors remain excluded, driver unload explicitly clears the latch, and an Administrator/SYSTEM attacker that can control the driver/service lifecycle is not yet contained by this boundary.
 
 ## Fail-closed analysis and availability risk
 
@@ -187,7 +194,9 @@ Separate disposable-VM fault evidence covers completion loss, low-disk fail-clos
 
 These results are regression/qualification evidence for the tested build and environment. They do not establish production signing, broad Windows/Server compatibility, kernel-compromise resistance, third-party filter interoperability, performance suitability, or safe production blocking policy.
 
-0.7.31 adds a separate sustained mixed-workload qualification harness. Its default contract keeps one GateClient/rollback session active for 60 waves and releases CREATE/RENAME/TRUNCATE/DELETE/mapped-write operations together in every wave, with 10-second inter-round pauses. Source presence is not qualification evidence: this threat model treats the endurance milestone as runtime evidence only after an exact-head disposable-VM run proves all rounds completed, the configured elapsed-time budget was consumed, the gate/workers stayed healthy, durable transaction stores have no pending operations, mapped pre-images and section/paging evidence verify, and cleanup succeeds.
+0.7.31 sustained mixed-workload qualification is now backed by exact-head disposable-VM evidence. PR #42 head `184566aa4269d28bf3f7c32aeb9035ceaa8dd25c` completed manual run #1 (`35986484214`) with 60/60 waves and 300 mixed CREATE/RENAME/TRUNCATE/DELETE/mapped-write operations. The run also re-proved bounded overflow at 16 requests against kernel cap 8 (8 allowed / 8 denied), worker/gate health, durable transaction correlation, zero pending metadata transactions, mapped pre-image/section/paging evidence and cleanup. This remains evidence for that tested LAB build/environment, not a production prevention claim.
+
+0.7.32 introduces the protocol-v16 disconnect fail-safe state described above. Source invariants and hosted compile/build are necessary but are not runtime evidence that process death, exact-root reconnect and graceful release behave correctly under Filter Manager. The milestone remains unqualified until an exact-head disposable-VM campaign kills GateClient after activation, proves in-root destructive I/O is denied while degraded, proves an incompatible/wrong-root recovery path cannot silently release the retained scope, proves same-root preflight recovery, and proves an explicit clean deactivation releases the root.
 
 ## Required production qualification
 

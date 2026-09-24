@@ -1,11 +1,12 @@
 #pragma once
 
 // Wire protocol between the RansomGuard lab minifilter and user-mode clients.
-// v15 adds DELETE disposition-result and handle-cleanup finalization evidence without changing RG_EVENT size.
-// The driver binds the exact requestor PEPROCESS for that IRP before allowing it to continue.
+// v16 adds explicit protection health state plus graceful gate deactivation so an unexpected
+// GateClient disconnect can latch a degraded fail-safe state instead of silently disabling gating.
+// The driver binds the exact requestor PEPROCESS for containment before allowing that IRP to continue.
 // The production bundle still does not install or enable the driver.
 
-#define RG_PROTOCOL_VERSION 15u
+#define RG_PROTOCOL_VERSION 16u
 #define RG_PATH_CHARS 512u
 #define RG_GATE_ROOT_CHARS 260u
 #define RG_PORT_NAME L"\\RansomGuardMinifilterPort"
@@ -57,6 +58,14 @@ typedef enum _RG_CLIENT_MODE {
     RgClientLabGate = 2
 } RG_CLIENT_MODE;
 
+typedef enum _RG_PROTECTION_STATE {
+    RgProtectionInactive = 0,
+    RgProtectionPreflight = 1,
+    RgProtectionProtected = 2,
+    RgProtectionDegradedProtected = 3,
+    RgProtectionMaintenance = 4
+} RG_PROTECTION_STATE;
+
 typedef enum _RG_GATE_DECISION {
     RgGateInvalid = 0,
     RgGateSnapshotCommitted = 1,
@@ -73,7 +82,8 @@ typedef enum _RG_CONTROL_COMMAND {
     RgControlQueryActivation = 2,
     RgControlArmPreflight = 3,
     RgControlActivateAndContainProcess = 4,
-    RgControlQueryContainment = 5
+    RgControlQueryContainment = 5,
+    RgControlDeactivateGate = 6
 } RG_CONTROL_COMMAND;
 
 #pragma pack(push, 1)
@@ -131,7 +141,7 @@ typedef struct _RG_CONTROL_REPLY {
     unsigned long Status;
     unsigned long GateActivated;
     unsigned long ContainmentActive;
-    unsigned long Reserved;
+    unsigned long ProtectionState;
     unsigned long long ContainedProcessId;
 } RG_CONTROL_REPLY, *PRG_CONTROL_REPLY;
 #pragma pack(pop)

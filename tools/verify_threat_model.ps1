@@ -60,12 +60,13 @@ foreach($required in @(
     'Production detector-to-containment orchestration remains unimplemented.',
     'one synchronous communication handle',
     'reply-required preservation is deliberately serialized',
-    'current wire contract is protocol v15',
+    'current wire contract is protocol v16',
     'For the exact 0.7.30 Driver Verifier qualification head',
     'overflow width of 16 against a kernel admission cap of 8 (8 allowed / 8 denied)',
     'Persisted reboot timestamps are SHA-bound and parsed from raw offset-bearing JSON',
-    '0.7.31 adds a separate sustained mixed-workload qualification harness',
-    'Source presence is not qualification evidence',
+    '0.7.31 sustained mixed-workload qualification is now backed by exact-head disposable-VM evidence',
+    '0.7.32 introduces the protocol-v16 disconnect fail-safe state',
+    'Source invariants and hosted compile/build are necessary but are not runtime evidence',
     'current runner reported ReFS creation unsupported',
     'Do not describe the current normal bundle as production ransomware blocking'
 )){
@@ -78,11 +79,11 @@ if(-not $security.Contains('[THREAT_MODEL.md](THREAT_MODEL.md)')){
     throw 'SECURITY.md must link to the canonical threat model.'
 }
 foreach($required in @(
-    'current user/kernel wire contract is protocol v15',
+    'current user/kernel wire contract is protocol v16',
     'The 0.7.30 qualification campaign materially increases confidence in this LAB boundary but does not change it into a production claim.',
     '16 requests against cap 8 -> 8 allowed / 8 denied',
-    '0.7.31 adds a manual sustained mixed-workload qualification contract',
-    'Source presence or a hosted compile is not treated as endurance evidence',
+    '0.7.31 sustained mixed-workload qualification does not widen the security boundary',
+    '0.7.32 introduces protocol v16 and an explicit GateClient-loss fail-safe foundation',
     'CODEOWNERS',
     'does not itself require approval'
 )){
@@ -95,7 +96,16 @@ foreach($required in @(
     'Data->RequestorMode == KernelMode',
     'Unresolved/out-of-root CREATEs fail open',
     'Unresolved/out-of-root paths fail open',
-    'return FLT_PREOP_SUCCESS_NO_CALLBACK'
+    'return FLT_PREOP_SUCCESS_NO_CALLBACK',
+    'gProtectionRequired',
+    'gDegradedProtected',
+    'gMaintenanceRequested',
+    'gGracefulDisconnectAuthorized',
+    'RgProtectionDegradedProtected',
+    'RgControlDeactivateGate',
+    'InterlockedExchange(&gMaintenanceRequested, 1)',
+    'InterlockedExchange(&gDegradedProtected, 1)',
+    'InterlockedExchange(&gClientConnected, 0)'
 )){
     if(-not $driver.Contains($required)){
         throw "Driver boundary changed without threat-model review: $required"
@@ -105,18 +115,21 @@ foreach($required in @(
 if($driver -notmatch 'FltCreateCommunicationPort\([^;]+RgConnect\s*,\s*RgDisconnect\s*,\s*RgMessage\s*,\s*1\s*\)'){
     throw 'Threat-model single-client port boundary changed without review.'
 }
-if(-not $protocol.Contains('#define RG_PROTOCOL_VERSION 15u')){
-    throw 'Threat-model protocol-v15 boundary changed without review.'
+if(-not $protocol.Contains('#define RG_PROTOCOL_VERSION 16u')){
+    throw 'Threat-model protocol-v16 boundary changed without review.'
 }
-if(-not $gateClient.Contains('ProtocolVersion = 15')){
-    throw 'GateClient protocol-v15 connection boundary changed without threat-model review.'
+if(-not $gateClient.Contains('ProtocolVersion = 16')){
+    throw 'GateClient protocol-v16 connection boundary changed without threat-model review.'
 }
 foreach($required in @(
     'using var workerSlots = new SemaphoreSlim(options.GateWorkers, options.GateWorkers);',
     'if (GateMessagePolicy.RequiresReply((RgEventType)ev.EventType))',
     'await worker.ConfigureAwait(false);',
     'FilterReplyMessage',
-    'synchronous handle'
+    'synchronous handle',
+    'RgControlCommand.DeactivateGate',
+    'RgProtectionState.Maintenance',
+    'Kernel gate graceful deactivation NOT authorized'
 )){
     if(-not $gateClient.Contains($required)){
         throw "Threat-model synchronous GateClient boundary changed without review: $required"
@@ -176,4 +189,4 @@ foreach($workflowPath in $workflowPaths){
     }
 }
 
-Write-Host "Threat-model gate PASSED: docs match AuditOnly/fail-open/kernel exclusions, protocol v15, serialized synchronous gate semantics, current Driver Verifier/fault qualification limits, supply-chain controls, CODEOWNERS routing, build_windows.ps1 and all $($workflowPaths.Count) repository workflows invoke this gate."
+Write-Host "Threat-model gate PASSED: docs match AuditOnly/fail-open/kernel exclusions, protocol v16, disconnect fail-safe state and serialized synchronous gate semantics, current Driver Verifier/fault qualification limits, supply-chain controls, CODEOWNERS routing, build_windows.ps1 and all $($workflowPaths.Count) repository workflows invoke this gate."

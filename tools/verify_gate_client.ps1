@@ -63,7 +63,7 @@ foreach($required in @(
   'CreateGatePolicy.TryParseDisposition',
   '(ev.Flags >> 24) & 0xFF',
   'ev.Flags & 0x00FFFFFF',
-  'ProtocolVersion = 15',
+  'ProtocolVersion = 16',
   'CreatePreservationAction.CaptureExistingPreimage',
   'CreatePreservationAction.RecordOriginallyAbsent',
   'CreatePreservationAction.DenyUnsupported',
@@ -117,6 +117,11 @@ foreach($required in @(
   'Native.Control',
   'RgControlCommand.ActivateGate',
   'RgControlCommand.ActivateAndContainProcess',
+  'RgControlCommand.DeactivateGate',
+  'RgProtectionState.Protected',
+  'RgProtectionState.Maintenance',
+  'ProtectionState',
+  'cleanShutdown',
   '--contain-pid',
   '--drop-first-create-completion',
   '--drop-first-rename-completion',
@@ -420,6 +425,31 @@ if($preflightBlock -match '(?i)ReleaseContainment|ClearContainment'){
   throw 'GateClient must not expose a runtime containment release/bypass command.'
 }
 
+if($preflightBlock -notmatch [regex]::Escape('activationReply.ProtectionState != (uint)RgProtectionState.Protected')){
+  throw 'Activation reply must prove kernel protection state is Protected.'
+}
+
+$cleanShutdown=$text.IndexOf('var cleanShutdown =')
+$lifecycleCompleted=$text.IndexOf('lifecycleStore.MarkCompletedAsync',$cleanShutdown)
+$deactivateRequest=$text.IndexOf('RgControlCommand.DeactivateGate',$lifecycleCompleted)
+$maintenanceCheck=$text.IndexOf('RgProtectionState.Maintenance',$deactivateRequest)
+$faultedBranch=$text.IndexOf('Kernel gate graceful deactivation NOT authorized',$maintenanceCheck)
+if($cleanShutdown -lt 0 -or $lifecycleCompleted -lt 0 -or $deactivateRequest -lt 0 -or
+   $maintenanceCheck -lt 0 -or $faultedBranch -lt 0 -or
+   $cleanShutdown -gt $lifecycleCompleted -or $lifecycleCompleted -gt $deactivateRequest -or
+   $deactivateRequest -gt $maintenanceCheck -or $maintenanceCheck -gt $faultedBranch){
+  throw 'Clean GateClient shutdown must durably complete the session before requesting whole-gate deactivation, while faulted shutdown must not authorize release.'
+}
+foreach($required in @(
+  'deactivationReply.GateActivated != 1',
+  'deactivationReply.GateActivated != 0',
+  'deactivationReply.ContainmentActive != 0',
+  'deactivationReply.ContainedProcessId != 0',
+  'deactivationReply.ProtectionState != (uint)RgProtectionState.Maintenance'
+)){
+  if($text -notmatch [regex]::Escape($required)){throw "Graceful deactivation reply invariant missing: $required"}
+}
+
 $fileProbeStart=$text.IndexOf('public static SafeFileHandle OpenPreflightProbe(string path)')
 $fileHoldStart=$text.IndexOf('public static SafeFileHandle OpenPreflightHold(string path)',$fileProbeStart)
 $directoryOpenStart=$text.IndexOf('public static SafeFileHandle OpenPreflightDirectory(string path)',$fileHoldStart)
@@ -466,7 +496,7 @@ if($preflightBlock -match 'Native\.Reply\('){throw 'Activation preflight events 
 $containOption=$text.IndexOf('case "--contain-pid"')
 $containRejectSystem=$text.IndexOf('parsedPid <= 4',$containOption)
 $containRejectSelf=$text.IndexOf('parsedPid == Environment.ProcessId',$containOption)
-$containPrepareReject=$text.IndexOf('Containment/fault/reconciliation options cannot be combined with --prepare-root')
+$containPrepareReject=$text.IndexOf('Containment/fault/reconciliation/shutdown options cannot be combined with --prepare-root')
 if($containOption -lt 0 -or $containRejectSystem -lt 0 -or $containRejectSelf -lt 0 -or $containPrepareReject -lt 0){
   throw 'LAB containment CLI must reject system/self PID and prepare-only combinations.'
 }
@@ -531,6 +561,18 @@ if($text -notmatch 'GateWorkers\s*<\s*1' -or $text -notmatch 'GateWorkers\s*>\s*
   throw 'Gate worker argument must remain explicitly bounded.'
 }
 foreach($required in @(
+  '--shutdown-file',
+  'MonitorShutdownFileAsync',
+  'File.Exists(options.ShutdownFile)',
+  'Native.Cancel(port)',
+  '--shutdown-file must be outside the protected LAB root.',
+  'const int deactivationAttempts = 30',
+  'Kernel remained busy for clean gate deactivation'
+)){
+  if($text -notmatch [regex]::Escape($required)){throw "Graceful GateClient shutdown invariant missing: $required"}
+}
+
+foreach($required in @(
   'static class GateMessagePolicy',
   'public static bool RequiresReply(RgEventType type)',
   'if (GateMessagePolicy.RequiresReply((RgEventType)ev.EventType))',
@@ -578,4 +620,4 @@ if($restartBlock -notmatch [regex]::Escape('PathPolicy.Under(intent.OriginalPath
   throw 'Restart reconciliation must remain scoped to the explicitly selected LAB root.'
 }
 
-Write-Host 'LAB gate client source check PASSED: protocol-v15 DELETE lifecycle plus TRUNCATE reconciliation, event-bound containment, bounded workers, durable identity/restart evidence, no destructive/process-control APIs.'
+Write-Host 'LAB gate client source check PASSED: protocol-v16 graceful deactivation plus disconnect fail-safe state, DELETE/TRUNCATE reconciliation, event-bound containment, bounded workers, durable identity/restart evidence, no destructive/process-control APIs.'

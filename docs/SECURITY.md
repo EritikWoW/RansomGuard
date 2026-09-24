@@ -6,7 +6,7 @@ Read [THREAT_MODEL.md](THREAT_MODEL.md) first. It is the canonical statement of 
 
 The normal RansomGuard product is AuditOnly for ordinary applications. It does not install or load the Engineering LAB minifilter and does not claim production ransomware blocking.
 
-The Engineering LAB minifilter is restricted to disposable test environments and explicit test data. Its current user/kernel wire contract is protocol v15. Its altitude is an unassigned LAB placeholder and its test-signing path is not a production trust anchor.
+The Engineering LAB minifilter is restricted to disposable test environments and explicit test data. Its current user/kernel wire contract is protocol v16. Its altitude is an unassigned LAB placeholder and its test-signing path is not a production trust anchor.
 
 No claim is made that the current product is tamper-proof against a local administrator, a malicious kernel component/BYOVD path, physical/boot compromise or a compromised signing/build system.
 
@@ -48,13 +48,15 @@ Important exceptions are explicit in THREAT_MODEL.md:
 - out-of-root operations are outside the negotiated gate;
 - kernel-mode requestors are outside the ordinary observation path;
 - paging writes are non-blocking evidence and rely on the conservative pre-preserved CREATE baseline;
-- driver presence without an active GateClient/session is not equivalent to protection.
+- driver presence alone is not protection before a LAB session has activated; after protocol-v16 activation, unexpected GateClient loss retains that exact root in DegradedProtected and denies resolved ordinary user-mode destructive operations, but unresolved paths, paging/section caveats, kernel-mode requestors and privileged unload/tamper remain outside that guarantee.
 
 Do not deploy the LAB blocking path on primary workstations or real user data.
 
 The 0.7.30 qualification campaign materially increases confidence in this LAB boundary but does not change it into a production claim. On an exact tested head, standard Driver Verifier targeted only `RansomGuardMinifilter.sys`, survived bounded CREATE/RENAME/TRUNCATE/DELETE/mapped-write stress without a recorded bugcheck, observed genuine admission overflow (16 requests against cap 8 -> 8 allowed / 8 denied), then completed `verifier /reset` and a second-reboot CLEAR proof. Completion-loss, low-disk fail-closed and real-reboot reconciliation campaigns also have disposable-VM evidence. ReFS remains unqualified on the current VM because filesystem creation was unsupported there.
 
-0.7.31 adds a manual sustained mixed-workload qualification contract but does not widen the security boundary. One GateClient/rollback session is held across repeated mixed CREATE/RENAME/TRUNCATE/DELETE/mapped-write waves and final evidence must remain fully correlated and pending-free. Source presence or a hosted compile is not treated as endurance evidence; the claim exists only for an exact-head disposable-VM run whose artifact proves all configured rounds, elapsed-time budget, worker/gate health and cleanup.
+0.7.31 sustained mixed-workload qualification does not widen the security boundary, but it now has exact-head disposable-VM evidence: PR #42 head `184566aa4269d28bf3f7c32aeb9035ceaa8dd25c`, run `35986484214`, completed 60/60 waves (300 mixed mutations), retained healthy gate/workers, re-proved 16-to-8 bounded admission overflow, and finished with correlated/pending-free transaction and mapped-write evidence plus cleanup.
+
+0.7.32 introduces protocol v16 and an explicit GateClient-loss fail-safe foundation. After activation, unexpected port loss retains the exact protected root and enters `DegradedProtected`; resolved ordinary user-mode destructive CREATE/non-paging WRITE/RENAME/DELETE/TRUNCATE operations are denied without user mode. Same-root reconnect returns to activation preflight. A clean transaction-complete shutdown uses explicit whole-gate `DeactivateGate`, which is refused while gate sends or queued evidence are outstanding. This code path is not yet a runtime-qualified production guarantee: unresolved scope remains fail-open, paging/section semantics remain baseline/evidence based, kernel-mode requestors remain excluded, and Administrator/SYSTEM can still control the current LAB driver lifecycle.
 
 ## Recovery boundary
 

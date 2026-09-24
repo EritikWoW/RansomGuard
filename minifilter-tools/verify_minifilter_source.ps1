@@ -144,6 +144,11 @@ foreach($required in @(
     'RgControlActivateAndContainProcess',
     'RgControlQueryContainment',
     'RgControlDeactivateGate',
+    'RgControlArmScopeAmbiguity',
+    'gScopeAmbiguityProcess',
+    'gScopeAmbiguityProcessId',
+    'RgClearScopeAmbiguityProbe',
+    'RgInjectScopeAmbiguityProbe',
     'gProtectionRequired',
     'gDegradedProtected',
     'gMaintenanceRequested',
@@ -283,7 +288,7 @@ if($messageStart -lt 0){throw 'Kernel control-message callback missing.'}
 $messageEnd=$src.IndexOf('static VOID RgDisconnect',$messageStart)
 if($messageEnd -lt 0){throw 'Kernel control-message callback boundary missing.'}
 $messageBlock=$src.Substring($messageStart,$messageEnd-$messageStart)
-foreach($required in @('RgControlActivateGate','RgControlQueryActivation','RgControlArmPreflight','RgControlActivateAndContainProcess','RgControlQueryContainment','RgControlDeactivateGate','TargetProcessId','PsLookupProcessByProcessId','gContainedProcess','gContainedProcessId','gPreflightProbeArmed','gActivationHazard','gGateActivated','gProtectionRequired','gDegradedProtected','gGracefulDisconnectAuthorized','RgCurrentProtectionState','ProtectionState','STATUS_DEVICE_BUSY')){
+foreach($required in @('RgControlActivateGate','RgControlQueryActivation','RgControlArmPreflight','RgControlActivateAndContainProcess','RgControlQueryContainment','RgControlDeactivateGate','RgControlArmScopeAmbiguity','TargetProcessId','PsLookupProcessByProcessId','gContainedProcess','gContainedProcessId','gScopeAmbiguityProcess','gScopeAmbiguityProcessId','gPreflightProbeArmed','gActivationHazard','gGateActivated','gProtectionRequired','gDegradedProtected','gGracefulDisconnectAuthorized','RgCurrentProtectionState','ProtectionState','STATUS_DEVICE_BUSY')){
     if($messageBlock -notmatch [regex]::Escape($required)){throw "Activation control callback missing invariant: $required"}
 }
 $containmentHelperStart=$src.IndexOf('static BOOLEAN RgIsContainedRequestor(PFLT_CALLBACK_DATA Data)')
@@ -301,6 +306,11 @@ foreach($required in @(
     'FILE_DELETE_ON_CLOSE',
     'FILE_OVERWRITE_IF',
     'RgClearContainedProcess',
+    'RgClearScopeAmbiguityProbe',
+    'RgInjectScopeAmbiguityProbe',
+    'gScopeAmbiguityProcess == requestor',
+    'Event->PathStatus = RgPathQueryFailed',
+    "Event->Path[0] = L'\0'",
     'ObDereferenceObject(previous)',
     'RgBindContainedRequestor',
     'ObReferenceObject(requestor)',
@@ -321,6 +331,23 @@ $activateContained=$messageBlock.IndexOf('InterlockedExchange(&gGateActivated, 1
 if($containCommand -lt 0 -or $lookupProcess -lt 0 -or $bindProcess -lt 0 -or $bindPid -lt 0 -or $activateContained -lt 0 -or
    $containCommand -gt $lookupProcess -or $lookupProcess -gt $bindProcess -or $bindProcess -gt $bindPid -or $bindPid -gt $activateContained){
     throw 'Containment must bind a referenced process object and PID before atomically activating the LAB gate.'
+}
+
+$scopeCommand=$messageBlock.IndexOf('request->Command == RgControlArmScopeAmbiguity')
+$scopeLookup=$messageBlock.IndexOf('PsLookupProcessByProcessId',$scopeCommand)
+$scopeBind=$messageBlock.IndexOf('gScopeAmbiguityProcess = targetProcess',$scopeLookup)
+$scopeBindPid=$messageBlock.IndexOf('InterlockedExchange64(',$scopeBind)
+if($scopeCommand -lt 0 -or $scopeLookup -lt 0 -or $scopeBind -lt 0 -or $scopeBindPid -lt 0 -or
+   $scopeCommand -gt $scopeLookup -or $scopeLookup -gt $scopeBind -or $scopeBind -gt $scopeBindPid){
+    throw 'LAB ambiguity probe must bind a referenced exact process object before it can affect a callback.'
+}
+foreach($required in @(
+    'InterlockedCompareExchange(&gGateActivated, 0, 0) == 0',
+    'InterlockedCompareExchange(&gProtectionRequired, 0, 0) == 0',
+    'InterlockedCompareExchange(&gDegradedProtected, 0, 0) != 0',
+    'InterlockedCompareExchange(&gMaintenanceRequested, 0, 0) != 0'
+)){
+    if($messageBlock.IndexOf($required,$scopeCommand) -lt 0){throw "Scope ambiguity arm guard missing: $required"}
 }
 if($messageBlock -notmatch [regex]::Escape('request->TargetProcessId <= 4') -or
    $messageBlock -notmatch [regex]::Escape('request->TargetProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId')){
@@ -437,6 +464,21 @@ if($preCreateBlock -notmatch [regex]::Escape('scope == RgScopeAmbiguous') -or
     throw 'Ambiguous protected-volume mutation scope must fail closed while read-only CREATE remains available.'
 }
 
+$createMutability=$preCreateBlock.IndexOf('if (RgCreateMayMutate(&event))')
+$createInject=$preCreateBlock.IndexOf('RgInjectScopeAmbiguityProbe(Data, &event)',$createMutability)
+$createClassify=$preCreateBlock.IndexOf('RgClassifyMutationScope(&event, FltObjects)',$createInject)
+if($createMutability -lt 0 -or $createInject -lt 0 -or $createClassify -lt 0 -or
+   $createMutability -gt $createInject -or $createInject -gt $createClassify){
+    throw 'Scope ambiguity fault probe must be one-shot only on mutation-capable CREATE before scope classification.'
+}
+foreach($block in @($preWriteBlock,$preSetBlock)){
+    $inject=$block.IndexOf('RgInjectScopeAmbiguityProbe(Data, &event)')
+    $classify=$block.IndexOf('RgClassifyMutationScope(&event, FltObjects)')
+    if($inject -lt 0 -or $classify -lt 0 -or $inject -gt $classify){
+        throw 'WRITE/SET_INFORMATION scope ambiguity probe must execute before scope classification.'
+    }
+}
+
 $scopeStart=$src.IndexOf('static RG_SCOPE_CLASSIFICATION RgClassifyMutationScope(')
 $scopeEnd=$src.IndexOf('static BOOLEAN RgIsContainedRequestor',$scopeStart)
 if($scopeStart -lt 0 -or $scopeEnd -lt 0){throw 'Volume-aware mutation scope classifier source block missing.'}
@@ -453,6 +495,10 @@ foreach($required in @(
 if($src -notmatch 'static VOID RgDisconnect[\s\S]*RgClearContainedProcess\(\)' -or
    $src -notmatch 'NTSTATUS RgUnload[\s\S]*RgClearContainedProcess\(\)'){
     throw 'Disconnect and unload must release the referenced containment process object.'
+}
+if($src -notmatch 'static VOID RgDisconnect[\s\S]*RgClearScopeAmbiguityProbe\(\)' -or
+   $src -notmatch 'NTSTATUS RgUnload[\s\S]*RgClearScopeAmbiguityProbe\(\)'){
+    throw 'Disconnect and unload must release the referenced LAB scope-ambiguity process object.'
 }
 
 if($src -notmatch 'FltCreateCommunicationPort\([^;]*RgConnect,\s*RgDisconnect,\s*RgMessage,\s*1\)' -and

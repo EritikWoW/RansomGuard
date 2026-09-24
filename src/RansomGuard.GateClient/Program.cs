@@ -2055,9 +2055,10 @@ sealed record Options(
                 default: throw new ArgumentException($"Unknown/incomplete argument: {args[i]}");
             }
         }
-        if (string.IsNullOrWhiteSpace(root)) throw new ArgumentException("Pass --root <disposable-test-directory>.");
+        if (string.IsNullOrWhiteSpace(root))
+            throw new ArgumentException("Pass --root <protected-directory>.");
         if (shutdownFile is not null && PathPolicy.Under(shutdownFile, root))
-            throw new ArgumentException("--shutdown-file must be outside the protected LAB root.");
+            throw new ArgumentException("--shutdown-file must be outside the protected root.");
         if (prepare && (containPid.HasValue || scopeAmbiguityPid.HasValue || containAfterPid.HasValue || dropFirstCreateCompletion || dropFirstRenameCompletion || dropFirstTruncateCompletion || dropFirstDeleteCompletion || reconcileOnly || shutdownFile is not null))
             throw new ArgumentException("Containment/fault/reconciliation/shutdown options cannot be combined with --prepare-root.");
         if (reconcileOnly && (containPid.HasValue || scopeAmbiguityPid.HasValue || containAfterPid.HasValue || dropFirstCreateCompletion || dropFirstRenameCompletion || dropFirstTruncateCompletion || dropFirstDeleteCompletion || containThresholdSpecified || shutdownFile is not null))
@@ -2070,9 +2071,35 @@ sealed record Options(
             throw new ArgumentException("Containment thresholds require --contain-after-pid.");
         if (containAfterPaths > containAfterEvents)
             throw new ArgumentException("--contain-after-paths cannot exceed --contain-after-events.");
-        store ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RansomGuardV072", "GateRollback");
+
+        if (profile == GateProfile.Production)
+        {
+            if (prepare || reconcileOnly || shutdownFile is not null ||
+                containPid.HasValue || scopeAmbiguityPid.HasValue || containAfterPid.HasValue ||
+                containThresholdSpecified || dropFirstCreateCompletion || dropFirstRenameCompletion ||
+                dropFirstTruncateCompletion || dropFirstDeleteCompletion)
+                throw new ArgumentException(
+                    "ProductionGate forbids LAB prepare/fault/reconciliation/shutdown/containment options.");
+
+            var fixedStore = Path.GetFullPath(Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                "RansomGuardV03",
+                "Rollback"));
+            if (store is not null && !PathPolicy.Equal(store, fixedStore))
+                throw new ArgumentException(
+                    $"ProductionGate rollback store is fixed to '{fixedStore}'.");
+            store = fixedStore;
+        }
+        else
+        {
+            store ??= Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "RansomGuardV072",
+                "GateRollback");
+        }
+
         return new Options(
-            root, store, session, prepare, gateWorkers, maxStoreMiB, minFreeMiB,
+            profile, root, store!, session, prepare, gateWorkers, maxStoreMiB, minFreeMiB,
             containPid, scopeAmbiguityPid, containAfterPid, containAfterEvents, containAfterPaths,
             dropFirstCreateCompletion, dropFirstRenameCompletion, dropFirstTruncateCompletion,
             dropFirstDeleteCompletion, reconcileOnly, shutdownFile);

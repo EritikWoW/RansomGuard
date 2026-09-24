@@ -42,6 +42,8 @@ Queues/windows are intentionally bounded. Event loss, queue drops, stale evidenc
 
 For ordinary user-mode destructive mutations while the LAB gate is connected and activated, resolved in-root operations follow preserve-before-allow. Version 0.8.4 also mediates the reviewed data-mutating FSCTL class: zero-data, duplicate-extents/block-clone, offload-write, file-level trim and sparse-state operations cannot bypass the preservation boundary. In protected scope they require an already committed durable stream baseline or fail closed; the FSCTL callback does not synchronously call user mode. If the default normalized-name query is unavailable, the driver first retries from Filter Manager's name cache; a scope that still cannot be classified on the exact bound protected volume is treated as ambiguous and fails closed in kernel. Proven out-of-root operations remain outside the gate.
 
+GateClient identity is kernel-bound in 0.8.5. The minifilter references the actual process that calls `FilterConnectCommunicationPort`, requires the wire `ClientProcessId` to equal that kernel-derived PID, and keeps the exact `PEPROCESS` for connection-lifetime self-I/O exemption. A forged PID cannot create a trusted GateClient identity.
+
 The current LAB communication path has one Filter Manager client connection and one synchronous GateClient handle. Multiple kernel requests can encounter the bounded admission path, while user-mode reply-required preservation is serialized so each `FilterReplyMessage` completes before the next blocking receive. Configurable message slots bound no-reply evidence/completion work; they are not a claim of parallel preservation decisions.
 
 Important exceptions are explicit in THREAT_MODEL.md:

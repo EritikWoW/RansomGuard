@@ -80,6 +80,12 @@ foreach($required in @(
     'preexisting-map.bin',
     'writableViewPresent',
     'postactivation-map.bin',
+    'unexpectedDisconnectLatched=$false',
+    'degradedWriteDenied=$false',
+    'degradedReconnectDenied=$false',
+    'degradedResetPassed=$false',
+    'Reset-LabFilterAfterDegradedStop',
+    'FilterConnectCommunicationPort failed',
     'BaselineVerified writable-section evidence',
     'paging-write evidence',
     'originalSha256',
@@ -114,6 +120,18 @@ foreach($required in @(
     'driverCatSha256'
 )){
     if($runtime -notmatch [regex]::Escape($required)){throw "Runtime integration script missing invariant: $required"}
+}
+
+$hardStop=$runtime.IndexOf("Stop-LabProcess $gatePost 'post-activation gate'")
+$degradedWrite=$runtime.IndexOf('$summary.degradedWriteDenied=$true',$hardStop)
+$degradedReconnect=$runtime.IndexOf('$summary.degradedReconnectDenied=$true',$degradedWrite)
+$degradedReset=$runtime.IndexOf('Reset-LabFilterAfterDegradedStop',$degradedReconnect)
+if($hardStop -lt 0 -or $degradedWrite -lt 0 -or $degradedReconnect -lt 0 -or $degradedReset -lt 0 -or
+   $hardStop -gt $degradedWrite -or $degradedWrite -gt $degradedReconnect -or $degradedReconnect -gt $degradedReset){
+    throw 'Runtime GateClient-death qualification must hard-stop the active client, prove write denial, prove reconnect denial, then reset the driver.'
+}
+if($runtime -notmatch [regex]::Escape('Protected file changed despite degraded-protected write denial.')){
+    throw 'Runtime degraded-protection proof must hash-check the protected file after denied mutation.'
 }
 
 $readiness=Get-Content -LiteralPath $readinessScript -Raw

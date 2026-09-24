@@ -511,11 +511,15 @@ if($containOption -lt 0 -or $containRejectSystem -lt 0 -or $containRejectSelf -l
 $transitionOption=$text.IndexOf('case "--contain-after-pid"')
 $transitionRejectSystem=$text.IndexOf('parsedTransitionPid <= 4',$transitionOption)
 $transitionRejectSelf=$text.IndexOf('parsedTransitionPid == Environment.ProcessId',$transitionOption)
-$transitionMutualExclusion=$text.IndexOf('--contain-pid and --contain-after-pid are mutually exclusive.')
+$transitionMutualExclusion=$text.IndexOf('--contain-pid, --scope-ambiguity-pid and --contain-after-pid are mutually exclusive.')
 $transitionThresholdBinding=$text.IndexOf('Containment thresholds require --contain-after-pid.')
+$scopeOption=$text.IndexOf('case "--scope-ambiguity-pid"')
+$scopeRejectSystem=$text.IndexOf('parsedScopePid <= 4',$scopeOption)
+$scopeRejectSelf=$text.IndexOf('parsedScopePid == Environment.ProcessId',$scopeOption)
 if($transitionOption -lt 0 -or $transitionRejectSystem -lt 0 -or $transitionRejectSelf -lt 0 -or
+   $scopeOption -lt 0 -or $scopeRejectSystem -lt 0 -or $scopeRejectSelf -lt 0 -or
    $transitionMutualExclusion -lt 0 -or $transitionThresholdBinding -lt 0){
-  throw 'Event-bound containment CLI must be explicit, single-target and threshold-bounded.'
+  throw 'Containment/scope-probe CLI must be explicit, single-target and threshold-bounded.'
 }
 
 $triggerStart=$text.IndexOf('sealed class LabContainmentTrigger')

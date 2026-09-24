@@ -505,6 +505,36 @@ if($preCreateStart -lt 0 -or $preCreateEnd -lt 0 -or $preWriteStart -lt 0 -or $p
 $preCreateBlock=$src.Substring($preCreateStart,$preCreateEnd-$preCreateStart)
 $preWriteBlock=$src.Substring($preWriteStart,$preWriteEnd-$preWriteStart)
 $preSetBlock=$src.Substring($preSetStart,$preSetEnd-$preSetStart)
+
+foreach($required in @(
+    'BOOLEAN gateClientRequestor',
+    'gateClientRequestor = RgIsGateClientRequestor(Data)',
+    'InterlockedCompareExchange(&gPreflightProbeArmed, 0, 0) == 0',
+    'if (gateClientRequestor)',
+    'RgEventPathMatchesGateRoot(&event)',
+    'InterlockedExchange(&gPreflightProbeArmed, 0) == 1',
+    'postContext->ActivationPreflight = 1'
+)){
+    if($preCreateBlock -notmatch [regex]::Escape($required)){
+        throw "GateClient activation-preflight process-object invariant missing: $required"
+    }
+}
+if($preCreateBlock -match 'if\s*\(RgIsGateClientRequestor\(Data\)\)\s*\{\s*return\s+FLT_PREOP_SUCCESS_NO_CALLBACK'){
+    throw 'GateClient CREATE self-exemption must not bypass an explicitly armed activation-preflight probe.'
+}
+if($preCreateBlock -match [regex]::Escape('event.ProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId')){
+    throw 'Activation preflight must use exact GateClient PEPROCESS identity, not PID equality.'
+}
+$clientIdentity=$preCreateBlock.IndexOf('gateClientRequestor = RgIsGateClientRequestor(Data)')
+$populateCreate=$preCreateBlock.IndexOf('RgPopulateEvent(&event, Data, FltObjects, RgEventCreate, 0)',$clientIdentity)
+$preflightBranch=$preCreateBlock.IndexOf('if (gateClientRequestor)',$populateCreate)
+$preflightArm=$preCreateBlock.IndexOf('InterlockedExchange(&gPreflightProbeArmed, 0) == 1',$preflightBranch)
+$scopeAfterPreflight=$preCreateBlock.IndexOf('RgClassifyMutationScope(&event, FltObjects)',$preflightArm)
+if($clientIdentity -lt 0 -or $populateCreate -lt 0 -or $preflightBranch -lt 0 -or $preflightArm -lt 0 -or $scopeAfterPreflight -lt 0 -or
+   $clientIdentity -gt $populateCreate -or $populateCreate -gt $preflightBranch -or $preflightBranch -gt $preflightArm -or $preflightArm -gt $scopeAfterPreflight){
+    throw 'Exact GateClient identity must be captured before CREATE population, and the armed activation-preflight branch must execute before ordinary scope classification.'
+}
+
 $readOnlyCreateBypass=$preCreateBlock.IndexOf('if (!RgCreateMayMutate(&event))')
 $createGateCall=$preCreateBlock.LastIndexOf('RgGateEvent(Data, &event')
 if($readOnlyCreateBypass -lt 0 -or $createGateCall -lt 0 -or $readOnlyCreateBypass -gt $createGateCall){

@@ -1,8 +1,12 @@
-# RansomGuard 0.8.2.0
+# RansomGuard 0.8.3.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
 and recover data through rollback plus adaptive crypto analysis.
+
+## Hard-link alias boundary
+
+0.8.3.0 closes the protected-root hard-link alias gap without introducing a new wire message. Activation now refuses any ordinary protected file whose frozen exact handle reports `NumberOfLinks != 1`. While a LAB or ProductionGate session is active/preflighting/degraded, `FileLinkInformation` and `FileLinkInformationEx` are classified by both the existing source path and the proposed new-link destination; touching the protected root fails closed, ambiguity on the protected volume fails closed, and proven outside-to-outside links remain outside the gate. This keeps protected file identity single-named for the current v1 recovery model.
 
 ## ProductionGate wire separation
 
@@ -163,7 +167,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.8.2.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.8.3.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 Manual disposable-VM runtime workflows:
 

@@ -22,6 +22,10 @@ $program=Get-Content -LiteralPath $programPath -Raw
 $auth=Get-Content -LiteralPath $authPath -Raw
 $build=Get-Content -LiteralPath $buildPath -Raw
 
+if($core -notmatch [regex]::Escape('bool ReadyForLifecycle')){
+    throw 'ProtectionPackageAdmission must expose an explicit ReadyForLifecycle claim.'
+}
+
 foreach($required in @(
     'ProductionProtection',
     'ProductionProvider = "RansomGuard"',
@@ -56,8 +60,7 @@ foreach($required in @(
     'INF DriverVer does not match the production package descriptor.',
     'SYS-to-CAT membership is not yet cryptographically verified; driver load is refused.',
     '"CatalogMembershipPending"',
-    'false,',
-    'ReadyForLifecycle'
+    'false,'
 )){
     if($verifier -notmatch [regex]::Escape($required)){throw "Protection package verifier invariant missing: $required"}
 }

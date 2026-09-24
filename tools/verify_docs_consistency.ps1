@@ -26,7 +26,7 @@ foreach($required in @(
     @('Guided setup',"# RansomGuard $version - guided setup",$guided),
     @('Audit quick start',"RansomGuard $version - audit-only quick start",$quick),
     @('Changelog',"# RansomGuard $version",$changelog),
-    @('Product target protocol','current engineering branch uses protocol v17',$target),
+    @('Product target protocol','current engineering branch uses protocol v18',$target),
     @('Product target build hardening','0.7.27 hardens build provenance',$target),
     @('Product target concurrency stress','0.7.28 adds a dedicated bounded-concurrency runtime qualification',$target),
     @('Product target fault campaign','0.7.29 adds separate storage-pressure and real-reboot fault qualifications',$target),
@@ -36,7 +36,8 @@ foreach($required in @(
     @('Product target protected-volume scope','0.7.33 introduces protocol v17 and closes the previous ordinary user-mode name-query fail-open on the negotiated protected volume',$target),
     @('Product target Enforce foundation','0.8.0 starts the production-enforcement integration layer above the already qualified protocol-v17 LAB core',$target),
     @('Product target protection package','0.8.1 adds the production protection-package trust/admission boundary above the 0.8.0 Enforce state foundation',$target),
-    @('Protection package document','Version 0.8.1 defines the trust/admission boundary for the future Production Enforce driver lifecycle',$protectionPackage),
+    @('Product target ProductionGate','0.8.2 introduces protocol v18 and a distinct ProductionGate client mode',$target),
+    @('Protection package document','Version 0.8.2 retains the trust/admission boundary for the future Production Enforce driver lifecycle',$protectionPackage),
     @('Protection package catalog membership','The driver SYS and INF must each verify as members of the supplied signed CAT',$protectionPackage)
 )){
     $label=[string]$required[0]
@@ -57,4 +58,4 @@ foreach($stale in @(
     }
 }
 
-Write-Host "Documentation consistency gate PASSED: operator docs, product target, README and changelog match version $version, protocol v17, qualified 0.7.x kernel milestones, 0.8.0 Enforce state foundation and 0.8.1 production package admission."
+Write-Host "Documentation consistency gate PASSED: operator docs, product target, README and changelog match version $version, protocol v18, qualified 0.7.x kernel milestones, 0.8.0 Enforce state foundation, 0.8.1 package admission and the 0.8.2 ProductionGate contract."

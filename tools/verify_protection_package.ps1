@@ -46,6 +46,8 @@ foreach($required in @(
 foreach($required in @(
     'Path.Combine(Path.GetFullPath(applicationBaseDirectory), DirectoryName)',
     'Path.Combine(Path.GetFullPath(applicationBaseDirectory), "RansomGuard.Service.exe")',
+    'Environment.ProcessPath',
+    'The running process image is not the fixed RansomGuard.Service.exe beside the protection package.',
     'Path.Combine(root, "GateClient", "RansomGuard.GateClient.exe")',
     'Path.Combine(driverDirectory, "RansomGuardMinifilter.sys")',
     'Path.Combine(driverDirectory, "RansomGuardMinifilter.inf")',

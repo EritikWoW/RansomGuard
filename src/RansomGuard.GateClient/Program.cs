@@ -2151,8 +2151,48 @@ static class LabRootPolicy
     }
 }
 
+static class ProductionRootPolicy
+{
+    public static void Validate(string root)
+    {
+        var full = Path.GetFullPath(root).TrimEnd('\');
+        var drive = Path.GetPathRoot(full)?.TrimEnd('\');
+        if (string.IsNullOrWhiteSpace(drive) || drive.Length != 2 || drive[1] != ':' ||
+            full.Equals(drive, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("ProductionGate root must be an explicit directory on a local drive.");
+        if (!Directory.Exists(full))
+            throw new DirectoryNotFoundException(full);
+
+        for (var current = full; !string.IsNullOrWhiteSpace(current); current = Path.GetDirectoryName(current))
+        {
+            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException("ProductionGate root/ancestor cannot be a reparse point: " + current);
+            if (PathPolicy.Equal(current, drive))
+                break;
+        }
+
+        foreach (var systemPath in new[]
+        {
+            Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData)
+        }.Where(x => !string.IsNullOrWhiteSpace(x)))
+        {
+            if (PathPolicy.Under(full, systemPath))
+                throw new InvalidOperationException(
+                    "ProductionGate root must not be inside Windows, Program Files, or ProgramData.");
+        }
+    }
+}
+
 static class PathPolicy
 {
+    public static bool Equal(string left, string right) =>
+        Path.GetFullPath(left).TrimEnd('\').Equals(
+            Path.GetFullPath(right).TrimEnd('\'),
+            StringComparison.OrdinalIgnoreCase);
+
     public static bool Under(string? path, string root)
     {
         if (string.IsNullOrWhiteSpace(path)) return false;

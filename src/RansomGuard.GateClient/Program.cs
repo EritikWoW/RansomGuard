@@ -547,11 +547,32 @@ await using (var lifecycleReservation = await storageBudget.ReserveAsync(
 
 if (cleanShutdown)
 {
-    var deactivationReply = Native.Control(port, new RgControlRequest
+    RgControlReply deactivationReply = default;
+    const int deactivationAttempts = 30;
+    for (var attempt = 1; attempt <= deactivationAttempts; attempt++)
     {
-        ProtocolVersion = 16,
-        Command = (uint)RgControlCommand.DeactivateGate
-    });
+        deactivationReply = Native.Control(port, new RgControlRequest
+        {
+            ProtocolVersion = 16,
+            Command = (uint)RgControlCommand.DeactivateGate
+        });
+        if (deactivationReply.Status == 0)
+            break;
+
+        if (deactivationReply.ProtocolVersion != 16 ||
+            deactivationReply.Command != (uint)RgControlCommand.DeactivateGate ||
+            deactivationReply.GateActivated != 1 ||
+            deactivationReply.ProtectionState != (uint)RgProtectionState.Protected)
+            throw new InvalidOperationException(
+                $"Kernel returned an inconsistent state while draining for deactivation. NTSTATUS=0x{deactivationReply.Status:X8}, active={deactivationReply.GateActivated}, state={(RgProtectionState)deactivationReply.ProtectionState}.");
+
+        if (attempt == deactivationAttempts)
+            throw new InvalidOperationException(
+                $"Kernel remained busy for clean gate deactivation after {deactivationAttempts} attempts. NTSTATUS=0x{deactivationReply.Status:X8}.");
+
+        await Task.Delay(100).ConfigureAwait(false);
+    }
+
     if (deactivationReply.ProtocolVersion != 16 ||
         deactivationReply.Command != (uint)RgControlCommand.DeactivateGate ||
         deactivationReply.Status != 0 ||

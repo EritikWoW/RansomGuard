@@ -92,7 +92,7 @@ static NTSTATUS RgGetNormalizedDestinationNameInformation(
 static NTSTATUS RgReadDeleteDispositionFlags(_In_ PFLT_CALLBACK_DATA Data, _Out_ PULONG Flags);
 static VOID RgPopulateRenameDestination(_Inout_ PRG_EVENT Event, _Inout_ PFLT_CALLBACK_DATA Data,
                                         _In_ PCFLT_RELATED_OBJECTS FltObjects);
-static BOOLEAN RgPathMatchesGateRoot(_In_ ULONG PathStatus, _In_reads_z_ const WCHAR *Path);
+static BOOLEAN RgPathMatchesGateRoot(_In_ ULONG PathStatus, _In_z_ const WCHAR *Path);
 static BOOLEAN RgEventPathMatchesGateRoot(_In_ const RG_EVENT *Event);
 static BOOLEAN RgEventDestinationPathMatchesGateRoot(_In_ const RG_EVENT *Event);
 static BOOLEAN RgIsOnGateVolume(_In_ PCFLT_RELATED_OBJECTS FltObjects);

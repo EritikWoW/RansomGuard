@@ -1,8 +1,14 @@
-# RansomGuard 0.8.1.0
+# RansomGuard 0.8.2.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
 and recover data through rollback plus adaptive crypto analysis.
+
+## ProductionGate wire separation
+
+0.8.2.0 advances the engineering minifilter/GateClient wire contract to protocol v18 and introduces a distinct `ProductionGate` client mode. LAB and ProductionGate share the already-qualified preserve/preflight/degraded-protection pipeline, but the kernel rejects LAB-only containment reply flags, containment controls and scope-ambiguity fault injection in ProductionGate. A degraded protected session retains its original gate profile as well as the exact root/volume, so it cannot reconnect under a different policy profile. GateClient production profile also rejects LAB prepare/fault/reconciliation/shutdown/containment CLI and uses the fixed service rollback repository under ProgramData.
+
+This is still a protocol/lifecycle boundary milestone, not production activation. The normal service does not yet install/load/attach the driver or spawn/supervise ProductionGate, so `Mode=Enforce` still reports `EnforceUnavailable`.
 
 ## Production protection package admission
 
@@ -14,7 +20,7 @@ The default normal bundle still excludes SYS/CAT/INF/GateClient and remains Audi
 
 0.8.0.0 establishes the normal-service protection-mode contract without silently promoting the Engineering LAB driver into production. Configuration schema 4 accepts explicit `Mode=Audit` or `Mode=Enforce`; Enforce requires one explicit non-drive protected root, keeps the signed-driver requirement mandatory, and keeps automatic containment disabled in this foundation milestone. The service publishes an explicit protection state machine (`EnforceStarting`, `EnforceUnavailable`, `KernelConnected`, `Protected`, `DegradedProtected`, `Maintenance`, `Failed`) and never derives `KernelEnforcementActive` from SCM driver state alone. Rollback repository validation is a prerequisite for any future kernel-start transition.
 
-The default normal package remains Audit and still contains no driver/GateClient production lifecycle. Requesting Enforce in this milestone therefore reports `EnforceUnavailable` rather than falling back to a false Protected claim. The previously qualified protocol-v17 LAB minifilter remains the preservation/enforcement core that the next production-lifecycle milestone will connect.
+The default normal package remains Audit and still contains no driver/GateClient production lifecycle. Requesting Enforce in this milestone therefore reports `EnforceUnavailable` rather than falling back to a false Protected claim. The previously qualified protocol-v17 preservation behavior is retained by the protocol-v18 engineering core; production service lifecycle activation remains a separate milestone.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 
@@ -33,7 +39,7 @@ undone by truncating the recovered copy to that length.
 Rename, delete-disposition and explicit truncate/allocation-length operations remain on the conservative
 **full-file pre-image** path for now.
 
-The engineering minifilter protocol is now v17 and reports CREATE, WRITE, RENAME, DELETE and TRUNCATE-class metadata operations; v17 retains the v16 protection-health/deactivation state machine and additionally binds the protected NT volume for ambiguous-scope fail-safe classification. DELETE can emit correlated no-reply `DeleteDispositionResult` and `DeleteFinalized` events without changing the fixed RG_EVENT wire size. A successful disposition result proves only that the filesystem accepted the disposition request; exact-handle cleanup is recorded separately and is not treated as proof that the pathname has disappeared.
+The engineering minifilter protocol is now v18 and reports CREATE, WRITE, RENAME, DELETE and TRUNCATE-class metadata operations; v18 retains the v17 protected-volume scope and v16 protection-health/deactivation state machine while separating LAB and ProductionGate client profiles. DELETE can emit correlated no-reply `DeleteDispositionResult` and `DeleteFinalized` events without changing the fixed RG_EVENT wire size. A successful disposition result proves only that the filesystem accepted the disposition request; exact-handle cleanup is recorded separately and is not treated as proof that the pathname has disappeared.
 
 For CREATE, the gate distinguishes Windows create dispositions instead of treating every open as destructive:
 existing `FILE_SUPERSEDE`, `FILE_OVERWRITE` and `FILE_OVERWRITE_IF` require a durable full pre-image;
@@ -157,7 +163,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.8.1.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.8.2.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 Manual disposable-VM runtime workflows:
 

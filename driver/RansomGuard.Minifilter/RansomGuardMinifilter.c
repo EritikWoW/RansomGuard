@@ -2274,6 +2274,7 @@ static VOID RgDisconnect(PVOID ConnectionCookie)
 {
     LONG protectionRequired;
     LONG gracefulDisconnect;
+    PFLT_VOLUME releaseVolume = NULL;
 
     UNREFERENCED_PARAMETER(ConnectionCookie);
 
@@ -2302,6 +2303,9 @@ static VOID RgDisconnect(PVOID ConnectionCookie)
     } else {
         InterlockedExchange(&gProtectionRequired, 0);
         InterlockedExchange(&gDegradedProtected, 0);
+        releaseVolume = gGateVolume;
+        gGateVolume = NULL;
+        gGateVolumeLengthBytes = 0;
         gGateRootLengthBytes = 0;
         RtlSecureZeroMemory(gGateRoot, sizeof(gGateRoot));
     }
@@ -2314,6 +2318,9 @@ static VOID RgDisconnect(PVOID ConnectionCookie)
     ExReleaseFastMutex(&gPortMutex);
 
     RgWaitForPortUsers();
+    if (releaseVolume != NULL) {
+        FltObjectDereference(releaseVolume);
+    }
 }
 
 NTSTATUS RgInstanceSetup(PCFLT_RELATED_OBJECTS FltObjects, FLT_INSTANCE_SETUP_FLAGS Flags,
@@ -2336,6 +2343,8 @@ NTSTATUS RgInstanceSetup(PCFLT_RELATED_OBJECTS FltObjects, FLT_INSTANCE_SETUP_FL
 
 NTSTATUS RgUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
 {
+    PFLT_VOLUME releaseVolume = NULL;
+
     UNREFERENCED_PARAMETER(Flags);
     InterlockedExchange(&gUnloading, 1);
     InterlockedExchange(&gClientConnected, 0);
@@ -2352,11 +2361,19 @@ NTSTATUS RgUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
     }
 
     ExAcquireFastMutex(&gPortMutex);
+    releaseVolume = gGateVolume;
+    gGateVolume = NULL;
+    gGateVolumeLengthBytes = 0;
+    gGateRootLengthBytes = 0;
+    RtlSecureZeroMemory(gGateRoot, sizeof(gGateRoot));
     if (gClientPort != NULL) {
         FltCloseClientPort(gFilter, &gClientPort);
     }
     ExReleaseFastMutex(&gPortMutex);
     RgWaitForPortUsers();
+    if (releaseVolume != NULL) {
+        FltObjectDereference(releaseVolume);
+    }
 
     ExWaitForRundownProtectionRelease(&gRundown);
     if (gFilter != NULL) {

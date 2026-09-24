@@ -125,6 +125,34 @@ rejected=false;try{
     ProtectionStateMachine.ValidateSnapshot(new ProtectionStatusDto("Enforce","Protected",true,true,true,true,"invalid containment claim",now));
 }catch(InvalidOperationException){rejected=true;}
 Check(rejected,"foundation cannot publish automatic containment even in Protected state");
+
+var productionHash=new string('A',64);
+var productionPackage=new ProtectionPackageDescriptor(
+    1,"ProductionProtection","0.8.1.0",17,"RansomGuard","385201",
+    productionHash,productionHash,productionHash,productionHash);
+ProtectionPackagePolicy.ValidateDescriptor(productionPackage,"0.8.1.0");
+Check(true,"production protection package descriptor accepted");
+rejected=false;try{
+    ProtectionPackagePolicy.ValidateDescriptor(productionPackage with{Altitude=ProtectionPackagePolicy.LabPlaceholderAltitude},"0.8.1.0");
+}catch(InvalidOperationException){rejected=true;}
+Check(rejected,"LAB placeholder altitude rejected from production package");
+rejected=false;try{
+    ProtectionPackagePolicy.ValidateDescriptor(productionPackage with{Provider="RansomGuard Lab"},"0.8.1.0");
+}catch(InvalidOperationException){rejected=true;}
+Check(rejected,"LAB provider rejected from production package");
+rejected=false;try{
+    ProtectionPackagePolicy.ValidateDescriptor(productionPackage with{Protocol=16},"0.8.1.0");
+}catch(InvalidOperationException){rejected=true;}
+Check(rejected,"wrong protection package protocol rejected");
+rejected=false;try{
+    ProtectionPackagePolicy.ValidateDescriptor(productionPackage with{DriverSysSha256="not-a-hash"},"0.8.1.0");
+}catch(InvalidOperationException){rejected=true;}
+Check(rejected,"malformed protection package hash rejected");
+rejected=false;try{
+    ProtectionPackagePolicy.ValidateDescriptor(productionPackage,"0.8.0.0");
+}catch(InvalidOperationException){rejected=true;}
+Check(rejected,"protection package version mismatch rejected");
+
 var root=@"C:\Data";var canary=@"C:\Data\canary.txt";
 RiskEngine NewEngine()=>new(s,new[]{root},new[]{canary});
 FileSignal E(string p,FileKind kind,int ms=0,ProcessKey? pk=null)=>new(now.AddMilliseconds(ms),now.AddMilliseconds(ms),pk??key,"anything.exe",path,p,kind);

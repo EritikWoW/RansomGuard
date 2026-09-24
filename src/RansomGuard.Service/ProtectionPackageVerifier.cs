@@ -55,6 +55,8 @@ internal static class ProtectionPackageVerifier
                 !File.Exists(sysPath) || !File.Exists(infPath) || !File.Exists(catPath))
                 return Rejected("Incomplete", true, "Production protection package layout is incomplete.", observed);
 
+            ValidateExactLayout(root);
+
             ProtectionPackageDescriptor descriptor;
             using (var descriptorFile = OpenExactFile(descriptorPath, 2, MaxDescriptorBytes))
             {
@@ -160,6 +162,39 @@ internal static class ProtectionPackageVerifier
         {
             return Rejected("Rejected", true, ex.GetType().Name + ": " + ex.Message, observed);
         }
+    }
+
+    private static void ValidateExactLayout(string root)
+    {
+        static string[] Names(string directory) =>
+            Directory.EnumerateFileSystemEntries(directory)
+                .Select(Path.GetFileName)
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .Select(name => name!)
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+        var rootNames = Names(root);
+        var expectedRoot = new[] { "Driver", "GateClient", DescriptorName }
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray();
+        if (!rootNames.SequenceEqual(expectedRoot, StringComparer.OrdinalIgnoreCase))
+            throw new InvalidDataException("Protection package root contains missing or unexpected entries.");
+
+        var gateDirectory = Path.Combine(root, "GateClient");
+        var gateNames = Names(gateDirectory);
+        if (!gateNames.SequenceEqual(new[] { "RansomGuard.GateClient.exe" }, StringComparer.OrdinalIgnoreCase))
+            throw new InvalidDataException("Protection/GateClient contains missing or unexpected entries.");
+
+        var driverDirectory = Path.Combine(root, "Driver");
+        var driverNames = Names(driverDirectory);
+        var expectedDriver = new[]
+        {
+            "RansomGuardMinifilter.cat",
+            "RansomGuardMinifilter.inf",
+            "RansomGuardMinifilter.sys"
+        };
+        if (!driverNames.SequenceEqual(expectedDriver, StringComparer.OrdinalIgnoreCase))
+            throw new InvalidDataException("Protection/Driver contains missing or unexpected entries.");
     }
 
     private static FileStream OpenExactFile(string path, long minBytes, long maxBytes)

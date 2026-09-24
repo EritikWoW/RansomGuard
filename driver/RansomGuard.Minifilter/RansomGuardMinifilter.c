@@ -382,9 +382,9 @@ FLT_PREOP_CALLBACK_STATUS RgPreAcquireForSectionSynchronization(
 FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjects, PVOID *CompletionContext)
 {
     RG_EVENT event;
-    NTSTATUS status;
     LONG mode;
     BOOLEAN degraded;
+    RG_SCOPE_CLASSIFICATION scope;
     ULONG gateError = 0;
 
     UNREFERENCED_PARAMETER(CompletionContext);
@@ -409,10 +409,13 @@ FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJE
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    status = RgPopulateEvent(&event, Data, FltObjects, RgEventWrite, 0);
-    if (!NT_SUCCESS(status) || !RgEventIsInsideGateRoot(&event)) {
-        // LAB gate is intentionally scoped. Unresolved/out-of-root paths fail open rather than risking OS-wide I/O loss.
+    (void)RgPopulateEvent(&event, Data, FltObjects, RgEventWrite, 0);
+    scope = RgClassifyMutationScope(&event, FltObjects);
+    if (scope == RgScopeOutside) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+    if (scope == RgScopeAmbiguous) {
+        return RgCompleteDenied(Data);
     }
 
     if (degraded) {
@@ -443,6 +446,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
     NTSTATUS status;
     LONG mode;
     BOOLEAN degraded;
+    RG_SCOPE_CLASSIFICATION scope;
     ULONG gateError = 0;
     ULONG infoClass;
 
@@ -468,8 +472,12 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
     }
 
     status = RgPopulateEvent(&event, Data, FltObjects, eventType, infoClass);
-    if (!NT_SUCCESS(status) || !RgEventIsInsideGateRoot(&event)) {
+    scope = RgClassifyMutationScope(&event, FltObjects);
+    if (scope == RgScopeOutside) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+    if (scope == RgScopeAmbiguous) {
+        return RgCompleteDenied(Data);
     }
 
     if (degraded) {

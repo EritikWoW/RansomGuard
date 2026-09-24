@@ -6,11 +6,13 @@ Read [THREAT_MODEL.md](THREAT_MODEL.md) first. It is the canonical statement of 
 
 The normal RansomGuard package defaults to Audit and does not install or load the Engineering LAB minifilter. Version 0.8.1 adds fail-closed admission for a future ProductionProtection package on top of the 0.8.0 Enforce state contract. Admission binds the package to the actual running service image and exact version/protocol/hashes. GateClient and the driver catalog must use the same signer as the running service, and SYS/INF must verify as catalog members of that supplied signed catalog. It still does not activate the production driver/GateClient lifecycle. An Enforce request therefore reports `EnforceUnavailable` rather than claiming kernel protection.
 
-The Engineering LAB minifilter is restricted to disposable test environments and explicit test data. Its current user/kernel wire contract is protocol v17. Protocol v17 binds the negotiated root to an exact Filter Manager volume object so destructive user-mode name-query ambiguity can fail safe only on that protected volume. Its altitude is an unassigned LAB placeholder and its test-signing path is not a production trust anchor.
+The minifilter/GateClient wire contract is protocol v18. The Engineering LAB path remains restricted to disposable test environments and explicit test data. Protocol v18 retains the v17 exact Filter Manager volume binding for protected-root ambiguity and adds a distinct ProductionGate client mode. ProductionGate cannot use LAB containment reply flags or LAB containment/scope-ambiguity control commands, and an activated session retains its exact client mode across degraded reconnect. The checked-in INF still uses an unassigned LAB placeholder altitude and its test-signing path is not a production trust anchor.
 
 No claim is made that the current product is tamper-proof against a local administrator, a malicious kernel component/BYOVD path, physical/boot compromise or a compromised signing/build system.
 
 Protection-package admission rejects the Engineering LAB provider and placeholder altitude, but a numeric altitude in a local descriptor is not proof that Microsoft assigned it. Production release governance must bind the shipped INF/descriptor to the external Microsoft altitude assignment and controlled production signing identity.
+
+0.8.2 ProductionGate is a protocol/security-contract change. Hosted source/compile tests are necessary but do not establish its runtime guarantee; exact-head disposable-VM activation, preserve-before-allow, LAB-control isolation and degraded-reconnect evidence are required before merge.
 
 ## Administrative boundary
 

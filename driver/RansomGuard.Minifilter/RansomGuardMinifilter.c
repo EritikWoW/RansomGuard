@@ -93,6 +93,12 @@ static NTSTATUS RgGetNormalizedDestinationNameInformation(
 static NTSTATUS RgReadDeleteDispositionFlags(_In_ PFLT_CALLBACK_DATA Data, _Out_ PULONG Flags);
 static VOID RgPopulateRenameDestination(_Inout_ PRG_EVENT Event, _Inout_ PFLT_CALLBACK_DATA Data,
                                         _In_ PCFLT_RELATED_OBJECTS FltObjects);
+static BOOLEAN RgIsHardLinkSetInfo(_In_ FILE_INFORMATION_CLASS InformationClass);
+static VOID RgPopulateLinkDestination(_Inout_ PRG_EVENT Event, _Inout_ PFLT_CALLBACK_DATA Data,
+                                      _In_ PCFLT_RELATED_OBJECTS FltObjects);
+static RG_SCOPE_CLASSIFICATION RgClassifyHardLinkScope(
+    _In_ const RG_EVENT *Event,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects);
 static BOOLEAN RgPathMatchesGateRoot(_In_ ULONG PathStatus, _In_z_ const WCHAR *Path);
 static BOOLEAN RgEventPathMatchesGateRoot(_In_ const RG_EVENT *Event);
 static BOOLEAN RgEventDestinationPathMatchesGateRoot(_In_ const RG_EVENT *Event);
@@ -487,6 +493,34 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
     }
 
     infoClass = (ULONG)Data->Iopb->Parameters.SetFileInformation.FileInformationClass;
+
+    if (RgIsHardLinkSetInfo((FILE_INFORMATION_CLASS)infoClass)) {
+        degraded = RgIsDegradedProtected();
+        mode = RgCurrentClientMode();
+
+        // Audit mode preserves its current non-blocking semantics. Production/LAB gate modes
+        // deliberately do not allow hard-link topology changes that touch the protected root:
+        // alias creation would otherwise let a later outside path mutate the same FileId.
+        if (mode == RgClientAudit && !degraded) {
+            return FLT_PREOP_SUCCESS_NO_CALLBACK;
+        }
+        if (!RgIsGateClientMode(mode) && !degraded) {
+            return FLT_PREOP_SUCCESS_NO_CALLBACK;
+        }
+
+        (void)RgPopulateEvent(&event, Data, FltObjects, RgEventInvalid, infoClass);
+        RgPopulateLinkDestination(&event, Data, FltObjects);
+        scope = RgClassifyHardLinkScope(&event, FltObjects);
+        if (scope == RgScopeOutside) {
+            return FLT_PREOP_SUCCESS_NO_CALLBACK;
+        }
+
+        // Inside or ambiguous-on-protected-volume is fail-closed. The conservative v1
+        // policy is to keep protected regular files single-linked rather than attempting
+        // recovery semantics for alias-topology mutations.
+        return RgCompleteDenied(Data);
+    }
+
     if (!RgIsInterestingSetInfo((FILE_INFORMATION_CLASS)infoClass, &eventType)) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
@@ -804,6 +838,105 @@ static VOID RgPopulateRenameDestination(PRG_EVENT Event, PFLT_CALLBACK_DATA Data
     }
     Event->DestinationPath[chars] = L'\0';
     FltReleaseFileNameInformation(destinationInfo);
+}
+
+static BOOLEAN RgIsHardLinkSetInfo(FILE_INFORMATION_CLASS InformationClass)
+{
+    return InformationClass == FileLinkInformation ||
+           InformationClass == FileLinkInformationEx;
+}
+
+static VOID RgPopulateLinkDestination(PRG_EVENT Event, PFLT_CALLBACK_DATA Data,
+                                      PCFLT_RELATED_OBJECTS FltObjects)
+{
+    PFILE_LINK_INFORMATION linkInfo;
+    PFLT_FILE_NAME_INFORMATION destinationInfo = NULL;
+    ULONG bufferLength;
+    ULONG minimumLength = FIELD_OFFSET(FILE_LINK_INFORMATION, FileName);
+    ULONG chars;
+    NTSTATUS status;
+    FILE_INFORMATION_CLASS infoClass;
+
+    Event->DestinationPathStatus = RgPathUnknown;
+    infoClass = Data->Iopb->Parameters.SetFileInformation.FileInformationClass;
+    bufferLength = Data->Iopb->Parameters.SetFileInformation.Length;
+    linkInfo = (PFILE_LINK_INFORMATION)Data->Iopb->Parameters.SetFileInformation.InfoBuffer;
+
+    if (linkInfo == NULL || bufferLength < minimumLength ||
+        linkInfo->FileNameLength == 0 ||
+        linkInfo->FileNameLength > (bufferLength - minimumLength) ||
+        (linkInfo->FileNameLength % sizeof(WCHAR)) != 0) {
+        Event->DestinationPathStatus = RgPathQueryFailed;
+        return;
+    }
+
+    if (infoClass == FileLinkInformationEx) {
+        Event->Flags = *(PULONG)linkInfo;
+    } else {
+        Event->Flags = linkInfo->ReplaceIfExists ? 1u : 0u;
+    }
+
+    status = RgGetNormalizedDestinationNameInformation(
+        FltObjects,
+        linkInfo->RootDirectory,
+        linkInfo->FileName,
+        linkInfo->FileNameLength,
+        &destinationInfo);
+
+    if (!NT_SUCCESS(status) || destinationInfo == NULL) {
+        Event->DestinationPathStatus = RgPathQueryFailed;
+        return;
+    }
+
+    chars = destinationInfo->Name.Length / sizeof(WCHAR);
+    if (chars >= RG_PATH_CHARS) {
+        chars = RG_PATH_CHARS - 1;
+        Event->DestinationPathStatus = RgPathTruncated;
+    } else {
+        Event->DestinationPathStatus = RgPathResolved;
+    }
+
+    if (chars != 0) {
+        RtlCopyMemory(Event->DestinationPath, destinationInfo->Name.Buffer, chars * sizeof(WCHAR));
+    }
+    Event->DestinationPath[chars] = L'\0';
+    FltReleaseFileNameInformation(destinationInfo);
+}
+
+static RG_SCOPE_CLASSIFICATION RgClassifyHardLinkScope(
+    const RG_EVENT *Event,
+    PCFLT_RELATED_OBJECTS FltObjects)
+{
+    RG_SCOPE_CLASSIFICATION sourceScope;
+    RG_SCOPE_CLASSIFICATION destinationScope;
+
+    if (Event == NULL) {
+        return RgScopeOutside;
+    }
+
+    if (Event->PathStatus == RgPathResolved || Event->PathStatus == RgPathTruncated) {
+        sourceScope = RgEventPathMatchesGateRoot(Event) ? RgScopeInside : RgScopeOutside;
+    } else {
+        sourceScope = RgScopeAmbiguous;
+    }
+
+    if (Event->DestinationPathStatus == RgPathResolved ||
+        Event->DestinationPathStatus == RgPathTruncated) {
+        destinationScope = RgEventDestinationPathMatchesGateRoot(Event)
+            ? RgScopeInside
+            : RgScopeOutside;
+    } else {
+        destinationScope = RgScopeAmbiguous;
+    }
+
+    if (sourceScope == RgScopeInside || destinationScope == RgScopeInside) {
+        return RgScopeInside;
+    }
+    if (sourceScope == RgScopeOutside && destinationScope == RgScopeOutside) {
+        return RgScopeOutside;
+    }
+
+    return RgIsOnGateVolume(FltObjects) ? RgScopeAmbiguous : RgScopeOutside;
 }
 
 static NTSTATUS RgCreateRenamePostContext(PFLT_CALLBACK_DATA Data,

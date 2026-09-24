@@ -79,6 +79,33 @@ function Stop-LabProcess([System.Diagnostics.Process]$Process,[string]$Descripti
     }
 }
 
+function Stop-GateGracefully(
+    [System.Diagnostics.Process]$Process,
+    [string]$ShutdownFile,
+    [string]$StdOut,
+    [string]$StdErr,
+    [string]$Description
+){
+    if($null -eq $Process){throw "Missing ${Description} process for graceful shutdown."}
+    if($Process.HasExited){throw "${Description} exited before graceful shutdown. Exit=$($Process.ExitCode)"}
+
+    Remove-Item -LiteralPath $ShutdownFile -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType File -Path $ShutdownFile -Force | Out-Null
+    if(-not $Process.WaitForExit(20000)){
+        Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+        throw "Timed out waiting for graceful ${Description} shutdown."
+    }
+
+    $out=if(Test-Path -LiteralPath $StdOut){Get-Content -LiteralPath $StdOut -Raw -ErrorAction SilentlyContinue}else{''}
+    $err=if(Test-Path -LiteralPath $StdErr){Get-Content -LiteralPath $StdErr -Raw -ErrorAction SilentlyContinue}else{''}
+    if($Process.ExitCode -ne 0){
+        throw "Graceful ${Description} shutdown failed. Exit=$($Process.ExitCode). $err"
+    }
+    if($out -notmatch 'Kernel gate graceful deactivation: MAINTENANCE authorized'){
+        throw "Graceful ${Description} shutdown did not prove kernel MAINTENANCE deactivation. $out $err"
+    }
+}
+
 function Wait-Path([string]$Path,[int]$Seconds,[string]$Description){
     $deadline=(Get-Date).AddSeconds($Seconds)
     while((Get-Date) -lt $deadline){
@@ -222,11 +249,16 @@ $preRoot=Join-Path $RootBase "preexisting-$stamp"
 $postRoot=Join-Path $RootBase "postactivation-$stamp"
 $containRoot=Join-Path $RootBase "containment-$stamp"
 $transitionRoot=Join-Path $RootBase "containment-transition-$stamp"
+$disconnectRoot=Join-Path $RootBase "disconnect-$stamp"
+$disconnectWrongRoot=Join-Path $RootBase "disconnect-wrong-$stamp"
+$disconnectOutside=Join-Path $RootBase "disconnect-outside-$stamp.bin"
 $dirStore=Join-Path $ResultsDirectory 'predirectory-store'
 $preStore=Join-Path $ResultsDirectory 'preexisting-store'
 $postStore=Join-Path $ResultsDirectory 'postactivation-store'
 $containStore=Join-Path $ResultsDirectory 'containment-store'
 $transitionStore=Join-Path $ResultsDirectory 'containment-transition-store'
+$disconnectStore=Join-Path $ResultsDirectory 'disconnect-store'
+$disconnectWrongStore=Join-Path $ResultsDirectory 'disconnect-wrong-store'
 $volume=[IO.Path]::GetPathRoot($RootBase).TrimEnd('\')
 $installScript=Join-Path $PSScriptRoot 'install_minifilter_lab.ps1'
 $unloadScript=Join-Path $PSScriptRoot 'unload_minifilter_lab.ps1'
@@ -253,6 +285,14 @@ $summary=[ordered]@{
     transitionRequested=$false
     transitionKernelActive=$false
     transitionDeniedNextWrite=$false
+    disconnectDeniedMutation=$false
+    disconnectPreservedTargetHash=$false
+    disconnectReadAllowed=$false
+    disconnectOutOfRootAllowed=$false
+    wrongRootReconnectRejected=$false
+    sameRootReconnectActivated=$false
+    sameRootMutationAllowed=$false
+    gracefulReleaseSucceeded=$false
     cleanupPassed=$false
     cleanupError=$null
     passed=$false
@@ -266,12 +306,20 @@ $gatePre=$null
 $gatePost=$null
 $gateContain=$null
 $gateTransition=$null
+$gateDisconnect=$null
+$gateWrong=$null
+$gateReconnect=$null
 $containProbe=$null
 $transitionProbe=$null
 $dirRelease=$null
 $release=$null
 $containGo=$null
 $transitionGo=$null
+$postShutdown=$null
+$containShutdown=$null
+$transitionShutdown=$null
+$disconnectShutdown=$null
+$reconnectShutdown=$null
 $runtimeFailure=$null
 $cleanupFailure=$null
 try{

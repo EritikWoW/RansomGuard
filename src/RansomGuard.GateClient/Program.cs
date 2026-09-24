@@ -133,6 +133,26 @@ Console.WriteLine($"Activation preflight: directories={activationSummary.Directo
 Console.WriteLine(activationSummary.ContainedProcessId is ulong containedPid
     ? $"LAB containment  : ACTIVE for kernel-bound process pid={containedPid}; abrupt disconnect clears only this PEPROCESS latch while root protection degrades fail-safe."
     : "LAB containment  : not pre-armed.");
+
+if (options.ScopeAmbiguityPid is ulong scopeAmbiguityPid)
+{
+    var ambiguityReply = Native.Control(port, new RgControlRequest
+    {
+        ProtocolVersion = 17,
+        Command = (uint)RgControlCommand.ArmScopeAmbiguity,
+        TargetProcessId = scopeAmbiguityPid
+    });
+    if (ambiguityReply.ProtocolVersion != 17 ||
+        ambiguityReply.Command != (uint)RgControlCommand.ArmScopeAmbiguity ||
+        ambiguityReply.Status != 0 ||
+        ambiguityReply.GateActivated != 1 ||
+        ambiguityReply.ProtectionState != (uint)RgProtectionState.Protected)
+        throw new InvalidOperationException(
+            $"Kernel refused LAB scope-ambiguity probe arm for pid={scopeAmbiguityPid}. NTSTATUS=0x{ambiguityReply.Status:X8}, state={(RgProtectionState)ambiguityReply.ProtectionState}.");
+
+    Console.WriteLine($"LAB scope ambiguity : ARMED for exact kernel process pid={scopeAmbiguityPid}; next destructive callback is forced name-unresolved.");
+}
+
 using var containmentTrigger = options.ContainAfterPid is int triggerPid
     ? new LabContainmentTrigger(triggerPid, options.ContainAfterEvents, options.ContainAfterPaths)
     : null;
@@ -1909,6 +1929,7 @@ sealed record Options(
     long MaxStoreMiB,
     long MinFreeMiB,
     ulong? ContainPid,
+    ulong? ScopeAmbiguityPid,
     int? ContainAfterPid,
     int ContainAfterEvents,
     int ContainAfterPaths,
@@ -1937,6 +1958,7 @@ sealed record Options(
         long maxStoreMiB = DefaultMaxStoreMiB;
         long minFreeMiB = DefaultMinFreeMiB;
         ulong? containPid = null;
+        ulong? scopeAmbiguityPid = null;
         int? containAfterPid = null;
         var containAfterEvents = DefaultContainAfterEvents;
         var containAfterPaths = DefaultContainAfterPaths;
@@ -1975,6 +1997,12 @@ sealed record Options(
                             "--contain-pid must identify a non-system process other than GateClient.");
                     containPid = parsedPid;
                     break;
+                case "--scope-ambiguity-pid" when i + 1 < args.Length:
+                    if (!uint.TryParse(args[++i], out var parsedScopePid) || parsedScopePid <= 4 || parsedScopePid == Environment.ProcessId)
+                        throw new ArgumentOutOfRangeException(nameof(args),
+                            "--scope-ambiguity-pid must identify a non-system process other than GateClient.");
+                    scopeAmbiguityPid = parsedScopePid;
+                    break;
                 case "--contain-after-pid" when i + 1 < args.Length:
                     if (!int.TryParse(args[++i], out var parsedTransitionPid) || parsedTransitionPid <= 4 || parsedTransitionPid == Environment.ProcessId)
                         throw new ArgumentOutOfRangeException(nameof(args),
@@ -2008,14 +2036,14 @@ sealed record Options(
         if (string.IsNullOrWhiteSpace(root)) throw new ArgumentException("Pass --root <disposable-test-directory>.");
         if (shutdownFile is not null && PathPolicy.Under(shutdownFile, root))
             throw new ArgumentException("--shutdown-file must be outside the protected LAB root.");
-        if (prepare && (containPid.HasValue || containAfterPid.HasValue || dropFirstCreateCompletion || dropFirstRenameCompletion || dropFirstTruncateCompletion || dropFirstDeleteCompletion || reconcileOnly || shutdownFile is not null))
+        if (prepare && (containPid.HasValue || scopeAmbiguityPid.HasValue || containAfterPid.HasValue || dropFirstCreateCompletion || dropFirstRenameCompletion || dropFirstTruncateCompletion || dropFirstDeleteCompletion || reconcileOnly || shutdownFile is not null))
             throw new ArgumentException("Containment/fault/reconciliation/shutdown options cannot be combined with --prepare-root.");
-        if (reconcileOnly && (containPid.HasValue || containAfterPid.HasValue || dropFirstCreateCompletion || dropFirstRenameCompletion || dropFirstTruncateCompletion || dropFirstDeleteCompletion || containThresholdSpecified || shutdownFile is not null))
+        if (reconcileOnly && (containPid.HasValue || scopeAmbiguityPid.HasValue || containAfterPid.HasValue || dropFirstCreateCompletion || dropFirstRenameCompletion || dropFirstTruncateCompletion || dropFirstDeleteCompletion || containThresholdSpecified || shutdownFile is not null))
             throw new ArgumentException("--reconcile-only cannot be combined with containment, fault injection, or a shutdown marker.");
         if ((dropFirstCreateCompletion ? 1 : 0) + (dropFirstRenameCompletion ? 1 : 0) + (dropFirstTruncateCompletion ? 1 : 0) + (dropFirstDeleteCompletion ? 1 : 0) > 1)
             throw new ArgumentException("Only one completion-loss injection may be armed per GateClient session.");
-        if (containPid.HasValue && containAfterPid.HasValue)
-            throw new ArgumentException("--contain-pid and --contain-after-pid are mutually exclusive.");
+        if ((containPid.HasValue ? 1 : 0) + (scopeAmbiguityPid.HasValue ? 1 : 0) + (containAfterPid.HasValue ? 1 : 0) > 1)
+            throw new ArgumentException("--contain-pid, --scope-ambiguity-pid and --contain-after-pid are mutually exclusive.");
         if (containThresholdSpecified && !containAfterPid.HasValue)
             throw new ArgumentException("Containment thresholds require --contain-after-pid.");
         if (containAfterPaths > containAfterEvents)
@@ -2023,7 +2051,7 @@ sealed record Options(
         store ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RansomGuardV072", "GateRollback");
         return new Options(
             root, store, session, prepare, gateWorkers, maxStoreMiB, minFreeMiB,
-            containPid, containAfterPid, containAfterEvents, containAfterPaths,
+            containPid, scopeAmbiguityPid, containAfterPid, containAfterEvents, containAfterPaths,
             dropFirstCreateCompletion, dropFirstRenameCompletion, dropFirstTruncateCompletion,
             dropFirstDeleteCompletion, reconcileOnly, shutdownFile);
     }
@@ -2188,7 +2216,7 @@ enum RgGateReplyFlags : uint
     ContainRequestor = 0x00000001
 }
 
-enum RgControlCommand : uint { Invalid = 0, ActivateGate = 1, QueryActivation = 2, ArmPreflight = 3, ActivateAndContainProcess = 4, QueryContainment = 5, DeactivateGate = 6 }
+enum RgControlCommand : uint { Invalid = 0, ActivateGate = 1, QueryActivation = 2, ArmPreflight = 3, ActivateAndContainProcess = 4, QueryContainment = 5, DeactivateGate = 6, ArmScopeAmbiguity = 7 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 struct RgControlRequest

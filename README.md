@@ -1,4 +1,4 @@
-# RansomGuard 0.7.31.0
+# RansomGuard 0.7.32.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
@@ -6,7 +6,7 @@ and recover data through rollback plus adaptive crypto analysis.
 
 ## Core preservation milestone
 
-0.7.31.0 keeps protocol v15 and the completed 0.7.30 Driver Verifier qualification, then adds a dedicated sustained mixed-workload campaign for the Engineering LAB minifilter. One exact-commit driver load and one GateClient/rollback session first repeat bounded admission/concurrency qualification, then run configurable waves that release CREATE, RENAME, TRUNCATE, DELETE and mapped-write operations together behind a shared barrier. The default manual profile is 60 waves with 10-second inter-round pauses: 300 mixed mutations across roughly ten minutes, with final durable transaction correlation, DELETE finalization, mapped pre-image hashes, writable-section/paging evidence, worker health and cleanup still mandatory.
+0.7.32.0 keeps protocol v15 and the completed 0.7.31 sustained mixed-workload qualification, then hardens GateClient-loss behavior. Once the LAB gate has successfully activated, the kernel records that protection was armed. An unexpected GateClient disconnect no longer erases the protected root or silently returns to the unobserved state: the driver retains the exact root and enters a fail-safe latch. Resolved in-root mutation-capable CREATE plus non-paging WRITE/RENAME/TRUNCATE/DELETE continue down the gate path and are denied because no user-mode preservation reply is available. A replacement GateClient may reconnect only to the same latched root and must repeat activation preflight before normal gating resumes. Clean shutdown is separate: GateClient requests an explicit orderly-disconnect authorization only after workers are drained, repository verification succeeds, durable transaction state is pending-free, containment acknowledgements are complete and the rollback session is marked Completed. This is still Engineering LAB behavior; unresolved scope and paging/mapped-write limitations remain explicit and the ordinary product remains AuditOnly.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 
@@ -149,7 +149,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.7.31.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.7.32.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 Manual disposable-VM runtime workflows:
 

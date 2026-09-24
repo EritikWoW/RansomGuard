@@ -53,7 +53,7 @@ $codeOwners=Get-Content -LiteralPath $codeOwnersPath -Raw
 
 foreach($required in @(
     'The default normal package remains Audit',
-    'Version 0.8.1 can admit a cryptographically bound ProductionProtection package',
+    'Version 0.8.2 can admit a cryptographically bound ProductionProtection package',
     'reports `EnforceUnavailable` until a separately qualified production driver/GateClient lifecycle completes',
     'Ambiguous-scope analysis',
     'Kernel-mode requestor / compromised kernel component / BYOVD path',
@@ -62,16 +62,16 @@ foreach($required in @(
     'Production detector-to-containment orchestration remains unimplemented.',
     'one synchronous communication handle',
     'reply-required preservation is deliberately serialized',
-    'current wire contract is protocol v17',
+    'current wire contract is protocol v18',
     'For the exact 0.7.30 Driver Verifier qualification head',
     'overflow width of 16 against a kernel admission cap of 8 (8 allowed / 8 denied)',
     'Persisted reboot timestamps are SHA-bound and parsed from raw offset-bearing JSON',
     '0.7.31 sustained mixed-workload qualification is now backed by exact-head disposable-VM evidence',
     '0.7.32 introduced the protocol-v16 disconnect fail-safe state',
-    '0.7.33 introduces protocol v17 protected-volume scope classification',
+    '0.7.33 protocol-v17 protected-volume scope classification is backed by exact-head disposable-VM evidence',
     'LAB-only negative fault-injection control',
     'It cannot manufacture an allow decision or disable scope enforcement',
-    'Source invariants and hosted compile/build are necessary but are not runtime evidence',
+    'runtime run #50 (`36030318084`)',
     'current runner reported ReFS creation unsupported',
     'Do not describe the current normal bundle as production ransomware blocking'
 )){
@@ -84,13 +84,14 @@ if(-not $security.Contains('[THREAT_MODEL.md](THREAT_MODEL.md)')){
     throw 'SECURITY.md must link to the canonical threat model.'
 }
 foreach($required in @(
-    'current user/kernel wire contract is protocol v17',
+    'current engineering minifilter/GateClient wire contract is protocol v18',
     'The 0.7.30 qualification campaign materially increases confidence in this LAB boundary but does not change it into a production claim.',
     '16 requests against cap 8 -> 8 allowed / 8 denied',
     '0.7.31 sustained mixed-workload qualification does not widen the security boundary',
     '0.7.32 introduced protocol v16 and the GateClient-loss fail-safe foundation',
-    '0.7.33 advances the wire contract to protocol v17 and binds the protected root to an exact referenced Filter Manager volume',
+    '0.7.33 advanced the wire contract to protocol v17 and bound the protected root to an exact referenced Filter Manager volume',
     'Version 0.8.1 adds fail-closed admission for a future ProductionProtection package',
+    '0.8.2 advances the current engineering contract to protocol v18 and separates LAB from ProductionGate',
     'GateClient and the driver catalog must use the same signer',
     'SYS/INF must verify as catalog members',
     'CODEOWNERS',
@@ -117,6 +118,11 @@ foreach($required in @(
     'RgProtectionDegradedProtected',
     'RgControlDeactivateGate',
     'RgControlArmScopeAmbiguity',
+    'RgClientProductionGate',
+    'gProtectedClientMode',
+    'RgCurrentProtectedClientMode',
+    'RgIsGateClientMode',
+    'STATUS_NOT_SUPPORTED',
     'gScopeAmbiguityProcess',
     'RgInjectScopeAmbiguityProbe',
     'InterlockedExchange(&gMaintenanceRequested, 1)',
@@ -131,16 +137,29 @@ foreach($required in @(
 if($driver -notmatch 'FltCreateCommunicationPort\([^;]+RgConnect\s*,\s*RgDisconnect\s*,\s*RgMessage\s*,\s*1\s*\)'){
     throw 'Threat-model single-client port boundary changed without review.'
 }
-if(-not $protocol.Contains('#define RG_PROTOCOL_VERSION 17u')){
-    throw 'Threat-model protocol-v17 boundary changed without review.'
+if(-not $protocol.Contains('#define RG_PROTOCOL_VERSION 18u')){
+    throw 'Threat-model protocol-v18 boundary changed without review.'
+}
+if(-not $protocol.Contains('RgClientProductionGate')){
+    throw 'Threat-model ProductionGate client-mode boundary changed without review.'
 }
 if(-not $protocol.Contains('GateVolumeLengthBytes')){
-    throw 'Threat-model protocol-v17 protected-volume field changed without review.'
+    throw 'Threat-model protocol-v18 protected-volume field changed without review.'
 }
-if(-not $gateClient.Contains('ProtocolVersion = 17') -or
-   -not $gateClient.Contains('GateVolumeLengthBytes = checked((uint)(ntVolume.Length * 2))') -or
-   -not $gateClient.Contains('DevicePathResolver.ToNtScope(options.Root)')){
-    throw 'GateClient protocol-v17 protected-volume connection boundary changed without threat-model review.'
+foreach($required in @(
+    'public const uint Version = 18;',
+    'ProtocolVersion = ProtocolContract.Version',
+    'RgClientMode.ProductionGate',
+    'GateVolumeLengthBytes = checked((uint)(ntVolume.Length * 2))',
+    'DevicePathResolver.ToNtScope(options.Root)',
+    'case "--production"',
+    'ProductionGate forbids LAB prepare/fault/reconciliation/shutdown/containment options.',
+    'ProductionGate rollback store is fixed to',
+    'options.Profile == GateProfile.Lab ? options.ContainPid : null'
+)){
+    if(-not $gateClient.Contains($required)){
+        throw "GateClient protocol-v18 LAB/Production profile boundary changed without threat-model review: $required"
+    }
 }
 foreach($required in @(
     'using var workerSlots = new SemaphoreSlim(options.GateWorkers, options.GateWorkers);',
@@ -150,7 +169,8 @@ foreach($required in @(
     'synchronous handle',
     'RgControlCommand.DeactivateGate',
     'RgProtectionState.Maintenance',
-    'Kernel gate graceful deactivation NOT authorized'
+    'Kernel gate graceful deactivation NOT authorized',
+    'ProductionGate received forbidden containment activation evidence.'
 )){
     if(-not $gateClient.Contains($required)){
         throw "Threat-model synchronous GateClient boundary changed without review: $required"
@@ -210,4 +230,4 @@ foreach($workflowPath in $workflowPaths){
     }
 }
 
-Write-Host "Threat-model gate PASSED: docs match AuditOnly/kernel exclusions, protocol v17 protected-volume ambiguous-scope fail-safe, v16 disconnect state machine and serialized synchronous gate semantics, current Driver Verifier/fault qualification limits, supply-chain controls, CODEOWNERS routing, build_windows.ps1 and all $($workflowPaths.Count) repository workflows invoke this gate."
+Write-Host "Threat-model gate PASSED: docs match AuditOnly/kernel exclusions, protocol v18 LAB/ProductionGate separation, retained-profile protected-volume fail-safe behavior, serialized synchronous gate semantics, current Driver Verifier/fault qualification limits, supply-chain controls, CODEOWNERS routing, build_windows.ps1 and all $($workflowPaths.Count) repository workflows invoke this gate."

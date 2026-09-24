@@ -262,6 +262,9 @@ function Run-FileSystemScenario($Vhd){
     $gateOut=Join-Path $ResultsDirectory ("{0}-gate.out.log" -f $fs.ToLowerInvariant())
     $gateErr=$gateOut+'.err'
     $gate=$null
+    $scopeProbe=$null
+    $scopeGo=$null
+    $unrelatedVolumeAmbiguityAllowed=$false
 
     $createTarget=Join-Path $root 'created.bin'
     $renameSource=Join-Path $root 'rename-source.bin'
@@ -284,12 +287,63 @@ function Run-FileSystemScenario($Vhd){
 
         & $installScript -Volume $volume -PackageDirectory $DriverPackageDirectory -Confirmation 'LAB-MINIFILTER' | Out-Host
 
+        # Cross-volume scope proof: while the protected gate root lives on the disposable VHD,
+        # attach the already-loaded filter to the runner-temp volume too. A one-shot forced
+        # name-query ambiguity from a non-GateClient process on that different PFLT_VOLUME
+        # must remain Outside rather than inheriting the protected VHD's fail-closed policy.
+        $otherVolume=[IO.Path]::GetPathRoot($ResultsDirectory).TrimEnd('\')
+        if($otherVolume -notmatch '^[A-Za-z]:$' -or
+           [string]::Equals($otherVolume,$volume,[StringComparison]::OrdinalIgnoreCase)){
+            throw "$fs cross-volume scope proof requires a distinct local ResultsDirectory volume. protected=$volume other=$otherVolume"
+        }
+        $attachOutput=(& fltmc attach RansomGuardMinifilter $otherVolume 2>&1 | Out-String)
+        $attachExit=$LASTEXITCODE
+        if($attachExit -ne 0){
+            throw "$fs could not attach RansomGuardMinifilter to unrelated proof volume $otherVolume. exit=$attachExit output=$attachOutput"
+        }
+
+        $scopeTarget=Join-Path $ResultsDirectory ("{0}-unrelated-volume-target.bin" -f $fs.ToLowerInvariant())
+        $scopeReady=Join-Path $ResultsDirectory ("{0}-unrelated-volume.ready" -f $fs.ToLowerInvariant())
+        $scopeGo=Join-Path $ResultsDirectory ("{0}-unrelated-volume.go" -f $fs.ToLowerInvariant())
+        $scopeResult=Join-Path $ResultsDirectory ("{0}-unrelated-volume.result" -f $fs.ToLowerInvariant())
+        $scopeProbeOut=Join-Path $ResultsDirectory ("{0}-unrelated-volume-probe.out.log" -f $fs.ToLowerInvariant())
+        $scopeProbeErr=Join-Path $ResultsDirectory ("{0}-unrelated-volume-probe.err.log" -f $fs.ToLowerInvariant())
+        New-TestFile $scopeTarget 8192
+        $scopeOriginalHash=(Get-FileHash -LiteralPath $scopeTarget -Algorithm SHA256).Hash
+        $scopeProbe=Start-LoggedProcess $helperExe @(
+            'containment-probe',
+            '--file',(Quote-Arg $scopeTarget),
+            '--ready',(Quote-Arg $scopeReady),
+            '--go',(Quote-Arg $scopeGo),
+            '--result',(Quote-Arg $scopeResult)
+        ) $scopeProbeOut $scopeProbeErr
+        Wait-Path $scopeReady 30 "$fs unrelated-volume scope probe readiness"
+
         $gate=Start-LoggedProcess $gateExe @(
             '--root',(Quote-Arg $root),
             '--store',(Quote-Arg $store),
-            '--session',$session
+            '--session',$session,
+            '--scope-ambiguity-pid',([string]$scopeProbe.Id)
         ) $gateOut $gateErr
+        Wait-LogPattern $gateOut 'LAB scope ambiguity\s+: ARMED' $gate 45
         Wait-LogPattern $gateOut 'kernel gate ACTIVE' $gate 45
+
+        Set-Content -LiteralPath $scopeGo -Value 'go' -Encoding ASCII
+        Wait-Path $scopeResult 30 "$fs unrelated-volume scope probe result"
+        if(-not $scopeProbe.WaitForExit(30000)){
+            Stop-Process -Id $scopeProbe.Id -Force -ErrorAction SilentlyContinue
+            throw "$fs unrelated-volume scope probe timeout."
+        }
+        $scopeOutcome=(Get-Content -LiteralPath $scopeResult -Raw).Trim()
+        if($scopeOutcome -ne 'allowed' -or $scopeProbe.ExitCode -ne 9){
+            throw "$fs unrelated-volume ambiguity was not allowed. outcome=$scopeOutcome exit=$($scopeProbe.ExitCode)"
+        }
+        $scopeAfterHash=(Get-FileHash -LiteralPath $scopeTarget -Algorithm SHA256).Hash
+        if([string]::Equals($scopeAfterHash,$scopeOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+            throw "$fs unrelated-volume ambiguity probe reported allow without changing its target."
+        }
+        $unrelatedVolumeAmbiguityAllowed=$true
+        $scopeProbe=$null
 
         & $helperExe create-new --file $createTarget | Out-Host
         if($LASTEXITCODE -ne 0){throw "$fs CREATE_NEW helper failed, exit=$LASTEXITCODE"}
@@ -397,6 +451,7 @@ function Run-FileSystemScenario($Vhd){
             truncatePassed=$true
             deletePassed=$true
             mappedWritePassed=$true
+            unrelatedVolumeAmbiguityAllowed=$unrelatedVolumeAmbiguityAllowed
             deleteDispositionState=[int]$deleteCompletionRecord.state
             cleanupPassed=$false
             error=$null
@@ -414,13 +469,21 @@ function Run-FileSystemScenario($Vhd){
             truncatePassed=$false
             deletePassed=$false
             mappedWritePassed=$false
+            unrelatedVolumeAmbiguityAllowed=$false
             deleteDispositionState=0
             cleanupPassed=$false
             error=$_.Exception.Message
         }
     }
     finally{
+        if($scopeProbe -and -not $scopeProbe.HasExited){
+            if($scopeGo){Set-Content -LiteralPath $scopeGo -Value 'go' -Encoding ASCII -ErrorAction SilentlyContinue}
+            Stop-Process -Id $scopeProbe.Id -Force -ErrorAction SilentlyContinue
+        }
         try{Stop-LabProcess $gate "$fs GateClient"}catch{}
+        # The outer finally unloads the filter after the scenario. That unload is required to
+        # remove both the protected VHD instance and this temporary unrelated-volume instance
+        # before the VHD can be detached/deleted.
     }
 }
 

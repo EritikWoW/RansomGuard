@@ -106,6 +106,8 @@ Ambiguous mutation-capable CREATE, non-paging WRITE, RENAME, DELETE and TRUNCATE
 
 GateClient's own process identity is excluded from ambiguous-volume denial because the rollback store and protocol activity must not become dependent on the synchronous gate they service. This is an explicit trusted-component exception, not a general process allow-list.
 
+Protocol v17 also contains a LAB-only negative fault-injection control used for qualification. `ArmScopeAmbiguity` references one already-running non-system target process object and forces only that process's next destructive callback to `PathStatus=QueryFailed`. It cannot manufacture an allow decision or disable scope enforcement, is consumed one-shot, and the referenced process object is cleared on successful deactivation, disconnect and unload. It is test infrastructure, not a production policy command.
+
 The production design rule remains:
 
 `failure condition -> attacker influence -> certainty request is in protected namespace -> permit/deny/degrade -> telemetry/operator action`

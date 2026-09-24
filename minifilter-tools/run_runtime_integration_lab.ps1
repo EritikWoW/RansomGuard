@@ -261,8 +261,10 @@ $hardPreRoot=Join-Path $RootBase "prehardlink-$stamp"
 $hardActiveRoot=Join-Path $RootBase "hardlink-active-$stamp"
 $hardPreAlias=Join-Path $RootBase "prehardlink-alias-$stamp.bin"
 $hardInsideToOutside=Join-Path $RootBase "hardlink-inside-to-outside-$stamp.bin"
+$hardInsideToOutsideEx=Join-Path $RootBase "hardlink-ex-inside-to-outside-$stamp.bin"
 $hardOutsideSource=Join-Path $RootBase "hardlink-outside-source-$stamp.bin"
 $hardOutsideLink=Join-Path $RootBase "hardlink-outside-link-$stamp.bin"
+$hardOutsideLinkEx=Join-Path $RootBase "hardlink-ex-outside-link-$stamp.bin"
 $preRoot=Join-Path $RootBase "preexisting-$stamp"
 $postRoot=Join-Path $RootBase "postactivation-$stamp"
 $containRoot=Join-Path $RootBase "containment-$stamp"
@@ -304,6 +306,9 @@ $summary=[ordered]@{
     hardLinkInsideToOutsideDenied=$false
     hardLinkOutsideToInsideDenied=$false
     hardLinkOutsideToOutsideAllowed=$false
+    hardLinkExInsideToOutsideDenied=$false
+    hardLinkExOutsideToInsideDenied=$false
+    hardLinkExOutsideToOutsideAllowed=$false
     preexistingMappingRejected=$false
     postActivationBaselineVerified=$false
     postActivationPagingObserved=$false
@@ -547,6 +552,37 @@ try{
     }
     $summary.hardLinkOutsideToOutsideAllowed=$true
     Remove-Item -LiteralPath $hardOutsideLink -Force -ErrorAction Stop
+
+    # Repeat the same boundary proof using FILE_LINK_INFORMATION_EX directly through
+    # NtSetInformationFile(FileLinkInformationEx), not CreateHardLinkW.
+    $hardInsideDestinationEx=Join-Path $hardActiveRoot 'outside-to-inside-link-ex.bin'
+    $insideOutExResult=Join-Path $ResultsDirectory 'hardlink-ex-inside-outside.result'
+    & $helperExe hard-link-ex --existing $hardInside --link $hardInsideToOutsideEx --result $insideOutExResult
+    if($LASTEXITCODE -ne 0){throw "Inside-to-outside FileLinkInformationEx helper failed, exit=$LASTEXITCODE"}
+    if((Get-Content -LiteralPath $insideOutExResult -Raw).Trim() -ne 'denied-ex' -or
+       (Test-Path -LiteralPath $hardInsideToOutsideEx)){
+        throw 'Protected inside-to-outside FileLinkInformationEx creation was not denied.'
+    }
+    $summary.hardLinkExInsideToOutsideDenied=$true
+
+    $outsideInExResult=Join-Path $ResultsDirectory 'hardlink-ex-outside-inside.result'
+    & $helperExe hard-link-ex --existing $hardOutsideSource --link $hardInsideDestinationEx --result $outsideInExResult
+    if($LASTEXITCODE -ne 0){throw "Outside-to-inside FileLinkInformationEx helper failed, exit=$LASTEXITCODE"}
+    if((Get-Content -LiteralPath $outsideInExResult -Raw).Trim() -ne 'denied-ex' -or
+       (Test-Path -LiteralPath $hardInsideDestinationEx)){
+        throw 'Protected outside-to-inside FileLinkInformationEx creation was not denied.'
+    }
+    $summary.hardLinkExOutsideToInsideDenied=$true
+
+    $outsideOutExResult=Join-Path $ResultsDirectory 'hardlink-ex-outside-outside.result'
+    & $helperExe hard-link-ex --existing $hardOutsideSource --link $hardOutsideLinkEx --result $outsideOutExResult
+    if($LASTEXITCODE -ne 0){throw "Outside-to-outside FileLinkInformationEx helper failed, exit=$LASTEXITCODE"}
+    if((Get-Content -LiteralPath $outsideOutExResult -Raw).Trim() -ne 'allowed-ex' -or
+       -not(Test-Path -LiteralPath $hardOutsideLinkEx -PathType Leaf)){
+        throw 'Outside-to-outside FileLinkInformationEx creation was over-blocked.'
+    }
+    $summary.hardLinkExOutsideToOutsideAllowed=$true
+    Remove-Item -LiteralPath $hardOutsideLinkEx -Force -ErrorAction Stop
 
     Stop-GateGracefully $gateHardActive $hardShutdown $hardOut $hardErr 'hard-link topology gate'
     $gateHardActive=$null

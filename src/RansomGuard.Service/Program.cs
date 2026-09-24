@@ -59,18 +59,16 @@ try
 
         var protection=new ProtectionStateMachine(settings.Mode);
         protection.MarkRollbackReady();
+        ProtectionPackageAdmission? protectionPackage=null;
         if(string.Equals(settings.Mode,"Enforce",StringComparison.Ordinal))
         {
-            // 0.8.0 establishes the production state/config/API contract only. It must not
-            // treat an installed/running LAB driver as production enforcement. Driver/GateClient
-            // lifecycle activation is a separate qualified milestone.
-            protection.MarkUnavailable(
-                "Production driver/GateClient lifecycle is not enabled in the 0.8.0 foundation build.");
+            protectionPackage=ProtectionPackageVerifier.Inspect(AppContext.BaseDirectory,ProductInfo.Version);
+            protection.MarkUnavailable("Protection package admission: "+protectionPackage.Reason);
         }
         store.Audit(new{
             Type="RollbackStoreReady",Utc=DateTime.UtcNow,Root=store.Rollback,
             Sessions=rollbackRepository.SessionIds().Length,RequestedMode=settings.Mode,
-            Protection=protection.Snapshot()
+            Protection=protection.Snapshot(),ProtectionPackage=protectionPackage
         });
         using var lab=isLab?new LabSession(args[0]=="--lab-full-dump"):null;
         var samples=new ContentSampler();

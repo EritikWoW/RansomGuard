@@ -54,6 +54,8 @@ Do not deploy the LAB blocking path on primary workstations or real user data.
 
 The 0.7.30 qualification campaign materially increases confidence in this LAB boundary but does not change it into a production claim. On an exact tested head, standard Driver Verifier targeted only `RansomGuardMinifilter.sys`, survived bounded CREATE/RENAME/TRUNCATE/DELETE/mapped-write stress without a recorded bugcheck, observed genuine admission overflow (16 requests against cap 8 -> 8 allowed / 8 denied), then completed `verifier /reset` and a second-reboot CLEAR proof. Completion-loss, low-disk fail-closed and real-reboot reconciliation campaigns also have disposable-VM evidence. ReFS remains unqualified on the current VM because filesystem creation was unsupported there.
 
+0.7.31 adds a manual sustained mixed-workload qualification contract but does not widen the security boundary. One GateClient/rollback session is held across repeated mixed CREATE/RENAME/TRUNCATE/DELETE/mapped-write waves and final evidence must remain fully correlated and pending-free. Source presence or a hosted compile is not treated as endurance evidence; the claim exists only for an exact-head disposable-VM run whose artifact proves all configured rounds, elapsed-time budget, worker/gate health and cleanup.
+
 ## Recovery boundary
 
 Rollback recovery is conservative and copy-out oriented. It verifies evidence and writes to new output paths. Restart observations never fabricate authoritative filesystem completion.

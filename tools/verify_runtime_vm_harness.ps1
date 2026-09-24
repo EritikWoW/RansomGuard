@@ -114,6 +114,8 @@ foreach($required in @(
     'RANSOMGUARD-LAB-GATE-V1',
     'Stop-ProcessHard $gate',
     'LabGate unexpectedly replaced retained ProductionGate state.',
+    'FilterConnectCommunicationPort failed',
+    'profile-mismatch probe failed before proving the kernel rejected the connection.',
     'production-gate-result.json',
     'cleanupPassed=$false',
     '$installed=$true',

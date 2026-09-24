@@ -1759,6 +1759,11 @@ static VOID RgQueueEvent(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjec
     }
 
     pending = InterlockedIncrement(&gPending);
+    if (InterlockedCompareExchange(&gMaintenanceRequested, 0, 0) != 0) {
+        InterlockedDecrement(&gPending);
+        ExReleaseRundownProtection(&gRundown);
+        return;
+    }
     if (pending > RG_MAX_PENDING) {
         InterlockedDecrement(&gPending);
         InterlockedIncrement(&gDropped);
@@ -1803,6 +1808,11 @@ static VOID RgQueueRawEvent(const RG_EVENT *Event, LONG ClientMode)
     }
 
     pending = InterlockedIncrement(&gPending);
+    if (InterlockedCompareExchange(&gMaintenanceRequested, 0, 0) != 0) {
+        InterlockedDecrement(&gPending);
+        ExReleaseRundownProtection(&gRundown);
+        return;
+    }
     if (pending > RG_MAX_PENDING) {
         InterlockedDecrement(&gPending);
         InterlockedIncrement(&gDropped);

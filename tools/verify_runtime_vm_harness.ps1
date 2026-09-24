@@ -349,8 +349,11 @@ foreach($required in @(
     if($unload -notmatch [regex]::Escape($required)){throw "Runtime cleanup script missing final-state invariant: $required"}
 }
 $cleanupArmIndex=$runtime.IndexOf('$installed=$true')
-$installInvokeIndex=$runtime.IndexOf('& $installScript')
-if($cleanupArmIndex -lt 0 -or $installInvokeIndex -lt 0 -or $cleanupArmIndex -gt $installInvokeIndex){
+if($cleanupArmIndex -lt 0){
+    throw 'Runtime harness must arm minifilter cleanup before invoking the installer.'
+}
+$installInvokeIndex=$runtime.IndexOf('& $installScript',$cleanupArmIndex)
+if($installInvokeIndex -lt 0 -or $cleanupArmIndex -gt $installInvokeIndex){
     throw 'Runtime harness must arm minifilter cleanup before invoking the installer.'
 }
 

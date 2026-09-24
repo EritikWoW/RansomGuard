@@ -2380,8 +2380,9 @@ static VOID RgDisconnect(PVOID ConnectionCookie)
     InterlockedExchange(&gPreflightProbeArmed, 0);
 
     if (protectionRequired != 0 && gracefulDisconnect == 0) {
-        // Keep the negotiated root and fail safe for resolved user-mode mutations.
-        // A replacement v16 GateClient may reconnect only to this exact root and must rerun preflight.
+        // Keep the negotiated root plus protected-volume reference and fail safe for
+        // resolved in-root or ambiguous protected-volume destructive user-mode mutations.
+        // A replacement v17 GateClient may reconnect only to this exact root/volume and rerun preflight.
     } else {
         InterlockedExchange(&gProtectionRequired, 0);
         InterlockedExchange(&gDegradedProtected, 0);

@@ -594,8 +594,7 @@ foreach($required in @(
     'RgEventDestinationPathMatchesGateRoot(Event)',
     'sourceScope == RgScopeInside || destinationScope == RgScopeInside',
     'sourceScope == RgScopeOutside && destinationScope == RgScopeOutside',
-    'RgIsOnGateVolume(FltObjects) ? RgScopeAmbiguous : RgScopeOutside',
-    'Event->ProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId'
+    'RgIsOnGateVolume(FltObjects) ? RgScopeAmbiguous : RgScopeOutside'
 )){
     if($scopeBlock -notmatch [regex]::Escape($required)){throw "Protocol-v18 scope classifier invariant missing: $required"}
 }
@@ -658,8 +657,8 @@ foreach($required in @(
         throw "GateClient process-object self-exemption invariant missing: $required"
     }
 }
-if($src -match [regex]::Escape('Event->ProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId')){
-    throw 'Ambiguous-volume self-exemption must use exact GateClient PEPROCESS identity, not a client-supplied PID.'
+if($scopeBlock -match [regex]::Escape('Event->ProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId')){
+    throw 'Mutation scope classification must not use GateClient PID identity; self-I/O exemption is bound to the exact GateClient PEPROCESS before classification.'
 }
 if($proto -notmatch 'RG_CREATE_DISPOSITION_SHIFT'){throw 'Protocol must carry CREATE disposition/options semantics.'}
 if($proto -notmatch 'DestinationPathStatus' -or $proto -notmatch 'DestinationPath\[RG_PATH_CHARS\]'){throw 'Protocol v8 must carry bounded rename destination path metadata.'}

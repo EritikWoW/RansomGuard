@@ -79,6 +79,34 @@ function Stop-LabProcess([System.Diagnostics.Process]$Process,[string]$Descripti
     }
 }
 
+function Stop-GateClientClean(
+    [System.Diagnostics.Process]$Process,
+    [string]$ShutdownMarker,
+    [string]$StdOut,
+    [string]$Description
+){
+    if($null -eq $Process){throw "$Description process is missing."}
+    if($Process.HasExited){
+        if($Process.ExitCode -ne 0){throw "$Description exited before clean shutdown, exit=$($Process.ExitCode)."}
+        return
+    }
+    Remove-Item -LiteralPath $ShutdownMarker -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType File -Path $ShutdownMarker -Force | Out-Null
+    if(-not $Process.WaitForExit(15000)){
+        Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+        throw "Timed out waiting for clean $Description shutdown."
+    }
+    if($Process.ExitCode -ne 0){
+        $errPath=$StdOut+'.err'
+        $err=if(Test-Path -LiteralPath $errPath){Get-Content -LiteralPath $errPath -Raw}else{''}
+        throw "$Description clean shutdown failed, exit=$($Process.ExitCode). $err"
+    }
+    $log=if(Test-Path -LiteralPath $StdOut){Get-Content -LiteralPath $StdOut -Raw}else{''}
+    if($log -notmatch 'Kernel disconnect authorization:\s+GRANTED'){
+        throw "$Description exited without durable orderly-disconnect authorization."
+    }
+}
+
 function Wait-Path([string]$Path,[int]$Seconds,[string]$Description){
     $deadline=(Get-Date).AddSeconds($Seconds)
     while((Get-Date) -lt $deadline){
@@ -266,6 +294,9 @@ $gatePre=$null
 $gatePost=$null
 $gateContain=$null
 $gateTransition=$null
+$postShutdown=Join-Path $ResultsDirectory 'postactivation.shutdown'
+$containShutdown=Join-Path $ResultsDirectory 'containment.shutdown'
+$transitionShutdown=Join-Path $ResultsDirectory 'containment-transition.shutdown'
 $containProbe=$null
 $transitionProbe=$null
 $dirRelease=$null
@@ -380,7 +411,8 @@ try{
     $postOut=Join-Path $ResultsDirectory 'postactivation-gate.out.log'
     $postErr=$postOut + '.err'
     $gatePost=Start-LoggedProcess $gateExe @(
-        '--root',(Quote-Arg $postRoot),'--store',(Quote-Arg $postStore),'--session','postactivation'
+        '--root',(Quote-Arg $postRoot),'--store',(Quote-Arg $postStore),'--session','postactivation',
+        '--shutdown-marker',(Quote-Arg $postShutdown)
     ) $postOut $postErr
     Wait-LogPattern $postOut 'kernel gate ACTIVE' $gatePost 45
 
@@ -425,9 +457,10 @@ try{
     $summary.preimageHashMatched=$true
 
     # The filter communication port allows one gate client. End this successful
-    # session before activating the next root so the disconnect callback clears
-    # gate/containment state and the next client can connect deterministically.
-    Stop-LabProcess $gatePost 'post-activation gate'
+    # session through the explicit orderly-disconnect authorization before
+    # activating the next root. A force-kill here would intentionally latch the
+    # 0.7.32 fail-safe root and reject the next different-root scenario.
+    Stop-GateClientClean $gatePost $postShutdown $postOut 'post-activation gate'
     $gatePost=$null
 
     # Scenario 3: activation-bound containment is scoped to one kernel process identity.
@@ -458,7 +491,8 @@ try{
         '--root',(Quote-Arg $containRoot),
         '--store',(Quote-Arg $containStore),
         '--session','containment',
-        '--contain-pid',([string]$containProbe.Id)
+        '--contain-pid',([string]$containProbe.Id),
+        '--shutdown-marker',(Quote-Arg $containShutdown)
     ) $containOut $containErr
     Wait-LogPattern $containOut 'LAB containment\s+: ACTIVE' $gateContain 45
 
@@ -491,7 +525,7 @@ try{
     }
     $summary.containmentAllowedPeer=$true
 
-    Stop-LabProcess $gateContain 'pre-armed containment gate'
+    Stop-GateClientClean $gateContain $containShutdown $containOut 'pre-armed containment gate'
     $gateContain=$null
 
     # Scenario 4: a preserved gate reply can atomically transition the exact requestor into containment.
@@ -524,7 +558,8 @@ try{
         '--session','containment-transition',
         '--contain-after-pid',([string]$transitionProbe.Id),
         '--contain-after-events','4',
-        '--contain-after-paths','2'
+        '--contain-after-paths','2',
+        '--shutdown-marker',(Quote-Arg $transitionShutdown)
     ) $transitionOut $transitionErr
     Wait-LogPattern $transitionOut 'LAB transition\s+: pid=' $gateTransition 45
     Wait-LogPattern $transitionOut 'kernel gate ACTIVE' $gateTransition 45
@@ -566,6 +601,9 @@ try{
     $summary.transitionKernelActive=$true
     Wait-LogPattern $transitionOut 'LAB CONTAINMENT ACTIVE' $gateTransition 30
     $transitionProbe=$null
+
+    Stop-GateClientClean $gateTransition $transitionShutdown $transitionOut 'event-bound containment gate'
+    $gateTransition=$null
 
     $summary.passed=$true
 }

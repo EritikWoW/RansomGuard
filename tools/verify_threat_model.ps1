@@ -52,7 +52,8 @@ $supplyGate=Get-Content -LiteralPath $supplyGatePath -Raw
 $codeOwners=Get-Content -LiteralPath $codeOwnersPath -Raw
 
 foreach($required in @(
-    'ordinary product remains AuditOnly',
+    'The default normal package remains Audit',
+    'reports `EnforceUnavailable` until a separately qualified production driver/GateClient lifecycle completes',
     'Ambiguous-scope analysis',
     'Kernel-mode requestor / compromised kernel component / BYOVD path',
     'preserve-before-allow',
@@ -88,6 +89,7 @@ foreach($required in @(
     '0.7.31 sustained mixed-workload qualification does not widen the security boundary',
     '0.7.32 introduced protocol v16 and the GateClient-loss fail-safe foundation',
     '0.7.33 advances the wire contract to protocol v17 and binds the protected root to an exact referenced Filter Manager volume',
+    'Version 0.8.0 adds an explicit Enforce configuration/state contract',
     'CODEOWNERS',
     'does not itself require approval'
 )){
@@ -156,8 +158,8 @@ foreach($required in @(
 if(-not $policy.Contains('AuditOnly: automatic action against ordinary applications is disabled in this build.')){
     throw 'DecisionPolicy ordinary-process AuditOnly boundary changed without threat-model review.'
 }
-if(-not $worker.Contains('Mode=AUDIT for ALL ordinary applications')){
-    throw 'GuardWorker ordinary-process AuditOnly statement changed without threat-model review.'
+if(-not $worker.Contains('RequestedMode={RequestedMode}; ProtectionState={ProtectionState}; KernelEnforcement={KernelEnforcement}')){
+    throw 'GuardWorker explicit requested/effective protection-state statement changed without threat-model review.'
 }
 if(-not $worker.Contains('Diagnostics-only state. There is NO file monitoring.')){
     throw 'GuardWorker explicit ETW degradation boundary changed without threat-model review.'

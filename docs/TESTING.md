@@ -70,6 +70,8 @@ Before registering or dispatching that runner, follow `docs/RUNTIME_VM_RUNNER.md
 
 Runtime evidence from that workflow is required before treating minifilter preservation or containment semantics as experimentally validated.
 
+For 0.8.3 the runtime contract also qualifies hard-link alias handling. It must prove that activation refuses a protected file with a pre-existing outside hard-link alias (`NumberOfLinks=2`), that active inside-to-outside and outside-to-inside hard-link creation are denied, and that an outside-to-outside hard link on the same attached volume remains allowed. These checks are required in `runtime-result.json` and are not inferred from helper exit codes alone.
+
 ## Automated x64 minifilter compile gate
 
 GitHub Actions restores pinned Microsoft WDK/SDK C++ 10.0.28000.2526 packages and builds

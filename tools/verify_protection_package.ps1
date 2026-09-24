@@ -49,6 +49,10 @@ foreach($required in @(
     'Environment.ProcessPath',
     'The running process image is not the fixed RansomGuard.Service.exe beside the protection package.',
     'Path.Combine(root, "GateClient", "RansomGuard.GateClient.exe")',
+    'ValidateExactLayout(root)',
+    'Protection package root contains missing or unexpected entries.',
+    'Protection/GateClient contains missing or unexpected entries.',
+    'Protection/Driver contains missing or unexpected entries.',
     'Path.Combine(driverDirectory, "RansomGuardMinifilter.sys")',
     'Path.Combine(driverDirectory, "RansomGuardMinifilter.inf")',
     'Path.Combine(driverDirectory, "RansomGuardMinifilter.cat")',
@@ -125,4 +129,4 @@ foreach($required in @(
     }
 }
 
-Write-Host 'Production protection-package admission gate PASSED: fixed layout, exact hashes/version/protocol, LAB identity rejection, signature inspection and explicit SYS-to-CAT membership fail-closed boundary.' -ForegroundColor Green
+Write-Host 'Production protection-package admission gate PASSED: exact layout, running-service signer binding, hashes/version/protocol, LAB identity rejection, Authenticode and SYS/INF catalog-membership verification, with no lifecycle mutation.' -ForegroundColor Green

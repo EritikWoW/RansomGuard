@@ -207,6 +207,20 @@ public sealed class FileIdentityStore
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("Durable file standard information requires Windows.");
 
+        var info = QueryNativeStandardInfo(handle);
+        return new DurableFileStandardInfo(info.AllocationSize, info.EndOfFile);
+    }
+
+    public static uint QueryHandleLinkCount(SafeFileHandle handle)
+    {
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("Hard-link topology inspection requires Windows.");
+
+        return QueryNativeStandardInfo(handle).NumberOfLinks;
+    }
+
+    private static NativeFileStandardInfo QueryNativeStandardInfo(SafeFileHandle handle)
+    {
         if (!GetFileInformationByHandleExStandard(handle, FileStandardInfo, out var info,
                 checked((uint)Marshal.SizeOf<NativeFileStandardInfo>())))
             throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(),
@@ -214,8 +228,10 @@ public sealed class FileIdentityStore
 
         if (info.AllocationSize < 0 || info.EndOfFile < 0)
             throw new InvalidDataException("Windows returned a negative file length/allocation size.");
+        if (info.NumberOfLinks == 0)
+            throw new InvalidDataException("Windows returned an invalid zero hard-link count.");
 
-        return new DurableFileStandardInfo(info.AllocationSize, info.EndOfFile);
+        return info;
     }
 
     private static string NormalizeSource(string path)

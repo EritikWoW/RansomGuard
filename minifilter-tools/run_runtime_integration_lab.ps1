@@ -257,6 +257,14 @@ Assert-NoReparsePath -Path $RootBase -Label 'RootBase'
 
 $dirRoot=Join-Path $RootBase "predirectory-$stamp"
 $dormantRoot=Join-Path $RootBase "prewritehandle-$stamp"
+$hardPreRoot=Join-Path $RootBase "prehardlink-$stamp"
+$hardActiveRoot=Join-Path $RootBase "hardlink-active-$stamp"
+$hardPreAlias=Join-Path $RootBase "prehardlink-alias-$stamp.bin"
+$hardInsideToOutside=Join-Path $RootBase "hardlink-inside-to-outside-$stamp.bin"
+$hardInsideToOutsideEx=Join-Path $RootBase "hardlink-ex-inside-to-outside-$stamp.bin"
+$hardOutsideSource=Join-Path $RootBase "hardlink-outside-source-$stamp.bin"
+$hardOutsideLink=Join-Path $RootBase "hardlink-outside-link-$stamp.bin"
+$hardOutsideLinkEx=Join-Path $RootBase "hardlink-ex-outside-link-$stamp.bin"
 $preRoot=Join-Path $RootBase "preexisting-$stamp"
 $postRoot=Join-Path $RootBase "postactivation-$stamp"
 $containRoot=Join-Path $RootBase "containment-$stamp"
@@ -268,6 +276,8 @@ $scopeRoot=Join-Path $RootBase "scope-$stamp"
 $scopeOutsideSource=Join-Path $RootBase "scope-outside-$stamp.bin"
 $dirStore=Join-Path $ResultsDirectory 'predirectory-store'
 $dormantStore=Join-Path $ResultsDirectory 'prewritehandle-store'
+$hardPreStore=Join-Path $ResultsDirectory 'prehardlink-store'
+$hardActiveStore=Join-Path $ResultsDirectory 'hardlink-active-store'
 $preStore=Join-Path $ResultsDirectory 'preexisting-store'
 $postStore=Join-Path $ResultsDirectory 'postactivation-store'
 $containStore=Join-Path $ResultsDirectory 'containment-store'
@@ -292,6 +302,13 @@ $summary=[ordered]@{
     driverCatSha256=$actualCatSha256
     preexistingDirectoryHandleRejected=$false
     dormantWritableHandleRejected=$false
+    preexistingHardLinkRejected=$false
+    hardLinkInsideToOutsideDenied=$false
+    hardLinkOutsideToInsideDenied=$false
+    hardLinkOutsideToOutsideAllowed=$false
+    hardLinkExInsideToOutsideDenied=$false
+    hardLinkExOutsideToInsideDenied=$false
+    hardLinkExOutsideToOutsideAllowed=$false
     preexistingMappingRejected=$false
     postActivationBaselineVerified=$false
     postActivationPagingObserved=$false
@@ -326,6 +343,8 @@ $dormantHolder=$null
 $holder=$null
 $gateDir=$null
 $gateDormant=$null
+$gateHardPre=$null
+$gateHardActive=$null
 $gatePre=$null
 $gatePost=$null
 $gateContain=$null
@@ -344,6 +363,7 @@ $containGo=$null
 $transitionGo=$null
 $scopeGo=$null
 $postShutdown=$null
+$hardShutdown=$null
 $containShutdown=$null
 $transitionShutdown=$null
 $disconnectShutdown=$null
@@ -454,6 +474,118 @@ try{
     if($dormantHolder.ExitCode -ne 0){throw "Dormant writable-handle holder failed, exit=$($dormantHolder.ExitCode)"}
     $dormantHolder=$null
     $gateDormant=$null
+
+    # Scenario 2: activation must refuse any protected regular file that already has
+    # more than one hard-link name, even when the alias itself is outside the root.
+    Prepare-GateRoot $gateExe $hardPreRoot
+    $hardPreFile=Join-Path $hardPreRoot 'preexisting-hardlink-victim.bin'
+    New-TestFile $hardPreFile
+    $hardPreCreateResult=Join-Path $ResultsDirectory 'prehardlink-create.result'
+    & $helperExe hard-link --existing $hardPreFile --link $hardPreAlias --result $hardPreCreateResult
+    if($LASTEXITCODE -ne 0){throw "Pre-existing hard-link helper failed, exit=$LASTEXITCODE"}
+    if((Get-Content -LiteralPath $hardPreCreateResult -Raw).Trim() -ne 'allowed' -or
+       -not(Test-Path -LiteralPath $hardPreAlias -PathType Leaf)){
+        throw 'Unable to create the pre-existing hard-link alias required for qualification.'
+    }
+
+    $hardPreOut=Join-Path $ResultsDirectory 'prehardlink-gate.out.log'
+    $hardPreErr=$hardPreOut + '.err'
+    $gateHardPre=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $hardPreRoot),'--store',(Quote-Arg $hardPreStore),'--session','prehardlink'
+    ) $hardPreOut $hardPreErr
+    if(-not $gateHardPre.WaitForExit(30000)){
+        Stop-Process -Id $gateHardPre.Id -Force -ErrorAction SilentlyContinue
+        throw 'Activation unexpectedly stayed alive with a pre-existing hard-link alias.'
+    }
+    if($gateHardPre.ExitCode -eq 0){throw 'Activation unexpectedly succeeded with a pre-existing hard-link alias.'}
+    $hardPreFailure=((Get-Content -LiteralPath $hardPreOut -Raw -ErrorAction SilentlyContinue)+[Environment]::NewLine+
+        (Get-Content -LiteralPath $hardPreErr -Raw -ErrorAction SilentlyContinue))
+    if($hardPreFailure -notmatch 'NumberOfLinks=2'){
+        throw "Pre-existing hard-link activation failed for an unexpected reason: $hardPreFailure"
+    }
+    $summary.preexistingHardLinkRejected=$true
+    Remove-Item -LiteralPath $hardPreAlias -Force -ErrorAction Stop
+    $gateHardPre=$null
+
+    # Scenario 3: once active, protected topology must remain single-linked.
+    Prepare-GateRoot $gateExe $hardActiveRoot
+    $hardInside=Join-Path $hardActiveRoot 'inside-source.bin'
+    $hardInsideDestination=Join-Path $hardActiveRoot 'outside-to-inside-link.bin'
+    New-TestFile $hardInside
+    New-TestFile $hardOutsideSource
+
+    $hardOut=Join-Path $ResultsDirectory 'hardlink-active-gate.out.log'
+    $hardErr=$hardOut + '.err'
+    $hardShutdown=Join-Path $ResultsDirectory 'hardlink-active.shutdown'
+    $gateHardActive=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $hardActiveRoot),
+        '--store',(Quote-Arg $hardActiveStore),
+        '--session','hardlink-active',
+        '--shutdown-file',(Quote-Arg $hardShutdown)
+    ) $hardOut $hardErr
+    Wait-LogPattern $hardOut 'kernel gate ACTIVE' $gateHardActive 45
+
+    $insideOutResult=Join-Path $ResultsDirectory 'hardlink-inside-outside.result'
+    & $helperExe hard-link --existing $hardInside --link $hardInsideToOutside --result $insideOutResult
+    if($LASTEXITCODE -ne 0){throw "Inside-to-outside hard-link helper failed, exit=$LASTEXITCODE"}
+    if((Get-Content -LiteralPath $insideOutResult -Raw).Trim() -ne 'denied' -or
+       (Test-Path -LiteralPath $hardInsideToOutside)){
+        throw 'Protected inside-to-outside hard-link creation was not denied.'
+    }
+    $summary.hardLinkInsideToOutsideDenied=$true
+
+    $outsideInResult=Join-Path $ResultsDirectory 'hardlink-outside-inside.result'
+    & $helperExe hard-link --existing $hardOutsideSource --link $hardInsideDestination --result $outsideInResult
+    if($LASTEXITCODE -ne 0){throw "Outside-to-inside hard-link helper failed, exit=$LASTEXITCODE"}
+    if((Get-Content -LiteralPath $outsideInResult -Raw).Trim() -ne 'denied' -or
+       (Test-Path -LiteralPath $hardInsideDestination)){
+        throw 'Protected outside-to-inside hard-link creation was not denied.'
+    }
+    $summary.hardLinkOutsideToInsideDenied=$true
+
+    $outsideOutResult=Join-Path $ResultsDirectory 'hardlink-outside-outside.result'
+    & $helperExe hard-link --existing $hardOutsideSource --link $hardOutsideLink --result $outsideOutResult
+    if($LASTEXITCODE -ne 0){throw "Outside-to-outside hard-link helper failed, exit=$LASTEXITCODE"}
+    if((Get-Content -LiteralPath $outsideOutResult -Raw).Trim() -ne 'allowed' -or
+       -not(Test-Path -LiteralPath $hardOutsideLink -PathType Leaf)){
+        throw 'Outside-to-outside hard-link creation was over-blocked.'
+    }
+    $summary.hardLinkOutsideToOutsideAllowed=$true
+    Remove-Item -LiteralPath $hardOutsideLink -Force -ErrorAction Stop
+
+    # Repeat the same boundary proof using FILE_LINK_INFORMATION_EX directly through
+    # NtSetInformationFile(FileLinkInformationEx), not CreateHardLinkW.
+    $hardInsideDestinationEx=Join-Path $hardActiveRoot 'outside-to-inside-link-ex.bin'
+    $insideOutExResult=Join-Path $ResultsDirectory 'hardlink-ex-inside-outside.result'
+    & $helperExe hard-link-ex --existing $hardInside --link $hardInsideToOutsideEx --result $insideOutExResult
+    if($LASTEXITCODE -ne 0){throw "Inside-to-outside FileLinkInformationEx helper failed, exit=$LASTEXITCODE"}
+    if((Get-Content -LiteralPath $insideOutExResult -Raw).Trim() -ne 'denied-ex' -or
+       (Test-Path -LiteralPath $hardInsideToOutsideEx)){
+        throw 'Protected inside-to-outside FileLinkInformationEx creation was not denied.'
+    }
+    $summary.hardLinkExInsideToOutsideDenied=$true
+
+    $outsideInExResult=Join-Path $ResultsDirectory 'hardlink-ex-outside-inside.result'
+    & $helperExe hard-link-ex --existing $hardOutsideSource --link $hardInsideDestinationEx --result $outsideInExResult
+    if($LASTEXITCODE -ne 0){throw "Outside-to-inside FileLinkInformationEx helper failed, exit=$LASTEXITCODE"}
+    if((Get-Content -LiteralPath $outsideInExResult -Raw).Trim() -ne 'denied-ex' -or
+       (Test-Path -LiteralPath $hardInsideDestinationEx)){
+        throw 'Protected outside-to-inside FileLinkInformationEx creation was not denied.'
+    }
+    $summary.hardLinkExOutsideToInsideDenied=$true
+
+    $outsideOutExResult=Join-Path $ResultsDirectory 'hardlink-ex-outside-outside.result'
+    & $helperExe hard-link-ex --existing $hardOutsideSource --link $hardOutsideLinkEx --result $outsideOutExResult
+    if($LASTEXITCODE -ne 0){throw "Outside-to-outside FileLinkInformationEx helper failed, exit=$LASTEXITCODE"}
+    if((Get-Content -LiteralPath $outsideOutExResult -Raw).Trim() -ne 'allowed-ex' -or
+       -not(Test-Path -LiteralPath $hardOutsideLinkEx -PathType Leaf)){
+        throw 'Outside-to-outside FileLinkInformationEx creation was over-blocked.'
+    }
+    $summary.hardLinkExOutsideToOutsideAllowed=$true
+    Remove-Item -LiteralPath $hardOutsideLinkEx -Force -ErrorAction Stop
+
+    Stop-GateGracefully $gateHardActive $hardShutdown $hardOut $hardErr 'hard-link topology gate'
+    $gateHardActive=$null
 
     Prepare-GateRoot $gateExe $preRoot
     $preFile=Join-Path $preRoot 'preexisting-map.bin'
@@ -908,7 +1040,7 @@ finally{
         if($scopeGo){New-Item -ItemType File -Path $scopeGo -Force -ErrorAction SilentlyContinue | Out-Null}
         Stop-Process -Id $scopeProbe.Id -Force -ErrorAction SilentlyContinue
     }
-    foreach($p in @($gateDir,$gateDormant,$gatePre,$gatePost,$gateScope,$gateContain,$gateTransition,$gateDisconnect,$gateWrong,$gateReconnect)){
+    foreach($p in @($gateDir,$gateDormant,$gateHardPre,$gateHardActive,$gatePre,$gatePost,$gateScope,$gateContain,$gateTransition,$gateDisconnect,$gateWrong,$gateReconnect)){
         if($p -and -not $p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}
     }
 

@@ -769,6 +769,15 @@ static class ActivationPreflight
                     throw new InvalidOperationException(
                         $"Activation refused: file identity changed while freezing '{path}'.");
                 }
+
+                var linkCount = FileIdentityStore.QueryHandleLinkCount(hold);
+                if (linkCount != 1)
+                {
+                    hold.Dispose();
+                    throw new InvalidOperationException(
+                        $"Activation refused: '{path}' has NumberOfLinks={linkCount}; protected regular files must have exactly one hard link.");
+                }
+
                 heldHandles.Add(hold);
 
                 checkedFiles++;

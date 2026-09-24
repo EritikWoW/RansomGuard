@@ -1939,7 +1939,6 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
         InterlockedExchange(&gGateActivated, context->ClientMode == RgClientLabGate ? 0 : 1);
         InterlockedExchange(&gActivationHazard, 0);
         InterlockedExchange(&gPreflightProbeArmed, 0);
-        InterlockedExchange(&gDegradedProtected, 0);
         InterlockedExchange(&gGracefulDisconnectAuthorized, 0);
 
         if (context->ClientMode == RgClientLabGate &&
@@ -1949,7 +1948,10 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
             gGateRoot[rootBytes / sizeof(WCHAR)] = L'\0';
         }
 
+        // On degraded reconnect publish the live client before clearing the fail-safe latch,
+        // so callbacks never observe both protection indicators false.
         InterlockedExchange(&gClientConnected, 1);
+        InterlockedExchange(&gDegradedProtected, 0);
     }
     ExReleaseFastMutex(&gPortMutex);
     return status;
@@ -2095,6 +2097,12 @@ static VOID RgDisconnect(PVOID ConnectionCookie)
     RgClearContainedProcess();
 
     ExAcquireFastMutex(&gPortMutex);
+    if (protectionRequired != 0 && gracefulDisconnect == 0) {
+        // Publish the fail-safe latch before publishing client loss. This avoids a transient
+        // connected=0/degraded=0 window that could otherwise let a racing mutation escape.
+        InterlockedExchange(&gDegradedProtected, 1);
+    }
+
     InterlockedExchange(&gClientConnected, 0);
     InterlockedExchange(&gClientMode, 0);
     InterlockedExchange64(&gClientProcessId, 0);
@@ -2105,7 +2113,6 @@ static VOID RgDisconnect(PVOID ConnectionCookie)
     if (protectionRequired != 0 && gracefulDisconnect == 0) {
         // Keep the negotiated root and fail safe for resolved user-mode mutations.
         // A replacement v16 GateClient may reconnect only to this exact root and must rerun preflight.
-        InterlockedExchange(&gDegradedProtected, 1);
     } else {
         InterlockedExchange(&gProtectionRequired, 0);
         InterlockedExchange(&gDegradedProtected, 0);

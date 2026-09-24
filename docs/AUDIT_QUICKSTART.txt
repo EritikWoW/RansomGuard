@@ -1,4 +1,4 @@
-RansomGuard 0.8.0.0 - audit-only quick start
+RansomGuard 0.8.1.0 - audit-only quick start
 
 Open UI\RansomGuard.Ui.exe normally.
 Go to Settings -> Background monitoring -> Set up RansomGuard and approve UAC.
@@ -13,8 +13,9 @@ Rules -> Add/Edit/Disable/Remove remain reviewed graphical UAC operations.
 Stop previous run_audit consoles first; never kill processes by name.
 
 The default normal product bundle does not install or load the Engineering LAB minifilter.
-0.8.0 understands an explicit Enforce request, but the production driver/GateClient lifecycle is not
-activated by this foundation package; it reports EnforceUnavailable rather than claiming protection.
+0.8.1 can inspect a fixed, signed ProductionProtection package for exact identity, signer and
+SYS/INF catalog membership, but the driver/GateClient lifecycle is still not activated; an Enforce
+request reports EnforceUnavailable rather than claiming protection.
 Default Audit operation remains non-blocking and is not production ransomware blocking.
 Read UI_ADMINISTRATION.md and GUIDED_SETUP.md before administrative changes.
 

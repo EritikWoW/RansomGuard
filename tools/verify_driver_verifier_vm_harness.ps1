@@ -25,6 +25,11 @@ foreach($required in @(
     'EXIT_CODE_REBOOT_NEEDED (2)',
     'Assert-VerifierMutationResult',
     'Read-And-VerifyState',
+    'RawJson',
+    'Get-JsonStringProperty',
+    'Get-JsonUtcTimestamp',
+    '[Text.Json.JsonDocument]::Parse',
+    '[DateTimeOffset]::Parse',
     "phase -ne 'runtime-failed-reset'",
     'prior.resetScheduled',
     'prior.runtimeBootUtc',
@@ -139,6 +144,35 @@ if($workflow.Contains('\${{')){
 if($arm -notmatch [regex]::Escape('Driver Verifier already has persistent settings')){
     throw 'Driver Verifier ARM must refuse pre-existing verifier state instead of overwriting it.'
 }
+foreach($source in @($arm,$runtime,$clear)){
+    foreach($required in @(
+        'RawJson',
+        'Get-JsonStringProperty',
+        'Get-JsonUtcTimestamp',
+        '[Text.Json.JsonDocument]::Parse',
+        '[DateTimeOffset]::Parse'
+    )){
+        if($source -notmatch [regex]::Escape($required)){
+            throw "Driver Verifier UTC-state invariant missing: $required"
+        }
+    }
+}
+if($runtime -notmatch [regex]::Escape('Get-JsonUtcTimestamp $verified.RawJson ''bootUpUtc''') -or
+   $runtime -notmatch [regex]::Escape('Get-JsonUtcTimestamp $verified.RawJson ''armedUtc''') -or
+   $runtime -notmatch [regex]::Escape('Get-JsonStringProperty $verified.RawJson ''armedUtc''')){
+    throw 'Driver Verifier runtime must preserve ARM timestamps directly from raw JSON.'
+}
+if($clear -notmatch [regex]::Escape('Get-JsonUtcTimestamp $verified.RawJson ''runtimeBootUtc''')){
+    throw 'Driver Verifier CLEAR must parse runtimeBootUtc directly from raw JSON.'
+}
+if($arm -notmatch [regex]::Escape('Get-JsonUtcTimestamp $priorVerified.RawJson ''runtimeBootUtc''')){
+    throw 'Driver Verifier failed-reset recovery must parse runtimeBootUtc directly from raw JSON.'
+}
+foreach($source in @($arm,$runtime,$clear)){
+    if($source -match '(?s)\[DateTime\]::Parse\s*\(\s*\[string\]\$(?:state|prior)\.(?:bootUpUtc|armedUtc|runtimeBootUtc)'){
+        throw 'Driver Verifier persisted timestamps must not be reparsed from ConvertFrom-Json DateTime values.'
+    }
+}
 $recoverPhase=$arm.IndexOf("phase -ne 'runtime-failed-reset'")
 $recoverReset=$arm.IndexOf('prior.resetScheduled',$recoverPhase)
 $recoverBoot=$arm.IndexOf('prior.runtimeBootUtc',$recoverReset)
@@ -168,4 +202,4 @@ if($clear -notmatch [regex]::Escape('Driver Verifier current activity still name
     throw 'Driver Verifier CLEAR must prove current verification activity is gone after the reset reboot.'
 }
 
-Write-Host 'Driver Verifier source gate PASSED: standard settings target only RansomGuardMinifilter.sys, bootmode is oneboot, runtime proves the loaded target is verified under bounded stress, failed-reset campaigns can be archived only after hash/phase/reset/reboot/querysettings proof, /reset is mandatory, a second reboot proves clear state, and no workflow step can reboot the VM automatically.'
+Write-Host 'Driver Verifier source gate PASSED: standard settings target only RansomGuardMinifilter.sys, persisted reboot timestamps are parsed from raw offset-bearing JSON without timezone coercion, runtime proves the loaded target is verified under bounded stress, failed-reset campaigns can be archived only after hash/phase/reset/reboot/querysettings proof, /reset is mandatory, a second reboot proves clear state, and no workflow step can reboot the VM automatically.'

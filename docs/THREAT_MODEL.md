@@ -1,8 +1,8 @@
 # RansomGuard threat model
 
-Status: engineering threat model for RansomGuard 0.8.3.x, covering the default Audit product, Production Enforce state/package admission contracts, protocol-v18 LAB/ProductionGate separation, hard-link alias policy, and the Engineering minifilter.
+Status: engineering threat model for RansomGuard 0.8.4.x, covering the default Audit product, Production Enforce state/package admission contracts, protocol-v18 LAB/ProductionGate separation, hard-link alias policy, and the Engineering minifilter.
 
-This document describes what the current implementation protects, what it deliberately does not protect, and how ambiguous I/O is handled. It is not a claim of production readiness. The default normal package remains Audit. Version 0.8.3 retains the cryptographically bound ProductionProtection package and distinct protocol-v18 ProductionGate profile, adds fail-closed hard-link alias policy to the engineering gate, but still reports `EnforceUnavailable` until a separately qualified production driver/GateClient lifecycle completes.
+This document describes what the current implementation protects, what it deliberately does not protect, and how ambiguous I/O is handled. It is not a claim of production readiness. The default normal package remains Audit. Version 0.8.4 retains the cryptographically bound ProductionProtection package and distinct protocol-v18 ProductionGate profile, adds explicit mediation for the reviewed data-mutating FSCTL class on top of the hard-link policy, but still reports `EnforceUnavailable` until a separately qualified production driver/GateClient lifecycle completes.
 
 ## Security goals
 
@@ -109,6 +109,8 @@ GateClient derives the NT device-volume prefix for the selected local LAB root a
 - **Ambiguous**: the destructive ordinary user-mode request cannot be classified by name and the callback belongs to the exact bound protected volume.
 
 Ambiguous mutation-capable CREATE, non-paging WRITE, RENAME, DELETE and TRUNCATE are denied in kernel. Read-only CREATE remains available because it cannot perform the destructive mutation being protected. RENAME evaluates both source and destination: either side inside makes the operation in-scope; both sides proven outside remain out-of-scope; an unresolved side on the protected volume fails safe.
+
+0.8.4 adds a separate mediation rule for known data-mutating filesystem controls that can change file content or extent layout without ordinary `IRP_MJ_WRITE` delivery. `FSCTL_SET_ZERO_DATA`, duplicate-extents/block-clone, offload-write, file-level trim and sparse-state operations are classified against the same protected root/volume scope. Proven outside operations remain outside; protected-volume ambiguity fails closed. In-scope execution requires an existing stream context whose mutation-capable CREATE already received `SnapshotCommitted` or `BaselineCommitted`. Missing context, Preflight, DegradedProtected or contained requestors are denied. No synchronous user-mode preservation is attempted from `IRP_MJ_FILE_SYSTEM_CONTROL`.
 
 0.8.3 applies the same source+destination rule to hard-link creation without adding a new user-mode transaction type. Activation also checks `FileStandardInfo.NumberOfLinks` on the exact frozen handle after FILE_ID equality and requires exactly one link. This deliberately keeps protected regular files single-named for the current recovery model: pre-existing aliases refuse activation, new inside↔outside aliases are denied, and proven outside↔outside links remain allowed.
 

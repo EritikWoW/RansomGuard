@@ -80,6 +80,15 @@ static NTSTATUS RgMessage(_In_opt_ PVOID ConnectionCookie,
 static NTSTATUS RgPopulateEvent(_Out_ PRG_EVENT Event, _Inout_ PFLT_CALLBACK_DATA Data,
                                 _In_ PCFLT_RELATED_OBJECTS FltObjects,
                                 _In_ RG_EVENT_TYPE EventType, _In_ ULONG FileInformationClass);
+static NTSTATUS RgGetNormalizedNameInformation(
+    _Inout_ PFLT_CALLBACK_DATA Data,
+    _Outptr_ PFLT_FILE_NAME_INFORMATION *NameInfo);
+static NTSTATUS RgGetNormalizedDestinationNameInformation(
+    _In_ PCFLT_RELATED_OBJECTS FltObjects,
+    _In_opt_ HANDLE RootDirectory,
+    _In_reads_bytes_(FileNameLength) PWSTR FileName,
+    _In_ ULONG FileNameLength,
+    _Outptr_ PFLT_FILE_NAME_INFORMATION *NameInfo);
 static NTSTATUS RgReadDeleteDispositionFlags(_In_ PFLT_CALLBACK_DATA Data, _Out_ PULONG Flags);
 static VOID RgPopulateRenameDestination(_Inout_ PRG_EVENT Event, _Inout_ PFLT_CALLBACK_DATA Data,
                                         _In_ PCFLT_RELATED_OBJECTS FltObjects);
@@ -533,6 +542,78 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
 
+static NTSTATUS RgGetNormalizedNameInformation(
+    PFLT_CALLBACK_DATA Data,
+    PFLT_FILE_NAME_INFORMATION *NameInfo)
+{
+    NTSTATUS status;
+
+    if (NameInfo == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    *NameInfo = NULL;
+
+    status = FltGetFileNameInformation(
+        Data,
+        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
+        NameInfo);
+    if (NT_SUCCESS(status) && *NameInfo != NULL) {
+        return status;
+    }
+    if (*NameInfo != NULL) {
+        FltReleaseFileNameInformation(*NameInfo);
+        *NameInfo = NULL;
+    }
+
+    // QUERY_DEFAULT refuses unsafe filesystem recursion outright. Before treating scope as
+    // ambiguous, still allow Filter Manager to satisfy the normalized name from its cache.
+    return FltGetFileNameInformation(
+        Data,
+        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_ALWAYS_ALLOW_CACHE_LOOKUP,
+        NameInfo);
+}
+
+static NTSTATUS RgGetNormalizedDestinationNameInformation(
+    PCFLT_RELATED_OBJECTS FltObjects,
+    HANDLE RootDirectory,
+    PWSTR FileName,
+    ULONG FileNameLength,
+    PFLT_FILE_NAME_INFORMATION *NameInfo)
+{
+    NTSTATUS status;
+
+    if (FltObjects == NULL || FltObjects->Instance == NULL || FltObjects->FileObject == NULL ||
+        FileName == NULL || FileNameLength == 0 || NameInfo == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    *NameInfo = NULL;
+
+    status = FltGetDestinationFileNameInformation(
+        FltObjects->Instance,
+        FltObjects->FileObject,
+        RootDirectory,
+        FileName,
+        FileNameLength,
+        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
+        NameInfo);
+    if (NT_SUCCESS(status) && *NameInfo != NULL) {
+        return status;
+    }
+    if (*NameInfo != NULL) {
+        FltReleaseFileNameInformation(*NameInfo);
+        *NameInfo = NULL;
+    }
+
+    return FltGetDestinationFileNameInformation(
+        FltObjects->Instance,
+        FltObjects->FileObject,
+        RootDirectory,
+        FileName,
+        FileNameLength,
+        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_ALWAYS_ALLOW_CACHE_LOOKUP,
+        NameInfo);
+}
+
 static NTSTATUS RgPopulateEvent(PRG_EVENT Event, PFLT_CALLBACK_DATA Data,
                                 PCFLT_RELATED_OBJECTS FltObjects,
                                 RG_EVENT_TYPE EventType, ULONG FileInformationClass)
@@ -579,9 +660,7 @@ static NTSTATUS RgPopulateEvent(PRG_EVENT Event, PFLT_CALLBACK_DATA Data,
         }
     }
 
-    status = FltGetFileNameInformation(Data,
-        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
-        &nameInfo);
+    status = RgGetNormalizedNameInformation(Data, &nameInfo);
 
     if (!NT_SUCCESS(status) || nameInfo == NULL) {
         Event->PathStatus = RgPathQueryFailed;
@@ -687,13 +766,11 @@ static VOID RgPopulateRenameDestination(PRG_EVENT Event, PFLT_CALLBACK_DATA Data
         Event->Flags = renameInfo->ReplaceIfExists ? 1u : 0u;
     }
 
-    status = FltGetDestinationFileNameInformation(
-        FltObjects->Instance,
-        FltObjects->FileObject,
+    status = RgGetNormalizedDestinationNameInformation(
+        FltObjects,
         renameInfo->RootDirectory,
         renameInfo->FileName,
         renameInfo->FileNameLength,
-        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
         &destinationInfo);
 
     if (!NT_SUCCESS(status) || destinationInfo == NULL) {
@@ -739,13 +816,11 @@ static NTSTATUS RgCreateRenamePostContext(PFLT_CALLBACK_DATA Data,
         return STATUS_INVALID_PARAMETER;
     }
 
-    status = FltGetDestinationFileNameInformation(
-        FltObjects->Instance,
-        FltObjects->FileObject,
+    status = RgGetNormalizedDestinationNameInformation(
+        FltObjects,
         renameInfo->RootDirectory,
         renameInfo->FileName,
         renameInfo->FileNameLength,
-        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
         &destinationInfo);
 
     if (!NT_SUCCESS(status) || destinationInfo == NULL) {
@@ -833,10 +908,7 @@ static NTSTATUS RgCreateCreatePostContext(PFLT_CALLBACK_DATA Data,
     NTSTATUS status;
 
     *PostContext = NULL;
-    status = FltGetFileNameInformation(
-        Data,
-        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
-        &nameInfo);
+    status = RgGetNormalizedNameInformation(Data, &nameInfo);
     if (!NT_SUCCESS(status) || nameInfo == NULL) {
         return NT_SUCCESS(status) ? STATUS_UNSUCCESSFUL : status;
     }

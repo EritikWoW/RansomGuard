@@ -102,7 +102,7 @@ var activationSummary = await ActivationPreflight.RunAsync(
     port, options.Root, resolver, activationStore, topologyStore, storageBudget, options.ContainPid, cts.Token).ConfigureAwait(false);
 Console.WriteLine($"Activation preflight: directories={activationSummary.DirectoriesHeld}, files={activationSummary.FilesChecked}, writable-views=0, kernel gate ACTIVE.");
 Console.WriteLine(activationSummary.ContainedProcessId is ulong containedPid
-    ? $"LAB containment  : ACTIVE for kernel-bound process pid={containedPid}; disconnect clears the latch."
+    ? $"LAB containment  : ACTIVE for kernel-bound process pid={containedPid}; abrupt disconnect clears only this PEPROCESS latch while root protection degrades fail-safe."
     : "LAB containment  : not pre-armed.");
 using var containmentTrigger = options.ContainAfterPid is int triggerPid
     ? new LabContainmentTrigger(triggerPid, options.ContainAfterEvents, options.ContainAfterPaths)

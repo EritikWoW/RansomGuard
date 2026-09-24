@@ -73,8 +73,14 @@ public sealed class ProtectionStateMachine
             throw new InvalidOperationException("Automatic containment can be active only in Protected state.");
         if (requested == RequestedProtectionMode.Audit && phase != ProtectionPhase.AuditOnly && phase != ProtectionPhase.Failed && phase != ProtectionPhase.Stopped)
             throw new InvalidOperationException("Audit mode cannot publish an Enforce protection phase.");
+        if (requested == RequestedProtectionMode.Enforce && phase == ProtectionPhase.AuditOnly)
+            throw new InvalidOperationException("Enforce mode cannot silently downgrade to AuditOnly.");
         if (expectedKernel && !value.RollbackStoreReady)
             throw new InvalidOperationException("Active kernel enforcement requires rollback-store readiness.");
+        if (phase == ProtectionPhase.KernelConnected && (!value.RollbackStoreReady || !value.KernelChannelConnected))
+            throw new InvalidOperationException("KernelConnected requires rollback readiness and a live kernel channel.");
+        if (phase is ProtectionPhase.EnforceStarting or ProtectionPhase.EnforceUnavailable && value.KernelChannelConnected)
+            throw new InvalidOperationException("Pre-activation Enforce states cannot claim a connected kernel channel.");
         if (phase == ProtectionPhase.Protected && !value.KernelChannelConnected)
             throw new InvalidOperationException("Protected state requires a connected kernel channel.");
         if (phase == ProtectionPhase.DegradedProtected && value.KernelChannelConnected)

@@ -117,6 +117,10 @@ rejected=false;try{
     ProtectionStateMachine.ValidateSnapshot(new ProtectionStatusDto("Enforce","Protected",true,false,true,false,"invalid",now));
 }catch(InvalidOperationException){rejected=true;}
 Check(rejected,"Protected claim requires a connected kernel channel");
+rejected=false;try{
+    ProtectionStateMachine.ValidateSnapshot(new ProtectionStatusDto("Enforce","AuditOnly",true,false,false,false,"invalid downgrade",now));
+}catch(InvalidOperationException){rejected=true;}
+Check(rejected,"Enforce request cannot silently downgrade to AuditOnly");
 var root=@"C:\Data";var canary=@"C:\Data\canary.txt";
 RiskEngine NewEngine()=>new(s,new[]{root},new[]{canary});
 FileSignal E(string p,FileKind kind,int ms=0,ProcessKey? pk=null)=>new(now.AddMilliseconds(ms),now.AddMilliseconds(ms),pk??key,"anything.exe",path,p,kind);

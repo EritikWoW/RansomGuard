@@ -118,6 +118,7 @@ static BOOLEAN RgAcquireClientPort(_In_ LONG ExpectedMode);
 static VOID RgReleaseClientPort(VOID);
 static VOID RgWaitForPortUsers(VOID);
 static LONG RgCurrentClientMode(VOID);
+static LONG RgCurrentProtectedClientMode(VOID);
 static BOOLEAN RgIsGateClientMode(_In_ LONG Mode);
 static ULONG RgCurrentProtectionState(VOID);
 static BOOLEAN RgIsDegradedProtected(VOID);
@@ -226,6 +227,11 @@ static BOOLEAN RgShouldObserve(_In_ PFLT_CALLBACK_DATA Data)
 static LONG RgCurrentClientMode(VOID)
 {
     return InterlockedCompareExchange(&gClientMode, 0, 0);
+}
+
+static LONG RgCurrentProtectedClientMode(VOID)
+{
+    return InterlockedCompareExchange(&gProtectedClientMode, 0, 0);
 }
 
 static BOOLEAN RgIsGateClientMode(LONG Mode)
@@ -1081,7 +1087,7 @@ FLT_POSTOP_CALLBACK_STATUS RgPostCreate(PFLT_CALLBACK_DATA Data,
         InterlockedExchange(&gActivationHazard, 1);
     }
 
-    RgQueueRawEvent(&event, RgCurrentClientMode());
+    RgQueueRawEvent(&event, RgCurrentProtectedClientMode());
 
     if (tunneledInfo != NULL) {
         FltReleaseFileNameInformation(tunneledInfo);
@@ -1131,7 +1137,7 @@ static VOID RgQueueDeleteFinalization(PRG_DELETE_HANDLE_CONTEXT Context,
     }
     KeQuerySystemTimePrecise(&systemTime);
     event.SystemTime100ns = systemTime.QuadPart;
-    RgQueueRawEvent(&event, RgCurrentClientMode());
+    RgQueueRawEvent(&event, RgCurrentProtectedClientMode());
 }
 
 static VOID RgAttachDeleteHandleContext(PCFLT_RELATED_OBJECTS FltObjects,
@@ -1376,7 +1382,7 @@ static VOID RgObservePagingWrite(PFLT_CALLBACK_DATA Data,
     // Paging I/O can run in memory-manager/cache-manager contexts where filesystem name
     // queries or synchronous user-mode preservation can deadlock. Emit bounded no-reply
     // evidence only; do not call RgGateEvent from the paging path.
-    RgQueueRawEvent(&event, RgCurrentClientMode());
+    RgQueueRawEvent(&event, RgCurrentProtectedClientMode());
     FltReleaseContext(context);
 }
 
@@ -1418,7 +1424,7 @@ static VOID RgObserveWritableSection(PFLT_CALLBACK_DATA Data,
     event.FileIdHigh = context->FileIdHigh;
     RtlCopyMemory(event.Path, context->Path, sizeof(event.Path));
 
-    RgQueueRawEvent(&event, RgCurrentClientMode());
+    RgQueueRawEvent(&event, RgCurrentProtectedClientMode());
     FltReleaseContext(context);
 }
 
@@ -1595,7 +1601,7 @@ static FLT_POSTOP_CALLBACK_STATUS RgPostSetInformationSafe(PFLT_CALLBACK_DATA Da
         }
     }
 
-    RgQueueRawEvent(&event, RgCurrentClientMode());
+    RgQueueRawEvent(&event, RgCurrentProtectedClientMode());
 
     if (tunneledInfo != NULL) {
         FltReleaseFileNameInformation(tunneledInfo);
@@ -1799,7 +1805,8 @@ static BOOLEAN RgInjectScopeAmbiguityProbe(
     PEPROCESS previous = NULL;
     BOOLEAN inject = FALSE;
 
-    if (Data == NULL || Event == NULL) {
+    if (Data == NULL || Event == NULL ||
+        RgCurrentClientMode() != RgClientLabGate) {
         return FALSE;
     }
 
@@ -1838,6 +1845,13 @@ static BOOLEAN RgBindContainedRequestor(PFLT_CALLBACK_DATA Data,
     BOOLEAN newlyBound = FALSE;
     ULONG failure = (ULONG)STATUS_DEVICE_BUSY;
     RG_EVENT activationEvent;
+
+    if (RgCurrentClientMode() != RgClientLabGate) {
+        if (ErrorCode != NULL) {
+            *ErrorCode = (ULONG)STATUS_NOT_SUPPORTED;
+        }
+        return FALSE;
+    }
 
     requestor = FltGetRequestorProcess(Data);
     if (requestor == NULL ||

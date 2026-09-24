@@ -41,6 +41,7 @@ foreach($required in @(
     'unexpectedDisconnectObserved',
     'failSafeWriteDenied',
     'failSafeCreateDenied',
+    "createFailure -notmatch '(?m)^Win32Error:\\s*5\\s*\u0024'",
     'differentRootRejected',
     'sameRootReconnectActivated',
     'sameRootCompletionDurable',

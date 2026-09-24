@@ -84,7 +84,10 @@ typedef enum _RG_CONTROL_COMMAND {
     RgControlArmPreflight = 3,
     RgControlActivateAndContainProcess = 4,
     RgControlQueryContainment = 5,
-    RgControlDeactivateGate = 6
+    RgControlDeactivateGate = 6,
+    // LAB-only one-shot fault probe. The target process is referenced in kernel and its next
+    // destructive callback is forced to PathStatus=QueryFailed. This can only increase denial.
+    RgControlArmScopeAmbiguity = 7
 } RG_CONTROL_COMMAND;
 
 #pragma pack(push, 1)

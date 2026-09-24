@@ -15,19 +15,25 @@ $workerPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\GuardWorker.cs'
 $gateClientPath=Join-Path $RepositoryRoot 'src\RansomGuard.GateClient\Program.cs'
 $protocolPath=Join-Path $RepositoryRoot 'native\shared\rg_minifilter_protocol.h'
 $verifierGatePath=Join-Path $RepositoryRoot 'tools\verify_driver_verifier_vm_harness.ps1'
+$buildPath=Join-Path $RepositoryRoot 'build_windows.ps1'
+$workflowRoot=Join-Path $RepositoryRoot '.github\workflows'
+if(-not(Test-Path -LiteralPath $workflowRoot -PathType Container)){
+    throw "Threat-model workflow root missing: $workflowRoot"
+}
 $workflowPaths=@(
-    '.github\workflows\windows-ci.yml',
-    '.github\workflows\minifilter-ci.yml',
-    '.github\workflows\minifilter-runtime-vm.yml',
-    '.github\workflows\minifilter-stress-vm.yml',
-    '.github\workflows\minifilter-crash-vm.yml',
-    '.github\workflows\minifilter-verifier-vm.yml'
-) | ForEach-Object { Join-Path $RepositoryRoot $_ }
+    Get-ChildItem -LiteralPath $workflowRoot -File |
+        Where-Object { $_.Extension -in @('.yml','.yaml') } |
+        Sort-Object FullName |
+        Select-Object -ExpandProperty FullName
+)
+if($workflowPaths.Count -eq 0){
+    throw 'Threat-model gate found no GitHub Actions workflows to audit.'
+}
 $globalPath=Join-Path $RepositoryRoot 'global.json'
 $supplyGatePath=Join-Path $RepositoryRoot 'tools\verify_supply_chain.ps1'
 $codeOwnersPath=Join-Path $RepositoryRoot '.github\CODEOWNERS'
 
-foreach($path in @($threatPath,$securityPath,$driverPath,$policyPath,$workerPath,$gateClientPath,$protocolPath,$verifierGatePath,$globalPath,$supplyGatePath,$codeOwnersPath)+$workflowPaths){
+foreach($path in @($threatPath,$securityPath,$driverPath,$policyPath,$workerPath,$gateClientPath,$protocolPath,$verifierGatePath,$buildPath,$globalPath,$supplyGatePath,$codeOwnersPath)+$workflowPaths){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){
         throw "Threat-model source missing: $path"
     }
@@ -155,6 +161,10 @@ if(-not $verifierGate.Contains('persisted reboot timestamps are parsed from raw 
     throw 'Threat model requires the timezone-safe Driver Verifier reboot-proof source gate.'
 }
 
+$build=Get-Content -LiteralPath $buildPath -Raw
+if(-not $build.Contains("tools\verify_threat_model.ps1")){
+    throw 'build_windows.ps1 must run the threat-model gate before building release artifacts.'
+}
 foreach($workflowPath in $workflowPaths){
     $workflow=Get-Content -LiteralPath $workflowPath -Raw
     if(-not $workflow.Contains('.\tools\verify_threat_model.ps1')){
@@ -162,4 +172,4 @@ foreach($workflowPath in $workflowPaths){
     }
 }
 
-Write-Host 'Threat-model gate PASSED: docs match AuditOnly/fail-open/kernel exclusions, protocol v15, serialized synchronous gate semantics, current Driver Verifier/fault qualification limits, supply-chain controls, CODEOWNERS routing, and all repository workflows invoke this gate.'
+Write-Host "Threat-model gate PASSED: docs match AuditOnly/fail-open/kernel exclusions, protocol v15, serialized synchronous gate semantics, current Driver Verifier/fault qualification limits, supply-chain controls, CODEOWNERS routing, build_windows.ps1 and all $($workflowPaths.Count) repository workflows invoke this gate."

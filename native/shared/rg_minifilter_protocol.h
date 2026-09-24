@@ -1,12 +1,13 @@
 #pragma once
 
 // Wire protocol between the RansomGuard lab minifilter and user-mode clients.
-// v16 adds explicit protection health state plus graceful gate deactivation so an unexpected
-// GateClient disconnect can latch a degraded fail-safe state instead of silently disabling gating.
+// v17 keeps the v16 protection-state machine and repurposes the former reserved connect field
+// as GateVolumeLengthBytes so the kernel can bind the exact protected PFLT_VOLUME. This lets
+// path-query ambiguity fail safe only on the protected volume while other volumes remain outside scope.
 // The driver binds the exact requestor PEPROCESS for containment before allowing that IRP to continue.
 // The production bundle still does not install or enable the driver.
 
-#define RG_PROTOCOL_VERSION 16u
+#define RG_PROTOCOL_VERSION 17u
 #define RG_PATH_CHARS 512u
 #define RG_GATE_ROOT_CHARS 260u
 #define RG_PORT_NAME L"\\RansomGuardMinifilterPort"
@@ -92,7 +93,7 @@ typedef struct _RG_CONNECT_CONTEXT {
     unsigned long ClientMode;
     unsigned long long ClientProcessId;
     unsigned long GateRootLengthBytes;
-    unsigned long Reserved;
+    unsigned long GateVolumeLengthBytes;
     wchar_t GateRoot[RG_GATE_ROOT_CHARS];
 } RG_CONNECT_CONTEXT, *PRG_CONNECT_CONTEXT;
 

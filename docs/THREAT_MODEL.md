@@ -94,7 +94,7 @@ The current driver does not mean "driver loaded = protected".
 
 ## Ambiguous-scope analysis
 
-Protocol v17 removes the previous ordinary user-mode destructive `name query failed -> allow` behavior on the negotiated protected volume without converting the entire machine into fail-closed I/O.
+Protocol v17 removes the previous ordinary user-mode destructive `name query failed -> allow` behavior on the negotiated protected volume without converting the entire machine into fail-closed I/O. Before classifying a normalized name as unresolved, the driver retries through Filter Manager with `QUERY_ALWAYS_ALLOW_CACHE_LOOKUP`; only residual uncertainty reaches the volume-aware Ambiguous state.
 
 GateClient derives the NT device-volume prefix for the selected local LAB root and sends its byte length in the fixed-size connect context. The kernel resolves that prefix with Filter Manager and retains the referenced `PFLT_VOLUME` for the protected session. Scope classification then uses three states:
 

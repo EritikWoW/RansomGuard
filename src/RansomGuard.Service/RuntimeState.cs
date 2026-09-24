@@ -18,7 +18,8 @@ internal sealed class RuntimeState
     private long _revision, _telemetryRevision, _incidentRevision, _recoveryRevision;
     public RuntimeState(ProtectionStatusDto protection)
     {
-        _protection = protection ?? throw new ArgumentNullException(nameof(protection));
+        ProtectionStateMachine.ValidateSnapshot(protection);
+        _protection = protection;
     }
     public DateTime StartedUtc => _startedUtc;
     public ChangePulse.Subscription Subscribe() => _pulse.Subscribe();
@@ -50,7 +51,11 @@ internal sealed class RuntimeState
     public void UpdateRecovery(RecoverySummaryDto value)
     { lock (_gate) { _recovery=value; _revision++; _recoveryRevision++; } _pulse.Signal(); }
     public void UpdateProtection(ProtectionStatusDto value)
-    { lock (_gate) { _protection=value; _revision++; _telemetryRevision++; } _pulse.Signal(); }
+    {
+        ProtectionStateMachine.ValidateSnapshot(value);
+        lock (_gate) { _protection=value; _revision++; _telemetryRevision++; }
+        _pulse.Signal();
+    }
     public ProtectionStatusDto Protection() { lock(_gate) return _protection; }
     public void RefreshDriverStatus()
     {

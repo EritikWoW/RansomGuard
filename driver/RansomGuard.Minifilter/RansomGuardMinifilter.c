@@ -16,6 +16,9 @@ static volatile LONG gPortRundownCompleted = 0;
 static volatile LONG gGateInFlight = 0;
 static volatile LONG gUnloading = 0;
 static volatile LONG gClientConnected = 0;
+static volatile LONG gProtectionArmed = 0;
+static volatile LONG gFailSafeActive = 0;
+static volatile LONG gDisconnectAuthorized = 0;
 static volatile LONG gClientMode = 0;
 static volatile LONG64 gClientProcessId = 0;
 static PEPROCESS gContainedProcess = NULL;
@@ -164,8 +167,12 @@ static BOOLEAN RgIsInterestingSetInfo(_In_ FILE_INFORMATION_CLASS InformationCla
 
 static BOOLEAN RgShouldObserve(_In_ PFLT_CALLBACK_DATA Data)
 {
-    if (InterlockedCompareExchange(&gUnloading, 0, 0) != 0 ||
-        InterlockedCompareExchange(&gClientConnected, 0, 0) == 0) {
+    if (InterlockedCompareExchange(&gUnloading, 0, 0) != 0) {
+        return FALSE;
+    }
+
+    if (InterlockedCompareExchange(&gClientConnected, 0, 0) == 0 &&
+        InterlockedCompareExchange(&gFailSafeActive, 0, 0) == 0) {
         return FALSE;
     }
 
@@ -1441,7 +1448,8 @@ static BOOLEAN RgEventPathMatchesGateRoot(const RG_EVENT *Event)
     RtlInitUnicodeString(&eventPath, Event->Path);
 
     ExAcquireFastMutex(&gPortMutex);
-    if (gClientPort != NULL && gClientMode == RgClientLabGate && gGateRootLengthBytes != 0) {
+    if (gClientMode == RgClientLabGate && gGateRootLengthBytes != 0 &&
+        (gClientPort != NULL || InterlockedCompareExchange(&gFailSafeActive, 0, 0) != 0)) {
         root.Buffer = gGateRoot;
         root.Length = gGateRootLengthBytes;
         root.MaximumLength = (USHORT)(gGateRootLengthBytes + sizeof(WCHAR));
@@ -1819,6 +1827,7 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
     NTSTATUS status = STATUS_SUCCESS;
     ULONG rootBytes;
     ULONG rootChars;
+    BOOLEAN reconnectFailSafe;
 
     UNREFERENCED_PARAMETER(ServerPortCookie);
     *ConnectionPortCookie = NULL;
@@ -1846,14 +1855,39 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
         if (context->GateRoot[0] != L'\\' || context->GateRoot[rootChars] != L'\0') {
             return STATUS_INVALID_PARAMETER;
         }
+        while (rootChars > 1 && context->GateRoot[rootChars - 1] == L'\\') {
+            rootChars--;
+        }
+        rootBytes = rootChars * sizeof(WCHAR);
     } else if (rootBytes != 0) {
         return STATUS_INVALID_PARAMETER;
     }
 
     ExAcquireFastMutex(&gPortMutex);
+    reconnectFailSafe = (InterlockedCompareExchange(&gFailSafeActive, 0, 0) != 0);
     if (gClientPort != NULL || gContainedProcess != NULL ||
         InterlockedCompareExchange(&gUnloading, 0, 0) != 0) {
         status = STATUS_DEVICE_BUSY;
+    } else if (reconnectFailSafe) {
+        if (context->ClientMode != RgClientLabGate ||
+            gClientMode != RgClientLabGate ||
+            InterlockedCompareExchange(&gProtectionArmed, 0, 0) == 0 ||
+            gGateRootLengthBytes != (USHORT)rootBytes ||
+            RtlCompareMemory(gGateRoot, context->GateRoot, rootBytes) != rootBytes) {
+            status = STATUS_ACCESS_DENIED;
+        } else {
+            if (InterlockedExchange(&gPortRundownCompleted, 0) != 0) {
+                ExReInitializeRundownProtection(&gPortRundown);
+            }
+            gClientPort = ClientPort;
+            InterlockedExchange64(&gClientProcessId, (LONG64)context->ClientProcessId);
+            InterlockedExchange(&gDisconnectAuthorized, 0);
+            InterlockedExchange(&gFailSafeActive, 0);
+            InterlockedExchange(&gGateActivated, 0);
+            InterlockedExchange(&gActivationHazard, 0);
+            InterlockedExchange(&gPreflightProbeArmed, 0);
+            InterlockedExchange(&gClientConnected, 1);
+        }
     } else {
         if (InterlockedExchange(&gPortRundownCompleted, 0) != 0) {
             ExReInitializeRundownProtection(&gPortRundown);
@@ -1863,18 +1897,17 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
         gClientPort = ClientPort;
         gClientMode = (LONG)context->ClientMode;
         InterlockedExchange64(&gClientProcessId, (LONG64)context->ClientProcessId);
+        InterlockedExchange(&gProtectionArmed, 0);
+        InterlockedExchange(&gFailSafeActive, 0);
+        InterlockedExchange(&gDisconnectAuthorized, 0);
         InterlockedExchange(&gGateActivated, context->ClientMode == RgClientLabGate ? 0 : 1);
         InterlockedExchange(&gActivationHazard, 0);
         InterlockedExchange(&gPreflightProbeArmed, 0);
 
         if (context->ClientMode == RgClientLabGate) {
             RtlCopyMemory(gGateRoot, context->GateRoot, rootBytes);
-            rootChars = rootBytes / sizeof(WCHAR);
-            while (rootChars > 1 && gGateRoot[rootChars - 1] == L'\\') {
-                gGateRoot[rootChars - 1] = L'\0';
-                rootChars--;
-            }
-            gGateRootLengthBytes = (USHORT)(rootChars * sizeof(WCHAR));
+            gGateRoot[rootBytes / sizeof(WCHAR)] = L'\0';
+            gGateRootLengthBytes = (USHORT)rootBytes;
         }
         InterlockedExchange(&gClientConnected, 1);
     }
@@ -1940,6 +1973,7 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
             status = STATUS_DEVICE_BUSY;
         } else {
             InterlockedExchange(&gGateActivated, 1);
+            InterlockedExchange(&gProtectionArmed, 1);
             status = STATUS_SUCCESS;
         }
     } else if (request->Command == RgControlActivateAndContainProcess) {
@@ -1964,10 +1998,25 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
                     targetProcess = NULL;
                     InterlockedExchange64(&gContainedProcessId, (LONG64)request->TargetProcessId);
                     InterlockedExchange(&gGateActivated, 1);
+                    InterlockedExchange(&gProtectionArmed, 1);
                     status = STATUS_SUCCESS;
                 }
                 ExReleaseFastMutex(&gPortMutex);
             }
+        }
+    } else if (request->Command == RgControlAuthorizeDisconnect) {
+        if (request->TargetProcessId != 0) {
+            status = STATUS_INVALID_PARAMETER;
+        } else if (InterlockedCompareExchange(&gGateActivated, 0, 0) == 0 ||
+                   InterlockedCompareExchange(&gProtectionArmed, 0, 0) == 0 ||
+                   InterlockedCompareExchange(&gFailSafeActive, 0, 0) != 0 ||
+                   InterlockedCompareExchange(&gPreflightProbeArmed, 0, 0) != 0 ||
+                   InterlockedCompareExchange(&gActivationHazard, 0, 0) != 0 ||
+                   InterlockedCompareExchange(&gGateInFlight, 0, 0) != 0) {
+            status = STATUS_DEVICE_BUSY;
+        } else {
+            InterlockedExchange(&gDisconnectAuthorized, 1);
+            status = STATUS_SUCCESS;
         }
     } else {
         status = STATUS_INVALID_PARAMETER;
@@ -1988,19 +2037,41 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
 
 static VOID RgDisconnect(PVOID ConnectionCookie)
 {
+    BOOLEAN preserveFailSafe;
+    LONG authorized;
+
     UNREFERENCED_PARAMETER(ConnectionCookie);
 
+    authorized = InterlockedExchange(&gDisconnectAuthorized, 0);
     RgClearContainedProcess();
 
     ExAcquireFastMutex(&gPortMutex);
+    preserveFailSafe =
+        InterlockedCompareExchange(&gUnloading, 0, 0) == 0 &&
+        authorized == 0 &&
+        gClientMode == RgClientLabGate &&
+        InterlockedCompareExchange(&gProtectionArmed, 0, 0) != 0 &&
+        gGateRootLengthBytes != 0;
+
     InterlockedExchange(&gClientConnected, 0);
-    InterlockedExchange(&gClientMode, 0);
     InterlockedExchange64(&gClientProcessId, 0);
-    InterlockedExchange(&gGateActivated, 0);
     InterlockedExchange(&gActivationHazard, 0);
     InterlockedExchange(&gPreflightProbeArmed, 0);
-    gGateRootLengthBytes = 0;
-    RtlSecureZeroMemory(gGateRoot, sizeof(gGateRoot));
+
+    if (preserveFailSafe) {
+        // The root and LAB mode remain latched. Resolved in-root destructive requests
+        // continue through the gate path and fail closed because no client port can reply.
+        InterlockedExchange(&gGateActivated, 1);
+        InterlockedExchange(&gFailSafeActive, 1);
+    } else {
+        InterlockedExchange(&gClientMode, 0);
+        InterlockedExchange(&gProtectionArmed, 0);
+        InterlockedExchange(&gFailSafeActive, 0);
+        InterlockedExchange(&gGateActivated, 0);
+        gGateRootLengthBytes = 0;
+        RtlSecureZeroMemory(gGateRoot, sizeof(gGateRoot));
+    }
+
     if (gClientPort != NULL) {
         FltCloseClientPort(gFilter, &gClientPort);
     }
@@ -2032,6 +2103,9 @@ NTSTATUS RgUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
     UNREFERENCED_PARAMETER(Flags);
     InterlockedExchange(&gUnloading, 1);
     InterlockedExchange(&gClientConnected, 0);
+    InterlockedExchange(&gProtectionArmed, 0);
+    InterlockedExchange(&gFailSafeActive, 0);
+    InterlockedExchange(&gDisconnectAuthorized, 0);
     InterlockedExchange(&gClientMode, 0);
     RgClearContainedProcess();
 
@@ -2041,6 +2115,8 @@ NTSTATUS RgUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
     }
 
     ExAcquireFastMutex(&gPortMutex);
+    gGateRootLengthBytes = 0;
+    RtlSecureZeroMemory(gGateRoot, sizeof(gGateRoot));
     if (gClientPort != NULL) {
         FltCloseClientPort(gFilter, &gClientPort);
     }

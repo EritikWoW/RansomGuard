@@ -1,8 +1,6 @@
-# RansomGuard 0.8.1.0 - guided setup
+# RansomGuard 0.8.2.0 - guided setup
 
-This document describes the default Audit guided setup. Version 0.8.1 adds production protection-package
-admission on top of the 0.8.0 Enforce state contract, but it still does not install/load the production
-kernel driver, spawn/supervise GateClient or claim active blocking. It does not change Defender or widen trust rules.
+This document describes the default Audit guided setup. Version 0.8.2 adds the protocol-v18 ProductionGate contract on top of package admission, but the guided setup still does not install/load the production kernel driver, spawn/supervise GateClient or claim active blocking. It does not change Defender or widen trust rules.
 The dashboard, chosen icons, Ukrainian/English languages and theme palettes remain.
 
 ## Ordinary user workflow

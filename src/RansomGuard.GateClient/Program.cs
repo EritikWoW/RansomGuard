@@ -73,11 +73,12 @@ if (options.DropFirstTruncateCompletion)
     Console.WriteLine("LAB completion-loss injection : ARMED for the first authoritative TRUNCATE result.");
 if (options.DropFirstDeleteCompletion)
     Console.WriteLine("LAB completion-loss injection : ARMED for the first authoritative DELETE disposition result.");
-Console.WriteLine("Press Ctrl+C to disconnect. The driver then stops gating because no client is connected.");
+Console.WriteLine("Press Ctrl+C for a clean shutdown. A clean, transaction-complete session explicitly deactivates the gate before disconnect.");
+Console.WriteLine("Abrupt GateClient loss after activation leaves the kernel in DEGRADED_PROTECTED for the retained LAB root.");
 
 var context = new RgConnectContext
 {
-    ProtocolVersion = 15,
+    ProtocolVersion = 16,
     ClientMode = (uint)RgClientMode.LabGate,
     ClientProcessId = (ulong)Environment.ProcessId,
     GateRootLengthBytes = checked((uint)(ntRoot.Length * 2)),
@@ -125,7 +126,7 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
     {
         if ((RgEventType)ev.EventType == RgEventType.ContainmentActivated)
         {
-            if (ev.ProtocolVersion != 15 ||
+            if (ev.ProtocolVersion != 16 ||
                 ev.RelatedSequence == 0 ||
                 ev.ProcessId <= 4 ||
                 ev.CompletionStatus != 0)
@@ -168,7 +169,7 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
 
         if ((RgEventType)ev.EventType == RgEventType.WritableSection)
         {
-            if (ev.ProtocolVersion != 15 ||
+            if (ev.ProtocolVersion != 16 ||
                 ev.PathStatus != (uint)RgPathStatus.Resolved ||
                 ev.RelatedSequence == 0 ||
                 ev.CompletionInformation > uint.MaxValue)
@@ -217,7 +218,7 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
 
         if ((RgEventType)ev.EventType == RgEventType.PagingWrite)
         {
-            if (ev.ProtocolVersion != 15 || ev.PathStatus != (uint)RgPathStatus.Resolved)
+            if (ev.ProtocolVersion != 16 || ev.PathStatus != (uint)RgPathStatus.Resolved)
                 throw new InvalidDataException("Invalid paging-write evidence event.");
 
             var trackedPath = resolver.Resolve(ev.Path);
@@ -487,12 +488,13 @@ var pendingContainmentAckCount = containmentRecords.Count(x =>
         y.Phase == ContainmentEvidencePhase.KernelActive &&
         y.KernelSequence == x.KernelSequence));
 var workerFailureCount = Volatile.Read(ref gateWorkerFailures);
-var lifecycleReason = workerFailureCount == 0 &&
-                      pendingCreateCount == 0 &&
-                      pendingRenameCount == 0 &&
-                      pendingTruncateCount == 0 &&
-                      unsettledDeleteCount == 0 &&
-                      pendingContainmentAckCount == 0
+var cleanShutdown = workerFailureCount == 0 &&
+                    pendingCreateCount == 0 &&
+                    pendingRenameCount == 0 &&
+                    pendingTruncateCount == 0 &&
+                    unsettledDeleteCount == 0 &&
+                    pendingContainmentAckCount == 0;
+var lifecycleReason = cleanShutdown
     ? "clean-gate-shutdown"
     : $"gate-shutdown-faulted:workers={workerFailureCount};pending-create={pendingCreateCount};pending-rename={pendingRenameCount};pending-truncate={pendingTruncateCount};unsettled-delete={unsettledDeleteCount};pending-containment-ack={pendingContainmentAckCount}";
 
@@ -501,12 +503,7 @@ await using (var lifecycleReservation = await storageBudget.ReserveAsync(
                  "session-lifecycle-terminal",
                  CancellationToken.None).ConfigureAwait(false))
 {
-    if (workerFailureCount == 0 &&
-        pendingCreateCount == 0 &&
-        pendingRenameCount == 0 &&
-        pendingTruncateCount == 0 &&
-        unsettledDeleteCount == 0 &&
-        pendingContainmentAckCount == 0)
+    if (cleanShutdown)
     {
         _ = await lifecycleStore.MarkCompletedAsync(lifecycleReason, CancellationToken.None)
             .ConfigureAwait(false);
@@ -518,6 +515,30 @@ await using (var lifecycleReservation = await storageBudget.ReserveAsync(
             .ConfigureAwait(false);
         Console.Error.WriteLine($"Rollback session lifecycle: Faulted ({lifecycleReason}).");
     }
+}
+
+if (cleanShutdown)
+{
+    var deactivationReply = Native.Control(port, new RgControlRequest
+    {
+        ProtocolVersion = 16,
+        Command = (uint)RgControlCommand.DeactivateGate
+    });
+    if (deactivationReply.ProtocolVersion != 16 ||
+        deactivationReply.Command != (uint)RgControlCommand.DeactivateGate ||
+        deactivationReply.Status != 0 ||
+        deactivationReply.GateActivated != 0 ||
+        deactivationReply.ContainmentActive != 0 ||
+        deactivationReply.ContainedProcessId != 0 ||
+        deactivationReply.ProtectionState != (uint)RgProtectionState.Maintenance)
+        throw new InvalidOperationException(
+            $"Kernel refused clean gate deactivation. NTSTATUS=0x{deactivationReply.Status:X8}, state={(RgProtectionState)deactivationReply.ProtectionState}.");
+
+    Console.WriteLine("Kernel gate graceful deactivation: MAINTENANCE authorized; port close may release the retained LAB root.");
+}
+else
+{
+    Console.Error.WriteLine("Kernel gate graceful deactivation NOT authorized; disconnect must remain fail-safe for the retained LAB root.");
 }
 
 static class ActivationPreflight
@@ -596,13 +617,14 @@ static class ActivationPreflight
 
                 var arm = Native.Control(port, new RgControlRequest
                 {
-                    ProtocolVersion = 15,
+                    ProtocolVersion = 16,
                     Command = (uint)RgControlCommand.ArmPreflight
                 });
-                if (arm.ProtocolVersion != 15 ||
+                if (arm.ProtocolVersion != 16 ||
                     arm.Command != (uint)RgControlCommand.ArmPreflight ||
                     arm.Status != 0 ||
-                    arm.GateActivated != 0)
+                    arm.GateActivated != 0 ||
+                    arm.ProtectionState != (uint)RgProtectionState.Preflight)
                     throw new InvalidOperationException(
                         $"Kernel refused to arm activation preflight for '{path}'. NTSTATUS=0x{arm.Status:X8}.");
 
@@ -662,14 +684,15 @@ static class ActivationPreflight
                 : RgControlCommand.ActivateGate;
             var activationReply = Native.Control(port, new RgControlRequest
             {
-                ProtocolVersion = 15,
+                ProtocolVersion = 16,
                 Command = (uint)activationCommand,
                 TargetProcessId = containPid ?? 0
             });
-            if (activationReply.ProtocolVersion != 15 ||
+            if (activationReply.ProtocolVersion != 16 ||
                 activationReply.Command != (uint)activationCommand ||
                 activationReply.Status != 0 ||
-                activationReply.GateActivated != 1)
+                activationReply.GateActivated != 1 ||
+                activationReply.ProtectionState != (uint)RgProtectionState.Protected)
                 throw new InvalidOperationException(
                     $"Kernel refused LAB activation after preflight. NTSTATUS=0x{activationReply.Status:X8}, active={activationReply.GateActivated}.");
 
@@ -728,7 +751,7 @@ static class ActivationPreflight
                     throw new InvalidOperationException("Activation refused: protected-root memory-mapped activity occurred during preflight.");
                 if (type != RgEventType.ActivationPreflight)
                     throw new InvalidDataException($"Unexpected event {type} during activation preflight.");
-                if (ev.ProtocolVersion != 15 || ev.PathStatus != (uint)RgPathStatus.Resolved)
+                if (ev.ProtocolVersion != 16 || ev.PathStatus != (uint)RgPathStatus.Resolved)
                     throw new InvalidDataException("Invalid activation preflight event.");
 
                 var resolved = resolver.Resolve(ev.Path);
@@ -756,7 +779,7 @@ static class CreateReconciliation
         CreateOperationStore operationStore,
         CancellationToken cancellationToken)
     {
-        if (ev.ProtocolVersion != 15 || ev.RelatedSequence == 0)
+        if (ev.ProtocolVersion != 16 || ev.RelatedSequence == 0)
             throw new InvalidDataException("Invalid CREATE completion correlation.");
 
         if (!NtSuccess(ev.CompletionStatus))
@@ -820,7 +843,7 @@ static class RenameReconciliation
         RenameRollbackStore renameStore,
         CancellationToken cancellationToken)
     {
-        if (ev.ProtocolVersion != 15 || ev.RelatedSequence == 0)
+        if (ev.ProtocolVersion != 16 || ev.RelatedSequence == 0)
             throw new InvalidDataException("Invalid rename completion correlation.");
 
         if (!NtSuccess(ev.CompletionStatus))
@@ -882,7 +905,7 @@ static class TruncateReconciliation
         TruncateOperationStore store,
         CancellationToken cancellationToken)
     {
-        if (ev.ProtocolVersion != 15 || ev.RelatedSequence == 0)
+        if (ev.ProtocolVersion != 16 || ev.RelatedSequence == 0)
             throw new InvalidDataException("Invalid TRUNCATE completion correlation.");
 
         var intent = store.Intents.SingleOrDefault(x => x.RequestSequence == ev.RelatedSequence)
@@ -948,7 +971,7 @@ static class DeleteReconciliation
         DeleteOperationStore store,
         CancellationToken cancellationToken)
     {
-        if (ev.ProtocolVersion != 15 || ev.RelatedSequence == 0)
+        if (ev.ProtocolVersion != 16 || ev.RelatedSequence == 0)
             throw new InvalidDataException("Invalid DELETE disposition completion correlation.");
 
         var intent = store.Intents.SingleOrDefault(x => x.RequestSequence == ev.RelatedSequence)
@@ -1006,7 +1029,7 @@ static class DeleteReconciliation
         DeleteOperationStore store,
         CancellationToken cancellationToken)
     {
-        if (ev.ProtocolVersion != 15 || ev.RelatedSequence == 0)
+        if (ev.ProtocolVersion != 16 || ev.RelatedSequence == 0)
             throw new InvalidDataException("Invalid DELETE finalization correlation.");
 
         var intent = store.Intents.SingleOrDefault(x => x.RequestSequence == ev.RelatedSequence)
@@ -1092,7 +1115,7 @@ static class GateDecision
         {
             // Never preserve or authorize against a truncated path. The kernel only sends a truncated
             // gate event when its known prefix is already inside the explicit LAB root, so deny it here.
-            if (ev.ProtocolVersion != 15 || ev.PathStatus != (uint)RgPathStatus.Resolved)
+            if (ev.ProtocolVersion != 16 || ev.PathStatus != (uint)RgPathStatus.Resolved)
                 return Deny(ev.Sequence, 1);
 
             var path = resolver.Resolve(ev.Path);
@@ -1479,7 +1502,7 @@ static class GateDecision
 
     private static RgGateReply Allow(ulong sequence, RgGateDecision decision) => new()
     {
-        ProtocolVersion = 15,
+        ProtocolVersion = 16,
         Decision = decision,
         RequestSequence = sequence,
         ErrorCode = 0
@@ -1487,7 +1510,7 @@ static class GateDecision
 
     private static RgGateReply Deny(ulong sequence, uint errorCode) => new()
     {
-        ProtocolVersion = 15,
+        ProtocolVersion = 16,
         Decision = RgGateDecision.Deny,
         RequestSequence = sequence,
         ErrorCode = errorCode
@@ -2045,6 +2068,7 @@ sealed class DevicePathResolver
 }
 
 enum RgClientMode : uint { Audit = 1, LabGate = 2 }
+enum RgProtectionState : uint { Inactive = 0, Preflight = 1, Protected = 2, DegradedProtected = 3, Maintenance = 4 }
 enum RgEventType : uint { Invalid = 0, Write = 1, Rename = 2, DeleteDisposition = 3, Truncate = 4, Create = 5, RenameResult = 6, CreateResult = 7, PagingWrite = 8, WritableSection = 9, ActivationPreflight = 10, ContainmentActivated = 11, TruncateResult = 12, DeleteDispositionResult = 13, DeleteFinalized = 14 }
 enum RgPathStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2, Truncated = 3 }
 enum RgIdentityStatus : uint { Unknown = 0, Resolved = 1, QueryFailed = 2 }
@@ -2100,7 +2124,7 @@ enum RgGateReplyFlags : uint
     ContainRequestor = 0x00000001
 }
 
-enum RgControlCommand : uint { Invalid = 0, ActivateGate = 1, QueryActivation = 2, ArmPreflight = 3, ActivateAndContainProcess = 4, QueryContainment = 5 }
+enum RgControlCommand : uint { Invalid = 0, ActivateGate = 1, QueryActivation = 2, ArmPreflight = 3, ActivateAndContainProcess = 4, QueryContainment = 5, DeactivateGate = 6 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 struct RgControlRequest
@@ -2118,7 +2142,7 @@ struct RgControlReply
     public uint Status;
     public uint GateActivated;
     public uint ContainmentActive;
-    public uint Reserved;
+    public uint ProtectionState;
     public ulong ContainedProcessId;
 }
 

@@ -48,7 +48,9 @@ Important exceptions are explicit in THREAT_MODEL.md:
 - out-of-root operations are outside the negotiated gate;
 - kernel-mode requestors are outside the ordinary observation path;
 - paging writes are non-blocking evidence and rely on the conservative pre-preserved CREATE baseline;
-- driver presence without an active GateClient/session is not equivalent to protection.
+- a never-activated driver/session is not protection; after an activated LAB session, unexpected GateClient loss now enters a kernel `DEGRADED_PROTECTED` latch for known in-scope destructive I/O, while explicit maintenance deactivation is required for a clean disconnect;
+
+The degraded disconnect latch does not remove the separate unresolved-path fail-open boundary and does not synchronously block already-existing writable mappings; those mappings rely on their previously committed baseline/pre-image. Current recovery from a degraded latch is driver unload/reload, so this remains Engineering LAB behavior rather than production lifecycle semantics.
 
 Do not deploy the LAB blocking path on primary workstations or real user data.
 

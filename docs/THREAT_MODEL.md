@@ -1,6 +1,6 @@
 # RansomGuard threat model
 
-Status: engineering threat model for the current Audit product and Engineering LAB minifilter.
+Status: engineering threat model for RansomGuard 0.7.30.x, covering the current Audit product and Engineering LAB minifilter.
 
 This document describes what the current implementation protects, what it deliberately does not protect, and how ambiguous I/O is handled. It is not a claim of production readiness. The ordinary product remains AuditOnly; the blocking minifilter path is Engineering LAB only.
 
@@ -42,7 +42,7 @@ The LAB path consists of:
 
 `user-mode requestor -> Filter Manager/minifilter -> synchronous GateClient decision -> durable rollback store -> allow/deny`
 
-The minifilter and GateClient trust each other only inside the explicitly negotiated LAB protocol/session. The gate is scoped to one explicit protected root. The rollback store must be outside that root.
+The minifilter and GateClient trust each other only inside the explicitly negotiated LAB protocol/session. The current wire contract is protocol v15; protocol drift is a compatibility/security boundary, not a best-effort condition. The gate is scoped to one explicit protected root. The rollback store must be outside that root.
 
 The Filter Manager server port currently permits one client connection. GateClient uses one synchronous communication handle. Kernel admission may have multiple blocking requests waiting, but user-mode reply-required preservation is deliberately serialized: the worker handling a gate request must send its reply before the receive loop issues the next blocking `FilterGetMessage`. Configurable GateClient slots bound no-reply completion/evidence processing; they are not a claim of multiple simultaneous preservation replies. This distinction is part of the availability model and must not be blurred in performance or security claims.
 
@@ -177,6 +177,16 @@ Production release governance still requires:
 
 Repository policy settings are external to source control. A CODEOWNERS file can route review but does not itself enforce approvals or prevent direct pushes. Exact inputs also do not protect against a compromised trusted dependency, action commit, build runner or signing identity.
 
+## Current qualification evidence
+
+The repository has stronger Engineering LAB evidence than a source-only prototype, but the evidence remains narrow and does not expand the supported threat model.
+
+For the exact 0.7.30 Driver Verifier qualification head, a disposable Windows VM completed ARM -> real reboot -> runtime -> real reboot -> CLEAR with standard Driver Verifier checks targeted only at `RansomGuardMinifilter.sys`. Runtime observed the target under Verifier, completed bounded concurrency stress with an overflow width of 16 against a kernel admission cap of 8 (8 allowed / 8 denied), exercised CREATE/RENAME/TRUNCATE/DELETE/mapped-write preservation paths, observed no Windows bugcheck in the qualification window, executed `verifier /reset`, and proved clear verifier state after the second reboot. Persisted reboot timestamps are SHA-bound and parsed from raw offset-bearing JSON so non-UTC runner locale cannot weaken reboot proof.
+
+Separate disposable-VM fault evidence covers completion loss, low-disk fail-closed storage admission, and one real-reboot TRUNCATE reconciliation campaign. NTFS runtime coverage exists. ReFS creation was unsupported on the qualification VM and therefore remains unqualified rather than implicitly passed.
+
+These results are regression/qualification evidence for the tested build and environment. They do not establish production signing, broad Windows/Server compatibility, kernel-compromise resistance, third-party filter interoperability, performance suitability, or safe production blocking policy.
+
 ## Required production qualification
 
 The project must remain non-production until, at minimum:
@@ -184,9 +194,9 @@ The project must remain non-production until, at minimum:
 - Microsoft assigns the production minifilter altitude and the release driver uses the production signing path;
 - target Windows/Server and security-feature compatibility is qualified; NTFS has disposable-VM runtime evidence, while the current runner reported ReFS creation unsupported, so ReFS remains unqualified rather than implicitly passed;
 - unresolved/name-query failure policy is reviewed and adversarially tested;
-- crash/reboot, GateClient/service death, timeout, low-disk and torn-journal campaigns pass;
+- the existing completion-loss, low-disk and reboot campaigns are extended into a broader fault matrix that includes GateClient/service death, timeout, torn-journal/power-loss conditions and repeated campaign recovery;
 - sustained pressure/queueing, rename/mapped-write storms and large/sparse/compressed/encrypted file cases pass; any concurrency claim distinguishes kernel admission from the serialized single-handle reply-required path;
-- Driver Verifier and native static-analysis campaigns are clean enough for the supported matrix;
+- the existing exact-head Driver Verifier qualification is repeated across the supported Windows/Server/filesystem matrix, and native static-analysis/SDV-style findings are reviewed to an explicit release threshold;
 - antivirus/EDR, VSS/backup and BitLocker coexistence is tested;
 - detector-to-containment orchestration is authorized and validated for ordinary applications;
 - release governance, independent review and provenance controls are enforced.

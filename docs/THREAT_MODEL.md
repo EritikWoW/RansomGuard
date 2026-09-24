@@ -205,7 +205,9 @@ These results are regression/qualification evidence for the tested build and env
 
 0.7.31 sustained mixed-workload qualification is now backed by exact-head disposable-VM evidence. PR #42 head `184566aa4269d28bf3f7c32aeb9035ceaa8dd25c` completed manual run #1 (`35986484214`) with 60/60 waves and 300 mixed CREATE/RENAME/TRUNCATE/DELETE/mapped-write operations. The run also re-proved bounded overflow at 16 requests against kernel cap 8 (8 allowed / 8 denied), worker/gate health, durable transaction correlation, zero pending metadata transactions, mapped pre-image/section/paging evidence and cleanup. This remains evidence for that tested LAB build/environment, not a production prevention claim.
 
-0.7.32 introduces the protocol-v16 disconnect fail-safe state described above. Source invariants and hosted compile/build are necessary but are not runtime evidence that process death, exact-root reconnect and graceful release behave correctly under Filter Manager. The milestone remains unqualified until an exact-head disposable-VM campaign kills GateClient after activation, proves in-root destructive I/O is denied while degraded, proves an incompatible/wrong-root recovery path cannot silently release the retained scope, proves same-root preflight recovery, and proves an explicit clean deactivation releases the root.
+0.7.32 introduced the protocol-v16 disconnect fail-safe state and is now backed by exact-head disposable-VM evidence: PR #45 head `9efa20727408a1a09c730149649822bc642ab4d0`, runtime run #49 (`36019325665`). That run proved abrupt GateClient-loss denial with hash preservation, read-only access while degraded, out-of-root availability, wrong-root rejection, same-root preflight recovery, clean Maintenance release, containment regressions, NTFS filesystem-matrix coverage and bounded cleanup.
+
+0.7.33 introduces protocol v17 protected-volume scope classification. Source invariants and hosted compile/build are necessary but are not runtime evidence for the new ambiguity boundary. Before merge, an exact-head disposable-VM campaign must prove that an outside-to-inside RENAME cannot bypass the root and must use a deterministic LAB-only ambiguity probe to show destructive same-volume ambiguity fails closed without extending that denial to another volume.
 
 ## Required production qualification
 
@@ -213,7 +215,7 @@ The project must remain non-production until, at minimum:
 
 - Microsoft assigns the production minifilter altitude and the release driver uses the production signing path;
 - target Windows/Server and security-feature compatibility is qualified; NTFS has disposable-VM runtime evidence, while the current runner reported ReFS creation unsupported, so ReFS remains unqualified rather than implicitly passed;
-- unresolved/name-query failure policy is reviewed and adversarially tested;
+- protocol-v17 ambiguous-scope policy is adversarially tested across source/destination rename boundaries, namespace aliases and supported local filesystem behavior;
 - the existing completion-loss, low-disk and reboot campaigns are extended into a broader fault matrix that includes GateClient/service death, timeout, torn-journal/power-loss conditions and repeated campaign recovery;
 - sustained pressure/queueing, rename/mapped-write storms and large/sparse/compressed/encrypted file cases pass; any concurrency claim distinguishes kernel admission from the serialized single-handle reply-required path;
 - the existing exact-head Driver Verifier qualification is repeated across the supported Windows/Server/filesystem matrix, and native static-analysis/SDV-style findings are reviewed to an explicit release threshold;

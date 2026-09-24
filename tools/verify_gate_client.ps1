@@ -441,6 +441,7 @@ if($cleanShutdown -lt 0 -or $lifecycleCompleted -lt 0 -or $deactivateRequest -lt
   throw 'Clean GateClient shutdown must durably complete the session before requesting whole-gate deactivation, while faulted shutdown must not authorize release.'
 }
 foreach($required in @(
+  'deactivationReply.GateActivated != 1',
   'deactivationReply.GateActivated != 0',
   'deactivationReply.ContainmentActive != 0',
   'deactivationReply.ContainedProcessId != 0',

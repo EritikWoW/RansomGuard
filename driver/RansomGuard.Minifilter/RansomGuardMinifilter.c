@@ -2279,6 +2279,35 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
                 ExReleaseFastMutex(&gPortMutex);
             }
         }
+    } else if (request->Command == RgControlArmScopeAmbiguity) {
+        if (request->TargetProcessId <= 4 ||
+            request->TargetProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId, 0, 0) ||
+            (ULONGLONG)(ULONG_PTR)request->TargetProcessId != request->TargetProcessId) {
+            status = STATUS_INVALID_PARAMETER;
+        } else if (InterlockedCompareExchange(&gGateActivated, 0, 0) == 0 ||
+                   InterlockedCompareExchange(&gProtectionRequired, 0, 0) == 0 ||
+                   InterlockedCompareExchange(&gDegradedProtected, 0, 0) != 0 ||
+                   InterlockedCompareExchange(&gMaintenanceRequested, 0, 0) != 0) {
+            status = STATUS_INVALID_DEVICE_STATE;
+        } else {
+            status = PsLookupProcessByProcessId(
+                (HANDLE)(ULONG_PTR)request->TargetProcessId,
+                &targetProcess);
+            if (NT_SUCCESS(status)) {
+                ExAcquireFastMutex(&gPortMutex);
+                if (gScopeAmbiguityProcess != NULL || gClientPort == NULL) {
+                    status = STATUS_DEVICE_BUSY;
+                } else {
+                    gScopeAmbiguityProcess = targetProcess;
+                    targetProcess = NULL;
+                    InterlockedExchange64(
+                        &gScopeAmbiguityProcessId,
+                        (LONG64)request->TargetProcessId);
+                    status = STATUS_SUCCESS;
+                }
+                ExReleaseFastMutex(&gPortMutex);
+            }
+        }
     } else if (request->Command == RgControlDeactivateGate) {
         if (request->TargetProcessId != 0) {
             status = STATUS_INVALID_PARAMETER;
@@ -2295,6 +2324,7 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
                 InterlockedCompareExchange(&gPending, 0, 0) != 0) {
                 status = STATUS_DEVICE_BUSY;
             } else {
+                RgClearScopeAmbiguityProbe();
                 RgClearContainedProcess();
                 InterlockedExchange(&gGateActivated, 0);
                 InterlockedExchange(&gProtectionRequired, 0);
@@ -2332,6 +2362,7 @@ static VOID RgDisconnect(PVOID ConnectionCookie)
     protectionRequired = InterlockedCompareExchange(&gProtectionRequired, 0, 0);
     gracefulDisconnect = InterlockedCompareExchange(&gGracefulDisconnectAuthorized, 0, 0);
 
+    RgClearScopeAmbiguityProbe();
     RgClearContainedProcess();
 
     ExAcquireFastMutex(&gPortMutex);
@@ -2404,6 +2435,7 @@ NTSTATUS RgUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
     InterlockedExchange(&gDegradedProtected, 0);
     InterlockedExchange(&gMaintenanceRequested, 0);
     InterlockedExchange(&gGracefulDisconnectAuthorized, 0);
+    RgClearScopeAmbiguityProbe();
     RgClearContainedProcess();
 
     if (gServerPort != NULL) {

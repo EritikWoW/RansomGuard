@@ -67,6 +67,8 @@ foreach($required in @(
     '0.7.31 sustained mixed-workload qualification is now backed by exact-head disposable-VM evidence',
     '0.7.32 introduced the protocol-v16 disconnect fail-safe state',
     '0.7.33 introduces protocol v17 protected-volume scope classification',
+    'LAB-only negative fault-injection control',
+    'It cannot manufacture an allow decision or disable scope enforcement',
     'Source invariants and hosted compile/build are necessary but are not runtime evidence',
     'current runner reported ReFS creation unsupported',
     'Do not describe the current normal bundle as production ransomware blocking'
@@ -109,6 +111,9 @@ foreach($required in @(
     'gGracefulDisconnectAuthorized',
     'RgProtectionDegradedProtected',
     'RgControlDeactivateGate',
+    'RgControlArmScopeAmbiguity',
+    'gScopeAmbiguityProcess',
+    'RgInjectScopeAmbiguityProbe',
     'InterlockedExchange(&gMaintenanceRequested, 1)',
     'InterlockedExchange(&gDegradedProtected, 1)',
     'InterlockedExchange(&gClientConnected, 0)'

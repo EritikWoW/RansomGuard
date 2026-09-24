@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 
 const string PortName = @"\RansomGuardMinifilterPort";
 var options = Options.Parse(args);
@@ -1921,9 +1922,11 @@ sealed class LabContainmentTrigger : IDisposable
 }
 
 sealed record Options(
+    bool Production,
     string Root,
     string StoreRoot,
     string? SessionId,
+    string? ReadyFile,
     bool PrepareOnly,
     int GateWorkers,
     long MaxStoreMiB,
@@ -1950,9 +1953,11 @@ sealed record Options(
 
     public static Options Parse(string[] args)
     {
+        var production = false;
         string? root = null;
         string? store = null;
         string? session = null;
+        string? readyFile = null;
         var prepare = false;
         var gateWorkers = DefaultGateWorkers;
         long maxStoreMiB = DefaultMaxStoreMiB;
@@ -1973,9 +1978,11 @@ sealed record Options(
         {
             switch (args[i].ToLowerInvariant())
             {
+                case "--production": production = true; break;
                 case "--root" when i + 1 < args.Length: root = Path.GetFullPath(args[++i]).TrimEnd('\\'); break;
                 case "--store" when i + 1 < args.Length: store = Path.GetFullPath(args[++i]); break;
                 case "--session" when i + 1 < args.Length: session = args[++i]; break;
+                case "--ready-file" when i + 1 < args.Length: readyFile = Path.GetFullPath(args[++i]); break;
                 case "--gate-workers" when i + 1 < args.Length:
                     if (!int.TryParse(args[++i], out gateWorkers) || gateWorkers < 1 || gateWorkers > MaxGateWorkers)
                         throw new ArgumentOutOfRangeException(nameof(args),
@@ -2033,14 +2040,25 @@ sealed record Options(
                 default: throw new ArgumentException($"Unknown/incomplete argument: {args[i]}");
             }
         }
-        if (string.IsNullOrWhiteSpace(root)) throw new ArgumentException("Pass --root <disposable-test-directory>.");
+        if (string.IsNullOrWhiteSpace(root))
+            throw new ArgumentException("Pass --root <protected-directory>.");
+
         if (shutdownFile is not null && PathPolicy.Under(shutdownFile, root))
-            throw new ArgumentException("--shutdown-file must be outside the protected LAB root.");
-        if (prepare && (containPid.HasValue || scopeAmbiguityPid.HasValue || containAfterPid.HasValue || dropFirstCreateCompletion || dropFirstRenameCompletion || dropFirstTruncateCompletion || dropFirstDeleteCompletion || reconcileOnly || shutdownFile is not null))
-            throw new ArgumentException("Containment/fault/reconciliation/shutdown options cannot be combined with --prepare-root.");
-        if (reconcileOnly && (containPid.HasValue || scopeAmbiguityPid.HasValue || containAfterPid.HasValue || dropFirstCreateCompletion || dropFirstRenameCompletion || dropFirstTruncateCompletion || dropFirstDeleteCompletion || containThresholdSpecified || shutdownFile is not null))
-            throw new ArgumentException("--reconcile-only cannot be combined with containment, fault injection, or a shutdown marker.");
-        if ((dropFirstCreateCompletion ? 1 : 0) + (dropFirstRenameCompletion ? 1 : 0) + (dropFirstTruncateCompletion ? 1 : 0) + (dropFirstDeleteCompletion ? 1 : 0) > 1)
+            throw new ArgumentException("--shutdown-file must be outside the protected root.");
+        if (readyFile is not null && PathPolicy.Under(readyFile, root))
+            throw new ArgumentException("--ready-file must be outside the protected root.");
+
+        if (prepare && (containPid.HasValue || scopeAmbiguityPid.HasValue || containAfterPid.HasValue ||
+                        dropFirstCreateCompletion || dropFirstRenameCompletion || dropFirstTruncateCompletion ||
+                        dropFirstDeleteCompletion || reconcileOnly || shutdownFile is not null || readyFile is not null))
+            throw new ArgumentException("Containment/fault/reconciliation/shutdown/readiness options cannot be combined with --prepare-root.");
+        if (reconcileOnly && (containPid.HasValue || scopeAmbiguityPid.HasValue || containAfterPid.HasValue ||
+                              dropFirstCreateCompletion || dropFirstRenameCompletion || dropFirstTruncateCompletion ||
+                              dropFirstDeleteCompletion || containThresholdSpecified || shutdownFile is not null ||
+                              readyFile is not null))
+            throw new ArgumentException("--reconcile-only cannot be combined with containment, fault injection, shutdown or readiness.");
+        if ((dropFirstCreateCompletion ? 1 : 0) + (dropFirstRenameCompletion ? 1 : 0) +
+            (dropFirstTruncateCompletion ? 1 : 0) + (dropFirstDeleteCompletion ? 1 : 0) > 1)
             throw new ArgumentException("Only one completion-loss injection may be armed per GateClient session.");
         if ((containPid.HasValue ? 1 : 0) + (scopeAmbiguityPid.HasValue ? 1 : 0) + (containAfterPid.HasValue ? 1 : 0) > 1)
             throw new ArgumentException("--contain-pid, --scope-ambiguity-pid and --contain-after-pid are mutually exclusive.");
@@ -2048,12 +2066,134 @@ sealed record Options(
             throw new ArgumentException("Containment thresholds require --contain-after-pid.");
         if (containAfterPaths > containAfterEvents)
             throw new ArgumentException("--contain-after-paths cannot exceed --contain-after-events.");
-        store ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RansomGuardV072", "GateRollback");
+
+        if (production)
+        {
+            if (prepare || reconcileOnly || containPid.HasValue || scopeAmbiguityPid.HasValue ||
+                containAfterPid.HasValue || containThresholdSpecified || dropFirstCreateCompletion ||
+                dropFirstRenameCompletion || dropFirstTruncateCompletion || dropFirstDeleteCompletion)
+                throw new ArgumentException("ProductionGate forbids LAB prepare/reconciliation/fault/containment options.");
+            if (string.IsNullOrWhiteSpace(store))
+                throw new ArgumentException("ProductionGate requires explicit --store.");
+            if (string.IsNullOrWhiteSpace(session) || session.Length > 128 ||
+                session.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
+                !string.Equals(Path.GetFileName(session), session, StringComparison.Ordinal))
+                throw new ArgumentException("ProductionGate requires a bounded path-safe --session id.");
+            if (string.IsNullOrWhiteSpace(readyFile))
+                throw new ArgumentException("ProductionGate requires explicit --ready-file.");
+            if (string.IsNullOrWhiteSpace(shutdownFile))
+                throw new ArgumentException("ProductionGate requires explicit --shutdown-file.");
+            if (PathPolicy.Under(store, root) || PathPolicy.Under(root, store))
+                throw new ArgumentException("ProductionGate protected root and rollback store must not overlap.");
+            if (PathPolicy.Under(readyFile, store) || PathPolicy.Under(shutdownFile, store))
+                throw new ArgumentException("ProductionGate readiness/shutdown control files must be outside the rollback repository.");
+            if (string.Equals(readyFile, shutdownFile, StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("ProductionGate readiness and shutdown files must be distinct.");
+        }
+        else
+        {
+            if (readyFile is not null)
+                throw new ArgumentException("--ready-file is ProductionGate-only.");
+            store ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RansomGuardV072", "GateRollback");
+        }
+
         return new Options(
-            root, store, session, prepare, gateWorkers, maxStoreMiB, minFreeMiB,
+            production, root, store!, session, readyFile, prepare, gateWorkers, maxStoreMiB, minFreeMiB,
             containPid, scopeAmbiguityPid, containAfterPid, containAfterEvents, containAfterPaths,
             dropFirstCreateCompletion, dropFirstRenameCompletion, dropFirstTruncateCompletion,
             dropFirstDeleteCompletion, reconcileOnly, shutdownFile);
+    }
+}
+
+sealed record ProductionGateReadiness(
+    int Schema,
+    string Version,
+    uint Protocol,
+    string Profile,
+    string State,
+    int ProcessId,
+    string Root,
+    string StoreRoot,
+    string SessionId,
+    int FilesChecked,
+    int DirectoriesHeld,
+    bool AutomaticContainmentActive,
+    DateTime ObservedUtc);
+
+static class ProductionReadinessWriter
+{
+    public static void WriteProtected(
+        string path,
+        string version,
+        string root,
+        string storeRoot,
+        string sessionId,
+        ActivationPreflightSummary activation)
+    {
+        var full = Path.GetFullPath(path);
+        var parent = Path.GetDirectoryName(full) ?? throw new InvalidOperationException("Production readiness parent is missing.");
+        if (!Directory.Exists(parent))
+            throw new DirectoryNotFoundException("Production readiness parent does not exist: " + parent);
+        PathPolicy.NoReparseComponents(parent);
+        if (File.Exists(full))
+            throw new IOException("Production readiness file already exists; supervisor must use a unique per-session path.");
+
+        var value = new ProductionGateReadiness(
+            1,
+            version,
+            WireProtocolVersion,
+            "ProductionGate",
+            "Protected",
+            Environment.ProcessId,
+            Path.GetFullPath(root),
+            Path.GetFullPath(storeRoot),
+            sessionId,
+            activation.FilesChecked,
+            activation.DirectoriesHeld,
+            false,
+            DateTime.UtcNow);
+
+        var tmp = full + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            using (var output = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
+            {
+                JsonSerializer.Serialize(output, value);
+                output.Flush(true);
+            }
+            File.Move(tmp, full, false);
+            PathPolicy.NoReparseComponents(full);
+        }
+        finally
+        {
+            if (File.Exists(tmp)) File.Delete(tmp);
+        }
+    }
+}
+
+static class ProductionRootPolicy
+{
+    public static void Validate(string root)
+    {
+        var full = Path.GetFullPath(root).TrimEnd('\\');
+        var drive = Path.GetPathRoot(full)?.TrimEnd('\\');
+        if (string.IsNullOrWhiteSpace(drive) || full.Equals(drive, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("ProductionGate root cannot be an entire drive.");
+        if (!Directory.Exists(full))
+            throw new DirectoryNotFoundException(full);
+        PathPolicy.NoReparseComponents(full);
+
+        foreach (var systemPath in new[]
+        {
+            Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData)
+        }.Where(x => !string.IsNullOrWhiteSpace(x)))
+        {
+            if (PathPolicy.Under(full, systemPath))
+                throw new InvalidOperationException("ProductionGate root must not be inside Windows, Program Files, or ProgramData.");
+        }
     }
 }
 
@@ -2110,6 +2250,19 @@ static class PathPolicy
         var p = Path.GetFullPath(path).TrimEnd('\\');
         var r = Path.GetFullPath(root).TrimEnd('\\');
         return p.Equals(r, StringComparison.OrdinalIgnoreCase) || p.StartsWith(r + "\\", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static void NoReparseComponents(string path)
+    {
+        var full = Path.GetFullPath(path);
+        var current = File.Exists(full) || Directory.Exists(full) ? full : Path.GetDirectoryName(full);
+        while (!string.IsNullOrWhiteSpace(current))
+        {
+            if ((File.Exists(current) || Directory.Exists(current)) &&
+                (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                throw new IOException("Reparse point is not allowed in ProductionGate control/storage paths: " + current);
+            current = Path.GetDirectoryName(current);
+        }
     }
 }
 

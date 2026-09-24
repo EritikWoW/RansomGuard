@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 
 const string PortName = @"\RansomGuardMinifilterPort";
-const int ProtocolVersion = 17;
+const int ProtocolVersion = 18;
 
 var options = Options.Parse(args);
 var productVersion = System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version?.ToString() ?? "unknown";
@@ -304,7 +304,7 @@ struct RgEvent
 
 static class Native
 {
-    private const uint WireProtocolVersion = 17;
+    private const uint WireProtocolVersion = 18;
 
     [DllImport("fltlib.dll", CharSet = CharSet.Unicode)]
     private static extern int FilterConnectCommunicationPort(string lpPortName, uint dwOptions, IntPtr lpContext,

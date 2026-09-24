@@ -1,3 +1,13 @@
+# RansomGuard 0.8.2.0
+
+- Advanced the minifilter/GateClient wire contract to protocol v18 and added the distinct `RgClientProductionGate` mode.
+- LAB and ProductionGate retain the same protected-root/volume preservation, activation-preflight, maintenance and DegradedProtected foundation; a degraded session now also retains its original gate profile, preventing LAB <-> ProductionGate reconnect substitution.
+- ProductionGate rejects containment reply flags in kernel and returns `STATUS_NOT_SUPPORTED` for LAB-only containment/query/fault-injection controls. The containment/scope-injection helpers also enforce LAB mode directly.
+- GateClient adds explicit `--production` profile selection. Production profile has no LAB root marker, requires an existing explicit local non-system/non-reparse protected root, uses the fixed ProgramData rollback repository, and rejects LAB prepare/fault/reconciliation/shutdown/containment options before connecting.
+- Gate-specific post-operation/no-reply evidence is routed by the retained gate profile rather than the mutable current connection mode, preventing cross-profile evidence delivery across disconnect/reconnect.
+- FilterClient and ProductionProtection package admission now require protocol v18; package version is 0.8.2.0.
+- This milestone still performs no production driver install/start/load/attach and no service-to-GateClient supervision. `Mode=Enforce` therefore remains `EnforceUnavailable` in the normal service until the lifecycle milestone is implemented and VM-qualified.
+
 # RansomGuard 0.8.1.0
 
 - Added the fixed ProductionProtection package descriptor/layout for future Enforce lifecycle activation.

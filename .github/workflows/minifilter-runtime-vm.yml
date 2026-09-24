@@ -166,6 +166,12 @@ jobs:
           foreach($name in @('ntfsAttempted','ntfsSupported','ntfsPassed','refsAttempted','cleanupPassed','passed')){
             if($matrix.$name -ne $true){throw "Filesystem matrix invariant '$name' was not true."}
           }
+          $ntfsScenarios=@($matrix.scenarios | Where-Object {
+            [string]::Equals([string]$_.fileSystem,'NTFS',[StringComparison]::OrdinalIgnoreCase) -and $_.supported -eq $true
+          })
+          if($ntfsScenarios.Count -ne 1 -or $ntfsScenarios[0].unrelatedVolumeAmbiguityAllowed -ne $true){
+            throw 'NTFS matrix must prove that forced ambiguity on an attached unrelated volume remains outside the protected-volume gate.'
+          }
           if($matrix.refsSupported -eq $true -and $matrix.refsPassed -ne $true){
             throw 'ReFS was supported by the runner but its compatibility scenario did not pass.'
           }

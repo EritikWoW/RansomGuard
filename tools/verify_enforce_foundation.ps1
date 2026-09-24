@@ -43,6 +43,9 @@ foreach($required in @(
     'ProtectionPhase.DegradedProtected',
     'ProtectionPhase.Maintenance',
     'Kernel enforcement cannot start before rollback repository validation.',
+    '_phase != ProtectionPhase.Protected',
+    '_phase is not (ProtectionPhase.Protected or ProtectionPhase.DegradedProtected)',
+    'EnforceUnavailable is a startup/pre-activation state and cannot replace an active protection state.',
     'var kernelEnforcement = _phase is ProtectionPhase.Protected or ProtectionPhase.DegradedProtected'
 )){
     if($runtime -notmatch [regex]::Escape($required)){throw "Protection state invariant missing: $required"}

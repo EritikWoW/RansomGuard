@@ -2009,6 +2009,11 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
     NTSTATUS status = STATUS_SUCCESS;
     ULONG rootBytes;
     ULONG rootChars;
+    ULONG volumeBytes;
+    ULONG volumeChars;
+    UNICODE_STRING volumeName;
+    PFLT_VOLUME candidateVolume = NULL;
+    PFLT_VOLUME releaseVolume = NULL;
 
     UNREFERENCED_PARAMETER(ServerPortCookie);
     *ConnectionPortCookie = NULL;
@@ -2024,16 +2029,26 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
     }
 
     rootBytes = context->GateRootLengthBytes;
-    if ((rootBytes % sizeof(WCHAR)) != 0 || rootBytes >= sizeof(context->GateRoot)) {
+    volumeBytes = context->GateVolumeLengthBytes;
+    if ((rootBytes % sizeof(WCHAR)) != 0 || rootBytes >= sizeof(context->GateRoot) ||
+        (volumeBytes % sizeof(WCHAR)) != 0 || volumeBytes >= sizeof(context->GateRoot)) {
         return STATUS_INVALID_PARAMETER;
     }
 
     if (context->ClientMode == RgClientLabGate) {
-        if (context->ClientProcessId == 0 || rootBytes < (4 * sizeof(WCHAR))) {
+        if (context->ClientProcessId == 0 ||
+            rootBytes < (4 * sizeof(WCHAR)) ||
+            volumeBytes < (4 * sizeof(WCHAR)) ||
+            volumeBytes > rootBytes) {
             return STATUS_INVALID_PARAMETER;
         }
+
         rootChars = rootBytes / sizeof(WCHAR);
+        volumeChars = volumeBytes / sizeof(WCHAR);
         if (context->GateRoot[0] != L'\\' || context->GateRoot[rootChars] != L'\0') {
+            return STATUS_INVALID_PARAMETER;
+        }
+        if (volumeBytes < rootBytes && context->GateRoot[volumeChars] != L'\\') {
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -2041,7 +2056,18 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
             rootChars--;
         }
         rootBytes = rootChars * sizeof(WCHAR);
-    } else if (rootBytes != 0) {
+        if (volumeBytes > rootBytes) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        volumeName.Buffer = context->GateRoot;
+        volumeName.Length = (USHORT)volumeBytes;
+        volumeName.MaximumLength = (USHORT)volumeBytes;
+        status = FltGetVolumeFromName(gFilter, &volumeName, &candidateVolume);
+        if (!NT_SUCCESS(status) || candidateVolume == NULL) {
+            return NT_SUCCESS(status) ? STATUS_FLT_VOLUME_NOT_FOUND : status;
+        }
+    } else if (rootBytes != 0 || volumeBytes != 0) {
         return STATUS_INVALID_PARAMETER;
     }
 
@@ -2052,8 +2078,12 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
     } else if (InterlockedCompareExchange(&gProtectionRequired, 0, 0) != 0 &&
                (context->ClientMode != RgClientLabGate ||
                 gGateRootLengthBytes != (USHORT)rootBytes ||
+                gGateVolumeLengthBytes != (USHORT)volumeBytes ||
+                gGateVolume == NULL ||
+                gGateVolume != candidateVolume ||
                 RtlCompareMemory(gGateRoot, context->GateRoot, rootBytes) != rootBytes)) {
-        // A disconnected protected session may reconnect only to the exact retained root.
+        // A disconnected protected session may reconnect only to the exact retained root
+        // on the same referenced Filter Manager volume object.
         status = STATUS_ACCESS_DENIED;
     } else {
         if (InterlockedExchange(&gPortRundownCompleted, 0) != 0) {
@@ -2061,6 +2091,9 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
         }
 
         if (InterlockedCompareExchange(&gProtectionRequired, 0, 0) == 0) {
+            releaseVolume = gGateVolume;
+            gGateVolume = NULL;
+            gGateVolumeLengthBytes = 0;
             RtlZeroMemory(gGateRoot, sizeof(gGateRoot));
             gGateRootLengthBytes = 0;
         }
@@ -2079,6 +2112,9 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
             RtlCopyMemory(gGateRoot, context->GateRoot, rootBytes);
             gGateRootLengthBytes = (USHORT)rootBytes;
             gGateRoot[rootBytes / sizeof(WCHAR)] = L'\0';
+            gGateVolume = candidateVolume;
+            candidateVolume = NULL;
+            gGateVolumeLengthBytes = (USHORT)volumeBytes;
         }
 
         // On degraded reconnect publish the live client before clearing the fail-safe latch,
@@ -2087,6 +2123,13 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
         InterlockedExchange(&gDegradedProtected, 0);
     }
     ExReleaseFastMutex(&gPortMutex);
+
+    if (candidateVolume != NULL) {
+        FltObjectDereference(candidateVolume);
+    }
+    if (releaseVolume != NULL) {
+        FltObjectDereference(releaseVolume);
+    }
     return status;
 }
 

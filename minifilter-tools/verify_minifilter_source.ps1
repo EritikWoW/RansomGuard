@@ -146,6 +146,7 @@ foreach($required in @(
     'RgControlDeactivateGate',
     'gProtectionRequired',
     'gDegradedProtected',
+    'gMaintenanceRequested',
     'gGracefulDisconnectAuthorized',
     'RgCurrentProtectionState',
     'RG_GATE_REPLY_FLAG_CONTAIN_REQUESTOR',
@@ -170,6 +171,13 @@ if($gateBlock -match 'ExAcquireFastMutex\(&gPortMutex\)'){
 if($gateBlock -notmatch 'RgAcquireClientPort\(RgClientLabGate' -or
    $gateBlock -notmatch 'RgReleaseClientPort\(\)'){
     throw 'RgGateEvent must use the short-lived client-port lease around FltSendMessage.'
+}
+$firstMaintenanceGate=$gateBlock.IndexOf('InterlockedCompareExchange(&gMaintenanceRequested, 0, 0) != 0')
+$portLease=$gateBlock.IndexOf('RgAcquireClientPort(RgClientLabGate')
+$secondMaintenanceGate=$gateBlock.IndexOf('InterlockedCompareExchange(&gMaintenanceRequested, 0, 0) != 0',$firstMaintenanceGate+1)
+if($firstMaintenanceGate -lt 0 -or $portLease -lt 0 -or $secondMaintenanceGate -lt 0 -or
+   $firstMaintenanceGate -gt $portLease -or $secondMaintenanceGate -lt $portLease){
+    throw 'Maintenance transition must close new gate admission and reject an already-replied request before allow processing.'
 }
 foreach($required in @(
     'reply.Flags & ~RG_GATE_REPLY_FLAG_CONTAIN_REQUESTOR',
@@ -303,15 +311,17 @@ if($messageBlock -notmatch [regex]::Escape('request->TargetProcessId <= 4') -or
 }
 
 $deactivateCommand=$messageBlock.IndexOf('request->Command == RgControlDeactivateGate')
+$deactivateMaintenance=$messageBlock.IndexOf('InterlockedExchange(&gMaintenanceRequested, 1)',$deactivateCommand)
 $deactivateBusy=$messageBlock.IndexOf('InterlockedCompareExchange(&gGateInFlight, 0, 0) != 0',$deactivateCommand)
 $deactivatePending=$messageBlock.IndexOf('InterlockedCompareExchange(&gPending, 0, 0) != 0',$deactivateCommand)
 $deactivateProtection=$messageBlock.IndexOf('InterlockedExchange(&gProtectionRequired, 0)',$deactivateCommand)
 $deactivateAuthorize=$messageBlock.IndexOf('InterlockedExchange(&gGracefulDisconnectAuthorized, 1)',$deactivateCommand)
-if($deactivateCommand -lt 0 -or $deactivateBusy -lt 0 -or $deactivatePending -lt 0 -or
-   $deactivateProtection -lt 0 -or $deactivateAuthorize -lt 0 -or
-   $deactivateCommand -gt $deactivateBusy -or $deactivateBusy -gt $deactivateProtection -or
-   $deactivatePending -gt $deactivateProtection -or $deactivateProtection -gt $deactivateAuthorize){
-    throw 'Graceful DeactivateGate must require zero kernel gate/pending work before authorizing protection release.'
+if($deactivateCommand -lt 0 -or $deactivateMaintenance -lt 0 -or $deactivateBusy -lt 0 -or
+   $deactivatePending -lt 0 -or $deactivateProtection -lt 0 -or $deactivateAuthorize -lt 0 -or
+   $deactivateCommand -gt $deactivateMaintenance -or $deactivateMaintenance -gt $deactivateBusy -or
+   $deactivateBusy -gt $deactivateProtection -or $deactivatePending -gt $deactivateProtection -or
+   $deactivateProtection -gt $deactivateAuthorize){
+    throw 'Graceful DeactivateGate must close admission before draining, then require zero kernel gate/pending work before authorizing protection release.'
 }
 
 $disconnectStart=$src.IndexOf('static VOID RgDisconnect(PVOID ConnectionCookie)')
@@ -324,6 +334,7 @@ foreach($required in @(
     'InterlockedExchange(&gDegradedProtected, 1)',
     'InterlockedExchange(&gClientConnected, 0)',
     'if (protectionRequired != 0 && gracefulDisconnect == 0)',
+    'InterlockedExchange(&gMaintenanceRequested, 0)',
     'gGateRootLengthBytes = 0',
     'RtlSecureZeroMemory(gGateRoot, sizeof(gGateRoot))'
 )){

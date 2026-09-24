@@ -1904,6 +1904,11 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
         if (context->GateRoot[0] != L'\\' || context->GateRoot[rootChars] != L'\0') {
             return STATUS_INVALID_PARAMETER;
         }
+
+        while (rootChars > 1 && context->GateRoot[rootChars - 1] == L'\\') {
+            rootChars--;
+        }
+        rootBytes = rootChars * sizeof(WCHAR);
     } else if (rootBytes != 0) {
         return STATUS_INVALID_PARAMETER;
     }
@@ -1912,28 +1917,38 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
     if (gClientPort != NULL || gContainedProcess != NULL ||
         InterlockedCompareExchange(&gUnloading, 0, 0) != 0) {
         status = STATUS_DEVICE_BUSY;
+    } else if (InterlockedCompareExchange(&gProtectionRequired, 0, 0) != 0 &&
+               (context->ClientMode != RgClientLabGate ||
+                gGateRootLengthBytes != (USHORT)rootBytes ||
+                RtlCompareMemory(gGateRoot, context->GateRoot, rootBytes) != rootBytes)) {
+        // A disconnected protected session may reconnect only to the exact retained root.
+        status = STATUS_ACCESS_DENIED;
     } else {
         if (InterlockedExchange(&gPortRundownCompleted, 0) != 0) {
             ExReInitializeRundownProtection(&gPortRundown);
         }
-        RtlZeroMemory(gGateRoot, sizeof(gGateRoot));
-        gGateRootLengthBytes = 0;
+
+        if (InterlockedCompareExchange(&gProtectionRequired, 0, 0) == 0) {
+            RtlZeroMemory(gGateRoot, sizeof(gGateRoot));
+            gGateRootLengthBytes = 0;
+        }
+
         gClientPort = ClientPort;
         gClientMode = (LONG)context->ClientMode;
         InterlockedExchange64(&gClientProcessId, (LONG64)context->ClientProcessId);
         InterlockedExchange(&gGateActivated, context->ClientMode == RgClientLabGate ? 0 : 1);
         InterlockedExchange(&gActivationHazard, 0);
         InterlockedExchange(&gPreflightProbeArmed, 0);
+        InterlockedExchange(&gDegradedProtected, 0);
+        InterlockedExchange(&gGracefulDisconnectAuthorized, 0);
 
-        if (context->ClientMode == RgClientLabGate) {
+        if (context->ClientMode == RgClientLabGate &&
+            InterlockedCompareExchange(&gProtectionRequired, 0, 0) == 0) {
             RtlCopyMemory(gGateRoot, context->GateRoot, rootBytes);
-            rootChars = rootBytes / sizeof(WCHAR);
-            while (rootChars > 1 && gGateRoot[rootChars - 1] == L'\\') {
-                gGateRoot[rootChars - 1] = L'\0';
-                rootChars--;
-            }
-            gGateRootLengthBytes = (USHORT)(rootChars * sizeof(WCHAR));
+            gGateRootLengthBytes = (USHORT)rootBytes;
+            gGateRoot[rootBytes / sizeof(WCHAR)] = L'\0';
         }
+
         InterlockedExchange(&gClientConnected, 1);
     }
     ExReleaseFastMutex(&gPortMutex);
@@ -1997,6 +2012,9 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
                    InterlockedCompareExchange(&gPreflightProbeArmed, 0, 0) != 0) {
             status = STATUS_DEVICE_BUSY;
         } else {
+            InterlockedExchange(&gProtectionRequired, 1);
+            InterlockedExchange(&gDegradedProtected, 0);
+            InterlockedExchange(&gGracefulDisconnectAuthorized, 0);
             InterlockedExchange(&gGateActivated, 1);
             status = STATUS_SUCCESS;
         }
@@ -2021,11 +2039,30 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
                     gContainedProcess = targetProcess;
                     targetProcess = NULL;
                     InterlockedExchange64(&gContainedProcessId, (LONG64)request->TargetProcessId);
+                    InterlockedExchange(&gProtectionRequired, 1);
+                    InterlockedExchange(&gDegradedProtected, 0);
+                    InterlockedExchange(&gGracefulDisconnectAuthorized, 0);
                     InterlockedExchange(&gGateActivated, 1);
                     status = STATUS_SUCCESS;
                 }
                 ExReleaseFastMutex(&gPortMutex);
             }
+        }
+    } else if (request->Command == RgControlDeactivateGate) {
+        if (request->TargetProcessId != 0) {
+            status = STATUS_INVALID_PARAMETER;
+        } else if (InterlockedCompareExchange(&gGateActivated, 0, 0) == 0) {
+            status = STATUS_INVALID_DEVICE_STATE;
+        } else if (InterlockedCompareExchange(&gGateInFlight, 0, 0) != 0 ||
+                   InterlockedCompareExchange(&gPending, 0, 0) != 0) {
+            status = STATUS_DEVICE_BUSY;
+        } else {
+            RgClearContainedProcess();
+            InterlockedExchange(&gGateActivated, 0);
+            InterlockedExchange(&gProtectionRequired, 0);
+            InterlockedExchange(&gDegradedProtected, 0);
+            InterlockedExchange(&gGracefulDisconnectAuthorized, 1);
+            status = STATUS_SUCCESS;
         }
     } else {
         status = STATUS_INVALID_PARAMETER;
@@ -2039,6 +2076,7 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
     reply->Status = (ULONG)status;
     reply->GateActivated = (ULONG)InterlockedCompareExchange(&gGateActivated, 0, 0);
     reply->ContainmentActive = containedProcessId != 0 ? 1u : 0u;
+    reply->ProtectionState = RgCurrentProtectionState();
     reply->ContainedProcessId = containedProcessId;
     *ReturnOutputBufferLength = sizeof(*reply);
     return STATUS_SUCCESS;
@@ -2046,7 +2084,13 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
 
 static VOID RgDisconnect(PVOID ConnectionCookie)
 {
+    LONG protectionRequired;
+    LONG gracefulDisconnect;
+
     UNREFERENCED_PARAMETER(ConnectionCookie);
+
+    protectionRequired = InterlockedCompareExchange(&gProtectionRequired, 0, 0);
+    gracefulDisconnect = InterlockedCompareExchange(&gGracefulDisconnectAuthorized, 0, 0);
 
     RgClearContainedProcess();
 
@@ -2057,8 +2101,19 @@ static VOID RgDisconnect(PVOID ConnectionCookie)
     InterlockedExchange(&gGateActivated, 0);
     InterlockedExchange(&gActivationHazard, 0);
     InterlockedExchange(&gPreflightProbeArmed, 0);
-    gGateRootLengthBytes = 0;
-    RtlSecureZeroMemory(gGateRoot, sizeof(gGateRoot));
+
+    if (protectionRequired != 0 && gracefulDisconnect == 0) {
+        // Keep the negotiated root and fail safe for resolved user-mode mutations.
+        // A replacement v16 GateClient may reconnect only to this exact root and must rerun preflight.
+        InterlockedExchange(&gDegradedProtected, 1);
+    } else {
+        InterlockedExchange(&gProtectionRequired, 0);
+        InterlockedExchange(&gDegradedProtected, 0);
+        gGateRootLengthBytes = 0;
+        RtlSecureZeroMemory(gGateRoot, sizeof(gGateRoot));
+    }
+    InterlockedExchange(&gGracefulDisconnectAuthorized, 0);
+
     if (gClientPort != NULL) {
         FltCloseClientPort(gFilter, &gClientPort);
     }
@@ -2091,6 +2146,9 @@ NTSTATUS RgUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
     InterlockedExchange(&gUnloading, 1);
     InterlockedExchange(&gClientConnected, 0);
     InterlockedExchange(&gClientMode, 0);
+    InterlockedExchange(&gProtectionRequired, 0);
+    InterlockedExchange(&gDegradedProtected, 0);
+    InterlockedExchange(&gGracefulDisconnectAuthorized, 0);
     RgClearContainedProcess();
 
     if (gServerPort != NULL) {

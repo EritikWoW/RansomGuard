@@ -53,7 +53,10 @@ $codeOwners=Get-Content -LiteralPath $codeOwnersPath -Raw
 
 foreach($required in @(
     'The default normal package remains Audit',
-    'Version 0.8.2 can admit a cryptographically bound ProductionProtection package',
+    'Version 0.8.3 retains the cryptographically bound ProductionProtection package',
+    'Protected regular file has `NumberOfLinks != 1` during activation',
+    '`FileLinkInformation` / `FileLinkInformationEx` touches protected source or destination',
+    'proven outside-to-outside hard-link topology is allowed',
     'reports `EnforceUnavailable` until a separately qualified production driver/GateClient lifecycle completes',
     'Ambiguous-scope analysis',
     'Kernel-mode requestor / compromised kernel component / BYOVD path',
@@ -107,6 +110,11 @@ foreach($required in @(
     'RgScopeAmbiguous',
     'RgClassifyMutationScope(&event, FltObjects)',
     'RgEventDestinationPathMatchesGateRoot',
+    'RgIsHardLinkSetInfo',
+    'FileLinkInformation',
+    'FileLinkInformationEx',
+    'RgPopulateLinkDestination',
+    'RgClassifyHardLinkScope',
     'FltGetVolumeFromName(gFilter, &volumeName, &candidateVolume)',
     'gGateVolume != candidateVolume',
     'FltObjectDereference(releaseVolume)',

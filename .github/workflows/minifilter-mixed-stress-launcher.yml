@@ -1,0 +1,214 @@
+name: Minifilter mixed endurance VM lab
+
+on:
+  workflow_dispatch:
+    inputs:
+      root_base:
+        description: Disposable VM-only stress root base. Must contain RansomGuard.
+        required: true
+        default: C:\RansomGuard-VM-MixedStress
+        type: string
+      parallelism:
+        description: Admission-overflow probe width. Must be 9-32; qualification phases run at kernel cap=8.
+        required: true
+        default: '16'
+        type: string
+      mixed_rounds:
+        description: Sustained mixed CREATE/RENAME/TRUNCATE/DELETE/mapped-write rounds. Must be 1-240.
+        required: true
+        default: '60'
+        type: string
+      round_pause_ms:
+        description: Pause between mixed rounds in milliseconds. Must be 0-60000.
+        required: true
+        default: '10000'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ransomguard-mixed-stress-launcher
+  cancel-in-progress: false
+
+jobs:
+  stress-runtime:
+    environment: ransomguard-lab-vm
+    runs-on: [self-hosted, Windows, X64, ransomguard-lab-vm]
+    timeout-minutes: 60
+    env:
+      RANSOMGUARD_LAB_VM: I_UNDERSTAND
+      RANSOMGUARD_LAB_CERT_THUMBPRINT: ${{ secrets.RANSOMGUARD_LAB_CERT_THUMBPRINT }}
+      RG_STRESS_ROOT_BASE: ${{ inputs.root_base }}
+      RG_STRESS_PARALLELISM: ${{ inputs.parallelism }}
+      RG_MIXED_ROUNDS: ${{ inputs.mixed_rounds }}
+      RG_MIXED_ROUND_PAUSE_MS: ${{ inputs.round_pause_ms }}
+
+    steps:
+      - name: Checkout exact PR 42 mixed endurance head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
+        with:
+          ref: 184566aa4269d28bf3f7c32aeb9035ceaa8dd25c
+          fetch-depth: 1
+
+      - name: Bind exact checked-out commit
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $expected='184566aa4269d28bf3f7c32aeb9035ceaa8dd25c'
+          $actual=(& git rev-parse --verify HEAD).Trim()
+          if($LASTEXITCODE -ne 0 -or -not [string]::Equals($actual,$expected,[StringComparison]::OrdinalIgnoreCase)){
+            throw "Mixed endurance launcher expected '$expected' but checked out '$actual'."
+          }
+          Write-Host "Mixed endurance target commit: $actual"
+          "RG_WORKFLOW_SHA=$actual" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Audit PowerShell and mixed endurance harness
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          .\tools\verify_powershell_automation.ps1
+          .\tools\verify_supply_chain.ps1
+          .\tools\verify_threat_model.ps1
+          .\tools\verify_concurrency_stress_vm_harness.ps1
+          .\tools\verify_mixed_stress_vm_harness.ps1
+
+      - name: Verify runtime VM runner readiness
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          if([string]::IsNullOrWhiteSpace($env:RANSOMGUARD_LAB_CERT_THUMBPRINT)){throw 'Environment secret RANSOMGUARD_LAB_CERT_THUMBPRINT is required.'}
+          .\minifilter-tools\verify_runtime_runner_readiness.ps1 -CertificateThumbprint $env:RANSOMGUARD_LAB_CERT_THUMBPRINT
+
+      - name: Clear stale LAB minifilter from prior failed run
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $root=[IO.Path]::GetFullPath($env:RG_STRESS_ROOT_BASE)
+          $volume=[IO.Path]::GetPathRoot($root).TrimEnd('\')
+          $filters=(& fltmc filters 2>$null | Out-String)
+          if($LASTEXITCODE -ne 0){throw "Unable to query Filter Manager before stress lab, exit=$LASTEXITCODE"}
+          if($filters -match '(?m)^\s*RansomGuardMinifilter\b'){
+            Write-Warning 'Removing RansomGuardMinifilter left loaded by a prior failed non-crash LAB run.'
+            .\minifilter-tools\unload_minifilter_lab.ps1 -Volume $volume
+          }
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0 node24 pinned
+        with:
+          dotnet-version: 10.0.401
+
+      - name: Build Engineering LAB userspace bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          .\build_lab.cmd
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          $lab=Get-ChildItem .\release -Directory -Filter 'RansomGuard-Lab-v*' | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+          if(-not $lab){throw 'Engineering LAB release directory not found.'}
+          "RG_LAB_RELEASE=$($lab.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build and sign exact-commit runtime driver package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $package=Join-Path $env:RUNNER_TEMP 'ransomguard-mixed-stress-driver'
+          .\minifilter-tools\prepare_runtime_driver_package.ps1 -CertificateThumbprint $env:RANSOMGUARD_LAB_CERT_THUMBPRINT -OutputDirectory $package
+          $provenance=Get-Content -LiteralPath (Join-Path $package 'runtime-package.json') -Raw | ConvertFrom-Json
+          if([int]$provenance.schema -ne 2){throw "Runtime package provenance schema must be 2. Found '$($provenance.schema)'."}
+          if($provenance.commit -ne $env:RG_WORKFLOW_SHA){throw "Runtime driver provenance commit '$($provenance.commit)' does not match workflow commit '$env:RG_WORKFLOW_SHA'."}
+          $expectedThumb=$env:RANSOMGUARD_LAB_CERT_THUMBPRINT.Replace(' ','').ToUpperInvariant()
+          if([string]$provenance.certificateThumbprint -ne $expectedThumb){throw "Runtime package certificate thumbprint '$($provenance.certificateThumbprint)' does not match configured LAB certificate '$expectedThumb'."}
+          [xml]$props=Get-Content -LiteralPath .\Directory.Build.props -Raw
+          $expectedVersion=[string]$props.Project.PropertyGroup.Version
+          if($provenance.productVersion -ne $expectedVersion){throw "Runtime package version '$($provenance.productVersion)' does not match '$expectedVersion'."}
+          foreach($artifact in @(
+            @('sysSha256',(Join-Path $package 'RansomGuardMinifilter.sys')),
+            @('infSha256',(Join-Path $package 'RansomGuardMinifilter.inf')),
+            @('catSha256',(Join-Path $package 'RansomGuardMinifilter.cat'))
+          )){
+            $expected=[string]$provenance.($artifact[0])
+            $actual=(Get-FileHash -LiteralPath $artifact[1] -Algorithm SHA256).Hash
+            if(-not [string]::Equals($expected,$actual,[StringComparison]::OrdinalIgnoreCase)){
+              throw "Runtime package artifact hash mismatch for $($artifact[1])."
+            }
+          }
+          "RG_DRIVER_PACKAGE=$package" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run sustained mixed workload stress
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $parallel=0
+          $rounds=0
+          $pauseMs=0
+          if(-not [int]::TryParse($env:RG_STRESS_PARALLELISM,[ref]$parallel) -or $parallel -lt 9 -or $parallel -gt 32){
+            throw "parallelism must be an integer between 9 and 32. Found '$env:RG_STRESS_PARALLELISM'."
+          }
+          if(-not [int]::TryParse($env:RG_MIXED_ROUNDS,[ref]$rounds) -or $rounds -lt 1 -or $rounds -gt 240){
+            throw "mixed_rounds must be an integer between 1 and 240. Found '$env:RG_MIXED_ROUNDS'."
+          }
+          if(-not [int]::TryParse($env:RG_MIXED_ROUND_PAUSE_MS,[ref]$pauseMs) -or $pauseMs -lt 0 -or $pauseMs -gt 60000){
+            throw "round_pause_ms must be an integer between 0 and 60000. Found '$env:RG_MIXED_ROUND_PAUSE_MS'."
+          }
+          $results=Join-Path $env:RUNNER_TEMP 'ransomguard-mixed-stress-results'
+          if(Test-Path -LiteralPath $results){Remove-Item -LiteralPath $results -Recurse -Force}
+          New-Item -ItemType Directory -Path $results -Force | Out-Null
+          .\minifilter-tools\run_concurrency_stress_lab.ps1 -LabReleaseDirectory $env:RG_LAB_RELEASE -DriverPackageDirectory $env:RG_DRIVER_PACKAGE -RootBase $env:RG_STRESS_ROOT_BASE -ResultsDirectory $results -Parallelism $parallel -MixedRounds $rounds -MixedRoundPauseMilliseconds $pauseMs
+          $summary=Get-Content -LiteralPath (Join-Path $results 'concurrency-stress-result.json') -Raw | ConvertFrom-Json
+          foreach($name in @(
+            'admissionOverflowPassed','createPassed','renamePassed','truncatePassed','deletePassed','mappedWritePassed',
+            'mixedWorkloadPassed','transactionCorrelationPassed','noPendingTransactionsPassed','preimageHashPassed',
+            'gateStayedAlive','gateWorkersHealthyPassed','cleanupPassed','passed'
+          )){
+            if($summary.$name -ne $true){throw "Mixed endurance invariant '$name' was not true."}
+          }
+          if([int]$summary.parallelism -ne $parallel){throw "Mixed stress summary parallelism '$($summary.parallelism)' does not match requested '$parallel'."}
+          if([int]$summary.qualificationParallelism -ne 8){throw "Mixed stress qualification parallelism '$($summary.qualificationParallelism)' was not 8."}
+          if([int]$summary.mixedRoundsRequested -ne $rounds -or [int]$summary.mixedRoundsCompleted -ne $rounds){
+            throw "Mixed rounds mismatch: requested=$rounds summaryRequested=$($summary.mixedRoundsRequested) completed=$($summary.mixedRoundsCompleted)."
+          }
+          if([int]$summary.mixedOperationsCompleted -ne ($rounds*5)){
+            throw "Mixed operation count '$($summary.mixedOperationsCompleted)' does not equal expected '$($rounds*5)'."
+          }
+          $minimumPauseSeconds=[Math]::Max(0,(($rounds-1)*$pauseMs/1000.0)-2.0)
+          if([double]$summary.mixedElapsedSeconds -lt $minimumPauseSeconds){
+            throw "Mixed elapsed time '$($summary.mixedElapsedSeconds)' seconds did not cover configured pause budget '$minimumPauseSeconds' seconds."
+          }
+          if([string]::IsNullOrWhiteSpace([string]$summary.mixedStartedUtc) -or [string]::IsNullOrWhiteSpace([string]$summary.mixedFinishedUtc)){
+            throw 'Mixed endurance summary must record start and finish UTC timestamps.'
+          }
+          if([int]$summary.overflowDenied -lt 1){throw 'Mixed stress did not observe a fail-closed admission denial above the kernel gate cap.'}
+          if([int]$summary.gateWorkers -ne 8 -or [int]$summary.kernelGateCap -ne 8){throw 'Mixed stress did not run against the intended 8-worker/8-request gate bound.'}
+          if(-not [string]::IsNullOrWhiteSpace([string]$summary.cleanupError)){throw "Mixed stress cleanup reported an error: $($summary.cleanupError)"}
+          "RG_MIXED_STRESS_RESULTS=$results" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Ensure LAB minifilter is unloaded after run
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $root=[IO.Path]::GetFullPath($env:RG_STRESS_ROOT_BASE)
+          $volume=[IO.Path]::GetPathRoot($root).TrimEnd('\')
+          $filters=(& fltmc filters 2>$null | Out-String)
+          if($LASTEXITCODE -ne 0){throw "Unable to query Filter Manager during stress cleanup, exit=$LASTEXITCODE"}
+          if($filters -match '(?m)^\s*RansomGuardMinifilter\b'){
+            .\minifilter-tools\unload_minifilter_lab.ps1 -Volume $volume
+          }
+
+      - name: Upload mixed endurance evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 node24 pinned
+        with:
+          name: ransomguard-mixed-stress-evidence
+          path: ${{ runner.temp }}/ransomguard-mixed-stress-results/**
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Remove signed lab package
+        if: always()
+        shell: pwsh
+        run: |
+          if($env:RG_DRIVER_PACKAGE -and (Test-Path -LiteralPath $env:RG_DRIVER_PACKAGE)){
+            Remove-Item -LiteralPath $env:RG_DRIVER_PACKAGE -Recurse -Force -ErrorAction SilentlyContinue
+          }

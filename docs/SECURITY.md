@@ -4,11 +4,13 @@ Read [THREAT_MODEL.md](THREAT_MODEL.md) first. It is the canonical statement of 
 
 ## Current product boundary
 
-The normal RansomGuard package defaults to Audit and does not install or load the Engineering LAB minifilter. Version 0.8.0 adds an explicit Enforce configuration/state contract, but this foundation milestone does not activate the production driver/GateClient lifecycle. An Enforce request therefore reports `EnforceUnavailable` rather than claiming kernel protection.
+The normal RansomGuard package defaults to Audit and does not install or load the Engineering LAB minifilter. Version 0.8.1 adds fail-closed admission for a future ProductionProtection package on top of the 0.8.0 Enforce state contract. Admission binds the package to the actual running service image, exact version/protocol/hashes, the same Authenticode signer for service/GateClient/catalog, and Windows catalog membership for SYS/INF. It still does not activate the production driver/GateClient lifecycle. An Enforce request therefore reports `EnforceUnavailable` rather than claiming kernel protection.
 
 The Engineering LAB minifilter is restricted to disposable test environments and explicit test data. Its current user/kernel wire contract is protocol v17. Protocol v17 binds the negotiated root to an exact Filter Manager volume object so destructive user-mode name-query ambiguity can fail safe only on that protected volume. Its altitude is an unassigned LAB placeholder and its test-signing path is not a production trust anchor.
 
 No claim is made that the current product is tamper-proof against a local administrator, a malicious kernel component/BYOVD path, physical/boot compromise or a compromised signing/build system.
+
+Protection-package admission rejects the Engineering LAB provider and placeholder altitude, but a numeric altitude in a local descriptor is not proof that Microsoft assigned it. Production release governance must bind the shipped INF/descriptor to the external Microsoft altitude assignment and controlled production signing identity.
 
 ## Administrative boundary
 

@@ -52,14 +52,14 @@ jobs:
       - name: Checkout exact PR 40 Driver Verifier head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
         with:
-          ref: e54f3c3b14134942bf0cf2b2697c4e8f077fcab2
+          ref: 6fe4698f99f40e266256606e808ea279e0d64971
           fetch-depth: 1
 
       - name: Bind exact checked-out commit
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
-          $expected='e54f3c3b14134942bf0cf2b2697c4e8f077fcab2'
+          $expected='6fe4698f99f40e266256606e808ea279e0d64971'
           $actual=(& git rev-parse --verify HEAD).Trim()
           if($LASTEXITCODE -ne 0 -or -not [string]::Equals($actual,$expected,[StringComparison]::OrdinalIgnoreCase)){
             throw "Driver Verifier launcher expected '$expected' but checked out '$actual'."

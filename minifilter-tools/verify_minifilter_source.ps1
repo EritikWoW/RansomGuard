@@ -352,7 +352,11 @@ foreach($required in @(
     'InterlockedExchange(&gClientConnected, 0)',
     'if (protectionRequired != 0 && gracefulDisconnect == 0)',
     'InterlockedExchange(&gMaintenanceRequested, 0)',
+    'releaseVolume = gGateVolume',
+    'gGateVolume = NULL',
+    'gGateVolumeLengthBytes = 0',
     'gGateRootLengthBytes = 0',
+    'FltObjectDereference(releaseVolume)',
     'RtlSecureZeroMemory(gGateRoot, sizeof(gGateRoot))'
 )){
     if($disconnectBlock -notmatch [regex]::Escape($required)){throw "Disconnect fail-safe invariant missing: $required"}
@@ -368,9 +372,16 @@ $connectEnd=$src.IndexOf('static NTSTATUS RgMessage(PVOID ConnectionCookie',$con
 if($connectStart -lt 0 -or $connectEnd -lt 0){throw 'Connect source block missing.'}
 $connectBlock=$src.Substring($connectStart,$connectEnd-$connectStart)
 foreach($required in @(
+    'FltGetVolumeFromName(gFilter, &volumeName, &candidateVolume)',
+    'context->GateVolumeLengthBytes',
+    'gGateVolumeLengthBytes != (USHORT)volumeBytes',
+    'gGateVolume != candidateVolume',
     'InterlockedCompareExchange(&gProtectionRequired, 0, 0) != 0',
     'gGateRootLengthBytes != (USHORT)rootBytes',
     'RtlCompareMemory(gGateRoot, context->GateRoot, rootBytes) != rootBytes',
+    'gGateVolume = candidateVolume',
+    'candidateVolume = NULL',
+    'FltObjectDereference(candidateVolume)',
     'InterlockedExchange(&gClientConnected, 1)',
     'InterlockedExchange(&gDegradedProtected, 0)'
 )){
@@ -414,6 +425,31 @@ if($preSetBlock -notmatch [regex]::Escape('if (RgIsContainedRequestor(Data))') -
    $preSetBlock.IndexOf('if (RgIsContainedRequestor(Data))') -gt $preSetBlock.IndexOf('RgGateEvent(Data, &event')){
     throw 'RENAME/DELETE/TRUNCATE must fail in kernel for the contained process before the user-mode gate.'
 }
+foreach($block in @($preCreateBlock,$preWriteBlock,$preSetBlock)){
+    if($block -notmatch [regex]::Escape('RgClassifyMutationScope(&event, FltObjects)')){
+        throw 'Mutation callback must classify source/destination scope through the protocol-v17 volume-aware classifier.'
+    }
+}
+if($preCreateBlock -notmatch [regex]::Escape('scope == RgScopeAmbiguous') -or
+   $preCreateBlock -notmatch [regex]::Escape('RgCreateMayMutate(&event)') -or
+   $preWriteBlock -notmatch [regex]::Escape('scope == RgScopeAmbiguous') -or
+   $preSetBlock -notmatch [regex]::Escape('scope == RgScopeAmbiguous')){
+    throw 'Ambiguous protected-volume mutation scope must fail closed while read-only CREATE remains available.'
+}
+
+$scopeStart=$src.IndexOf('static RG_SCOPE_CLASSIFICATION RgClassifyMutationScope(')
+$scopeEnd=$src.IndexOf('static BOOLEAN RgIsContainedRequestor',$scopeStart)
+if($scopeStart -lt 0 -or $scopeEnd -lt 0){throw 'Volume-aware mutation scope classifier source block missing.'}
+$scopeBlock=$src.Substring($scopeStart,$scopeEnd-$scopeStart)
+foreach($required in @(
+    'RgEventDestinationPathMatchesGateRoot(Event)',
+    'sourceScope == RgScopeInside || destinationScope == RgScopeInside',
+    'sourceScope == RgScopeOutside && destinationScope == RgScopeOutside',
+    'RgIsOnGateVolume(FltObjects) ? RgScopeAmbiguous : RgScopeOutside',
+    'Event->ProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId'
+)){
+    if($scopeBlock -notmatch [regex]::Escape($required)){throw "Protocol-v17 scope classifier invariant missing: $required"}
+}
 if($src -notmatch 'static VOID RgDisconnect[\s\S]*RgClearContainedProcess\(\)' -or
    $src -notmatch 'NTSTATUS RgUnload[\s\S]*RgClearContainedProcess\(\)'){
     throw 'Disconnect and unload must release the referenced containment process object.'
@@ -423,13 +459,19 @@ if($src -notmatch 'FltCreateCommunicationPort\([^;]*RgConnect,\s*RgDisconnect,\s
    $src -notmatch 'RgConnect, RgDisconnect, RgMessage, 1'){
     throw 'Communication port must register RgMessage for activation handshake.'
 }
-if($proto -notmatch '#define\s+RG_PROTOCOL_VERSION\s+16u'){throw 'Minifilter protocol must be v16 for disconnect fail-safe state.'}
+if($proto -notmatch '#define\s+RG_PROTOCOL_VERSION\s+17u'){throw 'Minifilter protocol must be v17 for protected-volume scope binding.'}
 if($proto -notmatch 'RG_GATE_ROOT_CHARS'){throw 'Protocol must carry an explicit bounded gate root.'}
 foreach($required in @('RgControlActivateAndContainProcess','RgControlQueryContainment','RgControlDeactivateGate','TargetProcessId','ContainmentActive','ProtectionState','ContainedProcessId','RG_GATE_REPLY_FLAG_CONTAIN_REQUESTOR','RgEventContainmentActivated','RgProtectionDegradedProtected','RgProtectionMaintenance')){
-    if($proto -notmatch [regex]::Escape($required)){throw "Protocol v16 protection/containment field missing: $required"}
+    if($proto -notmatch [regex]::Escape($required)){throw "Protocol v17 protection/containment field missing: $required"}
 }
-if($src -notmatch 'Unresolved/out-of-root paths fail open'){throw 'LAB gate must document fail-open behavior outside the explicitly resolved gate root.'}
-if($src -notmatch 'requestorPid\s*==\s*\(ULONGLONG\)InterlockedCompareExchange64\(&gClientProcessId'){throw 'Gate client PID must be excluded to prevent rollback-store self-deadlock.'}
+if($proto -notmatch 'GateVolumeLengthBytes'){throw 'Protocol v17 must carry the protected NT volume length inside the fixed-size connect context.'}
+if($src -notmatch [regex]::Escape('FltGetVolumeFromName(gFilter, &volumeName, &candidateVolume)') -or
+   $src -notmatch [regex]::Escape('FltObjectDereference(releaseVolume)')){
+    throw 'Protected volume must use a Filter Manager rundown reference with explicit release.'
+}
+if($src -notmatch [regex]::Escape('Event->ProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId')){
+    throw 'Gate client PID must be excluded from ambiguous-volume enforcement to prevent rollback-store self-deadlock.'
+}
 if($proto -notmatch 'RG_CREATE_DISPOSITION_SHIFT'){throw 'Protocol must carry CREATE disposition/options semantics.'}
 if($proto -notmatch 'DestinationPathStatus' -or $proto -notmatch 'DestinationPath\[RG_PATH_CHARS\]'){throw 'Protocol v8 must carry bounded rename destination path metadata.'}
 if($proto -notmatch 'RgEventRenameResult' -or $proto -notmatch 'RelatedSequence' -or $proto -notmatch 'CompletionStatus'){throw 'Protocol v8 must carry correlated post-rename completion metadata.'}
@@ -447,7 +489,7 @@ if($src -notmatch 'RgEventRenameResult' -or
 }
 
 if($proto -notmatch 'RgEventTruncateResult'){
-    throw 'Protocol v16 must retain a correlated TruncateResult event.'
+    throw 'Protocol v17 must retain a correlated TruncateResult event.'
 }
 if($src -notmatch [regex]::Escape('context->PostEventType = RgEventTruncateResult') -or
    $src -notmatch [regex]::Escape('event.EventType = context->PostEventType') -or

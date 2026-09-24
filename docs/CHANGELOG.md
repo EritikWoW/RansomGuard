@@ -2,7 +2,7 @@
 
 - Introduced minifilter/GateClient protocol v17 without increasing the fixed 544-byte connect-context size; the former reserved field now carries the protected NT-volume prefix length.
 - GateClient derives the exact NT device-volume prefix for the selected local LAB root and the kernel resolves it to a referenced Filter Manager `PFLT_VOLUME`.
-- Destructive ordinary user-mode CREATE/WRITE/RENAME/DELETE/TRUNCATE operations with unresolved/unknown normalized scope now fail closed when the callback is on the bound protected volume instead of silently treating ambiguity as out-of-scope.
+- Destructive ordinary user-mode CREATE/WRITE/RENAME/DELETE/TRUNCATE operations with unresolved/unknown normalized scope now fail closed when the callback is on the bound protected volume instead of silently treating ambiguity as out-of-scope; before entering Ambiguous, normalized source/destination lookup gets a second Filter Manager cache-only-safe opportunity via `QUERY_ALWAYS_ALLOW_CACHE_LOOKUP`.
 - Mutation-capable ambiguous CREATE is denied while read-only CREATE remains available.
 - RENAME scope now evaluates both source and destination. If either side is inside the protected root the operation is gated; if one side is unresolved on the protected volume the operation fails closed; only two proven-outside sides bypass the root gate.
 - Ambiguous callbacks on other volumes remain out of this gate, limiting availability blast radius.

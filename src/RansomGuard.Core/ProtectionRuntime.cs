@@ -119,8 +119,8 @@ public sealed class ProtectionStateMachine
         lock (_gate)
         {
             RequireEnforce();
-            if (!_rollbackReady || string.IsNullOrWhiteSpace(reason))
-                throw new InvalidOperationException("DegradedProtected requires rollback readiness and an explicit reason.");
+            if (!_rollbackReady || _phase != ProtectionPhase.Protected || string.IsNullOrWhiteSpace(reason))
+                throw new InvalidOperationException("DegradedProtected is valid only after an active Protected session loses its user-mode channel.");
             _phase = ProtectionPhase.DegradedProtected;
             _kernelConnected = false;
             _automaticContainmentActive = false;
@@ -134,8 +134,9 @@ public sealed class ProtectionStateMachine
         lock (_gate)
         {
             RequireEnforce();
-            if (string.IsNullOrWhiteSpace(reason))
-                throw new InvalidOperationException("Maintenance requires an explicit reason.");
+            if (_phase is not (ProtectionPhase.Protected or ProtectionPhase.DegradedProtected) ||
+                string.IsNullOrWhiteSpace(reason))
+                throw new InvalidOperationException("Maintenance requires an active/degraded protected session and an explicit reason.");
             _phase = ProtectionPhase.Maintenance;
             _automaticContainmentActive = false;
             _reason = reason;
@@ -148,8 +149,9 @@ public sealed class ProtectionStateMachine
         lock (_gate)
         {
             RequireEnforce();
-            if (string.IsNullOrWhiteSpace(reason))
-                throw new InvalidOperationException("EnforceUnavailable requires an explicit reason.");
+            if (_phase is ProtectionPhase.Protected or ProtectionPhase.DegradedProtected or ProtectionPhase.Maintenance ||
+                string.IsNullOrWhiteSpace(reason))
+                throw new InvalidOperationException("EnforceUnavailable is a startup/pre-activation state and cannot replace an active protection state.");
             _phase = ProtectionPhase.EnforceUnavailable;
             _kernelConnected = false;
             _automaticContainmentActive = false;

@@ -66,6 +66,8 @@ foreach($required in @(
     'Persisted reboot timestamps are SHA-bound and parsed from raw offset-bearing JSON',
     '0.7.31 adds a separate sustained mixed-workload qualification harness',
     'Source presence is not qualification evidence',
+    'DEGRADED_PROTECTED',
+    'explicit maintenance deactivation command',
     'current runner reported ReFS creation unsupported',
     'Do not describe the current normal bundle as production ransomware blocking'
 )){
@@ -95,7 +97,10 @@ foreach($required in @(
     'Data->RequestorMode == KernelMode',
     'Unresolved/out-of-root CREATEs fail open',
     'Unresolved/out-of-root paths fail open',
-    'return FLT_PREOP_SUCCESS_NO_CALLBACK'
+    'return FLT_PREOP_SUCCESS_NO_CALLBACK',
+    'gDegradedProtected',
+    'known in-scope destructive operations remain fail-closed until driver unload',
+    'RgControlDeactivateGate'
 )){
     if(-not $driver.Contains($required)){
         throw "Driver boundary changed without threat-model review: $required"
@@ -104,6 +109,9 @@ foreach($required in @(
 
 if($driver -notmatch 'FltCreateCommunicationPort\([^;]+RgConnect\s*,\s*RgDisconnect\s*,\s*RgMessage\s*,\s*1\s*\)'){
     throw 'Threat-model single-client port boundary changed without review.'
+}
+if(-not $protocol.Contains('RgControlDeactivateGate = 6')){
+    throw 'Threat-model explicit maintenance deactivation command missing from protocol.'
 }
 if(-not $protocol.Contains('#define RG_PROTOCOL_VERSION 15u')){
     throw 'Threat-model protocol-v15 boundary changed without review.'

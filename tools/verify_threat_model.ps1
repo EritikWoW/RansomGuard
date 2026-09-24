@@ -56,7 +56,7 @@ foreach($required in @(
     'Version 0.8.3 retains the cryptographically bound ProductionProtection package',
     'Protected regular file has `NumberOfLinks != 1` during activation',
     '`FileLinkInformation` / `FileLinkInformationEx` touches protected source or destination',
-    'proven outside-to-outside hard-link topology is allowed',
+    'proven outside↔outside links remain allowed',
     'reports `EnforceUnavailable` until a separately qualified production driver/GateClient lifecycle completes',
     'Ambiguous-scope analysis',
     'Kernel-mode requestor / compromised kernel component / BYOVD path',

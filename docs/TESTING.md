@@ -243,3 +243,22 @@ Every round must finish with the expected filesystem state, a durable DELETE `De
 
 The workflow is manual-only. It does not reboot Windows, enable Driver Verifier, modify boot policy or manage disks. Source/hosted CI proves only the harness contract; the 0.7.31 endurance milestone is runtime-qualified only after the exact unchanged PR head completes this VM workflow and the uploaded evidence artifact is reviewed.
 
+
+
+## 0.7.32 GateClient-loss fail-safe coverage
+
+The GateClient-loss campaign is manual and disposable-VM-only. It keeps one exact signed minifilter load throughout the qualification so the test can distinguish an unexpected client-port loss from an unload/reload reset.
+
+The required sequence is:
+
+1. prepare two disposable roots before activation;
+2. activate root A, then force-terminate that GateClient without orderly-disconnect authorization;
+3. while no GateClient is connected, require an existing-file WRITE and a mutation-capable CREATE inside root A to be denied and prove the existing file SHA-256 is unchanged;
+4. require a GateClient for root B to fail while root A is latched;
+5. reconnect root A, require the full existing activation preflight to complete again, perform one CREATE successfully, and require its authoritative CREATE completion journal record;
+6. request shutdown through the external LAB shutdown marker and require both a Completed rollback-session lifecycle and kernel `RgControlAuthorizeDisconnect` grant;
+7. without unloading the driver, activate root B successfully and cleanly disconnect it, proving the prior root latch was actually cleared.
+
+The source gate requires exactly one intentional force-kill on the success path. Successful reconnect sessions must use orderly shutdown rather than force-stop. The workflow is manual only and forbids reboot, Driver Verifier, disk-management, boot-policy and Defender mutations.
+
+Hosted source/compile success is not runtime qualification. The 0.7.32 GateClient-loss milestone becomes qualified only after the exact unchanged PR head completes `.github/workflows/minifilter-gateclient-loss-vm.yml` and its `gateclient-loss-result.json` plus logs are reviewed.

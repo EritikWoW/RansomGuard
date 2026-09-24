@@ -231,6 +231,12 @@ $volume=[IO.Path]::GetPathRoot($RootBase).TrimEnd('\')
 $installScript=Join-Path $PSScriptRoot 'install_minifilter_lab.ps1'
 $unloadScript=Join-Path $PSScriptRoot 'unload_minifilter_lab.ps1'
 
+function Reset-LabFilterAfterDegradedStop {
+    Write-Host 'Resetting LAB filter after intentional hard-stop/degraded-protection proof...' -ForegroundColor Yellow
+    & $unloadScript -Volume $volume
+    & $installScript -Volume $volume -PackageDirectory $DriverPackageDirectory -Confirmation 'LAB-MINIFILTER'
+}
+
 $summary=[ordered]@{
     schema=1
     version=$gateVersion
@@ -247,6 +253,10 @@ $summary=[ordered]@{
     postActivationBaselineVerified=$false
     postActivationPagingObserved=$false
     preimageHashMatched=$false
+    unexpectedDisconnectLatched=$false
+    degradedWriteDenied=$false
+    degradedReconnectDenied=$false
+    degradedResetPassed=$false
     containmentDeniedTarget=$false
     containmentPreservedTargetHash=$false
     containmentAllowedPeer=$false
@@ -264,6 +274,7 @@ $holder=$null
 $gateDir=$null
 $gatePre=$null
 $gatePost=$null
+$gateReconnect=$null
 $gateContain=$null
 $gateTransition=$null
 $containProbe=$null
@@ -424,11 +435,57 @@ try{
     }
     $summary.preimageHashMatched=$true
 
-    # The filter communication port allows one gate client. End this successful
-    # session before activating the next root so the disconnect callback clears
-    # gate/containment state and the next client can connect deterministically.
+    # Hard-stop the active GateClient without maintenance deactivation. This is the
+    # qualification boundary for DEGRADED_PROTECTED: the kernel must keep the known
+    # root fail-closed and refuse a replacement client until driver reset.
     Stop-LabProcess $gatePost 'post-activation gate'
     $gatePost=$null
+    Start-Sleep -Milliseconds 500
+    $summary.unexpectedDisconnectLatched=$true
+
+    $hashBeforeDeniedWrite=(Get-FileHash -LiteralPath $postFile -Algorithm SHA256).Hash
+    $writeDenied=$false
+    try{
+        [IO.File]::WriteAllText($postFile,'RANSOMGUARD-DEGRADED-WRITE-MUST-BE-DENIED')
+    }
+    catch{
+        $win32=$_.Exception.HResult -band 0xFFFF
+        if($_.Exception -is [UnauthorizedAccessException] -or $win32 -eq 5){
+            $writeDenied=$true
+        }
+        else{
+            throw
+        }
+    }
+    if(-not $writeDenied){
+        throw 'Unexpected GateClient loss did not fail-closed an ordinary destructive CREATE/WRITE open.'
+    }
+    $hashAfterDeniedWrite=(Get-FileHash -LiteralPath $postFile -Algorithm SHA256).Hash
+    if(-not [string]::Equals($hashBeforeDeniedWrite,$hashAfterDeniedWrite,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'Protected file changed despite degraded-protected write denial.'
+    }
+    $summary.degradedWriteDenied=$true
+
+    $reconnectStore=Join-Path $ResultsDirectory 'degraded-reconnect-store'
+    $reconnectOut=Join-Path $ResultsDirectory 'degraded-reconnect.out.log'
+    $reconnectErr=$reconnectOut + '.err'
+    $gateReconnect=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $postRoot),'--store',(Quote-Arg $reconnectStore),'--session','degraded-reconnect'
+    ) $reconnectOut $reconnectErr
+    if(-not $gateReconnect.WaitForExit(10000)){
+        Stop-Process -Id $gateReconnect.Id -Force -ErrorAction SilentlyContinue
+        throw 'A replacement GateClient unexpectedly connected while DEGRADED_PROTECTED was latched.'
+    }
+    $reconnectFailure=((Get-Content -LiteralPath $reconnectOut -Raw -ErrorAction SilentlyContinue)+[Environment]::NewLine+
+        (Get-Content -LiteralPath $reconnectErr -Raw -ErrorAction SilentlyContinue))
+    if($gateReconnect.ExitCode -eq 0 -or $reconnectFailure -notmatch 'FilterConnectCommunicationPort failed'){
+        throw "Replacement GateClient was not rejected by the degraded latch. exit=$($gateReconnect.ExitCode) output=$reconnectFailure"
+    }
+    $summary.degradedReconnectDenied=$true
+    $gateReconnect=$null
+
+    Reset-LabFilterAfterDegradedStop
+    $summary.degradedResetPassed=$true
 
     # Scenario 3: activation-bound containment is scoped to one kernel process identity.
     Prepare-GateRoot $gateExe $containRoot
@@ -493,6 +550,7 @@ try{
 
     Stop-LabProcess $gateContain 'pre-armed containment gate'
     $gateContain=$null
+    Reset-LabFilterAfterDegradedStop
 
     # Scenario 4: a preserved gate reply can atomically transition the exact requestor into containment.
     Prepare-GateRoot $gateExe $transitionRoot
@@ -589,7 +647,7 @@ finally{
         if($transitionGo){New-Item -ItemType File -Path $transitionGo -Force -ErrorAction SilentlyContinue | Out-Null}
         Stop-Process -Id $transitionProbe.Id -Force -ErrorAction SilentlyContinue
     }
-    foreach($p in @($gateDir,$gatePre,$gatePost,$gateContain,$gateTransition)){
+    foreach($p in @($gateDir,$gatePre,$gatePost,$gateReconnect,$gateContain,$gateTransition)){
         if($p -and -not $p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}
     }
 

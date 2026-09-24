@@ -39,6 +39,10 @@ $banned=@('FltWriteFile(','ZwWriteFile(','FltSetInformationFile(','FltCancelFile
 foreach($token in $banned){if($src.Contains($token)){throw "Kernel gate invariant violated: banned token '$token' found."}}
 foreach($required in @(
     'RgClientLabGate',
+    'RgClientProductionGate',
+    'gProtectedClientMode',
+    'RgCurrentProtectedClientMode',
+    'RgIsGateClientMode',
     'gClientProcessId',
     'RG_GATE_TIMEOUT_MS',
     'RG_MAX_GATE_INFLIGHT',
@@ -172,12 +176,14 @@ $gateBlock=$src.Substring($gateStart,$gateEnd-$gateStart)
 if($gateBlock -match 'ExAcquireFastMutex\(&gPortMutex\)'){
     throw 'RgGateEvent must not hold gPortMutex while waiting for user-mode preservation.'
 }
-if($gateBlock -notmatch 'RgAcquireClientPort\(RgClientLabGate' -or
+if($gateBlock -notmatch [regex]::Escape('gateMode = RgCurrentClientMode()') -or
+   $gateBlock -notmatch [regex]::Escape('RgIsGateClientMode(gateMode)') -or
+   $gateBlock -notmatch [regex]::Escape('RgAcquireClientPort(gateMode)') -or
    $gateBlock -notmatch 'RgReleaseClientPort\(\)'){
-    throw 'RgGateEvent must use the short-lived client-port lease around FltSendMessage.'
+    throw 'RgGateEvent must bind the current LAB/Production gate mode to the short-lived client-port lease around FltSendMessage.'
 }
 $firstMaintenanceGate=$gateBlock.IndexOf('InterlockedCompareExchange(&gMaintenanceRequested, 0, 0) != 0')
-$portLease=$gateBlock.IndexOf('RgAcquireClientPort(RgClientLabGate')
+$portLease=$gateBlock.IndexOf('RgAcquireClientPort(gateMode)')
 $secondMaintenanceGate=$gateBlock.IndexOf('InterlockedCompareExchange(&gMaintenanceRequested, 0, 0) != 0',$firstMaintenanceGate+1)
 if($firstMaintenanceGate -lt 0 -or $portLease -lt 0 -or $secondMaintenanceGate -lt 0 -or
    $firstMaintenanceGate -gt $portLease -or $secondMaintenanceGate -lt $portLease){
@@ -192,6 +198,14 @@ foreach($required in @(
 }
 if($gateBlock -notmatch [regex]::Escape('if (!allow && reply.Flags != 0)')){
     throw 'Containment reply flags must never be accepted on a denied/unpreserved operation.'
+}
+foreach($required in @(
+    'gateMode == RgClientProductionGate && reply.Flags != 0',
+    '*ErrorCode = (ULONG)STATUS_NOT_SUPPORTED'
+)){
+    if($gateBlock -notmatch [regex]::Escape($required)){
+        throw "ProductionGate must reject LAB containment reply flags in kernel: $required"
+    }
 }
 
 if($gateBlock -notmatch [regex]::Escape('else if (allow && RgIsContainedRequestor(Data))') -or
@@ -254,7 +268,7 @@ foreach($forbidden in @('RgGateEvent(','FltGetFileNameInformation(','FltGetFileN
     if($pagingBlock.Contains($forbidden)){throw "Paging-write path must remain non-blocking and name-query free: $forbidden"}
 }
 if($pagingBlock -notmatch [regex]::Escape('FltGetStreamContext') -or
-   $pagingBlock -notmatch [regex]::Escape('RgQueueRawEvent(&event, RgClientLabGate)')){
+   $pagingBlock -notmatch [regex]::Escape('RgQueueRawEvent(&event, RgCurrentProtectedClientMode())')){
     throw 'Paging-write path must use the pre-established stream context and queue no-reply evidence.'
 }
 
@@ -290,7 +304,7 @@ if($attachBlock -notmatch [regex]::Escape('FLT_SET_CONTEXT_REPLACE_IF_EXISTS') -
 if($sectionObserve -notmatch [regex]::Escape('FltGetStreamContext') -or
    $sectionObserve -notmatch [regex]::Escape('event.RelatedSequence = context->CreateRequestSequence') -or
    $sectionObserve -notmatch [regex]::Escape('event.CompletionInformation = context->PreservationDecision') -or
-   $sectionObserve -notmatch [regex]::Escape('RgQueueRawEvent(&event, RgClientLabGate)')){
+   $sectionObserve -notmatch [regex]::Escape('RgQueueRawEvent(&event, RgCurrentProtectedClientMode())')){
     throw 'Writable-section observation must attest the CREATE baseline through stream context and queue no-reply evidence.'
 }
 
@@ -320,6 +334,8 @@ $containmentHelperEnd=$src.IndexOf('static BOOLEAN RgGateEvent',$containmentHelp
 if($containmentHelperStart -lt 0 -or $containmentHelperEnd -lt 0){throw 'Kernel containment helper block missing.'}
 $containmentHelpers=$src.Substring($containmentHelperStart,$containmentHelperEnd-$containmentHelperStart)
 foreach($required in @(
+    'RgCurrentClientMode() != RgClientLabGate',
+    'STATUS_NOT_SUPPORTED',
     'FltGetRequestorProcess(Data)',
     'PsGetProcessId(requestor)',
     '!= Event->ProcessId',
@@ -345,6 +361,18 @@ foreach($required in @(
     'RgQueueRawEvent(&activationEvent, RgClientLabGate)'
 )){
     if($containmentHelpers -notmatch [regex]::Escape($required)){throw "Kernel containment helper invariant missing: $required"}
+}
+
+foreach($required in @(
+    'request->Command == RgControlQueryContainment',
+    'request->Command == RgControlActivateAndContainProcess',
+    'request->Command == RgControlArmScopeAmbiguity',
+    'RgCurrentClientMode() != RgClientLabGate',
+    'STATUS_NOT_SUPPORTED'
+)){
+    if($messageBlock -notmatch [regex]::Escape($required)){
+        throw "ProductionGate LAB-control rejection missing: $required"
+    }
 }
 
 $containCommand=$messageBlock.IndexOf('request->Command == RgControlActivateAndContainProcess')
@@ -478,7 +506,7 @@ if($preSetBlock -notmatch [regex]::Escape('if (RgIsContainedRequestor(Data))') -
 }
 foreach($block in @($preCreateBlock,$preWriteBlock,$preSetBlock)){
     if($block -notmatch [regex]::Escape('RgClassifyMutationScope(&event, FltObjects)')){
-        throw 'Mutation callback must classify source/destination scope through the protocol-v17 volume-aware classifier.'
+        throw 'Mutation callback must classify source/destination scope through the protocol-v18 volume-aware classifier.'
     }
 }
 if($preCreateBlock -notmatch [regex]::Escape('scope == RgScopeAmbiguous') -or
@@ -514,8 +542,23 @@ foreach($required in @(
     'RgIsOnGateVolume(FltObjects) ? RgScopeAmbiguous : RgScopeOutside',
     'Event->ProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId'
 )){
-    if($scopeBlock -notmatch [regex]::Escape($required)){throw "Protocol-v17 scope classifier invariant missing: $required"}
+    if($scopeBlock -notmatch [regex]::Escape($required)){throw "Protocol-v18 scope classifier invariant missing: $required"}
 }
+$connectStart=$src.IndexOf('static NTSTATUS RgConnect(PFLT_PORT ClientPort')
+$connectEnd=$src.IndexOf('static NTSTATUS RgMessage(PVOID ConnectionCookie',$connectStart)
+if($connectStart -lt 0 -or $connectEnd -lt 0){throw 'RgConnect source block missing.'}
+$connectBlock=$src.Substring($connectStart,$connectEnd-$connectStart)
+foreach($required in @(
+    'RgIsGateClientMode((LONG)context->ClientMode)',
+    'gProtectedClientMode != (LONG)context->ClientMode',
+    'InterlockedExchange(&gProtectedClientMode, (LONG)context->ClientMode)',
+    'InterlockedExchange(&gProtectedClientMode, 0)'
+)){
+    if($connectBlock -notmatch [regex]::Escape($required)){
+        throw "Degraded reconnect must retain exact LAB/Production gate profile: $required"
+    }
+}
+
 if($src -notmatch 'static VOID RgDisconnect[\s\S]*RgClearContainedProcess\(\)' -or
    $src -notmatch 'NTSTATUS RgUnload[\s\S]*RgClearContainedProcess\(\)'){
     throw 'Disconnect and unload must release the referenced containment process object.'
@@ -529,12 +572,12 @@ if($src -notmatch 'FltCreateCommunicationPort\([^;]*RgConnect,\s*RgDisconnect,\s
    $src -notmatch 'RgConnect, RgDisconnect, RgMessage, 1'){
     throw 'Communication port must register RgMessage for activation handshake.'
 }
-if($proto -notmatch '#define\s+RG_PROTOCOL_VERSION\s+17u'){throw 'Minifilter protocol must be v17 for protected-volume scope binding.'}
+if($proto -notmatch '#define\s+RG_PROTOCOL_VERSION\s+18u'){throw 'Minifilter protocol must be v18 for LAB/ProductionGate separation.'}
 if($proto -notmatch 'RG_GATE_ROOT_CHARS'){throw 'Protocol must carry an explicit bounded gate root.'}
-foreach($required in @('RgControlActivateAndContainProcess','RgControlQueryContainment','RgControlDeactivateGate','RgControlArmScopeAmbiguity','TargetProcessId','ContainmentActive','ProtectionState','ContainedProcessId','RG_GATE_REPLY_FLAG_CONTAIN_REQUESTOR','RgEventContainmentActivated','RgProtectionDegradedProtected','RgProtectionMaintenance')){
-    if($proto -notmatch [regex]::Escape($required)){throw "Protocol v17 protection/containment field missing: $required"}
+foreach($required in @('RgClientProductionGate','RgControlActivateAndContainProcess','RgControlQueryContainment','RgControlDeactivateGate','RgControlArmScopeAmbiguity','TargetProcessId','ContainmentActive','ProtectionState','ContainedProcessId','RG_GATE_REPLY_FLAG_CONTAIN_REQUESTOR','RgEventContainmentActivated','RgProtectionDegradedProtected','RgProtectionMaintenance')){
+    if($proto -notmatch [regex]::Escape($required)){throw "Protocol v18 protection/profile field missing: $required"}
 }
-if($proto -notmatch 'GateVolumeLengthBytes'){throw 'Protocol v17 must carry the protected NT volume length inside the fixed-size connect context.'}
+if($proto -notmatch 'GateVolumeLengthBytes'){throw 'Protocol v18 must retain the protected NT volume length inside the fixed-size connect context.'}
 if($src -notmatch [regex]::Escape('FltGetVolumeFromName(gFilter, &volumeName, &candidateVolume)') -or
    $src -notmatch [regex]::Escape('FltObjectDereference(releaseVolume)')){
     throw 'Protected volume must use a Filter Manager rundown reference with explicit release.'
@@ -559,7 +602,7 @@ if($src -notmatch 'RgEventRenameResult' -or
 }
 
 if($proto -notmatch 'RgEventTruncateResult'){
-    throw 'Protocol v17 must retain a correlated TruncateResult event.'
+    throw 'Protocol v18 must retain a correlated TruncateResult event.'
 }
 if($src -notmatch [regex]::Escape('context->PostEventType = RgEventTruncateResult') -or
    $src -notmatch [regex]::Escape('event.EventType = context->PostEventType') -or
@@ -578,7 +621,7 @@ $truncatePost=$src.IndexOf('context->PostEventType == RgEventTruncateResult')
 $truncatePassive=$src.IndexOf('KeGetCurrentIrql() == PASSIVE_LEVEL',$truncatePost)
 $truncateApc=$src.IndexOf('!KeAreAllApcsDisabled()',$truncatePost)
 $truncateQuery=$src.IndexOf('FltQueryInformationFile(',$truncatePost)
-$truncateQueue=$src.IndexOf('RgQueueRawEvent(&event, RgClientLabGate)',$truncatePost)
+$truncateQueue=$src.IndexOf('RgQueueRawEvent(&event, RgCurrentProtectedClientMode())',$truncatePost)
 if($truncatePost -lt 0 -or $truncatePassive -lt 0 -or $truncateApc -lt 0 -or $truncateQuery -lt 0 -or $truncateQueue -lt 0 -or
    $truncatePost -gt $truncatePassive -or $truncatePassive -gt $truncateQuery -or $truncateApc -gt $truncateQuery -or $truncateQuery -gt $truncateQueue){
     throw 'TRUNCATE post-operation FILE_STANDARD_INFO query must remain PASSIVE/APC-safe and precede no-reply result delivery.'
@@ -606,7 +649,7 @@ $deletePost=$src.IndexOf('context->PostEventType == RgEventDeleteDispositionResu
 $deleteIdentity=$src.IndexOf('RgPopulatePostOperationIdentity(&event, FltObjects)',$deletePost)
 $deleteStateQuery=$src.IndexOf('FileStandardInformation',$deleteIdentity)
 $deleteAttach=$src.IndexOf('RgAttachDeleteHandleContext(',$deleteStateQuery)
-$deleteQueue=$src.IndexOf('RgQueueRawEvent(&event, RgClientLabGate)',$deleteAttach)
+$deleteQueue=$src.IndexOf('RgQueueRawEvent(&event, RgCurrentProtectedClientMode())',$deleteAttach)
 if($deletePost -lt 0 -or $deleteIdentity -lt 0 -or $deleteStateQuery -lt 0 -or
    $deleteAttach -lt 0 -or $deleteQueue -lt 0 -or
    $deletePost -gt $deleteIdentity -or $deleteIdentity -gt $deleteStateQuery -or
@@ -642,7 +685,7 @@ if($proto -notmatch 'RgGateBaselineCommitted' -or $proto -notmatch 'RgGateNoPres
 if($infText -notmatch 'StartType\s*=\s*3'){throw 'Driver must remain demand-start in the lab prototype.'}
 if($infText -notmatch 'Instance1\.Flags\s*=\s*0x1'){throw 'Automatic volume attachment must remain suppressed.'}
 if($infText -notmatch 'Instance1\.Altitude\s*=\s*"370099\.4242"'){throw 'Unexpected LAB altitude. Review altitude policy manually.'}
-Write-Host 'LAB pre-write gate source check PASSED, including protocol-v17 protected-volume scope classification, disconnect fail-safe state, DELETE/TRUNCATE reconciliation, event-bound PEPROCESS containment, fail-closed activation preflight, bounded admission and paging/section evidence.' -ForegroundColor Green
+Write-Host 'Minifilter source check PASSED, including protocol-v18 LAB/ProductionGate separation, retained-profile degraded reconnect, protected-volume scope classification, disconnect fail-safe state, LAB-only containment/fault controls, bounded admission and paging/section evidence.' -ForegroundColor Green
 Write-Host 'Gate scope: one explicit NT root negotiated by the single connected client.'
 Write-Host 'In-scope mutations normally require an explicit preservation decision; an activation-bound contained PEPROCESS is denied before the user-mode gate.'
 Write-Host 'Resolved out-of-root I/O and ambiguity on other volumes stay outside the gate; ambiguous destructive ordinary user-mode I/O on the bound gate volume fails closed. No process-control or kernel file-writing APIs are present.'

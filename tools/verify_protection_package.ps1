@@ -11,8 +11,9 @@ $corePath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\ProtectionPackage.cs'
 $verifierPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\ProtectionPackageVerifier.cs'
 $programPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\Program.cs'
 $authPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\Authenticode.cs'
+$catalogTrustPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\DriverCatalogTrust.cs'
 $buildPath=Join-Path $RepositoryRoot 'build_windows.ps1'
-foreach($path in @($corePath,$verifierPath,$programPath,$authPath,$buildPath)){
+foreach($path in @($corePath,$verifierPath,$programPath,$authPath,$catalogTrustPath,$buildPath)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Production package gate source missing: $path"}
 }
 
@@ -20,6 +21,7 @@ $core=Get-Content -LiteralPath $corePath -Raw
 $verifier=Get-Content -LiteralPath $verifierPath -Raw
 $program=Get-Content -LiteralPath $programPath -Raw
 $auth=Get-Content -LiteralPath $authPath -Raw
+$catalogTrust=Get-Content -LiteralPath $catalogTrustPath -Raw
 $build=Get-Content -LiteralPath $buildPath -Raw
 
 if($core -notmatch [regex]::Escape('bool ReadyForLifecycle')){
@@ -58,15 +60,30 @@ foreach($required in @(
     'INF altitude does not match the production package descriptor.',
     'INF provider does not match the production package descriptor.',
     'INF DriverVer does not match the production package descriptor.',
-    'SYS-to-CAT membership is not yet cryptographically verified; driver load is refused.',
-    '"CatalogMembershipPending"',
-    'false,'
+    'DriverCatalogTrust.VerifyMember(sys, sysPath, catPath)',
+    'DriverCatalogTrust.VerifyMember(inf, infPath, catPath)',
+    '"ValidCatalogMember"',
+    '"Admitted"',
+    'Lifecycle activation is a separate milestone.'
 )){
     if($verifier -notmatch [regex]::Escape($required)){throw "Protection package verifier invariant missing: $required"}
 }
 
 if($auth -notmatch [regex]::Escape('Catalog lookup is not implemented.')){
-    throw 'Package admission relies on the explicit Authenticode catalog-lookup limitation remaining visible.'
+    throw 'Embedded Authenticode checker must keep its catalog-lookup limitation explicit; driver membership is verified separately.'
+}
+foreach($required in @(
+    'CryptCATAdminAcquireContext2',
+    'CryptCATAdminCalcHashFromFileHandle2',
+    'WinTrustCatalogInfo',
+    'UnionChoice = 2',
+    'CalculatedFileHash',
+    'MemberTag',
+    'ValidCatalogMember'
+)){
+    if($catalogTrust -notmatch [regex]::Escape($required)){
+        throw "Driver catalog-membership verifier invariant missing: $required"
+    }
 }
 
 $inspect=$program.IndexOf('ProtectionPackageVerifier.Inspect(AppContext.BaseDirectory,ProductInfo.Version)')

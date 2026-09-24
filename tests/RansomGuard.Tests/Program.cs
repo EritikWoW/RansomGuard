@@ -84,6 +84,10 @@ Check(rejected,"Audit mode cannot enter kernel startup");
 var enforceProtection=new ProtectionStateMachine("Enforce");
 Check(enforceProtection.Snapshot().State=="EnforceStarting"&&!enforceProtection.Snapshot().KernelEnforcementActive,
     "Enforce request starts non-protected");
+rejected=false;try{enforceProtection.MarkDegraded("invalid");}catch(InvalidOperationException){rejected=true;}
+Check(rejected,"unactivated Enforce cannot forge DegradedProtected enforcement");
+rejected=false;try{enforceProtection.BeginMaintenance("invalid");}catch(InvalidOperationException){rejected=true;}
+Check(rejected,"unactivated Enforce cannot enter Maintenance");
 rejected=false;try{enforceProtection.BeginKernelStartup();}catch(InvalidOperationException){rejected=true;}
 Check(rejected,"kernel startup requires rollback readiness");
 enforceProtection.MarkRollbackReady();

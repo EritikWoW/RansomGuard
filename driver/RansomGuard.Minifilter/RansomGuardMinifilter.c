@@ -21,6 +21,8 @@ static volatile LONG gClientMode = 0;
 static volatile LONG64 gClientProcessId = 0;
 static PEPROCESS gContainedProcess = NULL;
 static volatile LONG64 gContainedProcessId = 0;
+static PEPROCESS gScopeAmbiguityProcess = NULL;
+static volatile LONG64 gScopeAmbiguityProcessId = 0;
 static volatile LONG gGateActivated = 0;
 static volatile LONG gActivationHazard = 0;
 static volatile LONG gPreflightProbeArmed = 0;
@@ -91,6 +93,10 @@ static RG_SCOPE_CLASSIFICATION RgClassifyMutationScope(
 static BOOLEAN RgIsContainedRequestor(_In_ PFLT_CALLBACK_DATA Data);
 static BOOLEAN RgCreateMayMutate(_In_ const RG_EVENT *Event);
 static VOID RgClearContainedProcess(VOID);
+static VOID RgClearScopeAmbiguityProbe(VOID);
+static BOOLEAN RgInjectScopeAmbiguityProbe(
+    _In_ PFLT_CALLBACK_DATA Data,
+    _Inout_ PRG_EVENT Event);
 static BOOLEAN RgBindContainedRequestor(_In_ PFLT_CALLBACK_DATA Data,
                                         _In_ const RG_EVENT *Event,
                                         _Out_opt_ PULONG ErrorCode);
@@ -1684,6 +1690,59 @@ static VOID RgClearContainedProcess(VOID)
     if (previous != NULL) {
         ObDereferenceObject(previous);
     }
+}
+
+static VOID RgClearScopeAmbiguityProbe(VOID)
+{
+    PEPROCESS previous = NULL;
+
+    ExAcquireFastMutex(&gPortMutex);
+    previous = gScopeAmbiguityProcess;
+    gScopeAmbiguityProcess = NULL;
+    InterlockedExchange64(&gScopeAmbiguityProcessId, 0);
+    ExReleaseFastMutex(&gPortMutex);
+
+    if (previous != NULL) {
+        ObDereferenceObject(previous);
+    }
+}
+
+static BOOLEAN RgInjectScopeAmbiguityProbe(
+    PFLT_CALLBACK_DATA Data,
+    PRG_EVENT Event)
+{
+    PEPROCESS requestor;
+    PEPROCESS previous = NULL;
+    BOOLEAN inject = FALSE;
+
+    if (Data == NULL || Event == NULL) {
+        return FALSE;
+    }
+
+    requestor = FltGetRequestorProcess(Data);
+    if (requestor == NULL) {
+        return FALSE;
+    }
+
+    ExAcquireFastMutex(&gPortMutex);
+    if (gScopeAmbiguityProcess != NULL &&
+        gScopeAmbiguityProcess == requestor) {
+        previous = gScopeAmbiguityProcess;
+        gScopeAmbiguityProcess = NULL;
+        InterlockedExchange64(&gScopeAmbiguityProcessId, 0);
+        inject = TRUE;
+    }
+    ExReleaseFastMutex(&gPortMutex);
+
+    if (previous != NULL) {
+        ObDereferenceObject(previous);
+    }
+
+    if (inject) {
+        Event->PathStatus = RgPathQueryFailed;
+        Event->Path[0] = L'\0';
+    }
+    return inject;
 }
 
 static BOOLEAN RgBindContainedRequestor(PFLT_CALLBACK_DATA Data,

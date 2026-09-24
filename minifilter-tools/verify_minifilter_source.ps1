@@ -217,11 +217,12 @@ foreach($block in @($queueBlock,$rawQueueBlock)){
     }
 }
 
-$nameHelperStart=$src.IndexOf('static NTSTATUS RgGetNormalizedNameInformation(')
-$nameHelperEnd=$src.IndexOf('static NTSTATUS RgGetNormalizedDestinationNameInformation(',$nameHelperStart)
-$destNameHelperEnd=$src.IndexOf('static NTSTATUS RgPopulateEvent(',$nameHelperEnd)
-if($nameHelperStart -lt 0 -or $nameHelperEnd -lt 0 -or $destNameHelperEnd -lt 0){
-    throw 'Normalized name fallback helpers are missing.'
+$nameHelperStart=$src.LastIndexOf('static NTSTATUS RgGetNormalizedNameInformation(')
+$nameHelperEnd=$src.LastIndexOf('static NTSTATUS RgGetNormalizedDestinationNameInformation(')
+$destNameHelperEnd=$src.LastIndexOf('static NTSTATUS RgPopulateEvent(')
+if($nameHelperStart -lt 0 -or $nameHelperEnd -lt 0 -or $destNameHelperEnd -lt 0 -or
+   $nameHelperStart -ge $nameHelperEnd -or $nameHelperEnd -ge $destNameHelperEnd){
+    throw 'Normalized name fallback helper implementations are missing or out of order.'
 }
 $nameHelper=$src.Substring($nameHelperStart,$nameHelperEnd-$nameHelperStart)
 $destNameHelper=$src.Substring($nameHelperEnd,$destNameHelperEnd-$nameHelperEnd)
@@ -641,7 +642,7 @@ if($proto -notmatch 'RgGateBaselineCommitted' -or $proto -notmatch 'RgGateNoPres
 if($infText -notmatch 'StartType\s*=\s*3'){throw 'Driver must remain demand-start in the lab prototype.'}
 if($infText -notmatch 'Instance1\.Flags\s*=\s*0x1'){throw 'Automatic volume attachment must remain suppressed.'}
 if($infText -notmatch 'Instance1\.Altitude\s*=\s*"370099\.4242"'){throw 'Unexpected LAB altitude. Review altitude policy manually.'}
-Write-Host 'LAB pre-write gate source check PASSED, including protocol-v16 disconnect fail-safe state, DELETE/TRUNCATE reconciliation, event-bound PEPROCESS containment, fail-closed activation preflight, bounded admission and paging/section evidence.' -ForegroundColor Green
+Write-Host 'LAB pre-write gate source check PASSED, including protocol-v17 protected-volume scope classification, disconnect fail-safe state, DELETE/TRUNCATE reconciliation, event-bound PEPROCESS containment, fail-closed activation preflight, bounded admission and paging/section evidence.' -ForegroundColor Green
 Write-Host 'Gate scope: one explicit NT root negotiated by the single connected client.'
 Write-Host 'In-scope mutations normally require an explicit preservation decision; an activation-bound contained PEPROCESS is denied before the user-mode gate.'
 Write-Host 'Out-of-scope/unresolved I/O remains fail-open; no process-control or kernel file-writing APIs are present.'

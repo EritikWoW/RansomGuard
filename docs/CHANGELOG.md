@@ -1,3 +1,13 @@
+# RansomGuard 0.8.4.0
+
+- Registered `IRP_MJ_FILE_SYSTEM_CONTROL` in the minifilter while retaining protocol v18.
+- Added explicit mediation for `FSCTL_SET_ZERO_DATA`, `FSCTL_DUPLICATE_EXTENTS_TO_FILE`, `FSCTL_DUPLICATE_EXTENTS_TO_FILE_EX`, `FSCTL_OFFLOAD_WRITE`, `FSCTL_FILE_LEVEL_TRIM` and `FSCTL_SET_SPARSE`.
+- Audit mode remains non-blocking; proven outside-scope operations remain outside the protected gate.
+- Inside-root or protected-volume ambiguous data-mutating FSCTLs fail closed during Preflight, DegradedProtected, containment, or when no durable stream preservation context exists.
+- An active FSCTL is allowed only when the stream already carries a durable `SnapshotCommitted` or `BaselineCommitted` CREATE preservation context; no synchronous user-mode preservation is attempted from the FSCTL callback.
+- Added a real `FSCTL_SET_ZERO_DATA` runtime probe that must mutate the protected file while the committed full pre-image retains the exact original SHA-256.
+- Hard-link, dormant writable-handle, mapped-write, disconnect/reconnect, scope, containment, filesystem-matrix and ProductionGate regressions remain required.
+
 # RansomGuard 0.8.3.0
 
 - Closed the hard-link alias protection gap while retaining protocol v18.

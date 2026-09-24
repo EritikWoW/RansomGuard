@@ -38,7 +38,7 @@ Queues/windows are intentionally bounded. Event loss, queue drops, stale evidenc
 
 ## LAB preservation boundary
 
-For resolved, in-scope ordinary user-mode mutations while the LAB gate is connected and activated, destructive I/O follows preserve-before-allow and failures in preservation/admission/gate handling fail closed.
+For resolved, in-scope ordinary user-mode mutations while the LAB gate is connected and activated, destructive I/O follows preserve-before-allow and failures in preservation/admission/gate handling fail closed. Starting in 0.7.32, once activation has armed protection, an unexpected GateClient disconnect retains the exact protected root in a kernel fail-safe latch instead of silently disabling this synchronous enforcement path.
 
 The current LAB communication path has one Filter Manager client connection and one synchronous GateClient handle. Multiple kernel requests can encounter the bounded admission path, while user-mode reply-required preservation is serialized so each `FilterReplyMessage` completes before the next blocking receive. Configurable message slots bound no-reply evidence/completion work; they are not a claim of parallel preservation decisions.
 
@@ -48,13 +48,15 @@ Important exceptions are explicit in THREAT_MODEL.md:
 - out-of-root operations are outside the negotiated gate;
 - kernel-mode requestors are outside the ordinary observation path;
 - paging writes are non-blocking evidence and rely on the conservative pre-preserved CREATE baseline;
-- driver presence without an active GateClient/session is not equivalent to protection.
+- before any successful activation, driver presence without an active GateClient/session is not equivalent to protection; after an activated session loses GateClient unexpectedly, the exact root remains latched and resolved synchronous destructive I/O is denied until same-root revalidation or unload.
 
 Do not deploy the LAB blocking path on primary workstations or real user data.
 
 The 0.7.30 qualification campaign materially increases confidence in this LAB boundary but does not change it into a production claim. On an exact tested head, standard Driver Verifier targeted only `RansomGuardMinifilter.sys`, survived bounded CREATE/RENAME/TRUNCATE/DELETE/mapped-write stress without a recorded bugcheck, observed genuine admission overflow (16 requests against cap 8 -> 8 allowed / 8 denied), then completed `verifier /reset` and a second-reboot CLEAR proof. Completion-loss, low-disk fail-closed and real-reboot reconciliation campaigns also have disposable-VM evidence. ReFS remains unqualified on the current VM because filesystem creation was unsupported there.
 
 0.7.31 adds a manual sustained mixed-workload qualification contract but does not widen the security boundary. One GateClient/rollback session is held across repeated mixed CREATE/RENAME/TRUNCATE/DELETE/mapped-write waves and final evidence must remain fully correlated and pending-free. Source presence or a hosted compile is not treated as endurance evidence; the claim exists only for an exact-head disposable-VM run whose artifact proves all configured rounds, elapsed-time budget, worker/gate health and cleanup.
+
+0.7.32 adds an activated GateClient-loss fail-safe boundary without changing protocol v15. Successful activation arms kernel protection independently of the live client-port handle. Unexpected disconnect preserves the exact root and LAB mode; resolved in-root mutation-capable CREATE and non-paging WRITE/RENAME/TRUNCATE/DELETE then fail closed because no preservation reply can be obtained. A reconnect is accepted only for the same latched root and resets the gate to NotActivated so the existing full preflight must run again. Clean shutdown is separate: GateClient requests `RgControlAuthorizeDisconnect` only after its durable session is clean, and the kernel closes new gate admission atomically before confirming that no request is in flight. This source change is not considered runtime-qualified until the disposable-VM GateClient-loss campaign proves kill, denial, same-root revalidation and orderly disconnect behavior.
 
 ## Recovery boundary
 

@@ -63,7 +63,7 @@ foreach($required in @(
   'CreateGatePolicy.TryParseDisposition',
   '(ev.Flags >> 24) & 0xFF',
   'ev.Flags & 0x00FFFFFF',
-  'ProtocolVersion = 17',
+  'ProtocolVersion = GateProtocol.Version',
   'DevicePathResolver.ToNtScope(options.Root)',
   'GateVolumeLengthBytes = checked((uint)(ntVolume.Length * 2))',
   'public uint GateRootLengthBytes, GateVolumeLengthBytes;',
@@ -158,7 +158,25 @@ foreach($required in @(
   'pendingContainmentAckCount',
   'FilterSendMessage',
   'RgEventType.ActivationPreflight',
-  'Activation refused:'
+  'Activation refused:',
+  'GateProtocol.Version',
+  'ProductionGate = 3',
+  '--production',
+  '--ready-file',
+  'ProductionGate forbids LAB prepare/reconciliation/fault/containment options.',
+  'ProductionGate requires explicit --store.',
+  'ProductionGate requires a bounded ASCII path-safe --session id.',
+  'ProductionGate requires explicit --ready-file.',
+  'ProductionGate requires explicit --shutdown-file.',
+  'ProductionGate protected root and rollback store must not overlap.',
+  'ProductionGate readiness/shutdown control files must be outside the rollback repository.',
+  'ProductionRootPolicy.Validate(options.Root)',
+  'PathPolicy.NoReparseComponents(options.StoreRoot)',
+  'ProductionReadinessWriter.WriteProtected(',
+  '"ProductionGate"',
+  '"Protected"',
+  'AutomaticContainmentActive',
+  'ClientMode = (uint)(options.Production ? RgClientMode.ProductionGate : RgClientMode.LabGate)'
 )){
   if($text -notmatch [regex]::Escape($required)){throw "Gate client invariant missing: $required"}
 }
@@ -522,6 +540,29 @@ if($transitionOption -lt 0 -or $transitionRejectSystem -lt 0 -or $transitionReje
   throw 'Containment/scope-probe CLI must be explicit, single-target and threshold-bounded.'
 }
 
+$productionOption=$text.IndexOf('case "--production"')
+$productionReject=$text.IndexOf('ProductionGate forbids LAB prepare/reconciliation/fault/containment options.',$productionOption)
+$productionStore=$text.IndexOf('ProductionGate requires explicit --store.',$productionReject)
+$productionSession=$text.IndexOf('ProductionGate requires a bounded ASCII path-safe --session id.',$productionStore)
+$productionReady=$text.IndexOf('ProductionGate requires explicit --ready-file.',$productionSession)
+$productionShutdown=$text.IndexOf('ProductionGate requires explicit --shutdown-file.',$productionReady)
+if($productionOption -lt 0 -or $productionReject -lt 0 -or $productionStore -lt 0 -or
+   $productionSession -lt 0 -or $productionReady -lt 0 -or $productionShutdown -lt 0 -or
+   $productionOption -gt $productionReject -or $productionReject -gt $productionStore -or
+   $productionStore -gt $productionSession -or $productionSession -gt $productionReady -or
+   $productionReady -gt $productionShutdown){
+  throw 'ProductionGate CLI must be explicit and reject LAB control/fault/containment modes before runtime.'
+}
+
+$activationCall=$text.IndexOf('ActivationPreflight.RunAsync(')
+$readinessWrite=$text.IndexOf('ProductionReadinessWriter.WriteProtected(',$activationCall)
+$receiveLoop=$text.IndexOf('while (!cts.IsCancellationRequested)',$readinessWrite)
+if($activationCall -lt 0 -or $readinessWrite -lt 0 -or $receiveLoop -lt 0 -or
+   $activationCall -gt $readinessWrite -or $readinessWrite -gt $receiveLoop){
+  throw 'Production readiness must be written only after successful activation preflight and before the normal receive loop.'
+}
+
+
 $triggerStart=$text.IndexOf('sealed class LabContainmentTrigger')
 $triggerEnd=$text.IndexOf('sealed record Options(',$triggerStart)
 if($triggerStart -lt 0 -or $triggerEnd -lt 0){throw 'LabContainmentTrigger implementation missing.'}
@@ -576,7 +617,7 @@ foreach($required in @(
   'MonitorShutdownFileAsync',
   'File.Exists(options.ShutdownFile)',
   'Native.Cancel(port)',
-  '--shutdown-file must be outside the protected LAB root.',
+  '--shutdown-file must be outside the protected root.',
   'const int deactivationAttempts = 30',
   'Kernel remained busy for clean gate deactivation'
 )){
@@ -631,4 +672,4 @@ if($restartBlock -notmatch [regex]::Escape('PathPolicy.Under(intent.OriginalPath
   throw 'Restart reconciliation must remain scoped to the explicitly selected LAB root.'
 }
 
-Write-Host 'LAB gate client source check PASSED: protocol-v17 protected-volume scope plus graceful deactivation/disconnect fail-safe state, DELETE/TRUNCATE reconciliation, event-bound containment, bounded workers, durable identity/restart evidence, no destructive/process-control APIs.'
+Write-Host 'Gate client source check PASSED: protocol-v18 ProductionGate contract plus protected-volume scope and graceful deactivation/disconnect fail-safe state, DELETE/TRUNCATE reconciliation, event-bound containment, bounded workers, durable identity/restart evidence, no destructive/process-control APIs.'

@@ -6,7 +6,7 @@ Read [THREAT_MODEL.md](THREAT_MODEL.md) first. It is the canonical statement of 
 
 The normal RansomGuard product is AuditOnly for ordinary applications. It does not install or load the Engineering LAB minifilter and does not claim production ransomware blocking.
 
-The Engineering LAB minifilter is restricted to disposable test environments and explicit test data. Its altitude is an unassigned LAB placeholder and its test-signing path is not a production trust anchor.
+The Engineering LAB minifilter is restricted to disposable test environments and explicit test data. Its current user/kernel wire contract is protocol v15. Its altitude is an unassigned LAB placeholder and its test-signing path is not a production trust anchor.
 
 No claim is made that the current product is tamper-proof against a local administrator, a malicious kernel component/BYOVD path, physical/boot compromise or a compromised signing/build system.
 
@@ -52,6 +52,8 @@ Important exceptions are explicit in THREAT_MODEL.md:
 
 Do not deploy the LAB blocking path on primary workstations or real user data.
 
+The 0.7.30 qualification campaign materially increases confidence in this LAB boundary but does not change it into a production claim. On an exact tested head, standard Driver Verifier targeted only `RansomGuardMinifilter.sys`, survived bounded CREATE/RENAME/TRUNCATE/DELETE/mapped-write stress without a recorded bugcheck, observed genuine admission overflow (16 requests against cap 8 -> 8 allowed / 8 denied), then completed `verifier /reset` and a second-reboot CLEAR proof. Completion-loss, low-disk fail-closed and real-reboot reconciliation campaigns also have disposable-VM evidence. ReFS remains unqualified on the current VM because filesystem creation was unsupported there.
+
 ## Recovery boundary
 
 Rollback recovery is conservative and copy-out oriented. It verifies evidence and writes to new output paths. Restart observations never fabricate authoritative filesystem completion.
@@ -71,6 +73,8 @@ Source gates are regression checks, not independent security proofs. Kernel load
 The repository now pins the .NET SDK, immutable GitHub Action commits and locked NuGet dependency graphs, and runs dependency/source provenance gates. These controls reduce build drift but do not replace protected-branch policy, independent review, protected production signing keys, SBOM/provenance retention or a trusted build environment.
 
 Release-oriented engineering requires exact build inputs, immutable action references, locked dependency graphs, artifact hashes/provenance, protected branches, enforced review and protected signing keys. Repository settings such as branch/ruleset enforcement are not established merely by files in this tree.
+
+`.github/CODEOWNERS` provides review routing for security-sensitive source, build and documentation paths. It does not itself require approval, create independent review, or prevent direct pushes; enforcement still depends on repository branch/ruleset settings.
 
 ## Reporting
 

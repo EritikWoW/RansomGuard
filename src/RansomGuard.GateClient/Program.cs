@@ -562,7 +562,7 @@ if (cleanShutdown)
         if (deactivationReply.ProtocolVersion != 16 ||
             deactivationReply.Command != (uint)RgControlCommand.DeactivateGate ||
             deactivationReply.GateActivated != 1 ||
-            deactivationReply.ProtectionState != (uint)RgProtectionState.Protected)
+            deactivationReply.ProtectionState != (uint)RgProtectionState.Maintenance)
             throw new InvalidOperationException(
                 $"Kernel returned an inconsistent state while draining for deactivation. NTSTATUS=0x{deactivationReply.Status:X8}, active={deactivationReply.GateActivated}, state={(RgProtectionState)deactivationReply.ProtectionState}.");
 

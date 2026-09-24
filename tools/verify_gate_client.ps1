@@ -120,6 +120,9 @@ foreach($required in @(
   'RgControlCommand.AuthorizeDisconnect',
   'Kernel disconnect authorization: GRANTED after clean durable shutdown state.',
   'Kernel disconnect authorization: NOT REQUESTED.',
+  '--shutdown-marker',
+  'LAB orderly shutdown marker observed; draining GateClient.',
+  'options.ShutdownMarker',
   '--contain-pid',
   '--drop-first-create-completion',
   '--drop-first-rename-completion',
@@ -499,6 +502,15 @@ foreach($required in @(
   if($triggerBlock -notmatch [regex]::Escape($required)){throw "Event-bound containment trigger invariant missing: $required"}
 }
 
+$shutdownOption=$text.IndexOf('case "--shutdown-marker"')
+$shutdownOutsideRoot=$text.IndexOf('--shutdown-marker must be outside the protected LAB root.',$shutdownOption)
+$shutdownWatcher=$text.IndexOf('shutdownMarkerWatcher = Task.Run',$shutdownOutsideRoot)
+$shutdownCancel=$text.IndexOf('Native.Cancel(port)',$shutdownWatcher)
+if($shutdownOption -lt 0 -or $shutdownOutsideRoot -lt 0 -or $shutdownWatcher -lt 0 -or $shutdownCancel -lt 0 -or
+   $shutdownOption -gt $shutdownOutsideRoot -or $shutdownOutsideRoot -gt $shutdownWatcher -or $shutdownWatcher -gt $shutdownCancel){
+  throw 'LAB orderly shutdown marker must be explicit, outside the protected root, and cancel the blocking filter receive.'
+}
+
 $cleanShutdown=$text.IndexOf('var cleanShutdown = workerFailureCount == 0')
 $lifecycleTerminal=$text.IndexOf('lifecycleStore.MarkCompletedAsync',$cleanShutdown)
 $authorizeGuard=$text.IndexOf('if (cleanShutdown)',$lifecycleTerminal)
@@ -596,4 +608,4 @@ if($restartBlock -notmatch [regex]::Escape('PathPolicy.Under(intent.OriginalPath
   throw 'Restart reconciliation must remain scoped to the explicitly selected LAB root.'
 }
 
-Write-Host 'LAB gate client source check PASSED: protocol-v15 DELETE lifecycle plus TRUNCATE reconciliation, event-bound containment, clean-shutdown disconnect authorization, bounded workers, durable identity/restart evidence, no destructive/process-control APIs.'
+Write-Host 'LAB gate client source check PASSED: protocol-v15 DELETE lifecycle plus TRUNCATE reconciliation, event-bound containment, external orderly-shutdown marker, clean-shutdown disconnect authorization, bounded workers, durable identity/restart evidence, no destructive/process-control APIs.'

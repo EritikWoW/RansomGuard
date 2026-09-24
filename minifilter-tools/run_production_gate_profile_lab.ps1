@@ -265,6 +265,9 @@ try{
     if($labWrong.ExitCode -eq 0 -or $labText -match 'kernel gate ACTIVE'){
         throw 'LabGate unexpectedly replaced retained ProductionGate state.'
     }
+    if($labText -notmatch 'FilterConnectCommunicationPort failed'){
+        throw 'LabGate profile-mismatch probe failed before proving the kernel rejected the connection.'
+    }
     $labWrong=$null
     $summary.labProfileReconnectRejected=$true
 

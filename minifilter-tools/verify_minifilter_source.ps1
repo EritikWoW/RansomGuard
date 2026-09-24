@@ -762,7 +762,7 @@ foreach($required in @(
     }
 }
 
-$fsctlListStart=$src.IndexOf('static BOOLEAN RgIsDataMutatingFsctl(')
+$fsctlListStart=$src.LastIndexOf('static BOOLEAN RgIsDataMutatingFsctl(')
 $fsctlListEnd=$src.IndexOf('static BOOLEAN RgStreamHasDurablePreservation(',$fsctlListStart)
 if($fsctlListStart -lt 0 -or $fsctlListEnd -lt 0){
     throw 'Mutating FSCTL allowlist source block missing.'
@@ -781,7 +781,7 @@ foreach($required in @(
     }
 }
 
-$fsctlPreservationStart=$src.IndexOf('static BOOLEAN RgStreamHasDurablePreservation(')
+$fsctlPreservationStart=$src.LastIndexOf('static BOOLEAN RgStreamHasDurablePreservation(')
 $fsctlPreservationEnd=$src.IndexOf('FLT_PREOP_CALLBACK_STATUS RgPreFileSystemControl(',$fsctlPreservationStart)
 if($fsctlPreservationStart -lt 0 -or $fsctlPreservationEnd -lt 0){
     throw 'FSCTL preservation-context helper source block missing.'

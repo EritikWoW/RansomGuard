@@ -54,7 +54,7 @@ $codeOwners=Get-Content -LiteralPath $codeOwnersPath -Raw
 foreach($required in @(
     'The default normal package remains Audit',
     'Version 0.8.1 first inspects a fixed ProductionProtection package',
-    'reports `EnforceUnavailable` until a separately qualified production driver/GateClient lifecycle completes',
+    'still reports `EnforceUnavailable` until the separately qualified driver/GateClient lifecycle is wired in',
     'Ambiguous-scope analysis',
     'Kernel-mode requestor / compromised kernel component / BYOVD path',
     'preserve-before-allow',

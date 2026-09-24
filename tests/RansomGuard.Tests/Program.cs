@@ -58,9 +58,53 @@ Check(timingRisk.FirstEvidenceToDecisionMs>=1900&&timingRisk.FirstEvidenceToDeci
 Check(timingRisk.P95EvidenceDeliveryLagMs>=900,"evidence p95 delivery lag derived from evidence");
 var s=new GuardSettings{MaxProcesses=8,MaxEventsPerProcess=32};s.Validate();
 var rejected=false;try{new GuardSettings{Mode="Kill"}.Validate();}catch(InvalidOperationException){rejected=true;}
-Check(rejected,"old dangerous mode not silently imported");
-rejected=false;try{new GuardSettings{SchemaVersion=2}.Validate();}catch(InvalidOperationException){rejected=true;}
-Check(rejected,"old schema rejected");
+Check(rejected,"unsupported protection mode not silently imported");
+rejected=false;try{new GuardSettings{SchemaVersion=3}.Validate();}catch(InvalidOperationException){rejected=true;}
+Check(rejected,"pre-0.8 schema rejected until reviewed");
+var enforceSettings=new GuardSettings{Mode="Enforce",ProtectedRoots=new[]{@"C:\Data"}};
+enforceSettings.Validate();
+Check(true,"single-root Enforce foundation settings accepted");
+rejected=false;try{new GuardSettings{Mode="Enforce",ProtectedRoots=Array.Empty<string>()}.Validate();}catch(InvalidOperationException){rejected=true;}
+Check(rejected,"Enforce requires an explicit protected root");
+rejected=false;try{new GuardSettings{Mode="Enforce",ProtectedRoots=new[]{@"C:\Data",@"D:\Data"}}.Validate();}catch(InvalidOperationException){rejected=true;}
+Check(rejected,"unqualified multi-root Enforce rejected");
+rejected=false;try{new GuardSettings{Mode="Enforce",ProtectedRoots=new[]{@"C:\"}}.Validate();}catch(InvalidOperationException){rejected=true;}
+Check(rejected,"whole-drive Enforce root rejected");
+rejected=false;try{new GuardSettings{Mode="Enforce",ProtectedRoots=new[]{@"C:\Data"},Enforce=new(){RequireSignedDriver=false}}.Validate();}catch(InvalidOperationException){rejected=true;}
+Check(rejected,"Enforce cannot disable signed-driver requirement");
+rejected=false;try{new GuardSettings{Mode="Enforce",ProtectedRoots=new[]{@"C:\Data"},Enforce=new(){AutomaticContainment=true}}.Validate();}catch(InvalidOperationException){rejected=true;}
+Check(rejected,"automatic containment stays disabled in 0.8.0 foundation");
+
+var auditProtection=new ProtectionStateMachine("Audit");
+var auditSnapshot=auditProtection.Snapshot();
+Check(auditSnapshot.State=="AuditOnly"&&!auditSnapshot.KernelEnforcementActive,"Audit state never claims kernel enforcement");
+rejected=false;try{auditProtection.BeginKernelStartup();}catch(InvalidOperationException){rejected=true;}
+Check(rejected,"Audit mode cannot enter kernel startup");
+
+var enforceProtection=new ProtectionStateMachine("Enforce");
+Check(enforceProtection.Snapshot().State=="EnforceStarting"&&!enforceProtection.Snapshot().KernelEnforcementActive,
+    "Enforce request starts non-protected");
+rejected=false;try{enforceProtection.BeginKernelStartup();}catch(InvalidOperationException){rejected=true;}
+Check(rejected,"kernel startup requires rollback readiness");
+enforceProtection.MarkRollbackReady();
+enforceProtection.BeginKernelStartup();
+enforceProtection.MarkKernelConnected();
+Check(!enforceProtection.Snapshot().KernelEnforcementActive,"connected kernel channel alone is not protection");
+enforceProtection.MarkProtected(false);
+Check(enforceProtection.Snapshot().KernelEnforcementActive&&enforceProtection.Snapshot().State=="Protected",
+    "only activated protection state claims kernel enforcement");
+enforceProtection.MarkDegraded("GateClient unavailable; kernel fail-safe remains active.");
+Check(enforceProtection.Snapshot().KernelEnforcementActive&&!enforceProtection.Snapshot().KernelChannelConnected,
+    "DegradedProtected preserves kernel enforcement without a live user-mode channel");
+enforceProtection.BeginMaintenance("Authorized maintenance transition.");
+Check(!enforceProtection.Snapshot().KernelEnforcementActive&&enforceProtection.Snapshot().State=="Maintenance",
+    "maintenance does not claim active kernel enforcement");
+
+var unavailableProtection=new ProtectionStateMachine("Enforce");
+unavailableProtection.MarkRollbackReady();
+unavailableProtection.MarkUnavailable("Production lifecycle not activated.");
+Check(unavailableProtection.Snapshot().State=="EnforceUnavailable"&&!unavailableProtection.Snapshot().KernelEnforcementActive,
+    "EnforceUnavailable is explicit and never downgraded to a protected claim");
 var root=@"C:\Data";var canary=@"C:\Data\canary.txt";
 RiskEngine NewEngine()=>new(s,new[]{root},new[]{canary});
 FileSignal E(string p,FileKind kind,int ms=0,ProcessKey? pk=null)=>new(now.AddMilliseconds(ms),now.AddMilliseconds(ms),pk??key,"anything.exe",path,p,kind);

@@ -77,13 +77,13 @@ internal static class ProtectionPackageVerifier
                 !DecisionPolicy.HashEqual(sysHash, descriptor.DriverSysSha256) ||
                 !DecisionPolicy.HashEqual(infHash, descriptor.DriverInfSha256) ||
                 !DecisionPolicy.HashEqual(catHash, descriptor.DriverCatSha256))
-                return Rejected("HashMismatch", true, "Protection package bytes do not match the descriptor SHA-256 values.", observed, descriptor.Altitude, true);
+                return Rejected("HashMismatch", true, "Protection package bytes do not match the descriptor SHA-256 values.", observed, descriptor.Altitude, true, true);
 
             var serviceVersion = FileVersionInfo.GetVersionInfo(servicePath).FileVersion;
             var gateVersion = FileVersionInfo.GetVersionInfo(gatePath).FileVersion;
             if (!string.Equals(serviceVersion, expectedVersion, StringComparison.Ordinal) ||
                 !string.Equals(gateVersion, expectedVersion, StringComparison.Ordinal))
-                return Rejected("VersionMismatch", true, "Service/GateClient FileVersion does not match the package version.", observed, descriptor.Altitude, true, true);
+                return Rejected("VersionMismatch", true, "Service/GateClient FileVersion does not match the package version.", observed, descriptor.Altitude, true, true, true);
 
             service.Position = 0;
             var serviceSignature = Authenticode.Check(service, servicePath);
@@ -229,6 +229,7 @@ internal static class ProtectionPackageVerifier
             throw new InvalidDataException("INF DriverVer does not match the production package descriptor.");
     }
 
+    // Flags describe stages that completed successfully before rejection; ReadyForLifecycle is always false here.
     private static ProtectionPackageAdmission Rejected(
         string state,
         bool present,

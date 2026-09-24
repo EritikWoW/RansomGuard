@@ -59,6 +59,28 @@ public sealed class ProtectionStateMachine
         _ => throw new InvalidOperationException("Protection mode must be exactly Audit or Enforce.")
     };
 
+    public static void ValidateSnapshot(ProtectionStatusDto value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        var requested = ParseMode(value.RequestedMode);
+        if (!Enum.TryParse<ProtectionPhase>(value.State, ignoreCase: false, out var phase))
+            throw new InvalidOperationException("Unknown protection state.");
+
+        var expectedKernel = phase is ProtectionPhase.Protected or ProtectionPhase.DegradedProtected;
+        if (value.KernelEnforcementActive != expectedKernel)
+            throw new InvalidOperationException("KernelEnforcementActive does not match the protection phase.");
+        if (value.AutomaticContainmentActive && phase != ProtectionPhase.Protected)
+            throw new InvalidOperationException("Automatic containment can be active only in Protected state.");
+        if (requested == RequestedProtectionMode.Audit && phase != ProtectionPhase.AuditOnly && phase != ProtectionPhase.Failed && phase != ProtectionPhase.Stopped)
+            throw new InvalidOperationException("Audit mode cannot publish an Enforce protection phase.");
+        if (expectedKernel && !value.RollbackStoreReady)
+            throw new InvalidOperationException("Active kernel enforcement requires rollback-store readiness.");
+        if (phase == ProtectionPhase.Protected && !value.KernelChannelConnected)
+            throw new InvalidOperationException("Protected state requires a connected kernel channel.");
+        if (phase == ProtectionPhase.DegradedProtected && value.KernelChannelConnected)
+            throw new InvalidOperationException("DegradedProtected represents loss of the user-mode kernel channel.");
+    }
+
     public void MarkRollbackReady()
     {
         lock (_gate)

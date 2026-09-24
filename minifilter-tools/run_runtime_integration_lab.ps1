@@ -264,7 +264,7 @@ $installScript=Join-Path $PSScriptRoot 'install_minifilter_lab.ps1'
 $unloadScript=Join-Path $PSScriptRoot 'unload_minifilter_lab.ps1'
 
 $summary=[ordered]@{
-    schema=1
+    schema=2
     version=$gateVersion
     startedUtc=(Get-Date).ToUniversalTime().ToString('o')
     vm=$vm

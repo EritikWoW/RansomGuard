@@ -504,10 +504,13 @@ foreach($required in @(
 
 $shutdownOption=$text.IndexOf('case "--shutdown-marker"')
 $shutdownOutsideRoot=$text.IndexOf('--shutdown-marker must be outside the protected LAB root.',$shutdownOption)
-$shutdownWatcher=$text.IndexOf('shutdownMarkerWatcher = Task.Run',$shutdownOutsideRoot)
+$shutdownConnect=$text.IndexOf('using var port = Native.Connect(')
+$shutdownWatcher=$text.IndexOf('shutdownMarkerWatcher = Task.Run',$shutdownConnect)
 $shutdownCancel=$text.IndexOf('Native.Cancel(port)',$shutdownWatcher)
-if($shutdownOption -lt 0 -or $shutdownOutsideRoot -lt 0 -or $shutdownWatcher -lt 0 -or $shutdownCancel -lt 0 -or
-   $shutdownOption -gt $shutdownOutsideRoot -or $shutdownOutsideRoot -gt $shutdownWatcher -or $shutdownWatcher -gt $shutdownCancel){
+if($shutdownOption -lt 0 -or $shutdownOutsideRoot -lt 0 -or
+   $shutdownConnect -lt 0 -or $shutdownWatcher -lt 0 -or $shutdownCancel -lt 0 -or
+   $shutdownOption -gt $shutdownOutsideRoot -or
+   $shutdownConnect -gt $shutdownWatcher -or $shutdownWatcher -gt $shutdownCancel){
   throw 'LAB orderly shutdown marker must be explicit, outside the protected root, and cancel the blocking filter receive.'
 }
 

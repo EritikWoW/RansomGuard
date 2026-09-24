@@ -1,3 +1,17 @@
+# RansomGuard 0.7.31.0
+
+- Added a dedicated manual sustained mixed-workload qualification without changing minifilter protocol v15.
+- The existing bounded-concurrency harness now supports an optional long-lived mixed phase while preserving its default 0.7.28 behavior when mixed rounds are disabled.
+- One loaded exact-commit signed minifilter and one GateClient/rollback session survive the entire campaign; the default profile runs 60 mixed waves with 10-second pauses between waves.
+- Every mixed wave releases CREATE, RENAME, EOF TRUNCATE, DELETE and mapped-write helpers behind one shared barrier, for 300 mixed mutations in the default profile.
+- Mixed source files are prepared before gate activation so the workload does not bypass the protected path while constructing its own fixtures.
+- Each round requires expected filesystem topology, durable DELETE finalization, live GateClient and healthy workers before continuing.
+- Final validation reuses the strict transaction proof: unique intent/completion correlation, zero pending CREATE/RENAME/TRUNCATE/DELETE transactions, hash-verified mapped-write full pre-images, writable-section evidence and paging-write evidence.
+- The result records mixed start/finish UTC timestamps and stopwatch elapsed seconds and proves the configured inter-round pause budget was actually consumed.
+- Added a dedicated manual `Minifilter mixed endurance VM lab` workflow with exact-commit signed-driver provenance, guarded disposable-VM roots, bounded inputs and evidence artifact upload. It does not reboot Windows, enable Driver Verifier, alter boot policy or manage disks.
+- Added source gates for the mixed harness/workflow and wired them into hosted build/minifilter CI.
+- Bumped userspace/LAB and driver package version to 0.7.31.0.
+
 # RansomGuard 0.7.30.0
 
 - Added a dedicated manual disposable-VM Driver Verifier qualification without changing minifilter protocol v15.

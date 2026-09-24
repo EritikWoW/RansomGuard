@@ -1,4 +1,4 @@
-# RansomGuard 0.7.30.0
+# RansomGuard 0.7.31.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
@@ -6,7 +6,7 @@ and recover data through rollback plus adaptive crypto analysis.
 
 ## Core preservation milestone
 
-0.7.30.0 keeps the protocol-v15 preservation/recovery model and prior low-disk/reboot qualification, and adds a dedicated Driver Verifier campaign for the Engineering LAB minifilter. Verification is targeted only at `RansomGuardMinifilter.sys`, uses Windows standard verifier checks in one-boot mode, exercises the existing bounded-concurrency runtime proof, schedules `verifier /reset`, then requires a second reboot to prove verifier state is clear.
+0.7.31.0 keeps protocol v15 and the completed 0.7.30 Driver Verifier qualification, then adds a dedicated sustained mixed-workload campaign for the Engineering LAB minifilter. One exact-commit driver load and one GateClient/rollback session first repeat bounded admission/concurrency qualification, then run configurable waves that release CREATE, RENAME, TRUNCATE, DELETE and mapped-write operations together behind a shared barrier. The default manual profile is 60 waves with 10-second inter-round pauses: 300 mixed mutations across roughly ten minutes, with final durable transaction correlation, DELETE finalization, mapped pre-image hashes, writable-section/paging evidence, worker health and cleanup still mandatory.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 
@@ -34,7 +34,7 @@ create-capable dispositions on a missing path durably record that the path was o
 non-destructive opens require no snapshot. Existing-directory delete-on-close is denied until directory-topology rollback exists. Paths marked originally absent do not later manufacture rollback
 pre-images from data created during the same incident.
 
-Protocol v13 now also treats CREATE as a two-phase durable transaction. Before allow, the gate records a
+Protocol v15 retains CREATE as a two-phase durable transaction. Before allow, the gate records a
 hash-chained CREATE intent linked to the preservation proof. After the filesystem completes the operation,
 the minifilter reconciles the final tunneled name with `FltGetTunneledName`, queries `FileIdInformation`
 from the actual opened file object, and emits a correlated no-reply `CreateResult`. User mode records the
@@ -55,7 +55,7 @@ rejected. If reconciliation cannot be delivered, the intent remains pending inst
 
 On LAB gate restart, older pending CREATE/RENAME/TRUNCATE intents under the same explicit root are re-observed before a new session starts. CREATE/RENAME use the shared restart journal; TRUNCATE keeps FILE_ID and length evidence in `truncate-state/truncate-restart-journal.jsonl`. EOF loss can support completed/non-completed only when the exact durable FILE_ID and requested/original length match. Allocation-size and valid-data-length loss remain indeterminate rather than guessed. Restart evidence never manufactures a filesystem completion record: authoritative completion still requires the original kernel post-operation result.
 
-Protocol v13 also removes the previous blind skip of paging-write callbacks. After a successful in-scope CREATE, the minifilter attaches a nonpaged stream context containing the bounded tracked path and kernel file identity when available. A later paging write retrieves only that stream context and queues a no-reply `PagingWrite` event; it does not query file names, call the blocking gate, or perform filesystem I/O in the paging path. GateClient persists these observations in a separate hash-chained `paging-write-journal.jsonl`. PagingWrite itself remains visibility/evidence only. Starting with 0.7.11, mappings created from newly opened content-write capable handles have a full pre-image committed before the handle returns; this gives those mappings a recovery baseline without doing rollback I/O in the paging callback.
+Protocol v15 retains removal of the previous blind skip of paging-write callbacks. After a successful in-scope CREATE, the minifilter attaches a nonpaged stream context containing the bounded tracked path and kernel file identity when available. A later paging write retrieves only that stream context and queues a no-reply `PagingWrite` event; it does not query file names, call the blocking gate, or perform filesystem I/O in the paging path. GateClient persists these observations in a separate hash-chained `paging-write-journal.jsonl`. PagingWrite itself remains visibility/evidence only. Starting with 0.7.11, mappings created from newly opened content-write capable handles have a full pre-image committed before the handle returns; this gives those mappings a recovery baseline without doing rollback I/O in the paging callback.
 
 0.7.11 added a conservative pre-preservation rule for existing files opened with content-write capable access. If CREATE requests FILE_WRITE_DATA, FILE_APPEND_DATA or GENERIC_WRITE, the LAB gate binds the current FILE_ID_INFO and commits a full pre-image plus CREATE intent before allowing the handle to return. This gives later writable mappings created from that handle a pre-mutation baseline without performing user-mode rollback work in paging I/O. Read-only opens remain non-eager, and incident-created paths still use the originally-absent baseline.
 
@@ -149,13 +149,14 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.7.30.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.7.31.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 Manual disposable-VM runtime workflows:
 
     .github\workflows\minifilter-runtime-vm.yml
     .github\workflows\minifilter-crash-vm.yml
     .github\workflows\minifilter-verifier-vm.yml
+    .github\workflows\minifilter-mixed-stress-vm.yml
 
 LAB gate documentation:
 

@@ -1,6 +1,6 @@
 # RansomGuard threat model
 
-Status: engineering threat model for RansomGuard 0.7.30.x, covering the current Audit product and Engineering LAB minifilter.
+Status: engineering threat model for RansomGuard 0.7.31.x, covering the current Audit product and Engineering LAB minifilter.
 
 This document describes what the current implementation protects, what it deliberately does not protect, and how ambiguous I/O is handled. It is not a claim of production readiness. The ordinary product remains AuditOnly; the blocking minifilter path is Engineering LAB only.
 
@@ -186,6 +186,8 @@ For the exact 0.7.30 Driver Verifier qualification head, a disposable Windows VM
 Separate disposable-VM fault evidence covers completion loss, low-disk fail-closed storage admission, and one real-reboot TRUNCATE reconciliation campaign. NTFS runtime coverage exists. ReFS creation was unsupported on the qualification VM and therefore remains unqualified rather than implicitly passed.
 
 These results are regression/qualification evidence for the tested build and environment. They do not establish production signing, broad Windows/Server compatibility, kernel-compromise resistance, third-party filter interoperability, performance suitability, or safe production blocking policy.
+
+0.7.31 adds a separate sustained mixed-workload qualification harness. Its default contract keeps one GateClient/rollback session active for 60 waves and releases CREATE/RENAME/TRUNCATE/DELETE/mapped-write operations together in every wave, with 10-second inter-round pauses. Source presence is not qualification evidence: this threat model treats the endurance milestone as runtime evidence only after an exact-head disposable-VM run proves all rounds completed, the configured elapsed-time budget was consumed, the gate/workers stayed healthy, durable transaction stores have no pending operations, mapped pre-images and section/paging evidence verify, and cleanup succeeds.
 
 ## Required production qualification
 

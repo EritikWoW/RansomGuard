@@ -4,7 +4,9 @@ param(
     [Parameter(Mandatory=$true)][string]$DriverPackageDirectory,
     [string]$RootBase='C:\RansomGuard-VM-Stress',
     [string]$ResultsDirectory='',
-    [ValidateRange(9,32)][int]$Parallelism=16
+    [ValidateRange(9,32)][int]$Parallelism=16,
+    [ValidateRange(0,240)][int]$MixedRounds=0,
+    [ValidateRange(0,60000)][int]$MixedRoundPauseMilliseconds=0
 )
 
 $ErrorActionPreference='Stop'
@@ -504,6 +506,14 @@ $summary=[ordered]@{
     gateWorkers=8
     kernelGateCap=8
     qualificationParallelism=8
+    mixedRoundsRequested=$MixedRounds
+    mixedRoundPauseMilliseconds=$MixedRoundPauseMilliseconds
+    mixedRoundsCompleted=0
+    mixedOperationsCompleted=0
+    mixedStartedUtc=$null
+    mixedFinishedUtc=$null
+    mixedElapsedSeconds=0.0
+    mixedWorkloadPassed=($MixedRounds -eq 0)
     admissionOverflowPassed=$false
     overflowRounds=0
     overflowAllowed=0
@@ -542,6 +552,12 @@ try{
     $truncateTargets=@()
     $deleteTargets=@()
     $mappedTargets=@()
+    $mixedCreateTargets=@()
+    $mixedRenameSources=@()
+    $mixedRenameDestinations=@()
+    $mixedTruncateTargets=@()
+    $mixedDeleteTargets=@()
+    $mixedMappedTargets=@()
     $qualificationParallelism=8
 
     for($i=0;$i -lt $qualificationParallelism;$i++){
@@ -564,6 +580,29 @@ try{
         $mapped=Join-Path $root ("mapped-{0:D2}.bin" -f $i)
         New-TestFile $mapped 65536 (400+$i)
         $mappedTargets+=$mapped
+    }
+
+    for($i=0;$i -lt $MixedRounds;$i++){
+        $round=$i+1
+        $mixedCreateTargets+=Join-Path $root ("mixed-r{0:D4}-create.bin" -f $round)
+
+        $renameSource=Join-Path $root ("mixed-r{0:D4}-rename-source.bin" -f $round)
+        $renameDestination=Join-Path $root ("mixed-r{0:D4}-rename-destination.bin" -f $round)
+        New-TestFile $renameSource 65536 (500+($i*4))
+        $mixedRenameSources+=$renameSource
+        $mixedRenameDestinations+=$renameDestination
+
+        $truncate=Join-Path $root ("mixed-r{0:D4}-truncate.bin" -f $round)
+        New-TestFile $truncate 65536 (501+($i*4))
+        $mixedTruncateTargets+=$truncate
+
+        $delete=Join-Path $root ("mixed-r{0:D4}-delete.bin" -f $round)
+        New-TestFile $delete 65536 (502+($i*4))
+        $mixedDeleteTargets+=$delete
+
+        $mapped=Join-Path $root ("mixed-r{0:D4}-mapped.bin" -f $round)
+        New-TestFile $mapped 65536 (503+($i*4))
+        $mixedMappedTargets+=$mapped
     }
 
     & $installScript -Volume $drive -PackageDirectory $DriverPackageDirectory -Confirmation 'LAB-MINIFILTER' | Out-Host
@@ -742,6 +781,94 @@ try{
     Wait-StressGroup $group 90 'MAPPED-WRITE'
     $summary.mappedWritePassed=$true
 
+    if($MixedRounds -gt 0){
+        $mixedStopwatch=[Diagnostics.Stopwatch]::StartNew()
+        $summary.mixedStartedUtc=[DateTime]::UtcNow.ToString('o')
+        for($i=0;$i -lt $MixedRounds;$i++){
+            $round=$i+1
+            $group=@()
+            $ready=@()
+            $goPath=Join-Path $ResultsDirectory ("mixed-r{0:D4}.go" -f $round)
+            Remove-Item -LiteralPath $goPath -Force -ErrorAction SilentlyContinue
+
+            $createReady=Join-Path $ResultsDirectory ("mixed-r{0:D4}-create.ready" -f $round)
+            $ready+=@($createReady)
+            $item=Start-Helper ("mixed-r{0:D4}-create" -f $round) @(
+                'create-new','--file',(Quote-Arg $mixedCreateTargets[$i]),
+                '--ready',(Quote-Arg $createReady),'--go',(Quote-Arg $goPath))
+            $group+=@($item); $allHelpers.Add($item)
+
+            $renameReady=Join-Path $ResultsDirectory ("mixed-r{0:D4}-rename.ready" -f $round)
+            $ready+=@($renameReady)
+            $item=Start-Helper ("mixed-r{0:D4}-rename" -f $round) @(
+                'rename-file','--source',(Quote-Arg $mixedRenameSources[$i]),
+                '--destination',(Quote-Arg $mixedRenameDestinations[$i]),
+                '--ready',(Quote-Arg $renameReady),'--go',(Quote-Arg $goPath))
+            $group+=@($item); $allHelpers.Add($item)
+
+            $truncateReady=Join-Path $ResultsDirectory ("mixed-r{0:D4}-truncate.ready" -f $round)
+            $ready+=@($truncateReady)
+            $item=Start-Helper ("mixed-r{0:D4}-truncate" -f $round) @(
+                'truncate-eof','--file',(Quote-Arg $mixedTruncateTargets[$i]),
+                '--length','1024','--ready',(Quote-Arg $truncateReady),'--go',(Quote-Arg $goPath))
+            $group+=@($item); $allHelpers.Add($item)
+
+            $deleteReady=Join-Path $ResultsDirectory ("mixed-r{0:D4}-delete.ready" -f $round)
+            $ready+=@($deleteReady)
+            $item=Start-Helper ("mixed-r{0:D4}-delete" -f $round) @(
+                'delete-file','--file',(Quote-Arg $mixedDeleteTargets[$i]),
+                '--ready',(Quote-Arg $deleteReady),'--go',(Quote-Arg $goPath))
+            $group+=@($item); $allHelpers.Add($item)
+
+            $mappedReady=Join-Path $ResultsDirectory ("mixed-r{0:D4}-mapped.ready" -f $round)
+            $ready+=@($mappedReady)
+            $item=Start-Helper ("mixed-r{0:D4}-mapped" -f $round) @(
+                'map-write','--file',(Quote-Arg $mixedMappedTargets[$i]),
+                '--ready',(Quote-Arg $mappedReady),'--go',(Quote-Arg $goPath))
+            $group+=@($item); $allHelpers.Add($item)
+
+            Wait-AllPaths $ready 45 ("all mixed workload helpers for round {0} to reach the shared start barrier" -f $round)
+            Set-Content -LiteralPath $goPath -Value 'go' -Encoding ASCII
+            Wait-StressGroup $group 90 ("MIXED round {0}" -f $round)
+
+            if(-not(Test-Path -LiteralPath $mixedCreateTargets[$i] -PathType Leaf)){
+                throw "MIXED CREATE target missing after round $round."
+            }
+            if((Test-Path -LiteralPath $mixedRenameSources[$i]) -or
+               -not(Test-Path -LiteralPath $mixedRenameDestinations[$i] -PathType Leaf)){
+                throw "MIXED RENAME topology mismatch after round $round."
+            }
+            if((Get-Item -LiteralPath $mixedTruncateTargets[$i]).Length -ne 1024){
+                throw "MIXED TRUNCATE length mismatch after round $round."
+            }
+            if(Test-Path -LiteralPath $mixedDeleteTargets[$i]){
+                throw "MIXED DELETE pathname still exists after round $round."
+            }
+
+            $deleteFinalizationJournal=Join-Path $sessionRoot 'delete-state\delete-finalization-journal.jsonl'
+            Wait-DeleteFinalizations $deleteFinalizationJournal @($mixedDeleteTargets[$i]) $gate $gateErr 20
+            Assert-GateWorkersHealthy $gateErr
+            if($gate.HasExited){
+                throw "GateClient exited unexpectedly during mixed workload round $round. exit=$($gate.ExitCode)"
+            }
+
+            $summary.mixedRoundsCompleted=$round
+            $summary.mixedOperationsCompleted=($round*5)
+
+            if($MixedRoundPauseMilliseconds -gt 0 -and $round -lt $MixedRounds){
+                Start-Sleep -Milliseconds $MixedRoundPauseMilliseconds
+            }
+        }
+        $mixedStopwatch.Stop()
+        $summary.mixedFinishedUtc=[DateTime]::UtcNow.ToString('o')
+        $summary.mixedElapsedSeconds=[Math]::Round($mixedStopwatch.Elapsed.TotalSeconds,3)
+        $minimumPauseSeconds=[Math]::Max(0,(($MixedRounds-1)*$MixedRoundPauseMilliseconds/1000.0)-2.0)
+        if($summary.mixedElapsedSeconds -lt $minimumPauseSeconds){
+            throw "Mixed workload elapsed time '$($summary.mixedElapsedSeconds)' seconds is shorter than configured inter-round pause budget '$minimumPauseSeconds' seconds."
+        }
+        $summary.mixedWorkloadPassed=$true
+    }
+
     if($gate.HasExited){throw "GateClient exited unexpectedly during concurrency stress. exit=$($gate.ExitCode)"}
     $summary.gateStayedAlive=$true
     Assert-GateWorkersHealthy $gateErr
@@ -777,20 +904,21 @@ try{
     Assert-NoPendingTransactions $deleteIntents $deleteCompletions 'DELETE disposition store'
     $summary.noPendingTransactionsPassed=$true
 
-    $allSuccessfulCreateTargets=@($overflowAllowedTargets)+@($createTargets)
+    $allSuccessfulCreateTargets=@($overflowAllowedTargets)+@($createTargets)+@($mixedCreateTargets)
     Assert-CreateEvidence $allSuccessfulCreateTargets $createIntents $createCompletions
     Assert-OverflowDeniedEvidence $overflowDeniedTargets $createIntents $createCompletions
-    Assert-RenameEvidence $renameSources $renameDestinations $renameIntents $renameCompletions
-    Assert-TruncateEvidence $truncateTargets $truncateIntents $truncateCompletions
-    Assert-DeleteEvidence $deleteTargets $deleteIntents $deleteCompletions $deleteFinalizations
-    Assert-MappedEvidence $mappedTargets $rollback $sections $paging $sessionRoot
+    Assert-RenameEvidence (@($renameSources)+@($mixedRenameSources)) (@($renameDestinations)+@($mixedRenameDestinations)) $renameIntents $renameCompletions
+    Assert-TruncateEvidence (@($truncateTargets)+@($mixedTruncateTargets)) $truncateIntents $truncateCompletions
+    Assert-DeleteEvidence (@($deleteTargets)+@($mixedDeleteTargets)) $deleteIntents $deleteCompletions $deleteFinalizations
+    Assert-MappedEvidence (@($mappedTargets)+@($mixedMappedTargets)) $rollback $sections $paging $sessionRoot
 
     $summary.transactionCorrelationPassed=$true
     $summary.preimageHashPassed=$true
     $summary.passed=$summary.admissionOverflowPassed -and
         $summary.createPassed -and $summary.renamePassed -and
         $summary.truncatePassed -and $summary.deletePassed -and
-        $summary.mappedWritePassed -and $summary.transactionCorrelationPassed -and
+        $summary.mappedWritePassed -and $summary.mixedWorkloadPassed -and
+        $summary.transactionCorrelationPassed -and
         $summary.noPendingTransactionsPassed -and $summary.preimageHashPassed -and
         $summary.gateStayedAlive -and $summary.gateWorkersHealthyPassed
 }
@@ -826,4 +954,4 @@ if(-not $summary.passed){
     throw "Concurrency stress failed. error='$($summary.error)' cleanup='$($summary.cleanupError)' Evidence: $ResultsDirectory"
 }
 
-Write-Host "CONCURRENCY STRESS LAB PASSED. overflow-width=$Parallelism denied=$($summary.overflowDenied) allowed=$($summary.overflowAllowed); qualification-parallelism=8; gate-workers=8 kernel-cap=8. Evidence: $ResultsDirectory" -ForegroundColor Green
+Write-Host "CONCURRENCY STRESS LAB PASSED. overflow-width=$Parallelism denied=$($summary.overflowDenied) allowed=$($summary.overflowAllowed); qualification-parallelism=8; mixed-rounds=$($summary.mixedRoundsCompleted); mixed-operations=$($summary.mixedOperationsCompleted); gate-workers=8 kernel-cap=8. Evidence: $ResultsDirectory" -ForegroundColor Green

@@ -64,6 +64,8 @@ foreach($required in @(
     'For the exact 0.7.30 Driver Verifier qualification head',
     'overflow width of 16 against a kernel admission cap of 8 (8 allowed / 8 denied)',
     'Persisted reboot timestamps are SHA-bound and parsed from raw offset-bearing JSON',
+    '0.7.31 adds a separate sustained mixed-workload qualification harness',
+    'Source presence is not qualification evidence',
     'current runner reported ReFS creation unsupported',
     'Do not describe the current normal bundle as production ransomware blocking'
 )){
@@ -79,6 +81,8 @@ foreach($required in @(
     'current user/kernel wire contract is protocol v15',
     'The 0.7.30 qualification campaign materially increases confidence in this LAB boundary but does not change it into a production claim.',
     '16 requests against cap 8 -> 8 allowed / 8 denied',
+    '0.7.31 adds a manual sustained mixed-workload qualification contract',
+    'Source presence or a hosted compile is not treated as endurance evidence',
     'CODEOWNERS',
     'does not itself require approval'
 )){

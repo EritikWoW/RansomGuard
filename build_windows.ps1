@@ -112,6 +112,7 @@ try {
     & (Join-Path $PSScriptRoot 'tools\verify_runtime_vm_harness.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_filesystem_matrix_vm_harness.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_concurrency_stress_vm_harness.ps1')
+    & (Join-Path $PSScriptRoot 'tools\verify_mixed_stress_vm_harness.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_crash_vm_harness.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_fault_campaign_vm_harness.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_driver_verifier_vm_harness.ps1')

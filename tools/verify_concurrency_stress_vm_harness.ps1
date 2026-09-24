@@ -27,6 +27,18 @@ $script=Get-Content -LiteralPath $scriptPath -Raw
 
 foreach($required in @(
     '[ValidateRange(9,32)][int]$Parallelism=16',
+    '[ValidateRange(0,240)][int]$MixedRounds=0',
+    '[ValidateRange(0,60000)][int]$MixedRoundPauseMilliseconds=0',
+    'mixedRoundsRequested',
+    'mixedRoundsCompleted',
+    'mixedOperationsCompleted',
+    'mixedStartedUtc',
+    'mixedFinishedUtc',
+    'mixedElapsedSeconds',
+    'mixedWorkloadPassed',
+    'mixed-r{0:D4}.go',
+    'all mixed workload helpers for round {0} to reach the shared start barrier',
+    '$minimumPauseSeconds',
     'RANSOMGUARD_LAB_VM',
     'I_UNDERSTAND',
     "RootBase='C:\RansomGuard-VM-Stress'",
@@ -95,17 +107,18 @@ $renamePhase=$script.IndexOf('Start-Helper ("rename-')
 $truncatePhase=$script.IndexOf('Start-Helper ("truncate-')
 $deletePhase=$script.IndexOf('Start-Helper ("delete-')
 $mappedPhase=$script.IndexOf('Start-Helper ("mapped-')
+$mixedPhase=$script.IndexOf('Start-Helper ("mixed-r{0:D4}-create"')
 $evidence=$script.IndexOf('$createIntents=Read-JsonLines')
 $cleanup=$script.IndexOf('finally{',$evidence)
 $unload=$script.IndexOf('& $unloadScript -Volume $drive | Out-Host',$cleanup)
 if($startGate -lt 0 -or $createPhase -lt 0 -or $renamePhase -lt 0 -or
    $truncatePhase -lt 0 -or $deletePhase -lt 0 -or $mappedPhase -lt 0 -or
-   $evidence -lt 0 -or $cleanup -lt 0 -or $unload -lt 0 -or
+   $mixedPhase -lt 0 -or $evidence -lt 0 -or $cleanup -lt 0 -or $unload -lt 0 -or
    $startGate -gt $createPhase -or $createPhase -gt $renamePhase -or
    $renamePhase -gt $truncatePhase -or $truncatePhase -gt $deletePhase -or
-   $deletePhase -gt $mappedPhase -or $mappedPhase -gt $evidence -or
-   $evidence -gt $cleanup -or $cleanup -gt $unload){
-    throw 'Concurrency stress ordering must remain gate -> CREATE -> RENAME -> TRUNCATE -> DELETE -> mapped-write -> evidence -> finally/unload.'
+   $deletePhase -gt $mappedPhase -or $mappedPhase -gt $mixedPhase -or
+   $mixedPhase -gt $evidence -or $evidence -gt $cleanup -or $cleanup -gt $unload){
+    throw 'Concurrency stress ordering must remain gate -> CREATE -> RENAME -> TRUNCATE -> DELETE -> mapped-write -> optional mixed waves -> evidence -> finally/unload.'
 }
 
 if($script -match '(?im)\b(Format-Volume|diskpart(?:\.exe)?|Initialize-Disk|Clear-Disk|Remove-Partition|Resize-Partition|bcdedit(?:\.exe)?|verifier(?:\.exe)?|shutdown(?:\.exe)?|Restart-Computer|Stop-Computer)\b'){
@@ -177,4 +190,4 @@ if($workflow -match '(?im)\b(verifier(?:\.exe)?|shutdown(?:\.exe)?|Restart-Compu
     throw 'Concurrency stress VM workflow must not reboot, enable Driver Verifier, or format/manage disks.'
 }
 
-Write-Host 'Concurrency stress source gate PASSED: helper processes synchronize on shared start barriers so overflow width 16 genuinely races kernel cap 8, qualification phases run at cap=8, DELETE waits for durable topology finalization, GateClient worker failures are fatal, destructive/mapped operations are correlated to durable evidence, pre-images are hash-checked, cleanup is bounded, and reboot/disk/verifier operations are absent.'
+Write-Host 'Concurrency stress source gate PASSED: baseline qualification remains bounded at cap=8, optional sustained mixed waves share one GateClient/rollback session, every mixed round synchronizes CREATE/RENAME/TRUNCATE/DELETE/mapped-write behind one barrier, elapsed time is recorded, DELETE finalization/worker health remain mandatory, all transactions are correlated to durable evidence, pre-images are hash-checked, cleanup is bounded, and reboot/disk/verifier operations are absent.'

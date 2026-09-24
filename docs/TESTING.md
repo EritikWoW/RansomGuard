@@ -232,3 +232,14 @@ After the required reboot, the runtime phase first loads the exact signed driver
 
 A clean runtime pass executes `verifier /reset`; a second real reboot is mandatory. CLEAR proves persistent verifier settings are absent, `verifier /querysettings` does not name the target, `verifier /query` does not show current target activity, and the minifilter is not loaded. Persisted `armedUtc`, `bootUpUtc` and `runtimeBootUtc` values are extracted from the SHA-bound raw JSON and parsed with their explicit UTC/offset designator; they are never round-tripped through `ConvertFrom-Json` date coercion before reboot comparison. If runtime itself fails after successfully scheduling `/reset`, a later ARM may archive that prior `runtime-failed-reset` state only after validating its SHA-256, reset marker, newer boot time and clean verifier settings; unrelated or ambiguous `Active` state still blocks ARM. The workflow itself never reboots Windows.
 
+
+## 0.7.31 sustained mixed-workload coverage
+
+The mixed endurance campaign is manual and disposable-VM-only. It uses the same exact-commit signed driver preparation and the same bounded overflow/baseline qualification as the 0.7.28 stress harness, then keeps that exact minifilter load, GateClient process and rollback session alive for a sustained mixed phase.
+
+The default profile runs 60 rounds. Every round pre-stages five independent targets before activation and then releases CREATE, RENAME, EOF TRUNCATE, DELETE and mapped-write helpers together behind one shared start marker. Between rounds the workflow waits 10 seconds by default, yielding 300 mixed mutations over roughly ten minutes without restarting the gate or creating a new rollback session.
+
+Every round must finish with the expected filesystem state, a durable DELETE `DeletedObserved` finalization, a live GateClient and no recorded GateClient worker failure. At campaign end the same strict evidence checks cover the baseline plus every mixed target: unique request sequences, exactly one authoritative completion per intent, zero pending CREATE/RENAME/TRUNCATE/DELETE transactions, hash-verified mapped pre-images, writable-section evidence and paging-write evidence. The summary records mixed start/finish UTC plus stopwatch elapsed seconds and rejects a run that did not consume the configured inter-round pause budget.
+
+The workflow is manual-only. It does not reboot Windows, enable Driver Verifier, modify boot policy or manage disks. Source/hosted CI proves only the harness contract; the 0.7.31 endurance milestone is runtime-qualified only after the exact unchanged PR head completes this VM workflow and the uploaded evidence artifact is reviewed.
+

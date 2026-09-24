@@ -18,6 +18,7 @@ $guided=Get-Content -LiteralPath (Join-Path $RepositoryRoot 'docs\GUIDED_SETUP.m
 $quick=Get-Content -LiteralPath (Join-Path $RepositoryRoot 'docs\AUDIT_QUICKSTART.txt') -Raw
 $target=Get-Content -LiteralPath (Join-Path $RepositoryRoot 'docs\PRODUCT_TARGET.md') -Raw
 $changelog=Get-Content -LiteralPath (Join-Path $RepositoryRoot 'docs\CHANGELOG.md') -Raw
+$protectionPackage=Get-Content -LiteralPath (Join-Path $RepositoryRoot 'docs\PRODUCTION_PROTECTION_PACKAGE.md') -Raw
 
 foreach($required in @(
     @('README',"# RansomGuard $version",$readme),
@@ -33,7 +34,10 @@ foreach($required in @(
     @('Product target mixed endurance campaign','0.7.31 adds a dedicated long-duration/mixed-workload qualification contract',$target),
     @('Product target disconnect fail-safe','0.7.32 introduced protocol v16 and an explicit GateClient-loss protection state',$target),
     @('Product target protected-volume scope','0.7.33 introduces protocol v17 and closes the previous ordinary user-mode name-query fail-open on the negotiated protected volume',$target),
-    @('Product target Enforce foundation','0.8.0 starts the production-enforcement integration layer above the already qualified protocol-v17 LAB core',$target)
+    @('Product target Enforce foundation','0.8.0 starts the production-enforcement integration layer above the already qualified protocol-v17 LAB core',$target),
+    @('Product target protection package','0.8.1 adds the production protection-package trust/admission boundary above the 0.8.0 Enforce state foundation',$target),
+    @('Protection package document','Version 0.8.1 defines the trust/admission boundary for the future Production Enforce driver lifecycle',$protectionPackage),
+    @('Protection package catalog membership','The driver SYS and INF must each verify as members of the supplied signed CAT',$protectionPackage)
 )){
     $label=[string]$required[0]
     $needle=[string]$required[1]
@@ -53,4 +57,4 @@ foreach($stale in @(
     }
 }
 
-Write-Host "Documentation consistency gate PASSED: operator docs, product target, README and changelog match version $version, protocol v17, qualified 0.7.x kernel milestones and the 0.8.0 Production Enforce foundation boundary."
+Write-Host "Documentation consistency gate PASSED: operator docs, product target, README and changelog match version $version, protocol v17, qualified 0.7.x kernel milestones, 0.8.0 Enforce state foundation and 0.8.1 production package admission."

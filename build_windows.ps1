@@ -20,6 +20,7 @@ try {
     & (Join-Path $PSScriptRoot 'tools\verify_docs_consistency.ps1') -RepositoryRoot $PSScriptRoot
     & (Join-Path $PSScriptRoot 'tools\verify_threat_model.ps1') -RepositoryRoot $PSScriptRoot
     & (Join-Path $PSScriptRoot 'tools\verify_enforce_foundation.ps1') -RepositoryRoot $PSScriptRoot
+    & (Join-Path $PSScriptRoot 'tools\verify_protection_package.ps1') -RepositoryRoot $PSScriptRoot
 
     if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { throw 'Install .NET 10 SDK on the BUILD PC. Target PCs do not need a runtime.' }
     $version = (& dotnet --version).Trim()

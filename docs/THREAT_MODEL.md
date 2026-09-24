@@ -1,8 +1,8 @@
 # RansomGuard threat model
 
-Status: engineering threat model for RansomGuard 0.8.0.x, covering the default Audit product, the Production Enforce foundation state contract, and the Engineering LAB minifilter.
+Status: engineering threat model for RansomGuard 0.8.1.x, covering the default Audit product, Production Enforce state/package admission contracts, and the Engineering LAB minifilter.
 
-This document describes what the current implementation protects, what it deliberately does not protect, and how ambiguous I/O is handled. It is not a claim of production readiness. The default normal package remains Audit. Version 0.8.0 accepts an explicit Enforce request but reports `EnforceUnavailable` until a separately qualified production driver/GateClient lifecycle completes; the blocking minifilter path remains Engineering LAB only.
+This document describes what the current implementation protects, what it deliberately does not protect, and how ambiguous I/O is handled. It is not a claim of production readiness. The default normal package remains Audit. Version 0.8.1 can admit a cryptographically bound ProductionProtection package but still reports `EnforceUnavailable` until a separately qualified production driver/GateClient lifecycle completes; the blocking minifilter path remains Engineering LAB only.
 
 ## Security goals
 
@@ -32,7 +32,7 @@ Security-sensitive assets include:
 
 ### Ordinary product / Enforce foundation
 
-The normal service obtains filesystem telemetry through ETW and publishes bounded read-only status through the local named pipe. Audit is the default mode and remains non-blocking. Schema 4 may explicitly request Enforce, but 0.8.0 does not yet install/start/load the production driver or spawn GateClient; that request is published as `EnforceUnavailable`.
+The normal service obtains filesystem telemetry through ETW and publishes bounded read-only status through the local named pipe. Audit is the default mode and remains non-blocking. Schema 4 may explicitly request Enforce. Version 0.8.1 first inspects a fixed ProductionProtection package: the actual running service image anchors the signer identity; GateClient and the driver catalog must use the same signer; SYS/INF must verify as catalog members; LAB provider/placeholder altitude are rejected. Package admission performs no lifecycle mutation, so the request is still published as `EnforceUnavailable`.
 
 The protection state machine is the only source of a kernel-enforcement claim. SCM `Running`, driver installation, a live UI, or a connected-but-not-activated kernel channel cannot set `KernelEnforcementActive=true`. Rollback repository validation must complete before any future kernel-start transition.
 

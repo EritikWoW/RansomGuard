@@ -1,8 +1,14 @@
-# RansomGuard 0.8.0.0
+# RansomGuard 0.8.1.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
 and recover data through rollback plus adaptive crypto analysis.
+
+## Production protection package admission
+
+0.8.1.0 adds the fail-closed trust/admission boundary for a future Production Enforce protection package without installing or loading it. The service inspects only a fixed non-reparse `Protection/` layout beside its own running image; requires exact product version/protocol and descriptor SHA-256 values; rejects the Engineering LAB provider and placeholder altitude; verifies the running service, GateClient and driver catalog through cache-only Authenticode; requires GateClient and CAT to use the same signing certificate as the running service; and verifies both SYS and INF as members of that signed catalog through the Windows catalog APIs. A package that passes these checks is only `ReadyForLifecycle`: 0.8.1 still reports `EnforceUnavailable` because install/load/attach and GateClient supervision remain a separate milestone.
+
+The default normal bundle still excludes SYS/CAT/INF/GateClient and remains Audit by default. A numeric altitude in the descriptor is not by itself proof of Microsoft assignment; production release governance must bind it to the external assigned altitude.
 
 ## Production Enforce foundation
 
@@ -151,7 +157,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.8.0.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.8.1.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 Manual disposable-VM runtime workflows:
 

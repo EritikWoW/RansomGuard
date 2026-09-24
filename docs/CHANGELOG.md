@@ -1,3 +1,14 @@
+# RansomGuard 0.8.1.0
+
+- Added the fixed ProductionProtection package descriptor/layout for future Enforce lifecycle activation.
+- Package admission validates exact version/protocol, SHA-256 digests, non-reparse/final file identity, GateClient FileVersion, INF provider/DriverVer/altitude, and rejects the Engineering LAB provider/placeholder altitude.
+- The running service executable, GateClient and driver catalog must all pass cache-only Authenticode verification; GateClient and CAT must be signed by the same certificate as the actual running service image.
+- Added Windows catalog-mode trust verification using `CryptCATAdminAcquireContext2`, `CryptCATAdminCalcHashFromFileHandle2` and catalog-mode `WinVerifyTrust`; both SYS and INF must verify as members of the supplied signed CAT.
+- A successfully admitted package exposes signer identity and `ReadyForLifecycle=true`, but the normal service still reports `EnforceUnavailable`: no driver install/start/load/attach or GateClient process supervision is performed in 0.8.1.
+- The normal release bundle still excludes SYS/CAT/INF/GateClient and defaults to Audit.
+- A numeric altitude is not treated as proof of Microsoft assignment; external release governance remains required.
+- Protocol remains v17 and the qualified LAB kernel behavior is unchanged.
+
 # RansomGuard 0.8.0.0
 
 - Added configuration schema 4 with explicit `Mode=Audit` / `Mode=Enforce`. Audit remains the default.

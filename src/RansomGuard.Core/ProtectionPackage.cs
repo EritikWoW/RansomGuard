@@ -26,7 +26,8 @@ public sealed record ProtectionPackageAdmission(
     bool ReadyForLifecycle,
     string Reason,
     string? Altitude,
-    DateTime ObservedUtc);
+    DateTime ObservedUtc,
+    string? SignerCertificateSha256 = null);
 
 public static class ProtectionPackagePolicy
 {

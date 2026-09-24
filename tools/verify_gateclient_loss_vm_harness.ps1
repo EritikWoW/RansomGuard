@@ -68,6 +68,80 @@ foreach($required in @(
     'failSafeWriteDenied',
     'create-new',
     'failSafeCreateDenied',
+    "createFailure -notmatch '(?m)^Win32Error:\\s*5\\s*
+    'differentRootRejected',
+    '--shutdown-marker',
+    'same-root-reconnect',
+    'sameRootReconnectActivated',
+    'create-completion-journal.jsonl',
+    'sameRootCompletionDurable',
+    'Stop-GateClientClean $reconnectGate',
+    'Kernel disconnect authorization:',
+    'orderlyDisconnectAuthorized',
+    'post-clean-different-root',
+    'postCleanDifferentRootActivated',
+    'Stop-GateClientClean $postCleanGate',
+    'unload_minifilter_lab.ps1',
+    'gateclient-loss-result.json'
+)){
+    if($harness -notmatch [regex]::Escape($required)){throw "GateClient-loss harness missing invariant: $required"}
+}
+
+$forceKillCount=([regex]::Matches($harness,[regex]::Escape('Stop-Process -Id $initialGate.Id -Force'))).Count
+if($forceKillCount -ne 1){
+    throw "GateClient-loss qualification must contain exactly one intentional initial GateClient force-kill. Found $forceKillCount."
+}
+if($harness -match [regex]::Escape('Stop-Process -Id $reconnectGate.Id -Force -ErrorAction Stop') -or
+   $harness -match [regex]::Escape('Stop-Process -Id $postCleanGate.Id -Force -ErrorAction Stop')){
+    throw 'Reconnect and post-clean success paths must use orderly disconnect, not intentional force-kill.'
+}
+
+$gateClient=Get-Content -LiteralPath $gateClientPath -Raw
+foreach($required in @(
+    'case "--shutdown-marker"',
+    '--shutdown-marker must be outside the protected LAB root.',
+    'shutdownMarkerWatcher = Task.Run',
+    'LAB orderly shutdown marker observed; draining GateClient.',
+    'RgControlCommand.AuthorizeDisconnect',
+    'Kernel disconnect authorization: GRANTED after clean durable shutdown state.'
+)){
+    if($gateClient -notmatch [regex]::Escape($required)){throw "GateClient-loss qualification client invariant missing: $required"}
+}
+
+$driver=Get-Content -LiteralPath $driverPath -Raw
+foreach($required in @(
+    'gProtectionArmed',
+    'gFailSafeActive',
+    'gDisconnectAuthorized',
+    'RgControlAuthorizeDisconnect',
+    'InterlockedCompareExchange(&gDisconnectAuthorized, 1, 0)',
+    'RtlCompareMemory(gGateRoot, context->GateRoot, rootBytes) != rootBytes',
+    'InterlockedExchange(&gFailSafeActive, 1)'
+)){
+    if($driver -notmatch [regex]::Escape($required)){throw "GateClient-loss qualification driver invariant missing: $required"}
+}
+
+$forbidden=@(
+    'Restart-Computer',
+    'shutdown.exe',
+    'verifier.exe',
+    'verifier /',
+    'diskpart',
+    'Format-Volume',
+    'Initialize-Disk',
+    'Clear-Disk',
+    'Set-MpPreference',
+    'bcdedit'
+)
+foreach($path in @($workflowPath,$harnessPath)){
+    $text=Get-Content -LiteralPath $path -Raw
+    foreach($token in $forbidden){
+        if($text -match [regex]::Escape($token)){throw "GateClient-loss qualification must not mutate boot/disk/security state: $token in $path"}
+    }
+}
+
+Write-Host 'GateClient-loss VM harness source gate PASSED: manual disposable-VM only, one intentional activated-client kill, fail-safe WRITE/CREATE denial, different-root rejection, same-root revalidation, durable completion, orderly disconnect, post-clean root transition, bounded cleanup, no reboot/Verifier/disk/security mutation.' -ForegroundColor Green
+",
     'different-root-rejected',
     'differentRootRejected',
     '--shutdown-marker',

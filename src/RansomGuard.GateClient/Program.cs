@@ -2203,21 +2203,12 @@ static class ProductionReadinessWriter
             false,
             DateTime.UtcNow);
 
-        var tmp = full + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try
+        using (var output = new FileStream(full, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
         {
-            using (var output = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
-            {
-                JsonSerializer.Serialize(output, value);
-                output.Flush(true);
-            }
-            File.Move(tmp, full, false);
-            PathPolicy.NoReparseComponents(full);
+            JsonSerializer.Serialize(output, value);
+            output.Flush(true);
         }
-        finally
-        {
-            if (File.Exists(tmp)) File.Delete(tmp);
-        }
+        PathPolicy.NoReparseComponents(full);
     }
 }
 

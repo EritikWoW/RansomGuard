@@ -174,7 +174,7 @@ foreach($source in @($arm,$runtime,$clear)){
 }
 $recoverPhase=$arm.IndexOf("phase -ne 'runtime-failed-reset'")
 $recoverReset=$arm.IndexOf('prior.resetScheduled',$recoverPhase)
-$recoverBoot=$arm.IndexOf('prior.runtimeBootUtc',$recoverReset)
+$recoverBoot=$arm.IndexOf("Get-JsonUtcTimestamp `$priorVerified.RawJson 'runtimeBootUtc'",$recoverReset)
 $recoverQuery=$arm.IndexOf("Invoke-Verifier @('/querysettings') 'querysettings-prior-failed-reset'",$recoverBoot)
 $recoverArchive=$arm.IndexOf('Move-Item -LiteralPath $active -Destination $failedArchive',$recoverQuery)
 $newActive=$arm.IndexOf('New-Item -ItemType Directory -Path $active -Force',$recoverArchive)

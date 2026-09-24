@@ -295,8 +295,10 @@ try{
     }
     $createFailure=if(Test-Path -LiteralPath $createErr){Get-Content -LiteralPath $createErr -Raw}else{''}
     if($createProbe.ExitCode -eq 0 -or (Test-Path -LiteralPath $createDenied) -or
-       $createFailure -notmatch '(?m)^Win32Error:\s*5\s*
-
+       $createFailure -notmatch '(?m)^Win32Error:\s*5\s*$'){
+        throw "Mutation-capable CREATE was not proven ACCESS_DENIED without GateClient. exit=$($createProbe.ExitCode) stderr=$createFailure"
+    }
+    $summary.failSafeCreateDenied=$true
     $differentGate=Start-LoggedProcess $gateExe @(
         '--root',(Quote-Arg $rootB),
         '--store',(Quote-Arg $differentStore),

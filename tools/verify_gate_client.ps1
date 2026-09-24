@@ -560,6 +560,18 @@ if($text -notmatch 'GateWorkers\s*<\s*1' -or $text -notmatch 'GateWorkers\s*>\s*
   throw 'Gate worker argument must remain explicitly bounded.'
 }
 foreach($required in @(
+  '--shutdown-file',
+  'MonitorShutdownFileAsync',
+  'File.Exists(options.ShutdownFile)',
+  'Native.Cancel(port)',
+  '--shutdown-file must be outside the protected LAB root.',
+  'const int deactivationAttempts = 30',
+  'Kernel remained busy for clean gate deactivation'
+)){
+  if($text -notmatch [regex]::Escape($required)){throw "Graceful GateClient shutdown invariant missing: $required"}
+}
+
+foreach($required in @(
   'static class GateMessagePolicy',
   'public static bool RequiresReply(RgEventType type)',
   'if (GateMessagePolicy.RequiresReply((RgEventType)ev.EventType))',

@@ -58,6 +58,8 @@ The 0.7.30 qualification campaign materially increases confidence in this LAB bo
 
 0.7.31 adds a manual sustained mixed-workload qualification contract but does not widen the security boundary. One GateClient/rollback session is held across repeated mixed CREATE/RENAME/TRUNCATE/DELETE/mapped-write waves and final evidence must remain fully correlated and pending-free. Source presence or a hosted compile is not treated as endurance evidence; the claim exists only for an exact-head disposable-VM run whose artifact proves all configured rounds, elapsed-time budget, worker/gate health and cleanup.
 
+0.7.32 adds a separate degraded-protection qualification contract. An unexpected loss of an activated LAB GateClient must leave known in-scope destructive operations fail-closed and reject replacement-client connection until driver reset; controlled maintenance shutdown instead uses the explicit deactivation command. Runtime proof requires hard GateClient termination, denied protected-file mutation with unchanged SHA-256, reconnect rejection, bounded driver reset and successful continuation of the existing runtime cleanup matrix. This does not close unresolved-name fail-open semantics or turn already-existing writable mappings into a synchronous policy path.
+
 ## Recovery boundary
 
 Rollback recovery is conservative and copy-out oriented. It verifies evidence and writes to new output paths. Restart observations never fabricate authoritative filesystem completion.

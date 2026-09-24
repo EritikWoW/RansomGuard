@@ -1,4 +1,4 @@
-# RansomGuard 0.7.31.0
+# RansomGuard 0.7.32.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
@@ -6,7 +6,7 @@ and recover data through rollback plus adaptive crypto analysis.
 
 ## Core preservation milestone
 
-0.7.31.0 keeps protocol v15 and the completed 0.7.30 Driver Verifier qualification, then adds a dedicated sustained mixed-workload campaign for the Engineering LAB minifilter. One exact-commit driver load and one GateClient/rollback session first repeat bounded admission/concurrency qualification, then run configurable waves that release CREATE, RENAME, TRUNCATE, DELETE and mapped-write operations together behind a shared barrier. The default manual profile is 60 waves with 10-second inter-round pauses: 300 mixed mutations across roughly ten minutes, with final durable transaction correlation, DELETE finalization, mapped pre-image hashes, writable-section/paging evidence, worker health and cleanup still mandatory.
+0.7.32.0 keeps protocol v15, the completed 0.7.30 Driver Verifier campaign and the completed 0.7.31 mixed-endurance qualification, then hardens GateClient-loss semantics for the Engineering LAB minifilter. After an activated gate loses its policy client without an explicit maintenance deactivation, the kernel retains the negotiated protected root in `DEGRADED_PROTECTED` state: known in-scope destructive CREATE/WRITE/RENAME/TRUNCATE/DELETE operations and creation of new writable sections on tracked streams fail closed, while a replacement GateClient is refused until the LAB driver is reset. Planned shutdown is a separate explicit control transition after the receive loop and active workers drain. The disposable-VM runtime harness now hard-kills GateClient, requires Access Denied plus unchanged SHA-256 for the protected file, proves reconnect rejection, and only then unloads/reloads the LAB driver.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 
@@ -149,7 +149,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.7.31.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.7.32.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 Manual disposable-VM runtime workflows:
 
@@ -174,6 +174,4 @@ Bounded concurrent gate admission/workers are now implemented with a kernel cap 
 
 Restart evidence for pending/missing CREATE/RENAME/TRUNCATE completion events and unsettled DELETE lifecycle transactions is durable and conservative; authoritative completion is never inferred from a restart or topology probe. DELETE cleanup is handle-lifecycle evidence only, while pathname state is observed separately. The recovery planner may expose exact, fully consistent evidence as `Review` only, while cleanup-only, ambiguous, indeterminate or conflicting evidence stays `Blocked`. Paging writes on streams opened through the LAB gate are visible as durable evidence without synchronously blocking the paging path.
 
-Remaining core work includes broader long-duration/mixed-workload stress,
-production retention UI/policy integration, production detector-to-containment authorization/policy, process-state capture, adaptive crypto reconstruction, production recovery UI/topology orchestration,
-driver signing and Microsoft-assigned production altitude.
+Remaining core work includes identity-based resolution of the unresolved/name-query fail-open boundary, a full production Enforce/health and authenticated-maintenance lifecycle, production retention UI/policy integration, production detector-to-containment authorization/policy, process-state capture, adaptive crypto reconstruction, production recovery UI/topology orchestration, driver signing and Microsoft-assigned production altitude.

@@ -1,6 +1,6 @@
 # RansomGuard threat model
 
-Status: engineering threat model for RansomGuard 0.7.31.x, covering the current Audit product and Engineering LAB minifilter.
+Status: engineering threat model for RansomGuard 0.7.32.x, covering the current Audit product and Engineering LAB minifilter.
 
 This document describes what the current implementation protects, what it deliberately does not protect, and how ambiguous I/O is handled. It is not a claim of production readiness. The ordinary product remains AuditOnly; the blocking minifilter path is Engineering LAB only.
 
@@ -12,7 +12,7 @@ RansomGuard is built around three distinct goals:
 2. **Contain** further destructive mutations from an explicitly bound process only after a valid containment transition.
 3. **Recover** from durable evidence without guessing topology or overwriting live source data.
 
-The strongest current guarantee is the LAB preservation invariant: for a resolved, in-scope, ordinary user-mode mutation while the LAB gate is connected and activated, the operation is allowed only after the required preservation/evidence commit succeeds. This guarantee does not extend to every Windows I/O path.
+The strongest current guarantee is the LAB preservation invariant: for a resolved, in-scope, ordinary user-mode mutation while the LAB gate is connected and activated, the operation is allowed only after the required preservation/evidence commit succeeds. If that activated policy client then disappears unexpectedly, known in-scope destructive operations move to kernel `DEGRADED_PROTECTED` fail-closed handling rather than silently becoming allowed. This guarantee does not extend to unresolved scope, kernel-mode requestors, or every Windows I/O path.
 
 ## Assets
 
@@ -73,7 +73,8 @@ The current driver does not mean "driver loaded = protected".
 
 | State/condition | Current behavior | Security interpretation |
 |---|---|---|
-| No GateClient connected or driver unloading | Observation path returns without enforcement | No preservation guarantee |
+| Driver unloading, or no LAB session was ever activated | Observation path returns without enforcement | No preservation guarantee |
+| Activated LAB session loses GateClient without maintenance deactivation | Kernel retains root/mode in `DEGRADED_PROTECTED`; known in-scope destructive I/O and new writable sections on tracked streams are denied; reconnect is refused | Fail-safe LAB degradation, not a complete production health lifecycle |
 | Client in Audit mode | Event may be queued; operation continues | Telemetry only |
 | Client mode unknown/not LAB gate | Operation continues | No blocking guarantee |
 | LAB gate, pathname resolved outside root | Operation continues | Explicitly out of scope |
@@ -83,7 +84,8 @@ The current driver does not mean "driver loaded = protected".
 | LAB gate active, resolved in-root mutation, preservation/gate decision fails | Denied | Fail-closed preservation path |
 | LAB storage admission/quota/free-space check fails | Denied | Preservation integrity wins over availability |
 | Paging write on tracked stream | Non-blocking evidence only | Relies on pre-preserved CREATE baseline; paging path is not a synchronous policy gate |
-| Writable section creation on tracked stream | Non-blocking attestation | Attests prior baseline; does not itself preserve/block |
+| Writable section creation on tracked stream while policy client is healthy | Non-blocking attestation | Attests prior baseline; does not itself preserve/block |
+| New writable section creation on a tracked in-root stream while `DEGRADED_PROTECTED` | Denied | Prevents new mapped-write capability after unexpected policy-engine loss |
 | Kernel-mode requestor | Not observed by ordinary gate path | Explicit threat-model exclusion |
 
 ## Fail-open analysis
@@ -192,6 +194,8 @@ Separate disposable-VM fault evidence covers completion loss, low-disk fail-clos
 These results are regression/qualification evidence for the tested build and environment. They do not establish production signing, broad Windows/Server compatibility, kernel-compromise resistance, third-party filter interoperability, performance suitability, or safe production blocking policy.
 
 0.7.31 adds a separate sustained mixed-workload qualification harness. Its default contract keeps one GateClient/rollback session active for 60 waves and releases CREATE/RENAME/TRUNCATE/DELETE/mapped-write operations together in every wave, with 10-second inter-round pauses. Source presence is not qualification evidence: this threat model treats the endurance milestone as runtime evidence only after an exact-head disposable-VM run proves all rounds completed, the configured elapsed-time budget was consumed, the gate/workers stayed healthy, durable transaction stores have no pending operations, mapped pre-images and section/paging evidence verify, and cleanup succeeds.
+
+0.7.32 adds the client-death/degraded-protection qualification boundary. Source or hosted-build success alone is not runtime proof: an exact-head disposable-VM run must hard-stop the activated GateClient without maintenance deactivation, observe denied mutation with unchanged protected-file SHA-256, observe replacement-client rejection, reset the LAB driver, and still complete the existing mapping/containment/filesystem cleanup invariants.
 
 ## Required production qualification
 

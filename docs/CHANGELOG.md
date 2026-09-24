@@ -1,3 +1,14 @@
+# RansomGuard 0.7.32.0
+
+- Added kernel `DEGRADED_PROTECTED` state for an unexpected GateClient loss after an activated Engineering LAB gate.
+- The minifilter preserves the negotiated LAB root/mode instead of silently turning enforcement off when the active policy client disappears without explicit maintenance deactivation.
+- Resolved known in-scope mutation-capable CREATE, ordinary WRITE, RENAME/TRUNCATE/DELETE and creation of new writable sections on tracked streams fail closed while degraded.
+- A replacement GateClient is refused while the degraded latch is active, preventing silent root/policy replacement; current LAB recovery is driver unload/reload.
+- Added additive protocol-v15 control command `RgControlDeactivateGate = 6` without changing wire-structure sizes. Planned Ctrl+C/completion-loss shutdown drains workers, requests explicit deactivation, verifies inactive kernel state, then disconnects.
+- Extended the disposable-VM runtime harness to hard-kill an active GateClient, require Access Denied and unchanged SHA-256 on a protected target, require reconnect rejection, then reset the LAB driver before continuing compatibility/containment scenarios.
+- Added source gates and security/threat-model documentation for the degraded state. Existing writable mappings remain baseline/pre-image recovery-covered rather than synchronously blocked, and unresolved/name-query scope ambiguity remains a separate production blocker.
+- Bumped userspace/LAB and driver package version to 0.7.32.0.
+
 # RansomGuard 0.7.31.0
 
 - Added a dedicated manual sustained mixed-workload qualification without changing minifilter protocol v15.

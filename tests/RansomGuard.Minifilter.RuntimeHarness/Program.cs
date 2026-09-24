@@ -5,7 +5,7 @@ if (!OperatingSystem.IsWindows())
     throw new PlatformNotSupportedException("RansomGuard minifilter runtime harness is Windows-only.");
 
 if (args.Length == 0)
-    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-write-handle --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | map-write --file <path> [--ready <marker> --go <marker>] | create-new --file <path> [--ready <marker> --go <marker>] | rename-file --source <path> --destination <path> [--ready <marker> --go <marker>] | truncate-eof --file <path> --length <bytes> --ready <marker> --go <marker> | delete-file --file <path> --ready <marker> --go <marker> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker> | containment-transition --file-a <path> --file-b <path> --ready <marker> --go <marker> --result <marker>");
+    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-write-handle --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | hard-link --existing <path> --link <path> --result <marker> [--ready <marker> --go <marker>] | map-write --file <path> [--ready <marker> --go <marker>] | create-new --file <path> [--ready <marker> --go <marker>] | rename-file --source <path> --destination <path> [--ready <marker> --go <marker>] | truncate-eof --file <path> --length <bytes> --ready <marker> --go <marker> | delete-file --file <path> --ready <marker> --go <marker> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker> | containment-transition --file-a <path> --file-b <path> --ready <marker> --go <marker> --result <marker>");
 
 var command = args[0].ToLowerInvariant();
 var options = Parse(args.Skip(1).ToArray());
@@ -31,6 +31,14 @@ try
                 Require(options, "--directory"),
                 Require(options, "--ready"),
                 Require(options, "--release"));
+            break;
+        case "hard-link":
+            HardLinkProbe(
+                Require(options, "--existing"),
+                Require(options, "--link"),
+                Require(options, "--result"),
+                OptionalPath(options, "--ready"),
+                OptionalPath(options, "--go"));
             break;
         case "map-write":
             MapAndWrite(
@@ -255,6 +263,41 @@ static void HoldDirectoryDeleteHandle(string directoryPath, string readyMarker, 
             throw new TimeoutException("Timed out waiting for directory-handle release marker.");
         Thread.Sleep(100);
     }
+}
+
+static void HardLinkProbe(
+    string existingPath,
+    string linkPath,
+    string resultMarker,
+    string? readyMarker,
+    string? goMarker)
+{
+    EnsureFile(existingPath);
+    var linkParent = Path.GetDirectoryName(linkPath);
+    if (!string.IsNullOrWhiteSpace(linkParent)) Directory.CreateDirectory(linkParent);
+    var resultParent = Path.GetDirectoryName(resultMarker);
+    if (!string.IsNullOrWhiteSpace(resultParent)) Directory.CreateDirectory(resultParent);
+    if (File.Exists(linkPath)) File.Delete(linkPath);
+    if (File.Exists(resultMarker)) File.Delete(resultMarker);
+
+    WaitForOptionalBarrier(readyMarker, goMarker, "hard-link");
+
+    if (Native.CreateHardLinkW(linkPath, existingPath, IntPtr.Zero))
+    {
+        File.WriteAllText(resultMarker, "allowed");
+        return;
+    }
+
+    var error = Marshal.GetLastWin32Error();
+    if (error == 5)
+    {
+        File.WriteAllText(resultMarker, "denied");
+        return;
+    }
+
+    File.WriteAllText(resultMarker, "win32-error:" + error.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    throw new System.ComponentModel.Win32Exception(
+        error, $"CreateHardLinkW failed unexpectedly. existing='{existingPath}', link='{linkPath}'.");
 }
 
 static void ContainmentProbe(string filePath, string readyMarker, string goMarker, string resultMarker)
@@ -689,6 +732,13 @@ static class Native
         uint dwCreationDisposition,
         uint dwFlagsAndAttributes,
         IntPtr hTemplateFile);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool CreateHardLinkW(
+        string lpFileName,
+        string lpExistingFileName,
+        IntPtr lpSecurityAttributes);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

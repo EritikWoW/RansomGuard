@@ -259,6 +259,7 @@ $dirRoot=Join-Path $RootBase "predirectory-$stamp"
 $dormantRoot=Join-Path $RootBase "prewritehandle-$stamp"
 $hardPreRoot=Join-Path $RootBase "prehardlink-$stamp"
 $hardActiveRoot=Join-Path $RootBase "hardlink-active-$stamp"
+$fsctlRoot=Join-Path $RootBase "fsctl-zero-$stamp"
 $hardPreAlias=Join-Path $RootBase "prehardlink-alias-$stamp.bin"
 $hardInsideToOutside=Join-Path $RootBase "hardlink-inside-to-outside-$stamp.bin"
 $hardInsideToOutsideEx=Join-Path $RootBase "hardlink-ex-inside-to-outside-$stamp.bin"
@@ -278,6 +279,7 @@ $dirStore=Join-Path $ResultsDirectory 'predirectory-store'
 $dormantStore=Join-Path $ResultsDirectory 'prewritehandle-store'
 $hardPreStore=Join-Path $ResultsDirectory 'prehardlink-store'
 $hardActiveStore=Join-Path $ResultsDirectory 'hardlink-active-store'
+$fsctlStore=Join-Path $ResultsDirectory 'fsctl-zero-store'
 $preStore=Join-Path $ResultsDirectory 'preexisting-store'
 $postStore=Join-Path $ResultsDirectory 'postactivation-store'
 $containStore=Join-Path $ResultsDirectory 'containment-store'
@@ -309,6 +311,9 @@ $summary=[ordered]@{
     hardLinkExInsideToOutsideDenied=$false
     hardLinkExOutsideToInsideDenied=$false
     hardLinkExOutsideToOutsideAllowed=$false
+    fsctlZeroAllowedWithBaseline=$false
+    fsctlZeroMutatedTarget=$false
+    fsctlZeroPreimageHashMatched=$false
     preexistingMappingRejected=$false
     postActivationBaselineVerified=$false
     postActivationPagingObserved=$false
@@ -345,6 +350,7 @@ $gateDir=$null
 $gateDormant=$null
 $gateHardPre=$null
 $gateHardActive=$null
+$gateFsctl=$null
 $gatePre=$null
 $gatePost=$null
 $gateContain=$null
@@ -364,6 +370,7 @@ $transitionGo=$null
 $scopeGo=$null
 $postShutdown=$null
 $hardShutdown=$null
+$fsctlShutdown=$null
 $containShutdown=$null
 $transitionShutdown=$null
 $disconnectShutdown=$null
@@ -586,6 +593,62 @@ try{
 
     Stop-GateGracefully $gateHardActive $hardShutdown $hardOut $hardErr 'hard-link topology gate'
     $gateHardActive=$null
+
+    # Scenario 4: data-changing FSCTLs that bypass IRP_MJ_WRITE are allowed only after
+    # a mutation-capable CREATE has durably committed a full/absence baseline. Exercise
+    # FSCTL_SET_ZERO_DATA and prove the target changes while its original SHA-256 remains
+    # recoverable from the committed pre-image.
+    Prepare-GateRoot $gateExe $fsctlRoot
+    $fsctlTarget=Join-Path $fsctlRoot 'zero-data-target.bin'
+    New-TestFile $fsctlTarget
+    $fsctlOriginalHash=(Get-FileHash -LiteralPath $fsctlTarget -Algorithm SHA256).Hash
+
+    $fsctlOut=Join-Path $ResultsDirectory 'fsctl-zero-gate.out.log'
+    $fsctlErr=$fsctlOut + '.err'
+    $fsctlShutdown=Join-Path $ResultsDirectory 'fsctl-zero.shutdown'
+    $gateFsctl=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $fsctlRoot),
+        '--store',(Quote-Arg $fsctlStore),
+        '--session','fsctl-zero',
+        '--shutdown-file',(Quote-Arg $fsctlShutdown)
+    ) $fsctlOut $fsctlErr
+    Wait-LogPattern $fsctlOut 'kernel gate ACTIVE' $gateFsctl 45
+
+    $fsctlResult=Join-Path $ResultsDirectory 'fsctl-zero.result'
+    & $helperExe fsctl-zero --file $fsctlTarget --offset 0 --length 4096 --result $fsctlResult
+    if($LASTEXITCODE -ne 0){throw "FSCTL_SET_ZERO_DATA helper failed, exit=$LASTEXITCODE"}
+    if((Get-Content -LiteralPath $fsctlResult -Raw).Trim() -ne 'allowed'){
+        throw 'FSCTL_SET_ZERO_DATA did not complete after a preserved write-capable CREATE.'
+    }
+    $summary.fsctlZeroAllowedWithBaseline=$true
+
+    $fsctlAfterHash=(Get-FileHash -LiteralPath $fsctlTarget -Algorithm SHA256).Hash
+    if([string]::Equals($fsctlAfterHash,$fsctlOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'FSCTL_SET_ZERO_DATA reported success without mutating the test file.'
+    }
+    $summary.fsctlZeroMutatedTarget=$true
+
+    $fsctlSession=Join-Path $fsctlStore 'Sessions\fsctl-zero'
+    $fsctlJournal=Join-Path $fsctlSession 'journal.jsonl'
+    $fsctlCapture=Wait-JournalMatch $fsctlJournal {
+        param($x)
+        [string]::Equals([IO.Path]::GetFullPath([string]$x.originalPath),$fsctlTarget,[StringComparison]::OrdinalIgnoreCase)
+    } 20 'FSCTL full pre-image journal record'
+    if(-not [string]::Equals([string]$fsctlCapture.originalSha256,$fsctlOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw "FSCTL pre-image journal hash mismatch. expected=$fsctlOriginalHash actual=$($fsctlCapture.originalSha256)"
+    }
+    $fsctlSnapshot=Join-Path $fsctlSession ([string]$fsctlCapture.snapshotRelativePath)
+    if(-not(Test-Path -LiteralPath $fsctlSnapshot -PathType Leaf)){
+        throw "FSCTL pre-image object missing: $fsctlSnapshot"
+    }
+    $fsctlSnapshotHash=(Get-FileHash -LiteralPath $fsctlSnapshot -Algorithm SHA256).Hash
+    if(-not [string]::Equals($fsctlSnapshotHash,$fsctlOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw "FSCTL pre-image object hash mismatch. expected=$fsctlOriginalHash actual=$fsctlSnapshotHash"
+    }
+    $summary.fsctlZeroPreimageHashMatched=$true
+
+    Stop-GateGracefully $gateFsctl $fsctlShutdown $fsctlOut $fsctlErr 'FSCTL zero-data gate'
+    $gateFsctl=$null
 
     Prepare-GateRoot $gateExe $preRoot
     $preFile=Join-Path $preRoot 'preexisting-map.bin'
@@ -1040,7 +1103,7 @@ finally{
         if($scopeGo){New-Item -ItemType File -Path $scopeGo -Force -ErrorAction SilentlyContinue | Out-Null}
         Stop-Process -Id $scopeProbe.Id -Force -ErrorAction SilentlyContinue
     }
-    foreach($p in @($gateDir,$gateDormant,$gateHardPre,$gateHardActive,$gatePre,$gatePost,$gateScope,$gateContain,$gateTransition,$gateDisconnect,$gateWrong,$gateReconnect)){
+    foreach($p in @($gateDir,$gateDormant,$gateHardPre,$gateHardActive,$gateFsctl,$gatePre,$gatePost,$gateScope,$gateContain,$gateTransition,$gateDisconnect,$gateWrong,$gateReconnect)){
         if($p -and -not $p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}
     }
 

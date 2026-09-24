@@ -262,6 +262,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
     NTSTATUS status;
     LONG mode;
     BOOLEAN degraded;
+    RG_SCOPE_CLASSIFICATION scope;
     ULONG gateError = 0;
     ULONG gateDecision = RgGateDeny;
 
@@ -282,16 +283,6 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
     }
 
     status = RgPopulateEvent(&event, Data, FltObjects, RgEventCreate, 0);
-    if (!NT_SUCCESS(status)) {
-        return FLT_PREOP_SUCCESS_NO_CALLBACK;
-    }
-
-    if (degraded) {
-        if (!RgEventIsInsideGateRoot(&event) || !RgCreateMayMutate(&event)) {
-            return FLT_PREOP_SUCCESS_NO_CALLBACK;
-        }
-        return RgCompleteDenied(Data);
-    }
 
     if (InterlockedCompareExchange(&gGateActivated, 0, 0) == 0 &&
         event.ProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId, 0, 0) &&
@@ -306,9 +297,23 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
         return FLT_PREOP_SUCCESS_WITH_CALLBACK;
     }
 
-    if (!RgEventIsInsideGateRoot(&event)) {
-        // LAB gate remains explicitly scoped. Unresolved/out-of-root CREATEs fail open.
+    scope = RgClassifyMutationScope(&event, FltObjects);
+    if (scope == RgScopeOutside) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+    if (scope == RgScopeAmbiguous) {
+        // Read-only opens cannot mutate protected content. Mutation-capable CREATEs with an
+        // unresolved normalized name fail closed only when the callback is on the bound gate volume.
+        return RgCreateMayMutate(&event)
+            ? RgCompleteDenied(Data)
+            : FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    if (degraded) {
+        if (!RgCreateMayMutate(&event)) {
+            return FLT_PREOP_SUCCESS_NO_CALLBACK;
+        }
+        return RgCompleteDenied(Data);
     }
 
     if (InterlockedCompareExchange(&gGateActivated, 0, 0) == 0) {

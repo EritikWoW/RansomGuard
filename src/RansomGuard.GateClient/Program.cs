@@ -145,13 +145,16 @@ if (headerSize != 16 || eventSize != 2168 || replyHeaderSize != 16 || gateReplyS
 
 var resolver = new DevicePathResolver();
 var activationSummary = await ActivationPreflight.RunAsync(
-    port, options.Root, resolver, activationStore, topologyStore, storageBudget, options.ContainPid, cts.Token).ConfigureAwait(false);
+    port, options.Root, resolver, activationStore, topologyStore, storageBudget,
+    options.Profile == GateProfile.Lab ? options.ContainPid : null, cts.Token).ConfigureAwait(false);
 Console.WriteLine($"Activation preflight: directories={activationSummary.DirectoriesHeld}, files={activationSummary.FilesChecked}, writable-views=0, kernel gate ACTIVE.");
 Console.WriteLine(activationSummary.ContainedProcessId is ulong containedPid
     ? $"LAB containment  : ACTIVE for kernel-bound process pid={containedPid}; abrupt disconnect clears only this PEPROCESS latch while root protection degrades fail-safe."
-    : "LAB containment  : not pre-armed.");
+    : options.Profile == GateProfile.Production
+        ? "Production containment: disabled by profile."
+        : "LAB containment  : not pre-armed.");
 
-if (options.ScopeAmbiguityPid is ulong scopeAmbiguityPid)
+if (options.Profile == GateProfile.Lab && options.ScopeAmbiguityPid is ulong scopeAmbiguityPid)
 {
     var ambiguityReply = Native.Control(port, new RgControlRequest
     {
@@ -170,7 +173,7 @@ if (options.ScopeAmbiguityPid is ulong scopeAmbiguityPid)
     Console.WriteLine($"LAB scope ambiguity : ARMED for exact kernel process pid={scopeAmbiguityPid}; next destructive callback is forced name-unresolved.");
 }
 
-using var containmentTrigger = options.ContainAfterPid is int triggerPid
+using var containmentTrigger = options.Profile == GateProfile.Lab && options.ContainAfterPid is int triggerPid
     ? new LabContainmentTrigger(triggerPid, options.ContainAfterEvents, options.ContainAfterPaths)
     : null;
 if (containmentTrigger is not null)
@@ -192,6 +195,8 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
     {
         if ((RgEventType)ev.EventType == RgEventType.ContainmentActivated)
         {
+            if (options.Profile != GateProfile.Lab)
+                throw new InvalidDataException("ProductionGate received forbidden containment activation evidence.");
             if (ev.ProtocolVersion != ProtocolContract.Version ||
                 ev.RelatedSequence == 0 ||
                 ev.ProcessId <= 4 ||

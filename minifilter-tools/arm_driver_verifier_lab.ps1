@@ -102,10 +102,41 @@ function Read-And-VerifyState([string]$StatePath){
     if(-not [string]::Equals($expected,$actual,[StringComparison]::OrdinalIgnoreCase)){
         throw "Driver Verifier campaign state SHA-256 mismatch. expected=$expected actual=$actual"
     }
+    $raw=Get-Content -LiteralPath $StatePath -Raw
     return [pscustomobject]@{
-        State=(Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json -Depth 30)
+        State=($raw | ConvertFrom-Json -Depth 30)
         Hash=$actual
+        RawJson=$raw
     }
+}
+
+function Get-JsonStringProperty([string]$RawJson,[string]$PropertyName){
+    $doc=[Text.Json.JsonDocument]::Parse($RawJson)
+    try{
+        $element=$doc.RootElement.GetProperty($PropertyName)
+        if($element.ValueKind -ne [Text.Json.JsonValueKind]::String){
+            throw "Driver Verifier state property '$PropertyName' must be a JSON string."
+        }
+        $value=$element.GetString()
+        if([string]::IsNullOrWhiteSpace($value)){
+            throw "Driver Verifier state property '$PropertyName' is empty."
+        }
+        return $value
+    }finally{
+        $doc.Dispose()
+    }
+}
+
+function Get-JsonUtcTimestamp([string]$RawJson,[string]$PropertyName){
+    $value=Get-JsonStringProperty $RawJson $PropertyName
+    if($value -notmatch '(?i)(?:Z|[+-][0-9]{2}:[0-9]{2})$'){
+        throw "Driver Verifier state timestamp '$PropertyName' must contain an explicit UTC/offset designator. Found '$value'."
+    }
+    $dto=[DateTimeOffset]::Parse(
+        $value,
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::None)
+    return $dto.UtcDateTime
 }
 
 function Write-DurableJson([string]$Path,$Value){
@@ -195,10 +226,7 @@ try{
         if(-not [bool]$prior.resetScheduled){
             throw 'REFUSED: prior runtime-failed-reset campaign does not prove verifier /reset was scheduled.'
         }
-        $priorRuntimeBoot=[DateTime]::Parse(
-            [string]$prior.runtimeBootUtc,
-            [Globalization.CultureInfo]::InvariantCulture,
-            [Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+        $priorRuntimeBoot=Get-JsonUtcTimestamp $priorVerified.RawJson 'runtimeBootUtc'
         $currentBoot=([datetime](Get-CimInstance Win32_OperatingSystem).LastBootUpTime).ToUniversalTime()
         if($currentBoot -le $priorRuntimeBoot.AddSeconds(1)){
             throw "REFUSED: prior runtime-failed-reset campaign has not crossed the required reset reboot. runtimeBoot=$($priorRuntimeBoot.ToString('o')) currentBoot=$($currentBoot.ToString('o'))"

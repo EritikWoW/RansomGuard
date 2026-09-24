@@ -135,10 +135,10 @@ if($workflow -match '(?im)\b(verifier(?:\.exe)?|shutdown(?:\.exe)?|Restart-Compu
 if($script -match '(?im)\b(verifier(?:\.exe)?|shutdown(?:\.exe)?|Restart-Computer|Stop-Computer|Format-Volume|diskpart(?:\.exe)?|bcdedit(?:\.exe)?)\b'){
     throw 'Mixed endurance harness must not reboot, enable Driver Verifier, alter boot policy, or manage disks.'
 }
-if($workflow -notmatch [regex]::Escape("if(-not [int]::TryParse($env:RG_MIXED_ROUNDS,[ref]$rounds) -or $rounds -lt 1 -or $rounds -gt 240)")){
+if($workflow -notmatch [regex]::Escape('if(-not [int]::TryParse($env:RG_MIXED_ROUNDS,[ref]$rounds) -or $rounds -lt 1 -or $rounds -gt 240)')){
     throw 'Mixed endurance workflow must bound mixed_rounds to 1..240.'
 }
-if($workflow -notmatch [regex]::Escape("if(-not [int]::TryParse($env:RG_MIXED_ROUND_PAUSE_MS,[ref]$pauseMs) -or $pauseMs -lt 0 -or $pauseMs -gt 60000)")){
+if($workflow -notmatch [regex]::Escape('if(-not [int]::TryParse($env:RG_MIXED_ROUND_PAUSE_MS,[ref]$pauseMs) -or $pauseMs -lt 0 -or $pauseMs -gt 60000)')){
     throw 'Mixed endurance workflow must bound round_pause_ms to 0..60000.'
 }
 

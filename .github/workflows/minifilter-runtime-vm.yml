@@ -115,6 +115,7 @@ jobs:
           $summary=Get-Content -LiteralPath (Join-Path $results 'runtime-result.json') -Raw | ConvertFrom-Json
           if([int]$summary.schema -ne 2){throw "Runtime result schema must be 2. Found '$($summary.schema)'."}
           $requiredTrue=@(
+            'spoofedClientProcessIdRejected',
             'preexistingDirectoryHandleRejected',
             'dormantWritableHandleRejected',
             'preexistingHardLinkRejected',

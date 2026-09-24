@@ -739,6 +739,7 @@ foreach($required in @(
     'RgIsDataMutatingFsctl(fsctl)',
     'RgClassifyMutationScope(&event, FltObjects)',
     'scope == RgScopeAmbiguous',
+    'InterlockedCompareExchange(&gMaintenanceRequested, 0, 0) != 0',
     'RgIsContainedRequestor(Data)',
     'RgStreamHasDurablePreservation(FltObjects)',
     'return RgCompleteDenied(Data)',

@@ -46,6 +46,9 @@ foreach($required in @(
     '_phase != ProtectionPhase.Protected',
     '_phase is not (ProtectionPhase.Protected or ProtectionPhase.DegradedProtected)',
     'EnforceUnavailable is a startup/pre-activation state and cannot replace an active protection state.',
+    'KernelEnforcementActive does not match the protection phase.',
+    'Protected state requires a connected kernel channel.',
+    'DegradedProtected represents loss of the user-mode kernel channel.',
     'var kernelEnforcement = _phase is ProtectionPhase.Protected or ProtectionPhase.DegradedProtected'
 )){
     if($runtime -notmatch [regex]::Escape($required)){throw "Protection state invariant missing: $required"}
@@ -64,6 +67,8 @@ foreach($required in @(
     '_protection.KernelEnforcementActive',
     '_protection.AutomaticContainmentActive',
     '_protection.State',
+    'ProtectionStateMachine.ValidateSnapshot(protection)',
+    'ProtectionStateMachine.ValidateSnapshot(value)',
     'A connected UI or SCM Running state is not proof of kernel enforcement'
 )){
     if($serviceRuntime -notmatch [regex]::Escape($required)){throw "Runtime status invariant missing: $required"}

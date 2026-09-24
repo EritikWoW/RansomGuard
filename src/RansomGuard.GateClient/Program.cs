@@ -52,13 +52,16 @@ var storageBudget = new RollbackStorageBudget(
     store.Root,
     checked(options.MaxStoreMiB * RollbackStorageBudget.MiB),
     checked(options.MinFreeMiB * RollbackStorageBudget.MiB));
-var ntRoot = DevicePathResolver.ToNtRoot(options.Root);
+var ntScope = DevicePathResolver.ToNtScope(options.Root);
+var ntRoot = ntScope.Root;
+var ntVolume = ntScope.Volume;
 var productVersion = System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version?.ToString() ?? "unknown";
 
 Console.WriteLine($"RansomGuard LAB pre-write gate v{productVersion}");
 Console.WriteLine("LAB ONLY: use only inside a disposable test directory on a test machine/VM.");
 Console.WriteLine($"Protected LAB root : {options.Root}");
 Console.WriteLine($"Kernel NT root     : {ntRoot}");
+Console.WriteLine($"Kernel NT volume   : {ntVolume}");
 Console.WriteLine($"Rollback session   : {sessionId}");
 Console.WriteLine($"Rollback store     : {store.Root}");
 Console.WriteLine($"Restart evidence   : observed={restartSummary.Observed}, completed-evidence={restartSummary.SupportsCompleted}, not-completed-evidence={restartSummary.SupportsNotCompleted}, ambiguous={restartSummary.Ambiguous}");
@@ -78,10 +81,11 @@ Console.WriteLine("Abrupt GateClient loss after activation leaves the kernel in 
 
 var context = new RgConnectContext
 {
-    ProtocolVersion = 16,
+    ProtocolVersion = 17,
     ClientMode = (uint)RgClientMode.LabGate,
     ClientProcessId = (ulong)Environment.ProcessId,
     GateRootLengthBytes = checked((uint)(ntRoot.Length * 2)),
+    GateVolumeLengthBytes = checked((uint)(ntVolume.Length * 2)),
     GateRoot = ntRoot
 };
 
@@ -151,7 +155,7 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
     {
         if ((RgEventType)ev.EventType == RgEventType.ContainmentActivated)
         {
-            if (ev.ProtocolVersion != 16 ||
+            if (ev.ProtocolVersion != 17 ||
                 ev.RelatedSequence == 0 ||
                 ev.ProcessId <= 4 ||
                 ev.CompletionStatus != 0)
@@ -194,7 +198,7 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
 
         if ((RgEventType)ev.EventType == RgEventType.WritableSection)
         {
-            if (ev.ProtocolVersion != 16 ||
+            if (ev.ProtocolVersion != 17 ||
                 ev.PathStatus != (uint)RgPathStatus.Resolved ||
                 ev.RelatedSequence == 0 ||
                 ev.CompletionInformation > uint.MaxValue)
@@ -243,7 +247,7 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
 
         if ((RgEventType)ev.EventType == RgEventType.PagingWrite)
         {
-            if (ev.ProtocolVersion != 16 || ev.PathStatus != (uint)RgPathStatus.Resolved)
+            if (ev.ProtocolVersion != 17 || ev.PathStatus != (uint)RgPathStatus.Resolved)
                 throw new InvalidDataException("Invalid paging-write evidence event.");
 
             var trackedPath = resolver.Resolve(ev.Path);
@@ -553,13 +557,13 @@ if (cleanShutdown)
     {
         deactivationReply = Native.Control(port, new RgControlRequest
         {
-            ProtocolVersion = 16,
+            ProtocolVersion = 17,
             Command = (uint)RgControlCommand.DeactivateGate
         });
         if (deactivationReply.Status == 0)
             break;
 
-        if (deactivationReply.ProtocolVersion != 16 ||
+        if (deactivationReply.ProtocolVersion != 17 ||
             deactivationReply.Command != (uint)RgControlCommand.DeactivateGate ||
             deactivationReply.GateActivated != 1 ||
             deactivationReply.ProtectionState != (uint)RgProtectionState.Maintenance)
@@ -573,7 +577,7 @@ if (cleanShutdown)
         await Task.Delay(100).ConfigureAwait(false);
     }
 
-    if (deactivationReply.ProtocolVersion != 16 ||
+    if (deactivationReply.ProtocolVersion != 17 ||
         deactivationReply.Command != (uint)RgControlCommand.DeactivateGate ||
         deactivationReply.Status != 0 ||
         deactivationReply.GateActivated != 0 ||
@@ -666,10 +670,10 @@ static class ActivationPreflight
 
                 var arm = Native.Control(port, new RgControlRequest
                 {
-                    ProtocolVersion = 16,
+                    ProtocolVersion = 17,
                     Command = (uint)RgControlCommand.ArmPreflight
                 });
-                if (arm.ProtocolVersion != 16 ||
+                if (arm.ProtocolVersion != 17 ||
                     arm.Command != (uint)RgControlCommand.ArmPreflight ||
                     arm.Status != 0 ||
                     arm.GateActivated != 0 ||
@@ -733,11 +737,11 @@ static class ActivationPreflight
                 : RgControlCommand.ActivateGate;
             var activationReply = Native.Control(port, new RgControlRequest
             {
-                ProtocolVersion = 16,
+                ProtocolVersion = 17,
                 Command = (uint)activationCommand,
                 TargetProcessId = containPid ?? 0
             });
-            if (activationReply.ProtocolVersion != 16 ||
+            if (activationReply.ProtocolVersion != 17 ||
                 activationReply.Command != (uint)activationCommand ||
                 activationReply.Status != 0 ||
                 activationReply.GateActivated != 1 ||
@@ -800,7 +804,7 @@ static class ActivationPreflight
                     throw new InvalidOperationException("Activation refused: protected-root memory-mapped activity occurred during preflight.");
                 if (type != RgEventType.ActivationPreflight)
                     throw new InvalidDataException($"Unexpected event {type} during activation preflight.");
-                if (ev.ProtocolVersion != 16 || ev.PathStatus != (uint)RgPathStatus.Resolved)
+                if (ev.ProtocolVersion != 17 || ev.PathStatus != (uint)RgPathStatus.Resolved)
                     throw new InvalidDataException("Invalid activation preflight event.");
 
                 var resolved = resolver.Resolve(ev.Path);
@@ -828,7 +832,7 @@ static class CreateReconciliation
         CreateOperationStore operationStore,
         CancellationToken cancellationToken)
     {
-        if (ev.ProtocolVersion != 16 || ev.RelatedSequence == 0)
+        if (ev.ProtocolVersion != 17 || ev.RelatedSequence == 0)
             throw new InvalidDataException("Invalid CREATE completion correlation.");
 
         if (!NtSuccess(ev.CompletionStatus))
@@ -892,7 +896,7 @@ static class RenameReconciliation
         RenameRollbackStore renameStore,
         CancellationToken cancellationToken)
     {
-        if (ev.ProtocolVersion != 16 || ev.RelatedSequence == 0)
+        if (ev.ProtocolVersion != 17 || ev.RelatedSequence == 0)
             throw new InvalidDataException("Invalid rename completion correlation.");
 
         if (!NtSuccess(ev.CompletionStatus))
@@ -954,7 +958,7 @@ static class TruncateReconciliation
         TruncateOperationStore store,
         CancellationToken cancellationToken)
     {
-        if (ev.ProtocolVersion != 16 || ev.RelatedSequence == 0)
+        if (ev.ProtocolVersion != 17 || ev.RelatedSequence == 0)
             throw new InvalidDataException("Invalid TRUNCATE completion correlation.");
 
         var intent = store.Intents.SingleOrDefault(x => x.RequestSequence == ev.RelatedSequence)
@@ -1020,7 +1024,7 @@ static class DeleteReconciliation
         DeleteOperationStore store,
         CancellationToken cancellationToken)
     {
-        if (ev.ProtocolVersion != 16 || ev.RelatedSequence == 0)
+        if (ev.ProtocolVersion != 17 || ev.RelatedSequence == 0)
             throw new InvalidDataException("Invalid DELETE disposition completion correlation.");
 
         var intent = store.Intents.SingleOrDefault(x => x.RequestSequence == ev.RelatedSequence)
@@ -1078,7 +1082,7 @@ static class DeleteReconciliation
         DeleteOperationStore store,
         CancellationToken cancellationToken)
     {
-        if (ev.ProtocolVersion != 16 || ev.RelatedSequence == 0)
+        if (ev.ProtocolVersion != 17 || ev.RelatedSequence == 0)
             throw new InvalidDataException("Invalid DELETE finalization correlation.");
 
         var intent = store.Intents.SingleOrDefault(x => x.RequestSequence == ev.RelatedSequence)
@@ -1164,7 +1168,7 @@ static class GateDecision
         {
             // Never preserve or authorize against a truncated path. The kernel only sends a truncated
             // gate event when its known prefix is already inside the explicit LAB root, so deny it here.
-            if (ev.ProtocolVersion != 16 || ev.PathStatus != (uint)RgPathStatus.Resolved)
+            if (ev.ProtocolVersion != 17 || ev.PathStatus != (uint)RgPathStatus.Resolved)
                 return Deny(ev.Sequence, 1);
 
             var path = resolver.Resolve(ev.Path);
@@ -1551,7 +1555,7 @@ static class GateDecision
 
     private static RgGateReply Allow(ulong sequence, RgGateDecision decision) => new()
     {
-        ProtocolVersion = 16,
+        ProtocolVersion = 17,
         Decision = decision,
         RequestSequence = sequence,
         ErrorCode = 0
@@ -1559,7 +1563,7 @@ static class GateDecision
 
     private static RgGateReply Deny(ulong sequence, uint errorCode) => new()
     {
-        ProtocolVersion = 16,
+        ProtocolVersion = 17,
         Decision = RgGateDecision.Deny,
         RequestSequence = sequence,
         ErrorCode = errorCode
@@ -2110,7 +2114,7 @@ sealed class DevicePathResolver
         return null;
     }
 
-    public static string ToNtRoot(string dosRoot)
+    public static NtScope ToNtScope(string dosRoot)
     {
         var full = Path.GetFullPath(dosRoot).TrimEnd('\\');
         var drive = Path.GetPathRoot(full)?.TrimEnd('\\') ?? throw new InvalidOperationException("No drive root.");
@@ -2119,8 +2123,12 @@ sealed class DevicePathResolver
         if (Native.QueryDosDevice(drive, sb, sb.Capacity) == 0)
             throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "QueryDosDevice failed.");
         var device = sb.ToString().Split('\0')[0];
-        return device + full[drive.Length..];
+        if (string.IsNullOrWhiteSpace(device) || !device.StartsWith(@"\Device\", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Unexpected local volume device name: '{device}'.");
+        return new NtScope(device + full[drive.Length..], device);
     }
+
+    public readonly record struct NtScope(string Root, string Volume);
 }
 
 enum RgClientMode : uint { Audit = 1, LabGate = 2 }
@@ -2141,7 +2149,7 @@ struct RgConnectContext
 {
     public uint ProtocolVersion, ClientMode;
     public ulong ClientProcessId;
-    public uint GateRootLengthBytes, Reserved;
+    public uint GateRootLengthBytes, GateVolumeLengthBytes;
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string GateRoot;
 }
 

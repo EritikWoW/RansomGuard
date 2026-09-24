@@ -110,6 +110,7 @@ try {
     & (Join-Path $PSScriptRoot 'tools\verify_rollback_retention.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_gate_client.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_runtime_vm_harness.ps1')
+    & (Join-Path $PSScriptRoot 'tools\verify_gateclient_loss_vm_harness.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_filesystem_matrix_vm_harness.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_concurrency_stress_vm_harness.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_mixed_stress_vm_harness.ps1')

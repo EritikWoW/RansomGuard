@@ -73,7 +73,7 @@ if (options.DropFirstTruncateCompletion)
     Console.WriteLine("LAB completion-loss injection : ARMED for the first authoritative TRUNCATE result.");
 if (options.DropFirstDeleteCompletion)
     Console.WriteLine("LAB completion-loss injection : ARMED for the first authoritative DELETE disposition result.");
-Console.WriteLine("Press Ctrl+C to disconnect. The driver then stops gating because no client is connected.");
+Console.WriteLine("Press Ctrl+C for an explicit maintenance deactivation before disconnect. Unexpected client loss keeps the known LAB root fail-closed.");
 
 var context = new RgConnectContext
 {
@@ -86,7 +86,14 @@ var context = new RgConnectContext
 
 using var port = Native.Connect(PortName, context);
 using var cts = new CancellationTokenSource();
-Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); Native.Cancel(port); };
+var plannedDeactivationRequested = 0;
+Console.CancelKeyPress += (_, e) =>
+{
+    e.Cancel = true;
+    Interlocked.Exchange(ref plannedDeactivationRequested, 1);
+    cts.Cancel();
+    Native.Cancel(port);
+};
 
 var headerSize = Marshal.SizeOf<FilterMessageHeader>();
 var eventSize = Marshal.SizeOf<RgEvent>();
@@ -101,7 +108,7 @@ var activationSummary = await ActivationPreflight.RunAsync(
     port, options.Root, resolver, activationStore, topologyStore, storageBudget, options.ContainPid, cts.Token).ConfigureAwait(false);
 Console.WriteLine($"Activation preflight: directories={activationSummary.DirectoriesHeld}, files={activationSummary.FilesChecked}, writable-views=0, kernel gate ACTIVE.");
 Console.WriteLine(activationSummary.ContainedProcessId is ulong containedPid
-    ? $"LAB containment  : ACTIVE for kernel-bound process pid={containedPid}; disconnect clears the latch."
+    ? $"LAB containment  : ACTIVE for kernel-bound process pid={containedPid}; explicit maintenance deactivation clears the latch."
     : "LAB containment  : not pre-armed.");
 using var containmentTrigger = options.ContainAfterPid is int triggerPid
     ? new LabContainmentTrigger(triggerPid, options.ContainAfterEvents, options.ContainAfterPaths)
@@ -257,6 +264,7 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
             {
                 Console.Error.WriteLine(
                     $"LAB COMPLETION LOSS: intentionally dropping authoritative CREATE result request={ev.RelatedSequence}; status=0x{ev.CompletionStatus:X8}; exiting cleanly for restart reconciliation.");
+                Interlocked.Exchange(ref plannedDeactivationRequested, 1);
                 cts.Cancel();
                 Native.Cancel(port);
                 return;
@@ -280,6 +288,7 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
             {
                 Console.Error.WriteLine(
                     $"LAB COMPLETION LOSS: intentionally dropping authoritative RENAME result request={ev.RelatedSequence}; status=0x{ev.CompletionStatus:X8}; exiting cleanly for restart reconciliation.");
+                Interlocked.Exchange(ref plannedDeactivationRequested, 1);
                 cts.Cancel();
                 Native.Cancel(port);
                 return;
@@ -303,6 +312,7 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
             {
                 Console.Error.WriteLine(
                     $"LAB COMPLETION LOSS: intentionally dropping authoritative TRUNCATE result request={ev.RelatedSequence}; status=0x{ev.CompletionStatus:X8}; exiting cleanly for restart reconciliation.");
+                Interlocked.Exchange(ref plannedDeactivationRequested, 1);
                 cts.Cancel();
                 Native.Cancel(port);
                 return;
@@ -326,6 +336,7 @@ async Task ProcessMessageAsync(FilterMessageHeader header, RgEvent ev)
             {
                 Console.Error.WriteLine(
                     $"LAB COMPLETION LOSS: intentionally dropping authoritative DELETE disposition result request={ev.RelatedSequence}; status=0x{ev.CompletionStatus:X8}; exiting cleanly for restart reconciliation.");
+                Interlocked.Exchange(ref plannedDeactivationRequested, 1);
                 cts.Cancel();
                 Native.Cancel(port);
                 return;
@@ -473,6 +484,25 @@ finally
     Marshal.FreeHGlobal(buffer);
     if (activeWorkers.Count != 0)
         await Task.WhenAll(activeWorkers).ConfigureAwait(false);
+
+    if (Volatile.Read(ref plannedDeactivationRequested) != 0)
+    {
+        var deactivate = Native.Control(port, new RgControlRequest
+        {
+            ProtocolVersion = 15,
+            Command = (uint)RgControlCommand.DeactivateGate
+        });
+        if (deactivate.ProtocolVersion != 15 ||
+            deactivate.Command != (uint)RgControlCommand.DeactivateGate ||
+            deactivate.Status != 0 ||
+            deactivate.GateActivated != 0 ||
+            deactivate.ContainmentActive != 0 ||
+            deactivate.ContainedProcessId != 0)
+            throw new InvalidOperationException(
+                $"Kernel refused explicit LAB maintenance deactivation. NTSTATUS=0x{deactivate.Status:X8}, active={deactivate.GateActivated}, containment={deactivate.ContainmentActive}.");
+
+        Console.WriteLine("Kernel LAB gate: maintenance deactivation confirmed; disconnect may clear the protected root.");
+    }
 }
 
 repository.VerifyAll();
@@ -2100,7 +2130,7 @@ enum RgGateReplyFlags : uint
     ContainRequestor = 0x00000001
 }
 
-enum RgControlCommand : uint { Invalid = 0, ActivateGate = 1, QueryActivation = 2, ArmPreflight = 3, ActivateAndContainProcess = 4, QueryContainment = 5 }
+enum RgControlCommand : uint { Invalid = 0, ActivateGate = 1, QueryActivation = 2, ArmPreflight = 3, ActivateAndContainProcess = 4, QueryContainment = 5, DeactivateGate = 6 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 struct RgControlRequest

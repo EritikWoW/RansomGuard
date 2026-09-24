@@ -63,7 +63,17 @@ foreach($required in @(
   'CreateGatePolicy.TryParseDisposition',
   '(ev.Flags >> 24) & 0xFF',
   'ev.Flags & 0x00FFFFFF',
-  'ProtocolVersion = 17',
+  'public const uint Version = 18;',
+  'ProtocolVersion = ProtocolContract.Version',
+  'ProductionGate = 3',
+  '--production',
+  'GateProfile.Production',
+  'ProductionGate forbids LAB prepare/fault/reconciliation/shutdown/containment options.',
+  'ProductionGate rollback store is fixed to',
+  'Environment.SpecialFolder.CommonApplicationData',
+  'ProductionRootPolicy.Validate(options.Root)',
+  'ProductionGate root/ancestor cannot be a reparse point',
+  'ProductionGate root must not be inside Windows, Program Files, or ProgramData',
   'DevicePathResolver.ToNtScope(options.Root)',
   'GateVolumeLengthBytes = checked((uint)(ntVolume.Length * 2))',
   'public uint GateRootLengthBytes, GateVolumeLengthBytes;',
@@ -421,6 +431,20 @@ if($activateInPreflight -lt 0 -or $disposeInPreflight -lt 0 -or $holdInPreflight
   throw 'Activation must occur while share-sensitive file/directory handles are still held.'
 }
 
+$productionSwitch=$text.IndexOf('case "--production"')
+$productionReject=$text.IndexOf('ProductionGate forbids LAB prepare/fault/reconciliation/shutdown/containment options.',$productionSwitch)
+$productionStore=$text.IndexOf('Environment.SpecialFolder.CommonApplicationData',$productionReject)
+$productionMode=$text.IndexOf('RgClientMode.ProductionGate')
+$productionPreflight=$text.IndexOf('options.Profile == GateProfile.Lab ? options.ContainPid : null')
+$productionScope=$text.IndexOf('options.Profile == GateProfile.Lab && options.ScopeAmbiguityPid')
+$productionTrigger=$text.IndexOf('options.Profile == GateProfile.Lab && options.ContainAfterPid')
+$productionContainEvent=$text.IndexOf('ProductionGate received forbidden containment activation evidence.')
+if($productionSwitch -lt 0 -or $productionReject -lt 0 -or $productionStore -lt 0 -or
+   $productionMode -lt 0 -or $productionPreflight -lt 0 -or $productionScope -lt 0 -or
+   $productionTrigger -lt 0 -or $productionContainEvent -lt 0){
+  throw 'ProductionGate profile must be explicit, fixed-store and unable to reach LAB containment/fault controls.'
+}
+
 $containActivation=$preflightBlock.IndexOf('RgControlCommand.ActivateAndContainProcess')
 $containPidBind=$preflightBlock.IndexOf('TargetProcessId = containPid ?? 0',$containActivation)
 $containReplyCheck=$preflightBlock.IndexOf('activationReply.ContainedProcessId != containPid.Value',$containPidBind)
@@ -576,7 +600,7 @@ foreach($required in @(
   'MonitorShutdownFileAsync',
   'File.Exists(options.ShutdownFile)',
   'Native.Cancel(port)',
-  '--shutdown-file must be outside the protected LAB root.',
+  '--shutdown-file must be outside the protected root.',
   'const int deactivationAttempts = 30',
   'Kernel remained busy for clean gate deactivation'
 )){
@@ -631,4 +655,4 @@ if($restartBlock -notmatch [regex]::Escape('PathPolicy.Under(intent.OriginalPath
   throw 'Restart reconciliation must remain scoped to the explicitly selected LAB root.'
 }
 
-Write-Host 'LAB gate client source check PASSED: protocol-v17 protected-volume scope plus graceful deactivation/disconnect fail-safe state, DELETE/TRUNCATE reconciliation, event-bound containment, bounded workers, durable identity/restart evidence, no destructive/process-control APIs.'
+Write-Host 'GateClient source check PASSED: protocol-v18 LAB/ProductionGate separation, fixed production store/root policy, LAB-only fault/containment controls, protected-volume fail-safe state, durable reconciliation and no destructive/process-control APIs.'

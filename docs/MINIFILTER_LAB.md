@@ -1,4 +1,4 @@
-# RansomGuard minifilter engineering lab — v0.7.32.0
+# RansomGuard minifilter engineering lab — v0.7.33.0
 
 The minifilter has two mutually exclusive user-mode connection modes:
 
@@ -9,13 +9,13 @@ The minifilter has two mutually exclusive user-mode connection modes:
 The LAB Gate exists to validate preservation ordering. It is **not** a production driver configuration.
 Do not load it on a primary workstation and do not point it at real documents.
 
-On startup, older pending CREATE/RENAME/TRUNCATE intents and unsettled DELETE lifecycle transactions under the same LAB root are conservatively re-observed. CREATE/RENAME record path state + FILE_ID_INFO in restart-state; TRUNCATE records FILE_ID plus safely queryable EOF evidence in truncate-state; the DELETE lifecycle introduced in protocol v15 and retained by current protocol v16 records intent/disposition/finalization evidence in delete-state. DELETE handle cleanup is not pathname-deletion proof: live/restart topology is probed separately. Restart/finalization evidence never substitutes for the original kernel completion event. Exact consistent evidence may become Review-only crash recovery; cleanup-only, absent, ambiguous, indeterminate or conflicting evidence remains Blocked.
+On startup, older pending CREATE/RENAME/TRUNCATE intents and unsettled DELETE lifecycle transactions under the same LAB root are conservatively re-observed. CREATE/RENAME record path state + FILE_ID_INFO in restart-state; TRUNCATE records FILE_ID plus safely queryable EOF evidence in truncate-state; the DELETE lifecycle introduced in protocol v15 and retained by current protocol v17 records intent/disposition/finalization evidence in delete-state. DELETE handle cleanup is not pathname-deletion proof: live/restart topology is probed separately. Restart/finalization evidence never substitutes for the original kernel completion event. Exact consistent evidence may become Review-only crash recovery; cleanup-only, absent, ambiguous, indeterminate or conflicting evidence remains Blocked.
 
 Protocol v11 also observes paging writes on streams that were successfully opened inside the LAB root. The driver uses a pre-established nonpaged stream context and emits no-reply evidence only; it does not run a filesystem name query or synchronous preservation gate in the paging path. Treat these events as visibility, not as proof that memory-mapped writes are recoverable.
 
 ## Activation preflight
 
-A current protocol-v16 LAB connection is not active immediately after `FilterConnectCommunicationPort`. GateClient first scans all existing non-reparse files under the disposable root. For every file, the kernel post-CREATE probe records final path/FILE_ID_INFO and tests `MmDoesFileHaveUserWritableReferences`.
+A current protocol-v17 LAB connection is not active immediately after `FilterConnectCommunicationPort`. GateClient first scans all existing non-reparse files under the disposable root. For every file, the kernel post-CREATE probe records final path/FILE_ID_INFO and tests `MmDoesFileHaveUserWritableReferences`.
 
 If any file already has a user-writable mapped view, if a probe cannot be completed authoritatively, or if a pre-existing write/delete handle prevents the read-shared probe from opening the file, activation is refused. GateClient keeps every successful read-shared probe handle open until the explicit `ActivateGate` message succeeds, preventing a new write/delete handle from racing the rest of the scan.
 
@@ -49,7 +49,15 @@ Runtime scenario B activates cleanly, opens the test file for content-write acce
 - at least one paging-write evidence record;
 - a final test-file hash different from the original hash.
 
-Protocol v16 adds a GateClient-loss scenario. The harness activates a clean root, force-terminates GateClient without the shutdown marker, immediately proves read-only access still works but a resolved in-root write is denied with the target hash unchanged, and proves a sibling out-of-root write still succeeds. A GateClient for a different root must be rejected. A replacement v16 GateClient for the exact retained root must reconnect through activation preflight and permit preserved mutation again. That replacement is then stopped through the explicit shutdown marker; its output must prove kernel `MAINTENANCE` deactivation before the port closes, after which ordinary mutation without GateClient is allowed again.
+Protocol v17 retains the GateClient-loss scenario introduced in v16. The harness activates a clean root, force-terminates GateClient without the shutdown marker, immediately proves read-only access still works but a resolved in-root write is denied with the target hash unchanged, and proves a sibling out-of-root write still succeeds. A GateClient for a different root must be rejected. A replacement v17 GateClient for the exact retained root on the same protected volume must reconnect through activation preflight and permit preserved mutation again. That replacement is then stopped through the explicit shutdown marker; its output must prove kernel `MAINTENANCE` deactivation before the port closes, after which ordinary mutation without GateClient is allowed again.
+
+## Protocol v17 protected-volume scope
+
+The fixed-size connection context now carries `GateVolumeLengthBytes`, the byte length of the NT device-volume prefix already present at the start of `GateRoot`. GateClient derives both values from the same local drive through `QueryDosDevice`. The kernel resolves the prefix with `FltGetVolumeFromName` and retains the returned Filter Manager volume reference for the session.
+
+For ordinary user-mode destructive operations the kernel classifies scope as `Outside`, `Inside` or `Ambiguous`. A normalized source/destination inside the root is `Inside`. A path proven outside the root is `Outside`. When a required normalized name is unavailable and the callback belongs to the bound protected volume, scope is `Ambiguous` and mutation fails closed. The same name-query failure on another volume does not inherit this root's denial policy.
+
+RENAME uses both source and destination. Either side inside makes the operation in-scope; both sides proven outside bypass the root gate; an unresolved side on the protected volume fails closed. Cross-boundary rename is not yet a supported recovery topology, so the user-mode preservation policy denies it rather than allowing an unmodeled move. GateClient itself is excluded from ambiguous-volume denial so rollback-store I/O cannot deadlock the synchronous policy channel.
 
 Successful active GateClient sessions in this harness are never terminated with `Stop-Process -Force`; they use the explicit shutdown marker and `DeactivateGate`. Forced termination is reserved for the abrupt-loss test and failure cleanup.
 

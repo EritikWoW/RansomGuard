@@ -405,7 +405,7 @@ $preflightStart=$text.IndexOf('static class ActivationPreflight')
 $preflightEnd=$text.IndexOf('readonly record struct ActivationPreflightSummary',$preflightStart)
 if($preflightStart -lt 0 -or $preflightEnd -lt 0){throw 'ActivationPreflight implementation missing.'}
 $preflightBlock=$text.Substring($preflightStart,$preflightEnd-$preflightStart)
-foreach($required in @('Directory.EnumerateFiles','Directory.EnumerateDirectories','FileAttributes.ReparsePoint','Native.OpenPreflightProbe','Native.OpenPreflightHold','Native.OpenPreflightDirectory','ActivationPreflightStore','ActivationTopologyStore','FileIdentityStore.QueryHandleIdentity','RgEventType.ActivationPreflight','RgEventType.PagingWrite','RgEventType.WritableSection','heldHandles','RgControlCommand.ArmPreflight','RgControlCommand.ActivateGate','RgControlCommand.ActivateAndContainProcess','TargetProcessId = containPid ?? 0','Native.Control')){
+foreach($required in @('Directory.EnumerateFiles','Directory.EnumerateDirectories','FileAttributes.ReparsePoint','Native.OpenPreflightProbe','Native.OpenPreflightHold','Native.OpenPreflightDirectory','ActivationPreflightStore','ActivationTopologyStore','FileIdentityStore.QueryHandleIdentity','FileIdentityStore.QueryHandleLinkCount','NumberOfLinks={linkCount}','RgEventType.ActivationPreflight','RgEventType.PagingWrite','RgEventType.WritableSection','heldHandles','RgControlCommand.ArmPreflight','RgControlCommand.ActivateGate','RgControlCommand.ActivateAndContainProcess','TargetProcessId = containPid ?? 0','Native.Control')){
   if($preflightBlock -notmatch [regex]::Escape($required)){throw "Activation preflight missing invariant: $required"}
 }
 $armInPreflight=$preflightBlock.IndexOf('RgControlCommand.ArmPreflight')
@@ -415,6 +415,8 @@ $writableReject=$preflightBlock.IndexOf('if (writableView)',$receiveInPreflight)
 $holdInPreflight=$preflightBlock.IndexOf('Native.OpenPreflightHold(path)',$writableReject)
 $holdIdentity=$preflightBlock.IndexOf('FileIdentityStore.QueryHandleIdentity(hold)',$holdInPreflight)
 $identityCompare=$preflightBlock.IndexOf('if (!identity.Equals(holdIdentity))',$holdIdentity)
+$linkCountQuery=$preflightBlock.IndexOf('FileIdentityStore.QueryHandleLinkCount(hold)',$identityCompare)
+$linkCountReject=$preflightBlock.IndexOf('if (linkCount != 1)',$linkCountQuery)
 $activateInPreflight=$preflightBlock.IndexOf('RgControlCommand.ActivateGate')
 $disposeInPreflight=$preflightBlock.IndexOf('foreach (var handle in heldHandles) handle.Dispose()')
 if($armInPreflight -lt 0 -or $probeInPreflight -lt 0 -or $receiveInPreflight -lt 0 -or
@@ -426,6 +428,11 @@ if($writableReject -lt 0 -or $holdInPreflight -lt 0 -or $writableReject -gt $hol
 }
 if($holdIdentity -lt 0 -or $identityCompare -lt 0 -or $holdInPreflight -gt $holdIdentity -or $holdIdentity -gt $identityCompare){
   throw 'Activation must bind the share-sensitive hold to the exact kernel-attested FILE_ID_INFO.'
+}
+if($linkCountQuery -lt 0 -or $linkCountReject -lt 0 -or
+   $identityCompare -gt $linkCountQuery -or $linkCountQuery -gt $linkCountReject -or
+   $linkCountReject -gt $activateInPreflight){
+  throw 'Activation must reject multi-linked regular files on the exact frozen handle before kernel activation.'
 }
 if($activateInPreflight -lt 0 -or $disposeInPreflight -lt 0 -or $holdInPreflight -gt $activateInPreflight -or $activateInPreflight -gt $disposeInPreflight){
   throw 'Activation must occur while share-sensitive file/directory handles are still held.'

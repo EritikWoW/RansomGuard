@@ -56,6 +56,11 @@ foreach($required in @(
     "'sameRootReconnectActivated'",
     "'sameRootMutationAllowed'",
     "'gracefulReleaseSucceeded'",
+    "'scopeAmbiguityDeniedMutation'",
+    "'scopeAmbiguityPreservedTargetHash'",
+    "'crossBoundaryRenameDenied'",
+    "'crossBoundaryRenameSourcePreserved'",
+    "'crossBoundaryRenameDestinationAbsent'",
     'Runtime result schema must be 2',
     'Runtime result invariant',
     'Runtime cleanup reported an error',
@@ -128,6 +133,14 @@ foreach($required in @(
     'sameRootReconnectActivated',
     'sameRootMutationAllowed',
     'gracefulReleaseSucceeded',
+    '--scope-ambiguity-pid',
+    'LAB scope ambiguity\s+: ARMED',
+    'scopeAmbiguityDeniedMutation',
+    'scopeAmbiguityPreservedTargetHash',
+    'crossBoundaryRenameDenied',
+    'crossBoundaryRenameSourcePreserved',
+    'crossBoundaryRenameDestinationAbsent',
+    'Outside-to-inside RENAME unexpectedly bypassed protected destination scope.',
     '--shutdown-file',
     'Kernel gate graceful deactivation: MAINTENANCE authorized',
     '.VersionInfo.FileVersion',
@@ -375,4 +388,4 @@ foreach($required in @('where.exe pwsh.exe','set "PS_EXE=pwsh.exe"','powershell.
     if($buildWrapperText -notmatch [regex]::Escape($required)){throw "Windows build wrapper missing PowerShell host invariant: $required"}
 }
 
-Write-Host 'Runtime VM harness source gate PASSED: manual self-hosted VM only, exact-commit signed driver provenance, protocol-v16 GateClient-loss fail-safe/reconnect/release coverage, mapping and containment coverage, no boot/trust/Defender mutation.' -ForegroundColor Green
+Write-Host 'Runtime VM harness source gate PASSED: manual self-hosted VM only, exact-commit signed driver provenance, protocol-v17 protected-volume scope plus GateClient-loss fail-safe/reconnect/release coverage, mapping and containment coverage, no boot/trust/Defender mutation.' -ForegroundColor Green

@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 
 const string PortName = @"\RansomGuardMinifilterPort";
-const int ProtocolVersion = 16;
+const int ProtocolVersion = 17;
 
 var options = Options.Parse(args);
 var productVersion = System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version?.ToString() ?? "unknown";
@@ -280,7 +280,7 @@ struct RgConnectContext
 {
     public uint ProtocolVersion, ClientMode;
     public ulong ClientProcessId;
-    public uint GateRootLengthBytes, Reserved;
+    public uint GateRootLengthBytes, GateVolumeLengthBytes;
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string GateRoot;
 }
 
@@ -304,7 +304,7 @@ struct RgEvent
 
 static class Native
 {
-    private const uint WireProtocolVersion = 16;
+    private const uint WireProtocolVersion = 17;
 
     [DllImport("fltlib.dll", CharSet = CharSet.Unicode)]
     private static extern int FilterConnectCommunicationPort(string lpPortName, uint dwOptions, IntPtr lpContext,
@@ -325,6 +325,7 @@ static class Native
             ClientMode = 1,
             ClientProcessId = processId,
             GateRootLengthBytes = 0,
+            GateVolumeLengthBytes = 0,
             GateRoot = string.Empty
         };
         var size = Marshal.SizeOf<RgConnectContext>();

@@ -1,4 +1,4 @@
-# RansomGuard 0.7.32.0
+# RansomGuard 0.7.33.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
@@ -6,7 +6,7 @@ and recover data through rollback plus adaptive crypto analysis.
 
 ## Core preservation milestone
 
-0.7.32.0 introduces protocol v16 and the first GateClient-loss fail-safe state for the Engineering LAB minifilter. After a gate has been activated, an unexpected GateClient disconnect retains the exact protected root and enters kernel `DEGRADED_PROTECTED` before publishing client loss. Resolved ordinary user-mode mutation-capable CREATE, non-paging WRITE, RENAME, DELETE and TRUNCATE operations in that retained root are denied until a protocol-v16 GateClient reconnects to the same root and reruns activation preflight. A clean transaction-complete GateClient shutdown uses an explicit whole-gate `DeactivateGate` maintenance transition before closing the port. This does not enable the driver in the normal product, does not close unresolved-path fail-open behavior, and does not claim protection from kernel-mode or Administrator/SYSTEM tampering.
+0.7.33.0 introduces protocol v17 and a protected-volume scope boundary for the Engineering LAB minifilter. GateClient binds the exact NT volume that contains the negotiated root; destructive ordinary user-mode operations whose normalized name cannot be classified now fail closed when their callback is on that bound volume, instead of silently treating "unknown" as "outside". RENAME scope is classified from both source and destination, so an outside-to-inside rename cannot bypass the root gate. Proven out-of-root operations and ambiguous callbacks on other volumes remain outside this gate, limiting availability impact. Protocol-v16 GateClient-loss protection remains intact: unexpected disconnect retains the exact root/volume and enters `DEGRADED_PROTECTED`, while a clean transaction-complete shutdown uses explicit `DeactivateGate`. The normal product remains AuditOnly; kernel-mode requestors, paging/section caveats and Administrator/SYSTEM tamper remain outside the current guarantee.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 
@@ -25,7 +25,7 @@ undone by truncating the recovered copy to that length.
 Rename, delete-disposition and explicit truncate/allocation-length operations remain on the conservative
 **full-file pre-image** path for now.
 
-The engineering minifilter protocol is now v16 and reports CREATE, WRITE, RENAME, DELETE and TRUNCATE-class metadata operations; v16 also carries explicit protection-health state and graceful whole-gate deactivation. DELETE can emit correlated no-reply `DeleteDispositionResult` and `DeleteFinalized` events without changing the fixed RG_EVENT wire size. A successful disposition result proves only that the filesystem accepted the disposition request; exact-handle cleanup is recorded separately and is not treated as proof that the pathname has disappeared.
+The engineering minifilter protocol is now v17 and reports CREATE, WRITE, RENAME, DELETE and TRUNCATE-class metadata operations; v17 retains the v16 protection-health/deactivation state machine and additionally binds the protected NT volume for ambiguous-scope fail-safe classification. DELETE can emit correlated no-reply `DeleteDispositionResult` and `DeleteFinalized` events without changing the fixed RG_EVENT wire size. A successful disposition result proves only that the filesystem accepted the disposition request; exact-handle cleanup is recorded separately and is not treated as proof that the pathname has disappeared.
 
 For CREATE, the gate distinguishes Windows create dispositions instead of treating every open as destructive:
 existing `FILE_SUPERSEDE`, `FILE_OVERWRITE` and `FILE_OVERWRITE_IF` require a durable full pre-image;
@@ -149,7 +149,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.7.32.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.7.33.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 Manual disposable-VM runtime workflows:
 

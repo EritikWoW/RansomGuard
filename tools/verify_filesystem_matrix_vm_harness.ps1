@@ -75,6 +75,11 @@ foreach($required in @(
     '"CreateResult.*" + [regex]::Escape($truncateTarget)',
     '"CreateResult.*" + [regex]::Escape($deleteTarget)',
     'map-write',
+    'fltmc attach RansomGuardMinifilter $otherVolume',
+    '--scope-ambiguity-pid',
+    'LAB scope ambiguity\s+: ARMED',
+    'unrelatedVolumeAmbiguityAllowed',
+    'unrelated-volume ambiguity was not allowed',
     'create-completion-journal.jsonl',
     'rename-completion-journal.jsonl',
     'truncate-completion-journal.jsonl',
@@ -200,6 +205,8 @@ foreach($required in @(
     'run_filesystem_matrix_lab.ps1',
     'filesystem-matrix-result.json',
     "'ntfsAttempted','ntfsSupported','ntfsPassed','refsAttempted','cleanupPassed','passed'",
+    '$ntfsScenarios[0].unrelatedVolumeAmbiguityAllowed',
+    'forced ambiguity on an attached unrelated volume remains outside the protected-volume gate',
     'refsUnsupportedReason',
     'ransomguard-filesystem-matrix-evidence',
     'Upload filesystem matrix evidence',
@@ -222,4 +229,4 @@ if($build -notmatch [regex]::Escape('verify_filesystem_matrix_vm_harness.ps1')){
     throw 'Windows source gates must execute verify_filesystem_matrix_vm_harness.ps1.'
 }
 
-Write-Host 'Filesystem matrix source gate PASSED: disposable VHD only, NTFS required, ReFS explicit supported/unsupported state, CREATE/RENAME/TRUNCATE/DELETE/mapped-I/O coverage, no host-disk or boot/security mutation.' -ForegroundColor Green
+Write-Host 'Filesystem matrix source gate PASSED: disposable VHD only, NTFS required, ReFS explicit supported/unsupported state, CREATE/RENAME/TRUNCATE/DELETE/mapped-I/O coverage, plus attached unrelated-volume ambiguity isolation; no host-disk formatting/deletion or boot/security mutation.' -ForegroundColor Green

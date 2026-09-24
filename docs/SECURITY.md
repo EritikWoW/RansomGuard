@@ -6,7 +6,7 @@ Read [THREAT_MODEL.md](THREAT_MODEL.md) first. It is the canonical statement of 
 
 The normal RansomGuard product is AuditOnly for ordinary applications. It does not install or load the Engineering LAB minifilter and does not claim production ransomware blocking.
 
-The Engineering LAB minifilter is restricted to disposable test environments and explicit test data. Its current user/kernel wire contract is protocol v16. Its altitude is an unassigned LAB placeholder and its test-signing path is not a production trust anchor.
+The Engineering LAB minifilter is restricted to disposable test environments and explicit test data. Its current user/kernel wire contract is protocol v17. Protocol v17 binds the negotiated root to an exact Filter Manager volume object so destructive user-mode name-query ambiguity can fail safe only on that protected volume. Its altitude is an unassigned LAB placeholder and its test-signing path is not a production trust anchor.
 
 No claim is made that the current product is tamper-proof against a local administrator, a malicious kernel component/BYOVD path, physical/boot compromise or a compromised signing/build system.
 
@@ -38,17 +38,18 @@ Queues/windows are intentionally bounded. Event loss, queue drops, stale evidenc
 
 ## LAB preservation boundary
 
-For resolved, in-scope ordinary user-mode mutations while the LAB gate is connected and activated, destructive I/O follows preserve-before-allow and failures in preservation/admission/gate handling fail closed.
+For ordinary user-mode destructive mutations while the LAB gate is connected and activated, resolved in-root operations follow preserve-before-allow. If the default normalized-name query is unavailable, the driver first retries from Filter Manager's name cache; a scope that still cannot be classified on the exact bound protected volume is treated as ambiguous and fails closed in kernel. Proven out-of-root operations remain outside the gate.
 
 The current LAB communication path has one Filter Manager client connection and one synchronous GateClient handle. Multiple kernel requests can encounter the bounded admission path, while user-mode reply-required preservation is serialized so each `FilterReplyMessage` completes before the next blocking receive. Configurable message slots bound no-reply evidence/completion work; they are not a claim of parallel preservation decisions.
 
 Important exceptions are explicit in THREAT_MODEL.md:
 
-- unresolved/name-query-failed scope classification currently fails open;
-- out-of-root operations are outside the negotiated gate;
+- a pathname proven outside the negotiated root remains outside the gate;
+- path/name ambiguity is fail-closed only for destructive ordinary user-mode operations whose callback is on the exact bound protected volume; ambiguity on another volume remains outside this root's gate;
+- GateClient's own process identity is excluded from ambiguous-volume denial so the rollback store cannot self-deadlock the policy channel;
 - kernel-mode requestors are outside the ordinary observation path;
 - paging writes are non-blocking evidence and rely on the conservative pre-preserved CREATE baseline;
-- driver presence alone is not protection before a LAB session has activated; after protocol-v16 activation, unexpected GateClient loss retains that exact root in DegradedProtected and denies resolved ordinary user-mode destructive operations, but unresolved paths, paging/section caveats, kernel-mode requestors and privileged unload/tamper remain outside that guarantee.
+- driver presence alone is not protection before a LAB session has activated; after activation, unexpected GateClient loss retains the exact root and protected volume in DegradedProtected, but paging/section caveats, kernel-mode requestors and privileged unload/tamper remain outside that guarantee.
 
 Do not deploy the LAB blocking path on primary workstations or real user data.
 
@@ -56,7 +57,7 @@ The 0.7.30 qualification campaign materially increases confidence in this LAB bo
 
 0.7.31 sustained mixed-workload qualification does not widen the security boundary, but it now has exact-head disposable-VM evidence: PR #42 head `184566aa4269d28bf3f7c32aeb9035ceaa8dd25c`, run `35986484214`, completed 60/60 waves (300 mixed mutations), retained healthy gate/workers, re-proved 16-to-8 bounded admission overflow, and finished with correlated/pending-free transaction and mapped-write evidence plus cleanup.
 
-0.7.32 introduces protocol v16 and an explicit GateClient-loss fail-safe foundation. After activation, unexpected port loss retains the exact protected root and enters `DegradedProtected`; resolved ordinary user-mode destructive CREATE/non-paging WRITE/RENAME/DELETE/TRUNCATE operations are denied without user mode. Same-root reconnect returns to activation preflight. A clean transaction-complete shutdown uses explicit whole-gate `DeactivateGate`: the kernel first closes new gate and queued-evidence admission in Maintenance, denies replies racing that transition, and keeps release unauthorized while gate sends or queued evidence are outstanding. If the client dies during that drain, the root still falls back to `DegradedProtected`; only a fully drained deactivation authorizes root release on port close. This code path is not yet a runtime-qualified production guarantee: unresolved scope remains fail-open, paging/section semantics remain baseline/evidence based, kernel-mode requestors remain excluded, and Administrator/SYSTEM can still control the current LAB driver lifecycle.
+0.7.32 introduced protocol v16 and the GateClient-loss fail-safe foundation. 0.7.33 advances the wire contract to protocol v17 and binds the protected root to an exact referenced Filter Manager volume. Resolved source/destination scope is classified against the root; unresolved or unknown destructive ordinary user-mode scope on that volume fails closed, while a callback on another volume does not inherit the protected root's denial policy. RENAME evaluates both source and destination, closing the outside-to-inside bypass. The v16 disconnect state machine is retained: unexpected port loss keeps root plus volume in `DegradedProtected`, exact-root/same-volume reconnect reruns activation preflight, and clean `DeactivateGate` release occurs only after gate/evidence admission is drained. This remains an Engineering LAB guarantee, not production Enforce: paging/section semantics remain baseline/evidence based, kernel-mode requestors remain excluded, and Administrator/SYSTEM can still control the current LAB driver lifecycle.
 
 ## Recovery boundary
 

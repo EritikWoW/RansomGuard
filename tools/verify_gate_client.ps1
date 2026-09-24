@@ -63,7 +63,10 @@ foreach($required in @(
   'CreateGatePolicy.TryParseDisposition',
   '(ev.Flags >> 24) & 0xFF',
   'ev.Flags & 0x00FFFFFF',
-  'ProtocolVersion = 16',
+  'ProtocolVersion = 17',
+  'DevicePathResolver.ToNtScope(options.Root)',
+  'GateVolumeLengthBytes = checked((uint)(ntVolume.Length * 2))',
+  'public uint GateRootLengthBytes, GateVolumeLengthBytes;',
   'CreatePreservationAction.CaptureExistingPreimage',
   'CreatePreservationAction.RecordOriginallyAbsent',
   'CreatePreservationAction.DenyUnsupported',
@@ -118,6 +121,10 @@ foreach($required in @(
   'RgControlCommand.ActivateGate',
   'RgControlCommand.ActivateAndContainProcess',
   'RgControlCommand.DeactivateGate',
+  'RgControlCommand.ArmScopeAmbiguity',
+  '--scope-ambiguity-pid',
+  'LAB scope ambiguity : ARMED for exact kernel process pid=',
+  'ScopeAmbiguityPid',
   'RgProtectionState.Protected',
   'RgProtectionState.Maintenance',
   'ProtectionState',
@@ -504,11 +511,15 @@ if($containOption -lt 0 -or $containRejectSystem -lt 0 -or $containRejectSelf -l
 $transitionOption=$text.IndexOf('case "--contain-after-pid"')
 $transitionRejectSystem=$text.IndexOf('parsedTransitionPid <= 4',$transitionOption)
 $transitionRejectSelf=$text.IndexOf('parsedTransitionPid == Environment.ProcessId',$transitionOption)
-$transitionMutualExclusion=$text.IndexOf('--contain-pid and --contain-after-pid are mutually exclusive.')
+$transitionMutualExclusion=$text.IndexOf('--contain-pid, --scope-ambiguity-pid and --contain-after-pid are mutually exclusive.')
 $transitionThresholdBinding=$text.IndexOf('Containment thresholds require --contain-after-pid.')
+$scopeOption=$text.IndexOf('case "--scope-ambiguity-pid"')
+$scopeRejectSystem=$text.IndexOf('parsedScopePid <= 4',$scopeOption)
+$scopeRejectSelf=$text.IndexOf('parsedScopePid == Environment.ProcessId',$scopeOption)
 if($transitionOption -lt 0 -or $transitionRejectSystem -lt 0 -or $transitionRejectSelf -lt 0 -or
+   $scopeOption -lt 0 -or $scopeRejectSystem -lt 0 -or $scopeRejectSelf -lt 0 -or
    $transitionMutualExclusion -lt 0 -or $transitionThresholdBinding -lt 0){
-  throw 'Event-bound containment CLI must be explicit, single-target and threshold-bounded.'
+  throw 'Containment/scope-probe CLI must be explicit, single-target and threshold-bounded.'
 }
 
 $triggerStart=$text.IndexOf('sealed class LabContainmentTrigger')
@@ -620,4 +631,4 @@ if($restartBlock -notmatch [regex]::Escape('PathPolicy.Under(intent.OriginalPath
   throw 'Restart reconciliation must remain scoped to the explicitly selected LAB root.'
 }
 
-Write-Host 'LAB gate client source check PASSED: protocol-v16 graceful deactivation plus disconnect fail-safe state, DELETE/TRUNCATE reconciliation, event-bound containment, bounded workers, durable identity/restart evidence, no destructive/process-control APIs.'
+Write-Host 'LAB gate client source check PASSED: protocol-v17 protected-volume scope plus graceful deactivation/disconnect fail-safe state, DELETE/TRUNCATE reconciliation, event-bound containment, bounded workers, durable identity/restart evidence, no destructive/process-control APIs.'

@@ -9,6 +9,7 @@ C_ASSERT(sizeof(RG_CONTROL_REPLY) == 32);
 static PFLT_FILTER gFilter = NULL;
 static PFLT_PORT gServerPort = NULL;
 static PFLT_PORT gClientPort = NULL;
+static PFLT_VOLUME gGateVolume = NULL;
 static FAST_MUTEX gPortMutex;
 static EX_RUNDOWN_REF gRundown;
 static EX_RUNDOWN_REF gPortRundown;
@@ -20,6 +21,8 @@ static volatile LONG gClientMode = 0;
 static volatile LONG64 gClientProcessId = 0;
 static PEPROCESS gContainedProcess = NULL;
 static volatile LONG64 gContainedProcessId = 0;
+static PEPROCESS gScopeAmbiguityProcess = NULL;
+static volatile LONG64 gScopeAmbiguityProcessId = 0;
 static volatile LONG gGateActivated = 0;
 static volatile LONG gActivationHazard = 0;
 static volatile LONG gPreflightProbeArmed = 0;
@@ -32,6 +35,13 @@ static volatile LONG gDropped = 0;
 static volatile LONG64 gSequence = 0;
 static WCHAR gGateRoot[RG_GATE_ROOT_CHARS];
 static USHORT gGateRootLengthBytes = 0;
+static USHORT gGateVolumeLengthBytes = 0;
+
+typedef enum _RG_SCOPE_CLASSIFICATION {
+    RgScopeOutside = 0,
+    RgScopeInside = 1,
+    RgScopeAmbiguous = 2
+} RG_SCOPE_CLASSIFICATION;
 
 static VOID RgQueueEvent(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects,
                          _In_ RG_EVENT_TYPE EventType, _In_ ULONG FileInformationClass);
@@ -70,14 +80,32 @@ static NTSTATUS RgMessage(_In_opt_ PVOID ConnectionCookie,
 static NTSTATUS RgPopulateEvent(_Out_ PRG_EVENT Event, _Inout_ PFLT_CALLBACK_DATA Data,
                                 _In_ PCFLT_RELATED_OBJECTS FltObjects,
                                 _In_ RG_EVENT_TYPE EventType, _In_ ULONG FileInformationClass);
+static NTSTATUS RgGetNormalizedNameInformation(
+    _Inout_ PFLT_CALLBACK_DATA Data,
+    _Outptr_ PFLT_FILE_NAME_INFORMATION *NameInfo);
+static NTSTATUS RgGetNormalizedDestinationNameInformation(
+    _In_ PCFLT_RELATED_OBJECTS FltObjects,
+    _In_opt_ HANDLE RootDirectory,
+    _In_reads_bytes_(FileNameLength) PWSTR FileName,
+    _In_ ULONG FileNameLength,
+    _Outptr_ PFLT_FILE_NAME_INFORMATION *NameInfo);
 static NTSTATUS RgReadDeleteDispositionFlags(_In_ PFLT_CALLBACK_DATA Data, _Out_ PULONG Flags);
 static VOID RgPopulateRenameDestination(_Inout_ PRG_EVENT Event, _Inout_ PFLT_CALLBACK_DATA Data,
                                         _In_ PCFLT_RELATED_OBJECTS FltObjects);
+static BOOLEAN RgPathMatchesGateRoot(_In_ ULONG PathStatus, _In_z_ const WCHAR *Path);
 static BOOLEAN RgEventPathMatchesGateRoot(_In_ const RG_EVENT *Event);
-static BOOLEAN RgEventIsInsideGateRoot(_In_ const RG_EVENT *Event);
+static BOOLEAN RgEventDestinationPathMatchesGateRoot(_In_ const RG_EVENT *Event);
+static BOOLEAN RgIsOnGateVolume(_In_ PCFLT_RELATED_OBJECTS FltObjects);
+static RG_SCOPE_CLASSIFICATION RgClassifyMutationScope(
+    _In_ const RG_EVENT *Event,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects);
 static BOOLEAN RgIsContainedRequestor(_In_ PFLT_CALLBACK_DATA Data);
 static BOOLEAN RgCreateMayMutate(_In_ const RG_EVENT *Event);
 static VOID RgClearContainedProcess(VOID);
+static VOID RgClearScopeAmbiguityProbe(VOID);
+static BOOLEAN RgInjectScopeAmbiguityProbe(
+    _In_ PFLT_CALLBACK_DATA Data,
+    _Inout_ PRG_EVENT Event);
 static BOOLEAN RgBindContainedRequestor(_In_ PFLT_CALLBACK_DATA Data,
                                         _In_ const RG_EVENT *Event,
                                         _Out_opt_ PULONG ErrorCode);
@@ -248,6 +276,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
     NTSTATUS status;
     LONG mode;
     BOOLEAN degraded;
+    RG_SCOPE_CLASSIFICATION scope;
     ULONG gateError = 0;
     ULONG gateDecision = RgGateDeny;
 
@@ -268,15 +297,8 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
     }
 
     status = RgPopulateEvent(&event, Data, FltObjects, RgEventCreate, 0);
-    if (!NT_SUCCESS(status)) {
-        return FLT_PREOP_SUCCESS_NO_CALLBACK;
-    }
-
-    if (degraded) {
-        if (!RgEventIsInsideGateRoot(&event) || !RgCreateMayMutate(&event)) {
-            return FLT_PREOP_SUCCESS_NO_CALLBACK;
-        }
-        return RgCompleteDenied(Data);
+    if (RgCreateMayMutate(&event)) {
+        (void)RgInjectScopeAmbiguityProbe(Data, &event);
     }
 
     if (InterlockedCompareExchange(&gGateActivated, 0, 0) == 0 &&
@@ -292,9 +314,23 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
         return FLT_PREOP_SUCCESS_WITH_CALLBACK;
     }
 
-    if (!RgEventIsInsideGateRoot(&event)) {
-        // LAB gate remains explicitly scoped. Unresolved/out-of-root CREATEs fail open.
+    scope = RgClassifyMutationScope(&event, FltObjects);
+    if (scope == RgScopeOutside) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+    if (scope == RgScopeAmbiguous) {
+        // Read-only opens cannot mutate protected content. Mutation-capable CREATEs with an
+        // unresolved normalized name fail closed only when the callback is on the bound gate volume.
+        return RgCreateMayMutate(&event)
+            ? RgCompleteDenied(Data)
+            : FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    if (degraded) {
+        if (!RgCreateMayMutate(&event)) {
+            return FLT_PREOP_SUCCESS_NO_CALLBACK;
+        }
+        return RgCompleteDenied(Data);
     }
 
     if (InterlockedCompareExchange(&gGateActivated, 0, 0) == 0) {
@@ -363,9 +399,9 @@ FLT_PREOP_CALLBACK_STATUS RgPreAcquireForSectionSynchronization(
 FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjects, PVOID *CompletionContext)
 {
     RG_EVENT event;
-    NTSTATUS status;
     LONG mode;
     BOOLEAN degraded;
+    RG_SCOPE_CLASSIFICATION scope;
     ULONG gateError = 0;
 
     UNREFERENCED_PARAMETER(CompletionContext);
@@ -390,10 +426,14 @@ FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJE
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    status = RgPopulateEvent(&event, Data, FltObjects, RgEventWrite, 0);
-    if (!NT_SUCCESS(status) || !RgEventIsInsideGateRoot(&event)) {
-        // LAB gate is intentionally scoped. Unresolved/out-of-root paths fail open rather than risking OS-wide I/O loss.
+    (void)RgPopulateEvent(&event, Data, FltObjects, RgEventWrite, 0);
+    (void)RgInjectScopeAmbiguityProbe(Data, &event);
+    scope = RgClassifyMutationScope(&event, FltObjects);
+    if (scope == RgScopeOutside) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+    if (scope == RgScopeAmbiguous) {
+        return RgCompleteDenied(Data);
     }
 
     if (degraded) {
@@ -424,6 +464,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
     NTSTATUS status;
     LONG mode;
     BOOLEAN degraded;
+    RG_SCOPE_CLASSIFICATION scope;
     ULONG gateError = 0;
     ULONG infoClass;
 
@@ -449,8 +490,13 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
     }
 
     status = RgPopulateEvent(&event, Data, FltObjects, eventType, infoClass);
-    if (!NT_SUCCESS(status) || !RgEventIsInsideGateRoot(&event)) {
+    (void)RgInjectScopeAmbiguityProbe(Data, &event);
+    scope = RgClassifyMutationScope(&event, FltObjects);
+    if (scope == RgScopeOutside) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+    if (scope == RgScopeAmbiguous) {
+        return RgCompleteDenied(Data);
     }
 
     if (degraded) {
@@ -494,6 +540,78 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
     }
 
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
+}
+
+static NTSTATUS RgGetNormalizedNameInformation(
+    PFLT_CALLBACK_DATA Data,
+    PFLT_FILE_NAME_INFORMATION *NameInfo)
+{
+    NTSTATUS status;
+
+    if (NameInfo == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    *NameInfo = NULL;
+
+    status = FltGetFileNameInformation(
+        Data,
+        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
+        NameInfo);
+    if (NT_SUCCESS(status) && *NameInfo != NULL) {
+        return status;
+    }
+    if (*NameInfo != NULL) {
+        FltReleaseFileNameInformation(*NameInfo);
+        *NameInfo = NULL;
+    }
+
+    // QUERY_DEFAULT refuses unsafe filesystem recursion outright. Before treating scope as
+    // ambiguous, still allow Filter Manager to satisfy the normalized name from its cache.
+    return FltGetFileNameInformation(
+        Data,
+        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_ALWAYS_ALLOW_CACHE_LOOKUP,
+        NameInfo);
+}
+
+static NTSTATUS RgGetNormalizedDestinationNameInformation(
+    PCFLT_RELATED_OBJECTS FltObjects,
+    HANDLE RootDirectory,
+    PWSTR FileName,
+    ULONG FileNameLength,
+    PFLT_FILE_NAME_INFORMATION *NameInfo)
+{
+    NTSTATUS status;
+
+    if (FltObjects == NULL || FltObjects->Instance == NULL || FltObjects->FileObject == NULL ||
+        FileName == NULL || FileNameLength == 0 || NameInfo == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    *NameInfo = NULL;
+
+    status = FltGetDestinationFileNameInformation(
+        FltObjects->Instance,
+        FltObjects->FileObject,
+        RootDirectory,
+        FileName,
+        FileNameLength,
+        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
+        NameInfo);
+    if (NT_SUCCESS(status) && *NameInfo != NULL) {
+        return status;
+    }
+    if (*NameInfo != NULL) {
+        FltReleaseFileNameInformation(*NameInfo);
+        *NameInfo = NULL;
+    }
+
+    return FltGetDestinationFileNameInformation(
+        FltObjects->Instance,
+        FltObjects->FileObject,
+        RootDirectory,
+        FileName,
+        FileNameLength,
+        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_ALWAYS_ALLOW_CACHE_LOOKUP,
+        NameInfo);
 }
 
 static NTSTATUS RgPopulateEvent(PRG_EVENT Event, PFLT_CALLBACK_DATA Data,
@@ -542,13 +660,14 @@ static NTSTATUS RgPopulateEvent(PRG_EVENT Event, PFLT_CALLBACK_DATA Data,
         }
     }
 
-    status = FltGetFileNameInformation(Data,
-        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
-        &nameInfo);
+    status = RgGetNormalizedNameInformation(Data, &nameInfo);
 
     if (!NT_SUCCESS(status) || nameInfo == NULL) {
         Event->PathStatus = RgPathQueryFailed;
-        return status;
+        if (EventType == RgEventRename) {
+            RgPopulateRenameDestination(Event, Data, FltObjects);
+        }
+        return NT_SUCCESS(status) ? STATUS_UNSUCCESSFUL : status;
     }
 
     status = FltParseFileNameInformation(nameInfo);
@@ -647,13 +766,11 @@ static VOID RgPopulateRenameDestination(PRG_EVENT Event, PFLT_CALLBACK_DATA Data
         Event->Flags = renameInfo->ReplaceIfExists ? 1u : 0u;
     }
 
-    status = FltGetDestinationFileNameInformation(
-        FltObjects->Instance,
-        FltObjects->FileObject,
+    status = RgGetNormalizedDestinationNameInformation(
+        FltObjects,
         renameInfo->RootDirectory,
         renameInfo->FileName,
         renameInfo->FileNameLength,
-        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
         &destinationInfo);
 
     if (!NT_SUCCESS(status) || destinationInfo == NULL) {
@@ -699,13 +816,11 @@ static NTSTATUS RgCreateRenamePostContext(PFLT_CALLBACK_DATA Data,
         return STATUS_INVALID_PARAMETER;
     }
 
-    status = FltGetDestinationFileNameInformation(
-        FltObjects->Instance,
-        FltObjects->FileObject,
+    status = RgGetNormalizedDestinationNameInformation(
+        FltObjects,
         renameInfo->RootDirectory,
         renameInfo->FileName,
         renameInfo->FileNameLength,
-        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
         &destinationInfo);
 
     if (!NT_SUCCESS(status) || destinationInfo == NULL) {
@@ -793,10 +908,7 @@ static NTSTATUS RgCreateCreatePostContext(PFLT_CALLBACK_DATA Data,
     NTSTATUS status;
 
     *PostContext = NULL;
-    status = FltGetFileNameInformation(
-        Data,
-        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
-        &nameInfo);
+    status = RgGetNormalizedNameInformation(Data, &nameInfo);
     if (!NT_SUCCESS(status) || nameInfo == NULL) {
         return NT_SUCCESS(status) ? STATUS_UNSUCCESSFUL : status;
     }
@@ -1485,17 +1597,18 @@ static FLT_POSTOP_CALLBACK_STATUS RgPostSetInformationSafe(PFLT_CALLBACK_DATA Da
     return FLT_POSTOP_FINISHED_PROCESSING;
 }
 
-static BOOLEAN RgEventPathMatchesGateRoot(const RG_EVENT *Event)
+static BOOLEAN RgPathMatchesGateRoot(ULONG PathStatus, const WCHAR *Path)
 {
     UNICODE_STRING eventPath;
     UNICODE_STRING root;
     BOOLEAN result = FALSE;
 
-    if (Event->PathStatus != RgPathResolved && Event->PathStatus != RgPathTruncated) {
+    if (Path == NULL ||
+        (PathStatus != RgPathResolved && PathStatus != RgPathTruncated)) {
         return FALSE;
     }
 
-    RtlInitUnicodeString(&eventPath, Event->Path);
+    RtlInitUnicodeString(&eventPath, Path);
 
     ExAcquireFastMutex(&gPortMutex);
     if (gGateRootLengthBytes != 0 &&
@@ -1510,7 +1623,7 @@ static BOOLEAN RgEventPathMatchesGateRoot(const RG_EVENT *Event)
             result = TRUE;
         } else if (eventPath.Length > root.Length && RtlPrefixUnicodeString(&root, &eventPath, TRUE)) {
             USHORT index = root.Length / sizeof(WCHAR);
-            if (Event->Path[index] == L'\\') {
+            if (Path[index] == L'\\') {
                 result = TRUE;
             }
         }
@@ -1519,16 +1632,79 @@ static BOOLEAN RgEventPathMatchesGateRoot(const RG_EVENT *Event)
     return result;
 }
 
-static BOOLEAN RgEventIsInsideGateRoot(const RG_EVENT *Event)
+static BOOLEAN RgEventPathMatchesGateRoot(const RG_EVENT *Event)
 {
-    ULONGLONG requestorPid;
+    return RgPathMatchesGateRoot(Event->PathStatus, Event->Path);
+}
 
-    requestorPid = Event->ProcessId;
-    if (requestorPid == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId, 0, 0)) {
+static BOOLEAN RgEventDestinationPathMatchesGateRoot(const RG_EVENT *Event)
+{
+    return RgPathMatchesGateRoot(Event->DestinationPathStatus, Event->DestinationPath);
+}
+
+static BOOLEAN RgIsOnGateVolume(PCFLT_RELATED_OBJECTS FltObjects)
+{
+    BOOLEAN result = FALSE;
+
+    if (FltObjects == NULL || FltObjects->Volume == NULL) {
         return FALSE;
     }
 
-    return RgEventPathMatchesGateRoot(Event);
+    ExAcquireFastMutex(&gPortMutex);
+    result = (gGateVolume != NULL && gGateVolume == FltObjects->Volume);
+    ExReleaseFastMutex(&gPortMutex);
+    return result;
+}
+
+static RG_SCOPE_CLASSIFICATION RgClassifyMutationScope(
+    const RG_EVENT *Event,
+    PCFLT_RELATED_OBJECTS FltObjects)
+{
+    RG_SCOPE_CLASSIFICATION sourceScope;
+    RG_SCOPE_CLASSIFICATION destinationScope;
+
+    if (Event == NULL) {
+        return RgScopeOutside;
+    }
+
+    // GateClient owns the rollback store and activation protocol. Never make its own volume I/O
+    // depend on the synchronous gate, even if a name query is temporarily unavailable.
+    if (Event->ProcessId != 0 &&
+        Event->ProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId, 0, 0)) {
+        return RgScopeOutside;
+    }
+
+    if (Event->PathStatus == RgPathResolved || Event->PathStatus == RgPathTruncated) {
+        sourceScope = RgEventPathMatchesGateRoot(Event) ? RgScopeInside : RgScopeOutside;
+    } else {
+        sourceScope = RgScopeAmbiguous;
+    }
+
+    if (Event->EventType == RgEventRename) {
+        if (Event->DestinationPathStatus == RgPathResolved ||
+            Event->DestinationPathStatus == RgPathTruncated) {
+            destinationScope = RgEventDestinationPathMatchesGateRoot(Event)
+                ? RgScopeInside
+                : RgScopeOutside;
+        } else {
+            destinationScope = RgScopeAmbiguous;
+        }
+
+        if (sourceScope == RgScopeInside || destinationScope == RgScopeInside) {
+            return RgScopeInside;
+        }
+        if (sourceScope == RgScopeOutside && destinationScope == RgScopeOutside) {
+            return RgScopeOutside;
+        }
+
+        return RgIsOnGateVolume(FltObjects) ? RgScopeAmbiguous : RgScopeOutside;
+    }
+
+    if (sourceScope == RgScopeAmbiguous) {
+        return RgIsOnGateVolume(FltObjects) ? RgScopeAmbiguous : RgScopeOutside;
+    }
+
+    return sourceScope;
 }
 
 static BOOLEAN RgIsContainedRequestor(PFLT_CALLBACK_DATA Data)
@@ -1591,6 +1767,59 @@ static VOID RgClearContainedProcess(VOID)
     if (previous != NULL) {
         ObDereferenceObject(previous);
     }
+}
+
+static VOID RgClearScopeAmbiguityProbe(VOID)
+{
+    PEPROCESS previous = NULL;
+
+    ExAcquireFastMutex(&gPortMutex);
+    previous = gScopeAmbiguityProcess;
+    gScopeAmbiguityProcess = NULL;
+    InterlockedExchange64(&gScopeAmbiguityProcessId, 0);
+    ExReleaseFastMutex(&gPortMutex);
+
+    if (previous != NULL) {
+        ObDereferenceObject(previous);
+    }
+}
+
+static BOOLEAN RgInjectScopeAmbiguityProbe(
+    PFLT_CALLBACK_DATA Data,
+    PRG_EVENT Event)
+{
+    PEPROCESS requestor;
+    PEPROCESS previous = NULL;
+    BOOLEAN inject = FALSE;
+
+    if (Data == NULL || Event == NULL) {
+        return FALSE;
+    }
+
+    requestor = FltGetRequestorProcess(Data);
+    if (requestor == NULL) {
+        return FALSE;
+    }
+
+    ExAcquireFastMutex(&gPortMutex);
+    if (gScopeAmbiguityProcess != NULL &&
+        gScopeAmbiguityProcess == requestor) {
+        previous = gScopeAmbiguityProcess;
+        gScopeAmbiguityProcess = NULL;
+        InterlockedExchange64(&gScopeAmbiguityProcessId, 0);
+        inject = TRUE;
+    }
+    ExReleaseFastMutex(&gPortMutex);
+
+    if (previous != NULL) {
+        ObDereferenceObject(previous);
+    }
+
+    if (inject) {
+        Event->PathStatus = RgPathQueryFailed;
+        Event->Path[0] = L'\0';
+    }
+    return inject;
 }
 
 static BOOLEAN RgBindContainedRequestor(PFLT_CALLBACK_DATA Data,
@@ -1903,6 +2132,11 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
     NTSTATUS status = STATUS_SUCCESS;
     ULONG rootBytes;
     ULONG rootChars;
+    ULONG volumeBytes;
+    ULONG volumeChars;
+    UNICODE_STRING volumeName;
+    PFLT_VOLUME candidateVolume = NULL;
+    PFLT_VOLUME releaseVolume = NULL;
 
     UNREFERENCED_PARAMETER(ServerPortCookie);
     *ConnectionPortCookie = NULL;
@@ -1918,16 +2152,26 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
     }
 
     rootBytes = context->GateRootLengthBytes;
-    if ((rootBytes % sizeof(WCHAR)) != 0 || rootBytes >= sizeof(context->GateRoot)) {
+    volumeBytes = context->GateVolumeLengthBytes;
+    if ((rootBytes % sizeof(WCHAR)) != 0 || rootBytes >= sizeof(context->GateRoot) ||
+        (volumeBytes % sizeof(WCHAR)) != 0 || volumeBytes >= sizeof(context->GateRoot)) {
         return STATUS_INVALID_PARAMETER;
     }
 
     if (context->ClientMode == RgClientLabGate) {
-        if (context->ClientProcessId == 0 || rootBytes < (4 * sizeof(WCHAR))) {
+        if (context->ClientProcessId == 0 ||
+            rootBytes < (4 * sizeof(WCHAR)) ||
+            volumeBytes < (4 * sizeof(WCHAR)) ||
+            volumeBytes > rootBytes) {
             return STATUS_INVALID_PARAMETER;
         }
+
         rootChars = rootBytes / sizeof(WCHAR);
+        volumeChars = volumeBytes / sizeof(WCHAR);
         if (context->GateRoot[0] != L'\\' || context->GateRoot[rootChars] != L'\0') {
+            return STATUS_INVALID_PARAMETER;
+        }
+        if (volumeBytes < rootBytes && context->GateRoot[volumeChars] != L'\\') {
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -1935,7 +2179,18 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
             rootChars--;
         }
         rootBytes = rootChars * sizeof(WCHAR);
-    } else if (rootBytes != 0) {
+        if (volumeBytes > rootBytes) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        volumeName.Buffer = context->GateRoot;
+        volumeName.Length = (USHORT)volumeBytes;
+        volumeName.MaximumLength = (USHORT)volumeBytes;
+        status = FltGetVolumeFromName(gFilter, &volumeName, &candidateVolume);
+        if (!NT_SUCCESS(status) || candidateVolume == NULL) {
+            return NT_SUCCESS(status) ? STATUS_FLT_VOLUME_NOT_FOUND : status;
+        }
+    } else if (rootBytes != 0 || volumeBytes != 0) {
         return STATUS_INVALID_PARAMETER;
     }
 
@@ -1946,8 +2201,12 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
     } else if (InterlockedCompareExchange(&gProtectionRequired, 0, 0) != 0 &&
                (context->ClientMode != RgClientLabGate ||
                 gGateRootLengthBytes != (USHORT)rootBytes ||
+                gGateVolumeLengthBytes != (USHORT)volumeBytes ||
+                gGateVolume == NULL ||
+                gGateVolume != candidateVolume ||
                 RtlCompareMemory(gGateRoot, context->GateRoot, rootBytes) != rootBytes)) {
-        // A disconnected protected session may reconnect only to the exact retained root.
+        // A disconnected protected session may reconnect only to the exact retained root
+        // on the same referenced Filter Manager volume object.
         status = STATUS_ACCESS_DENIED;
     } else {
         if (InterlockedExchange(&gPortRundownCompleted, 0) != 0) {
@@ -1955,6 +2214,9 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
         }
 
         if (InterlockedCompareExchange(&gProtectionRequired, 0, 0) == 0) {
+            releaseVolume = gGateVolume;
+            gGateVolume = NULL;
+            gGateVolumeLengthBytes = 0;
             RtlZeroMemory(gGateRoot, sizeof(gGateRoot));
             gGateRootLengthBytes = 0;
         }
@@ -1973,6 +2235,9 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
             RtlCopyMemory(gGateRoot, context->GateRoot, rootBytes);
             gGateRootLengthBytes = (USHORT)rootBytes;
             gGateRoot[rootBytes / sizeof(WCHAR)] = L'\0';
+            gGateVolume = candidateVolume;
+            candidateVolume = NULL;
+            gGateVolumeLengthBytes = (USHORT)volumeBytes;
         }
 
         // On degraded reconnect publish the live client before clearing the fail-safe latch,
@@ -1981,6 +2246,13 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
         InterlockedExchange(&gDegradedProtected, 0);
     }
     ExReleaseFastMutex(&gPortMutex);
+
+    if (candidateVolume != NULL) {
+        FltObjectDereference(candidateVolume);
+    }
+    if (releaseVolume != NULL) {
+        FltObjectDereference(releaseVolume);
+    }
     return status;
 }
 
@@ -2079,6 +2351,35 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
                 ExReleaseFastMutex(&gPortMutex);
             }
         }
+    } else if (request->Command == RgControlArmScopeAmbiguity) {
+        if (request->TargetProcessId <= 4 ||
+            request->TargetProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId, 0, 0) ||
+            (ULONGLONG)(ULONG_PTR)request->TargetProcessId != request->TargetProcessId) {
+            status = STATUS_INVALID_PARAMETER;
+        } else if (InterlockedCompareExchange(&gGateActivated, 0, 0) == 0 ||
+                   InterlockedCompareExchange(&gProtectionRequired, 0, 0) == 0 ||
+                   InterlockedCompareExchange(&gDegradedProtected, 0, 0) != 0 ||
+                   InterlockedCompareExchange(&gMaintenanceRequested, 0, 0) != 0) {
+            status = STATUS_INVALID_DEVICE_STATE;
+        } else {
+            status = PsLookupProcessByProcessId(
+                (HANDLE)(ULONG_PTR)request->TargetProcessId,
+                &targetProcess);
+            if (NT_SUCCESS(status)) {
+                ExAcquireFastMutex(&gPortMutex);
+                if (gScopeAmbiguityProcess != NULL || gClientPort == NULL) {
+                    status = STATUS_DEVICE_BUSY;
+                } else {
+                    gScopeAmbiguityProcess = targetProcess;
+                    targetProcess = NULL;
+                    InterlockedExchange64(
+                        &gScopeAmbiguityProcessId,
+                        (LONG64)request->TargetProcessId);
+                    status = STATUS_SUCCESS;
+                }
+                ExReleaseFastMutex(&gPortMutex);
+            }
+        }
     } else if (request->Command == RgControlDeactivateGate) {
         if (request->TargetProcessId != 0) {
             status = STATUS_INVALID_PARAMETER;
@@ -2095,6 +2396,7 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
                 InterlockedCompareExchange(&gPending, 0, 0) != 0) {
                 status = STATUS_DEVICE_BUSY;
             } else {
+                RgClearScopeAmbiguityProbe();
                 RgClearContainedProcess();
                 InterlockedExchange(&gGateActivated, 0);
                 InterlockedExchange(&gProtectionRequired, 0);
@@ -2125,12 +2427,14 @@ static VOID RgDisconnect(PVOID ConnectionCookie)
 {
     LONG protectionRequired;
     LONG gracefulDisconnect;
+    PFLT_VOLUME releaseVolume = NULL;
 
     UNREFERENCED_PARAMETER(ConnectionCookie);
 
     protectionRequired = InterlockedCompareExchange(&gProtectionRequired, 0, 0);
     gracefulDisconnect = InterlockedCompareExchange(&gGracefulDisconnectAuthorized, 0, 0);
 
+    RgClearScopeAmbiguityProbe();
     RgClearContainedProcess();
 
     ExAcquireFastMutex(&gPortMutex);
@@ -2148,11 +2452,15 @@ static VOID RgDisconnect(PVOID ConnectionCookie)
     InterlockedExchange(&gPreflightProbeArmed, 0);
 
     if (protectionRequired != 0 && gracefulDisconnect == 0) {
-        // Keep the negotiated root and fail safe for resolved user-mode mutations.
-        // A replacement v16 GateClient may reconnect only to this exact root and must rerun preflight.
+        // Keep the negotiated root plus protected-volume reference and fail safe for
+        // resolved in-root or ambiguous protected-volume destructive user-mode mutations.
+        // A replacement v17 GateClient may reconnect only to this exact root/volume and rerun preflight.
     } else {
         InterlockedExchange(&gProtectionRequired, 0);
         InterlockedExchange(&gDegradedProtected, 0);
+        releaseVolume = gGateVolume;
+        gGateVolume = NULL;
+        gGateVolumeLengthBytes = 0;
         gGateRootLengthBytes = 0;
         RtlSecureZeroMemory(gGateRoot, sizeof(gGateRoot));
     }
@@ -2165,6 +2473,9 @@ static VOID RgDisconnect(PVOID ConnectionCookie)
     ExReleaseFastMutex(&gPortMutex);
 
     RgWaitForPortUsers();
+    if (releaseVolume != NULL) {
+        FltObjectDereference(releaseVolume);
+    }
 }
 
 NTSTATUS RgInstanceSetup(PCFLT_RELATED_OBJECTS FltObjects, FLT_INSTANCE_SETUP_FLAGS Flags,
@@ -2187,6 +2498,8 @@ NTSTATUS RgInstanceSetup(PCFLT_RELATED_OBJECTS FltObjects, FLT_INSTANCE_SETUP_FL
 
 NTSTATUS RgUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
 {
+    PFLT_VOLUME releaseVolume = NULL;
+
     UNREFERENCED_PARAMETER(Flags);
     InterlockedExchange(&gUnloading, 1);
     InterlockedExchange(&gClientConnected, 0);
@@ -2195,6 +2508,7 @@ NTSTATUS RgUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
     InterlockedExchange(&gDegradedProtected, 0);
     InterlockedExchange(&gMaintenanceRequested, 0);
     InterlockedExchange(&gGracefulDisconnectAuthorized, 0);
+    RgClearScopeAmbiguityProbe();
     RgClearContainedProcess();
 
     if (gServerPort != NULL) {
@@ -2203,11 +2517,19 @@ NTSTATUS RgUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
     }
 
     ExAcquireFastMutex(&gPortMutex);
+    releaseVolume = gGateVolume;
+    gGateVolume = NULL;
+    gGateVolumeLengthBytes = 0;
+    gGateRootLengthBytes = 0;
+    RtlSecureZeroMemory(gGateRoot, sizeof(gGateRoot));
     if (gClientPort != NULL) {
         FltCloseClientPort(gFilter, &gClientPort);
     }
     ExReleaseFastMutex(&gPortMutex);
     RgWaitForPortUsers();
+    if (releaseVolume != NULL) {
+        FltObjectDereference(releaseVolume);
+    }
 
     ExWaitForRundownProtectionRelease(&gRundown);
     if (gFilter != NULL) {

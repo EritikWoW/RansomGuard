@@ -251,3 +251,15 @@ GateClient source checks require lifecycle/transaction cleanliness before `Deact
 
 These source checks are not sufficient runtime evidence. Before 0.7.32 is merged as a qualified milestone, a disposable-VM exact-head campaign must activate a protected root, terminate GateClient abruptly, prove resolved in-root destructive operations fail with access denial while the client is absent, prove out-of-root/read-only behavior is not converted into a root-wide OS denial, reconnect protocol v16 to the same retained root and rerun preflight, then perform a clean explicit deactivation and prove ordinary mutation succeeds only after authorized release. The campaign must also reject a wrong-root reconnect while protection is retained. Paging/section and unresolved-name behavior remain the separately documented boundary rather than being silently broadened by this campaign.
 
+
+
+## 0.7.33 protected-volume scope qualification
+
+Protocol v17 keeps the fixed connect-context size but binds the negotiated LAB root to the exact local Filter Manager volume object. Source gates require the connection to resolve that volume through `FltGetVolumeFromName`, retain the rundown reference through Protected/DegradedProtected, and release it on authorized disconnect or unload.
+
+Runtime qualification for this milestone must add two security-focused cases before merge:
+
+- an outside-to-inside RENAME must not bypass root scope; it must be denied unless a future reviewed cross-boundary preservation model is implemented;
+- a deterministic LAB-only ambiguity probe must make the next ordinary user-mode destructive request appear name-unresolved after the callback volume is known, proving that the protected-volume request is denied while an operation on another volume is not accidentally covered by that root.
+
+The existing 0.7.32 GateClient-loss/reconnect/Maintenance scenarios, NTFS filesystem matrix, containment, mapped-write baseline/evidence and cleanup invariants remain mandatory regressions. Kernel-mode requestors and paging/section synchronous enforcement are not added by this milestone.

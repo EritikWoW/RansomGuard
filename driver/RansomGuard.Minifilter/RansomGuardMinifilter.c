@@ -18,6 +18,7 @@ static volatile LONG gGateInFlight = 0;
 static volatile LONG gUnloading = 0;
 static volatile LONG gClientConnected = 0;
 static volatile LONG gClientMode = 0;
+static volatile LONG gProtectedClientMode = 0;
 static volatile LONG64 gClientProcessId = 0;
 static PEPROCESS gContainedProcess = NULL;
 static volatile LONG64 gContainedProcessId = 0;
@@ -117,6 +118,7 @@ static BOOLEAN RgAcquireClientPort(_In_ LONG ExpectedMode);
 static VOID RgReleaseClientPort(VOID);
 static VOID RgWaitForPortUsers(VOID);
 static LONG RgCurrentClientMode(VOID);
+static BOOLEAN RgIsGateClientMode(_In_ LONG Mode);
 static ULONG RgCurrentProtectionState(VOID);
 static BOOLEAN RgIsDegradedProtected(VOID);
 static BOOLEAN RgIsPagingWrite(_In_ PFLT_CALLBACK_DATA Data);
@@ -226,6 +228,11 @@ static LONG RgCurrentClientMode(VOID)
     return InterlockedCompareExchange(&gClientMode, 0, 0);
 }
 
+static BOOLEAN RgIsGateClientMode(LONG Mode)
+{
+    return Mode == RgClientLabGate || Mode == RgClientProductionGate;
+}
+
 static BOOLEAN RgIsDegradedProtected(VOID)
 {
     return InterlockedCompareExchange(&gDegradedProtected, 0, 0) != 0;
@@ -243,7 +250,7 @@ static ULONG RgCurrentProtectionState(VOID)
     }
 
     if (InterlockedCompareExchange(&gClientConnected, 0, 0) != 0 &&
-        RgCurrentClientMode() == RgClientLabGate) {
+        RgIsGateClientMode(RgCurrentClientMode())) {
         return InterlockedCompareExchange(&gGateActivated, 0, 0) != 0
             ? RgProtectionProtected
             : RgProtectionPreflight;
@@ -292,7 +299,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    if (mode != RgClientLabGate && !degraded) {
+    if (!RgIsGateClientMode(mode) && !degraded) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
@@ -377,7 +384,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreAcquireForSectionSynchronization(
 
     if (InterlockedCompareExchange(&gUnloading, 0, 0) != 0 ||
         InterlockedCompareExchange(&gClientConnected, 0, 0) == 0 ||
-        RgCurrentClientMode() != RgClientLabGate) {
+        !RgIsGateClientMode(RgCurrentClientMode())) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
@@ -422,7 +429,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJE
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    if (mode != RgClientLabGate && !degraded) {
+    if (!RgIsGateClientMode(mode) && !degraded) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
@@ -485,7 +492,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    if (mode != RgClientLabGate && !degraded) {
+    if (!RgIsGateClientMode(mode) && !degraded) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
@@ -1074,7 +1081,7 @@ FLT_POSTOP_CALLBACK_STATUS RgPostCreate(PFLT_CALLBACK_DATA Data,
         InterlockedExchange(&gActivationHazard, 1);
     }
 
-    RgQueueRawEvent(&event, RgClientLabGate);
+    RgQueueRawEvent(&event, RgCurrentClientMode());
 
     if (tunneledInfo != NULL) {
         FltReleaseFileNameInformation(tunneledInfo);
@@ -1124,7 +1131,7 @@ static VOID RgQueueDeleteFinalization(PRG_DELETE_HANDLE_CONTEXT Context,
     }
     KeQuerySystemTimePrecise(&systemTime);
     event.SystemTime100ns = systemTime.QuadPart;
-    RgQueueRawEvent(&event, RgClientLabGate);
+    RgQueueRawEvent(&event, RgCurrentClientMode());
 }
 
 static VOID RgAttachDeleteHandleContext(PCFLT_RELATED_OBJECTS FltObjects,
@@ -1221,7 +1228,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreCleanup(PFLT_CALLBACK_DATA Data,
 
     if (InterlockedCompareExchange(&gUnloading, 0, 0) != 0 ||
         InterlockedCompareExchange(&gClientConnected, 0, 0) == 0 ||
-        RgCurrentClientMode() != RgClientLabGate ||
+        !RgIsGateClientMode(RgCurrentClientMode()) ||
         FltObjects == NULL || FltObjects->Instance == NULL || FltObjects->FileObject == NULL) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
@@ -1337,7 +1344,7 @@ static VOID RgObservePagingWrite(PFLT_CALLBACK_DATA Data,
 
     if (InterlockedCompareExchange(&gUnloading, 0, 0) != 0 ||
         InterlockedCompareExchange(&gClientConnected, 0, 0) == 0 ||
-        RgCurrentClientMode() != RgClientLabGate ||
+        !RgIsGateClientMode(RgCurrentClientMode()) ||
         FltObjects == NULL || FltObjects->FileObject == NULL) {
         return;
     }
@@ -1369,7 +1376,7 @@ static VOID RgObservePagingWrite(PFLT_CALLBACK_DATA Data,
     // Paging I/O can run in memory-manager/cache-manager contexts where filesystem name
     // queries or synchronous user-mode preservation can deadlock. Emit bounded no-reply
     // evidence only; do not call RgGateEvent from the paging path.
-    RgQueueRawEvent(&event, RgClientLabGate);
+    RgQueueRawEvent(&event, RgCurrentClientMode());
     FltReleaseContext(context);
 }
 
@@ -1411,7 +1418,7 @@ static VOID RgObserveWritableSection(PFLT_CALLBACK_DATA Data,
     event.FileIdHigh = context->FileIdHigh;
     RtlCopyMemory(event.Path, context->Path, sizeof(event.Path));
 
-    RgQueueRawEvent(&event, RgClientLabGate);
+    RgQueueRawEvent(&event, RgCurrentClientMode());
     FltReleaseContext(context);
 }
 
@@ -1588,7 +1595,7 @@ static FLT_POSTOP_CALLBACK_STATUS RgPostSetInformationSafe(PFLT_CALLBACK_DATA Da
         }
     }
 
-    RgQueueRawEvent(&event, RgClientLabGate);
+    RgQueueRawEvent(&event, RgCurrentClientMode());
 
     if (tunneledInfo != NULL) {
         FltReleaseFileNameInformation(tunneledInfo);
@@ -1612,7 +1619,7 @@ static BOOLEAN RgPathMatchesGateRoot(ULONG PathStatus, const WCHAR *Path)
 
     ExAcquireFastMutex(&gPortMutex);
     if (gGateRootLengthBytes != 0 &&
-        (gClientMode == RgClientLabGate ||
+        (RgIsGateClientMode(gClientMode) ||
          InterlockedCompareExchange(&gProtectionRequired, 0, 0) != 0 ||
          InterlockedCompareExchange(&gDegradedProtected, 0, 0) != 0)) {
         root.Buffer = gGateRoot;
@@ -1896,6 +1903,7 @@ static BOOLEAN RgGateEvent(PFLT_CALLBACK_DATA Data,
     NTSTATUS status = STATUS_PORT_DISCONNECTED;
     BOOLEAN allow = FALSE;
     LONG inFlight;
+    LONG gateMode;
 
     RtlZeroMemory(&reply, sizeof(reply));
     if (Decision != NULL) {
@@ -1919,7 +1927,8 @@ static BOOLEAN RgGateEvent(PFLT_CALLBACK_DATA Data,
         return FALSE;
     }
 
-    if (RgAcquireClientPort(RgClientLabGate)) {
+    gateMode = RgCurrentClientMode();
+    if (RgIsGateClientMode(gateMode) && RgAcquireClientPort(gateMode)) {
         status = FltSendMessage(gFilter, &gClientPort,
             (PVOID)Event, sizeof(*Event),
             &reply, &replyLength, &timeout);
@@ -1946,6 +1955,12 @@ static BOOLEAN RgGateEvent(PFLT_CALLBACK_DATA Data,
         return FALSE;
     }
     if ((reply.Flags & ~RG_GATE_REPLY_FLAG_CONTAIN_REQUESTOR) != 0) {
+        return FALSE;
+    }
+    if (gateMode == RgClientProductionGate && reply.Flags != 0) {
+        if (ErrorCode != NULL) {
+            *ErrorCode = (ULONG)STATUS_NOT_SUPPORTED;
+        }
         return FALSE;
     }
 
@@ -2028,7 +2043,8 @@ static VOID RgQueueRawEvent(const RG_EVENT *Event, LONG ClientMode)
     PRG_WORK_ITEM work = NULL;
     LONG pending;
 
-    if (Event == NULL || (ClientMode != RgClientAudit && ClientMode != RgClientLabGate)) {
+    if (Event == NULL ||
+        (ClientMode != RgClientAudit && !RgIsGateClientMode(ClientMode))) {
         return;
     }
 
@@ -2071,7 +2087,7 @@ static VOID RgSendWorker(PVOID Parameter)
     NTSTATUS status = STATUS_PORT_DISCONNECTED;
 
     work->Event.DroppedBeforeThis = (ULONG)InterlockedExchange(&gDropped, 0);
-    timeout.QuadPart = -(((work->ClientMode == RgClientLabGate) ?
+    timeout.QuadPart = -((RgIsGateClientMode(work->ClientMode) ?
         RG_RECONCILE_SEND_TIMEOUT_MS : RG_SEND_TIMEOUT_MS) * 10LL * 1000LL);
 
     if (RgAcquireClientPort(work->ClientMode)) {

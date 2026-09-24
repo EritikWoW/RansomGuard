@@ -47,6 +47,9 @@ foreach($required in @(
     '_phase is not (ProtectionPhase.Protected or ProtectionPhase.DegradedProtected)',
     'EnforceUnavailable is a startup/pre-activation state and cannot replace an active protection state.',
     'KernelEnforcementActive does not match the protection phase.',
+    'Enforce mode cannot silently downgrade to AuditOnly.',
+    'KernelConnected requires rollback readiness and a live kernel channel.',
+    'Pre-activation Enforce states cannot claim a connected kernel channel.',
     'Protected state requires a connected kernel channel.',
     'DegradedProtected represents loss of the user-mode kernel channel.',
     'var kernelEnforcement = _phase is ProtectionPhase.Protected or ProtectionPhase.DegradedProtected'

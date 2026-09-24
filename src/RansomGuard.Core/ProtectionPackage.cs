@@ -32,7 +32,7 @@ public sealed record ProtectionPackageAdmission(
 public static class ProtectionPackagePolicy
 {
     public const int DescriptorSchema = 1;
-    public const int ProtocolVersion = 17;
+    public const int ProtocolVersion = 18;
     public const string ProductionProfile = "ProductionProtection";
     public const string ProductionProvider = "RansomGuard";
     public const string LabPlaceholderAltitude = "370099.4242";

@@ -73,7 +73,7 @@ if (options.DropFirstTruncateCompletion)
     Console.WriteLine("LAB completion-loss injection : ARMED for the first authoritative TRUNCATE result.");
 if (options.DropFirstDeleteCompletion)
     Console.WriteLine("LAB completion-loss injection : ARMED for the first authoritative DELETE disposition result.");
-Console.WriteLine("Press Ctrl+C to disconnect. The driver then stops gating because no client is connected.");
+Console.WriteLine("Press Ctrl+C for an orderly shutdown. Unexpected GateClient loss leaves the activated LAB root in kernel fail-safe mode.");
 
 var context = new RgConnectContext
 {
@@ -487,12 +487,13 @@ var pendingContainmentAckCount = containmentRecords.Count(x =>
         y.Phase == ContainmentEvidencePhase.KernelActive &&
         y.KernelSequence == x.KernelSequence));
 var workerFailureCount = Volatile.Read(ref gateWorkerFailures);
-var lifecycleReason = workerFailureCount == 0 &&
-                      pendingCreateCount == 0 &&
-                      pendingRenameCount == 0 &&
-                      pendingTruncateCount == 0 &&
-                      unsettledDeleteCount == 0 &&
-                      pendingContainmentAckCount == 0
+var cleanShutdown = workerFailureCount == 0 &&
+                    pendingCreateCount == 0 &&
+                    pendingRenameCount == 0 &&
+                    pendingTruncateCount == 0 &&
+                    unsettledDeleteCount == 0 &&
+                    pendingContainmentAckCount == 0;
+var lifecycleReason = cleanShutdown
     ? "clean-gate-shutdown"
     : $"gate-shutdown-faulted:workers={workerFailureCount};pending-create={pendingCreateCount};pending-rename={pendingRenameCount};pending-truncate={pendingTruncateCount};unsettled-delete={unsettledDeleteCount};pending-containment-ack={pendingContainmentAckCount}";
 
@@ -501,12 +502,7 @@ await using (var lifecycleReservation = await storageBudget.ReserveAsync(
                  "session-lifecycle-terminal",
                  CancellationToken.None).ConfigureAwait(false))
 {
-    if (workerFailureCount == 0 &&
-        pendingCreateCount == 0 &&
-        pendingRenameCount == 0 &&
-        pendingTruncateCount == 0 &&
-        unsettledDeleteCount == 0 &&
-        pendingContainmentAckCount == 0)
+    if (cleanShutdown)
     {
         _ = await lifecycleStore.MarkCompletedAsync(lifecycleReason, CancellationToken.None)
             .ConfigureAwait(false);
@@ -518,6 +514,28 @@ await using (var lifecycleReservation = await storageBudget.ReserveAsync(
             .ConfigureAwait(false);
         Console.Error.WriteLine($"Rollback session lifecycle: Faulted ({lifecycleReason}).");
     }
+}
+
+if (cleanShutdown)
+{
+    var disconnect = Native.Control(port, new RgControlRequest
+    {
+        ProtocolVersion = 15,
+        Command = (uint)RgControlCommand.AuthorizeDisconnect
+    });
+    if (disconnect.ProtocolVersion != 15 ||
+        disconnect.Command != (uint)RgControlCommand.AuthorizeDisconnect ||
+        disconnect.Status != 0 ||
+        disconnect.GateActivated != 1)
+        throw new InvalidOperationException(
+            $"Kernel refused orderly disconnect authorization. NTSTATUS=0x{disconnect.Status:X8} gate={disconnect.GateActivated}.");
+
+    Console.WriteLine("Kernel disconnect authorization: GRANTED after clean durable shutdown state.");
+}
+else
+{
+    Console.Error.WriteLine(
+        "Kernel disconnect authorization: NOT REQUESTED. Activated protection remains fail-safe if this client disconnects.");
 }
 
 static class ActivationPreflight
@@ -2100,7 +2118,7 @@ enum RgGateReplyFlags : uint
     ContainRequestor = 0x00000001
 }
 
-enum RgControlCommand : uint { Invalid = 0, ActivateGate = 1, QueryActivation = 2, ArmPreflight = 3, ActivateAndContainProcess = 4, QueryContainment = 5 }
+enum RgControlCommand : uint { Invalid = 0, ActivateGate = 1, QueryActivation = 2, ArmPreflight = 3, ActivateAndContainProcess = 4, QueryContainment = 5, AuthorizeDisconnect = 6 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 struct RgControlRequest

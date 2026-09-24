@@ -1937,7 +1937,10 @@ sealed class LabContainmentTrigger : IDisposable
     public void Dispose() => _process.Dispose();
 }
 
+enum GateProfile { Lab = 0, Production = 1 }
+
 sealed record Options(
+    GateProfile Profile,
     string Root,
     string StoreRoot,
     string? SessionId,
@@ -1967,6 +1970,7 @@ sealed record Options(
 
     public static Options Parse(string[] args)
     {
+        var profile = GateProfile.Lab;
         string? root = null;
         string? store = null;
         string? session = null;
@@ -1990,6 +1994,7 @@ sealed record Options(
         {
             switch (args[i].ToLowerInvariant())
             {
+                case "--production": profile = GateProfile.Production; break;
                 case "--root" when i + 1 < args.Length: root = Path.GetFullPath(args[++i]).TrimEnd('\\'); break;
                 case "--store" when i + 1 < args.Length: store = Path.GetFullPath(args[++i]); break;
                 case "--session" when i + 1 < args.Length: session = args[++i]; break;

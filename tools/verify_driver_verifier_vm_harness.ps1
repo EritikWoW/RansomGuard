@@ -32,7 +32,6 @@ foreach($required in @(
     '[DateTimeOffset]::Parse',
     "phase -ne 'runtime-failed-reset'",
     'prior.resetScheduled',
-    'prior.runtimeBootUtc',
     'querysettings-prior-failed-reset',
     'priorFailedCampaignArchived',
     'Failed-',

@@ -2163,7 +2163,8 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
 
     context = (PRG_CONNECT_CONTEXT)ConnectionContext;
     if (context->ProtocolVersion != RG_PROTOCOL_VERSION ||
-        (context->ClientMode != RgClientAudit && context->ClientMode != RgClientLabGate)) {
+        (context->ClientMode != RgClientAudit &&
+         !RgIsGateClientMode((LONG)context->ClientMode))) {
         return STATUS_REVISION_MISMATCH;
     }
 
@@ -2174,7 +2175,7 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
         return STATUS_INVALID_PARAMETER;
     }
 
-    if (context->ClientMode == RgClientLabGate) {
+    if (RgIsGateClientMode((LONG)context->ClientMode)) {
         if (context->ClientProcessId == 0 ||
             rootBytes < (4 * sizeof(WCHAR)) ||
             volumeBytes < (4 * sizeof(WCHAR)) ||
@@ -2215,7 +2216,8 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
         InterlockedCompareExchange(&gUnloading, 0, 0) != 0) {
         status = STATUS_DEVICE_BUSY;
     } else if (InterlockedCompareExchange(&gProtectionRequired, 0, 0) != 0 &&
-               (context->ClientMode != RgClientLabGate ||
+               (!RgIsGateClientMode((LONG)context->ClientMode) ||
+                gProtectedClientMode != (LONG)context->ClientMode ||
                 gGateRootLengthBytes != (USHORT)rootBytes ||
                 gGateVolumeLengthBytes != (USHORT)volumeBytes ||
                 gGateVolume == NULL ||
@@ -2235,18 +2237,20 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
             gGateVolumeLengthBytes = 0;
             RtlZeroMemory(gGateRoot, sizeof(gGateRoot));
             gGateRootLengthBytes = 0;
+            InterlockedExchange(&gProtectedClientMode, 0);
         }
 
         gClientPort = ClientPort;
         gClientMode = (LONG)context->ClientMode;
         InterlockedExchange64(&gClientProcessId, (LONG64)context->ClientProcessId);
-        InterlockedExchange(&gGateActivated, context->ClientMode == RgClientLabGate ? 0 : 1);
+        InterlockedExchange(&gGateActivated,
+            RgIsGateClientMode((LONG)context->ClientMode) ? 0 : 1);
         InterlockedExchange(&gActivationHazard, 0);
         InterlockedExchange(&gPreflightProbeArmed, 0);
         InterlockedExchange(&gMaintenanceRequested, 0);
         InterlockedExchange(&gGracefulDisconnectAuthorized, 0);
 
-        if (context->ClientMode == RgClientLabGate &&
+        if (RgIsGateClientMode((LONG)context->ClientMode) &&
             InterlockedCompareExchange(&gProtectionRequired, 0, 0) == 0) {
             RtlCopyMemory(gGateRoot, context->GateRoot, rootBytes);
             gGateRootLengthBytes = (USHORT)rootBytes;
@@ -2254,6 +2258,7 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
             gGateVolume = candidateVolume;
             candidateVolume = NULL;
             gGateVolumeLengthBytes = (USHORT)volumeBytes;
+            InterlockedExchange(&gProtectedClientMode, (LONG)context->ClientMode);
         }
 
         // On degraded reconnect publish the live client before clearing the fail-safe latch,
@@ -2305,7 +2310,7 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
 
     if (request->ProtocolVersion != RG_PROTOCOL_VERSION ||
         InterlockedCompareExchange(&gClientConnected, 0, 0) == 0 ||
-        RgCurrentClientMode() != RgClientLabGate) {
+        !RgIsGateClientMode(RgCurrentClientMode())) {
         status = STATUS_REVISION_MISMATCH;
     } else if (request->Command == RgControlQueryActivation ||
                request->Command == RgControlQueryContainment) {
@@ -2337,7 +2342,9 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
             status = STATUS_SUCCESS;
         }
     } else if (request->Command == RgControlActivateAndContainProcess) {
-        if (InterlockedCompareExchange(&gGateActivated, 0, 0) != 0 ||
+        if (RgCurrentClientMode() != RgClientLabGate) {
+            status = STATUS_NOT_SUPPORTED;
+        } else if (InterlockedCompareExchange(&gGateActivated, 0, 0) != 0 ||
             InterlockedCompareExchange(&gActivationHazard, 0, 0) != 0 ||
             InterlockedCompareExchange(&gPreflightProbeArmed, 0, 0) != 0) {
             status = STATUS_DEVICE_BUSY;
@@ -2368,7 +2375,9 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
             }
         }
     } else if (request->Command == RgControlArmScopeAmbiguity) {
-        if (request->TargetProcessId <= 4 ||
+        if (RgCurrentClientMode() != RgClientLabGate) {
+            status = STATUS_NOT_SUPPORTED;
+        } else if (request->TargetProcessId <= 4 ||
             request->TargetProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId, 0, 0) ||
             (ULONGLONG)(ULONG_PTR)request->TargetProcessId != request->TargetProcessId) {
             status = STATUS_INVALID_PARAMETER;
@@ -2470,7 +2479,7 @@ static VOID RgDisconnect(PVOID ConnectionCookie)
     if (protectionRequired != 0 && gracefulDisconnect == 0) {
         // Keep the negotiated root plus protected-volume reference and fail safe for
         // resolved in-root or ambiguous protected-volume destructive user-mode mutations.
-        // A replacement v17 GateClient may reconnect only to this exact root/volume and rerun preflight.
+        // A replacement v18 GateClient may reconnect only with the retained gate mode and exact root/volume, then rerun preflight.
     } else {
         InterlockedExchange(&gProtectionRequired, 0);
         InterlockedExchange(&gDegradedProtected, 0);
@@ -2479,6 +2488,7 @@ static VOID RgDisconnect(PVOID ConnectionCookie)
         gGateVolumeLengthBytes = 0;
         gGateRootLengthBytes = 0;
         RtlSecureZeroMemory(gGateRoot, sizeof(gGateRoot));
+        InterlockedExchange(&gProtectedClientMode, 0);
     }
     InterlockedExchange(&gMaintenanceRequested, 0);
     InterlockedExchange(&gGracefulDisconnectAuthorized, 0);
@@ -2520,6 +2530,7 @@ NTSTATUS RgUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
     InterlockedExchange(&gUnloading, 1);
     InterlockedExchange(&gClientConnected, 0);
     InterlockedExchange(&gClientMode, 0);
+    InterlockedExchange(&gProtectedClientMode, 0);
     InterlockedExchange(&gProtectionRequired, 0);
     InterlockedExchange(&gDegradedProtected, 0);
     InterlockedExchange(&gMaintenanceRequested, 0);

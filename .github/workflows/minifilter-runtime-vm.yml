@@ -116,6 +116,7 @@ jobs:
           if([int]$summary.schema -ne 2){throw "Runtime result schema must be 2. Found '$($summary.schema)'."}
           $requiredTrue=@(
             'preexistingDirectoryHandleRejected',
+            'dormantWritableHandleRejected',
             'preexistingMappingRejected',
             'postActivationBaselineVerified',
             'postActivationPagingObserved',

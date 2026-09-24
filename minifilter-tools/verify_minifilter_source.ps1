@@ -217,6 +217,30 @@ foreach($block in @($queueBlock,$rawQueueBlock)){
     }
 }
 
+$nameHelperStart=$src.IndexOf('static NTSTATUS RgGetNormalizedNameInformation(')
+$nameHelperEnd=$src.IndexOf('static NTSTATUS RgGetNormalizedDestinationNameInformation(',$nameHelperStart)
+$destNameHelperEnd=$src.IndexOf('static NTSTATUS RgPopulateEvent(',$nameHelperEnd)
+if($nameHelperStart -lt 0 -or $nameHelperEnd -lt 0 -or $destNameHelperEnd -lt 0){
+    throw 'Normalized name fallback helpers are missing.'
+}
+$nameHelper=$src.Substring($nameHelperStart,$nameHelperEnd-$nameHelperStart)
+$destNameHelper=$src.Substring($nameHelperEnd,$destNameHelperEnd-$nameHelperEnd)
+foreach($block in @($nameHelper,$destNameHelper)){
+    $defaultQuery=$block.IndexOf('FLT_FILE_NAME_QUERY_DEFAULT')
+    $cacheQuery=$block.IndexOf('FLT_FILE_NAME_QUERY_ALWAYS_ALLOW_CACHE_LOOKUP')
+    if($defaultQuery -lt 0 -or $cacheQuery -lt 0 -or $defaultQuery -gt $cacheQuery){
+        throw 'Normalized scope lookup must try QUERY_DEFAULT before QUERY_ALWAYS_ALLOW_CACHE_LOOKUP.'
+    }
+}
+foreach($required in @(
+    'RgGetNormalizedNameInformation(Data, &nameInfo)',
+    'RgGetNormalizedDestinationNameInformation('
+)){
+    if($src -notmatch [regex]::Escape($required)){
+        throw "Scope name fallback helper is not wired into all expected paths: $required"
+    }
+}
+
 if($src -match 'IRP_MJ_WRITE\s*,\s*FLTFL_OPERATION_REGISTRATION_SKIP_PAGING_IO'){
     throw 'Paging-write visibility requires IRP_MJ_WRITE callbacks to receive paging I/O.'
 }

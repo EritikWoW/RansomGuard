@@ -255,6 +255,7 @@ Assert-NoReparsePath -Path $ResultsDirectory -Label 'ResultsDirectory'
 New-Item -ItemType Directory -Path $RootBase -Force | Out-Null
 Assert-NoReparsePath -Path $RootBase -Label 'RootBase'
 
+$spoofRoot=Join-Path $RootBase "client-spoof-$stamp"
 $dirRoot=Join-Path $RootBase "predirectory-$stamp"
 $dormantRoot=Join-Path $RootBase "prewritehandle-$stamp"
 $hardPreRoot=Join-Path $RootBase "prehardlink-$stamp"
@@ -302,6 +303,7 @@ $summary=[ordered]@{
     driverSysSha256=$actualSysSha256
     driverInfSha256=$actualInfSha256
     driverCatSha256=$actualCatSha256
+    spoofedClientProcessIdRejected=$false
     preexistingDirectoryHandleRejected=$false
     dormantWritableHandleRejected=$false
     preexistingHardLinkRejected=$false
@@ -394,6 +396,760 @@ try{
     # install_minifilter_lab.ps1 throws on failure. Do not inspect $LASTEXITCODE here:
     # it belongs to the last native command executed inside the child script and may remain
     # nonzero even after the script has independently verified a successful load/attach.
+
+    # Scenario -1: the kernel must bind the communication client to the actual connecting
+    # process object/PID. A valid protocol/root/volume context with a forged ClientProcessId
+    # must be rejected before any protection session can be established.
+    Prepare-GateRoot $gateExe $spoofRoot
+    $spoofResult=Join-Path $ResultsDirectory 'client-spoof.result'
+    & $helperExe connect-spoof --root $spoofRoot --claimed-pid 4294967294 --result $spoofResult
+    if($LASTEXITCODE -ne 0){throw "GateClient PID spoof probe helper failed, exit=$LASTEXITCODE"}
+    $spoofOutcome=(Get-Content -LiteralPath $spoofResult -Raw).Trim()
+    if($spoofOutcome -notmatch '^rejected:0x[0-9A-F]{8}
+    $lockedDirectory=Join-Path $dirRoot 'locked-directory'
+    New-Item -ItemType Directory -Path $lockedDirectory -Force | Out-Null
+    $dirReady=Join-Path $ResultsDirectory 'predirectory.ready'
+    $dirRelease=Join-Path $ResultsDirectory 'predirectory.release'
+    $dirHolderOut=Join-Path $ResultsDirectory 'predirectory-holder.out.log'
+    $dirHolderErr=Join-Path $ResultsDirectory 'predirectory-holder.err.log'
+    $dirHolder=Start-LoggedProcess $helperExe @(
+        'hold-dir-delete','--directory',(Quote-Arg $lockedDirectory),'--ready',(Quote-Arg $dirReady),'--release',(Quote-Arg $dirRelease)
+    ) $dirHolderOut $dirHolderErr
+    Wait-Path $dirReady 15 'pre-existing DELETE directory handle'
+
+    $dirOut=Join-Path $ResultsDirectory 'predirectory-gate.out.log'
+    $dirErr=$dirOut + '.err'
+    $gateDir=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $dirRoot),'--store',(Quote-Arg $dirStore),'--session','predirectory'
+    ) $dirOut $dirErr
+
+    if(-not $gateDir.WaitForExit(30000)){
+        Stop-Process -Id $gateDir.Id -Force -ErrorAction SilentlyContinue
+        throw 'Activation unexpectedly stayed alive with a pre-existing DELETE directory handle.'
+    }
+    if($gateDir.ExitCode -eq 0){throw 'Activation unexpectedly succeeded with a pre-existing DELETE directory handle.'}
+    $dirFailure=((Get-Content -LiteralPath $dirOut -Raw -ErrorAction SilentlyContinue)+[Environment]::NewLine+
+        (Get-Content -LiteralPath $dirErr -Raw -ErrorAction SilentlyContinue))
+    if($dirFailure -notmatch '(?i)Activation topology preflight|sharing|used by another process|could not hold directory'){
+        throw "Directory-handle activation failed for an unexpected reason: $dirFailure"
+    }
+    $summary.preexistingDirectoryHandleRejected=$true
+
+    New-Item -ItemType File -Path $dirRelease -Force | Out-Null
+    if(-not $dirHolder.WaitForExit(15000)){
+        Stop-Process -Id $dirHolder.Id -Force -ErrorAction SilentlyContinue
+        throw 'Directory DELETE-handle holder did not exit.'
+    }
+    if($dirHolder.ExitCode -ne 0){throw "Directory DELETE-handle holder failed, exit=$($dirHolder.ExitCode)"}
+    $dirHolder=$null
+    $gateDir=$null
+
+    # Scenario 1: a dormant pre-activation writable handle must prevent activation even
+    # when no writable mapping exists yet. The topology hold uses ShareRead only, so any
+    # existing WRITE access must surface as a sharing violation before ActivateGate.
+    Prepare-GateRoot $gateExe $dormantRoot
+    $dormantFile=Join-Path $dormantRoot 'dormant-write-handle.bin'
+    New-TestFile $dormantFile
+    $dormantReady=Join-Path $ResultsDirectory 'prewritehandle.ready'
+    $dormantRelease=Join-Path $ResultsDirectory 'prewritehandle.release'
+    $dormantHolderOut=Join-Path $ResultsDirectory 'prewritehandle-holder.out.log'
+    $dormantHolderErr=Join-Path $ResultsDirectory 'prewritehandle-holder.err.log'
+    $dormantHolder=Start-LoggedProcess $helperExe @(
+        'hold-write-handle','--file',(Quote-Arg $dormantFile),'--ready',(Quote-Arg $dormantReady),'--release',(Quote-Arg $dormantRelease)
+    ) $dormantHolderOut $dormantHolderErr
+    Wait-Path $dormantReady 15 'pre-existing dormant writable handle'
+
+    $dormantOut=Join-Path $ResultsDirectory 'prewritehandle-gate.out.log'
+    $dormantErr=$dormantOut + '.err'
+    $gateDormant=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $dormantRoot),'--store',(Quote-Arg $dormantStore),'--session','prewritehandle'
+    ) $dormantOut $dormantErr
+
+    if(-not $gateDormant.WaitForExit(30000)){
+        Stop-Process -Id $gateDormant.Id -Force -ErrorAction SilentlyContinue
+        throw 'Activation unexpectedly stayed alive with a dormant pre-existing writable handle.'
+    }
+    if($gateDormant.ExitCode -eq 0){
+        throw 'Activation unexpectedly succeeded with a dormant pre-existing writable handle.'
+    }
+    $dormantFailure=((Get-Content -LiteralPath $dormantOut -Raw -ErrorAction SilentlyContinue)+[Environment]::NewLine+
+        (Get-Content -LiteralPath $dormantErr -Raw -ErrorAction SilentlyContinue))
+    if($dormantFailure -notmatch '(?i)Activation topology preflight|sharing|used by another process|could not hold file'){
+        throw "Dormant writable-handle activation failed for an unexpected reason: $dormantFailure"
+    }
+    if($dormantFailure -match 'already has a user-writable mapped view'){
+        throw 'Dormant writable-handle proof accidentally used the existing-mapping rejection path.'
+    }
+    $summary.dormantWritableHandleRejected=$true
+
+    New-Item -ItemType File -Path $dormantRelease -Force | Out-Null
+    if(-not $dormantHolder.WaitForExit(15000)){
+        Stop-Process -Id $dormantHolder.Id -Force -ErrorAction SilentlyContinue
+        throw 'Dormant writable-handle holder did not exit.'
+    }
+    if($dormantHolder.ExitCode -ne 0){throw "Dormant writable-handle holder failed, exit=$($dormantHolder.ExitCode)"}
+    $dormantHolder=$null
+    $gateDormant=$null
+
+    # Scenario 2: activation must refuse any protected regular file that already has
+    # more than one hard-link name, even when the alias itself is outside the root.
+    Prepare-GateRoot $gateExe $hardPreRoot
+    $hardPreFile=Join-Path $hardPreRoot 'preexisting-hardlink-victim.bin'
+    New-TestFile $hardPreFile
+    $hardPreCreateResult=Join-Path $ResultsDirectory 'prehardlink-create.result'
+    & $helperExe hard-link --existing $hardPreFile --link $hardPreAlias --result $hardPreCreateResult
+    if($LASTEXITCODE -ne 0){throw "Pre-existing hard-link helper failed, exit=$LASTEXITCODE"}
+    if((Get-Content -LiteralPath $hardPreCreateResult -Raw).Trim() -ne 'allowed' -or
+       -not(Test-Path -LiteralPath $hardPreAlias -PathType Leaf)){
+        throw 'Unable to create the pre-existing hard-link alias required for qualification.'
+    }
+
+    $hardPreOut=Join-Path $ResultsDirectory 'prehardlink-gate.out.log'
+    $hardPreErr=$hardPreOut + '.err'
+    $gateHardPre=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $hardPreRoot),'--store',(Quote-Arg $hardPreStore),'--session','prehardlink'
+    ) $hardPreOut $hardPreErr
+    if(-not $gateHardPre.WaitForExit(30000)){
+        Stop-Process -Id $gateHardPre.Id -Force -ErrorAction SilentlyContinue
+        throw 'Activation unexpectedly stayed alive with a pre-existing hard-link alias.'
+    }
+    if($gateHardPre.ExitCode -eq 0){throw 'Activation unexpectedly succeeded with a pre-existing hard-link alias.'}
+    $hardPreFailure=((Get-Content -LiteralPath $hardPreOut -Raw -ErrorAction SilentlyContinue)+[Environment]::NewLine+
+        (Get-Content -LiteralPath $hardPreErr -Raw -ErrorAction SilentlyContinue))
+    if($hardPreFailure -notmatch 'NumberOfLinks=2'){
+        throw "Pre-existing hard-link activation failed for an unexpected reason: $hardPreFailure"
+    }
+    $summary.preexistingHardLinkRejected=$true
+    Remove-Item -LiteralPath $hardPreAlias -Force -ErrorAction Stop
+    $gateHardPre=$null
+
+    # Scenario 3: once active, protected topology must remain single-linked.
+    Prepare-GateRoot $gateExe $hardActiveRoot
+    $hardInside=Join-Path $hardActiveRoot 'inside-source.bin'
+    $hardInsideDestination=Join-Path $hardActiveRoot 'outside-to-inside-link.bin'
+    New-TestFile $hardInside
+    New-TestFile $hardOutsideSource
+
+    $hardOut=Join-Path $ResultsDirectory 'hardlink-active-gate.out.log'
+    $hardErr=$hardOut + '.err'
+    $hardShutdown=Join-Path $ResultsDirectory 'hardlink-active.shutdown'
+    $gateHardActive=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $hardActiveRoot),
+        '--store',(Quote-Arg $hardActiveStore),
+        '--session','hardlink-active',
+        '--shutdown-file',(Quote-Arg $hardShutdown)
+    ) $hardOut $hardErr
+    Wait-LogPattern $hardOut 'kernel gate ACTIVE' $gateHardActive 45
+
+    $insideOutResult=Join-Path $ResultsDirectory 'hardlink-inside-outside.result'
+    & $helperExe hard-link --existing $hardInside --link $hardInsideToOutside --result $insideOutResult
+    if($LASTEXITCODE -ne 0){throw "Inside-to-outside hard-link helper failed, exit=$LASTEXITCODE"}
+    if((Get-Content -LiteralPath $insideOutResult -Raw).Trim() -ne 'denied' -or
+       (Test-Path -LiteralPath $hardInsideToOutside)){
+        throw 'Protected inside-to-outside hard-link creation was not denied.'
+    }
+    $summary.hardLinkInsideToOutsideDenied=$true
+
+    $outsideInResult=Join-Path $ResultsDirectory 'hardlink-outside-inside.result'
+    & $helperExe hard-link --existing $hardOutsideSource --link $hardInsideDestination --result $outsideInResult
+    if($LASTEXITCODE -ne 0){throw "Outside-to-inside hard-link helper failed, exit=$LASTEXITCODE"}
+    if((Get-Content -LiteralPath $outsideInResult -Raw).Trim() -ne 'denied' -or
+       (Test-Path -LiteralPath $hardInsideDestination)){
+        throw 'Protected outside-to-inside hard-link creation was not denied.'
+    }
+    $summary.hardLinkOutsideToInsideDenied=$true
+
+    $outsideOutResult=Join-Path $ResultsDirectory 'hardlink-outside-outside.result'
+    & $helperExe hard-link --existing $hardOutsideSource --link $hardOutsideLink --result $outsideOutResult
+    if($LASTEXITCODE -ne 0){throw "Outside-to-outside hard-link helper failed, exit=$LASTEXITCODE"}
+    if((Get-Content -LiteralPath $outsideOutResult -Raw).Trim() -ne 'allowed' -or
+       -not(Test-Path -LiteralPath $hardOutsideLink -PathType Leaf)){
+        throw 'Outside-to-outside hard-link creation was over-blocked.'
+    }
+    $summary.hardLinkOutsideToOutsideAllowed=$true
+    Remove-Item -LiteralPath $hardOutsideLink -Force -ErrorAction Stop
+
+    # Repeat the same boundary proof using FILE_LINK_INFORMATION_EX directly through
+    # NtSetInformationFile(FileLinkInformationEx), not CreateHardLinkW.
+    $hardInsideDestinationEx=Join-Path $hardActiveRoot 'outside-to-inside-link-ex.bin'
+    $insideOutExResult=Join-Path $ResultsDirectory 'hardlink-ex-inside-outside.result'
+    & $helperExe hard-link-ex --existing $hardInside --link $hardInsideToOutsideEx --result $insideOutExResult
+    if($LASTEXITCODE -ne 0){throw "Inside-to-outside FileLinkInformationEx helper failed, exit=$LASTEXITCODE"}
+    if((Get-Content -LiteralPath $insideOutExResult -Raw).Trim() -ne 'denied-ex' -or
+       (Test-Path -LiteralPath $hardInsideToOutsideEx)){
+        throw 'Protected inside-to-outside FileLinkInformationEx creation was not denied.'
+    }
+    $summary.hardLinkExInsideToOutsideDenied=$true
+
+    $outsideInExResult=Join-Path $ResultsDirectory 'hardlink-ex-outside-inside.result'
+    & $helperExe hard-link-ex --existing $hardOutsideSource --link $hardInsideDestinationEx --result $outsideInExResult
+    if($LASTEXITCODE -ne 0){throw "Outside-to-inside FileLinkInformationEx helper failed, exit=$LASTEXITCODE"}
+    if((Get-Content -LiteralPath $outsideInExResult -Raw).Trim() -ne 'denied-ex' -or
+       (Test-Path -LiteralPath $hardInsideDestinationEx)){
+        throw 'Protected outside-to-inside FileLinkInformationEx creation was not denied.'
+    }
+    $summary.hardLinkExOutsideToInsideDenied=$true
+
+    $outsideOutExResult=Join-Path $ResultsDirectory 'hardlink-ex-outside-outside.result'
+    & $helperExe hard-link-ex --existing $hardOutsideSource --link $hardOutsideLinkEx --result $outsideOutExResult
+    if($LASTEXITCODE -ne 0){throw "Outside-to-outside FileLinkInformationEx helper failed, exit=$LASTEXITCODE"}
+    if((Get-Content -LiteralPath $outsideOutExResult -Raw).Trim() -ne 'allowed-ex' -or
+       -not(Test-Path -LiteralPath $hardOutsideLinkEx -PathType Leaf)){
+        throw 'Outside-to-outside FileLinkInformationEx creation was over-blocked.'
+    }
+    $summary.hardLinkExOutsideToOutsideAllowed=$true
+    Remove-Item -LiteralPath $hardOutsideLinkEx -Force -ErrorAction Stop
+
+    Stop-GateGracefully $gateHardActive $hardShutdown $hardOut $hardErr 'hard-link topology gate'
+    $gateHardActive=$null
+
+    # Scenario 4: data-changing FSCTLs that bypass IRP_MJ_WRITE are allowed only after
+    # a mutation-capable CREATE has durably committed a full/absence baseline. Exercise
+    # FSCTL_SET_ZERO_DATA and prove the target changes while its original SHA-256 remains
+    # recoverable from the committed pre-image.
+    Prepare-GateRoot $gateExe $fsctlRoot
+    $fsctlTarget=Join-Path $fsctlRoot 'zero-data-target.bin'
+    New-TestFile $fsctlTarget
+    $fsctlOriginalHash=(Get-FileHash -LiteralPath $fsctlTarget -Algorithm SHA256).Hash
+
+    $fsctlOut=Join-Path $ResultsDirectory 'fsctl-zero-gate.out.log'
+    $fsctlErr=$fsctlOut + '.err'
+    $fsctlShutdown=Join-Path $ResultsDirectory 'fsctl-zero.shutdown'
+    $gateFsctl=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $fsctlRoot),
+        '--store',(Quote-Arg $fsctlStore),
+        '--session','fsctl-zero',
+        '--shutdown-file',(Quote-Arg $fsctlShutdown)
+    ) $fsctlOut $fsctlErr
+    Wait-LogPattern $fsctlOut 'kernel gate ACTIVE' $gateFsctl 45
+
+    $fsctlResult=Join-Path $ResultsDirectory 'fsctl-zero.result'
+    & $helperExe fsctl-zero --file $fsctlTarget --offset 0 --length 4096 --result $fsctlResult
+    if($LASTEXITCODE -ne 0){throw "FSCTL_SET_ZERO_DATA helper failed, exit=$LASTEXITCODE"}
+    if((Get-Content -LiteralPath $fsctlResult -Raw).Trim() -ne 'allowed'){
+        throw 'FSCTL_SET_ZERO_DATA did not complete after a preserved write-capable CREATE.'
+    }
+    $summary.fsctlZeroAllowedWithBaseline=$true
+
+    $fsctlAfterHash=(Get-FileHash -LiteralPath $fsctlTarget -Algorithm SHA256).Hash
+    if([string]::Equals($fsctlAfterHash,$fsctlOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'FSCTL_SET_ZERO_DATA reported success without mutating the test file.'
+    }
+    $summary.fsctlZeroMutatedTarget=$true
+
+    $fsctlSession=Join-Path $fsctlStore 'Sessions\fsctl-zero'
+    $fsctlJournal=Join-Path $fsctlSession 'journal.jsonl'
+    $fsctlCapture=Wait-JournalMatch $fsctlJournal {
+        param($x)
+        [string]::Equals([IO.Path]::GetFullPath([string]$x.originalPath),$fsctlTarget,[StringComparison]::OrdinalIgnoreCase)
+    } 20 'FSCTL full pre-image journal record'
+    if(-not [string]::Equals([string]$fsctlCapture.originalSha256,$fsctlOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw "FSCTL pre-image journal hash mismatch. expected=$fsctlOriginalHash actual=$($fsctlCapture.originalSha256)"
+    }
+    $fsctlSnapshot=Join-Path $fsctlSession ([string]$fsctlCapture.snapshotRelativePath)
+    if(-not(Test-Path -LiteralPath $fsctlSnapshot -PathType Leaf)){
+        throw "FSCTL pre-image object missing: $fsctlSnapshot"
+    }
+    $fsctlSnapshotHash=(Get-FileHash -LiteralPath $fsctlSnapshot -Algorithm SHA256).Hash
+    if(-not [string]::Equals($fsctlSnapshotHash,$fsctlOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw "FSCTL pre-image object hash mismatch. expected=$fsctlOriginalHash actual=$fsctlSnapshotHash"
+    }
+    $summary.fsctlZeroPreimageHashMatched=$true
+
+    Stop-GateGracefully $gateFsctl $fsctlShutdown $fsctlOut $fsctlErr 'FSCTL zero-data gate'
+    $gateFsctl=$null
+
+    Prepare-GateRoot $gateExe $preRoot
+    $preFile=Join-Path $preRoot 'preexisting-map.bin'
+    New-TestFile $preFile
+    $ready=Join-Path $ResultsDirectory 'preexisting.ready'
+    $release=Join-Path $ResultsDirectory 'preexisting.release'
+    $holderOut=Join-Path $ResultsDirectory 'preexisting-holder.out.log'
+    $holderErr=Join-Path $ResultsDirectory 'preexisting-holder.err.log'
+    $holder=Start-LoggedProcess $helperExe @(
+        'hold-map','--file',(Quote-Arg $preFile),'--ready',(Quote-Arg $ready),'--release',(Quote-Arg $release)
+    ) $holderOut $holderErr
+    Wait-Path $ready 15 'pre-existing writable mapping'
+
+    $preOut=Join-Path $ResultsDirectory 'preexisting-gate.out.log'
+    $preErr=$preOut + '.err'
+    $gatePre=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $preRoot),'--store',(Quote-Arg $preStore),'--session','preexisting'
+    ) $preOut $preErr
+
+    if(-not $gatePre.WaitForExit(30000)){
+        Stop-Process -Id $gatePre.Id -Force -ErrorAction SilentlyContinue
+        throw 'Activation unexpectedly stayed alive with a pre-existing writable mapped view.'
+    }
+    if($gatePre.ExitCode -eq 0){throw 'Activation unexpectedly succeeded with a pre-existing writable mapped view.'}
+
+    $preJournal=Join-Path $preStore 'Sessions\preexisting\activation-state\activation-preflight-journal.jsonl'
+    $null=Wait-JournalMatch $preJournal {
+        param($x)
+        $x.writableViewPresent -eq $true -and
+        [string]::Equals([IO.Path]::GetFullPath([string]$x.path),$preFile,[StringComparison]::OrdinalIgnoreCase)
+    } 15 'writableViewPresent=true activation evidence'
+    $summary.preexistingMappingRejected=$true
+
+    New-Item -ItemType File -Path $release -Force | Out-Null
+    if(-not $holder.WaitForExit(15000)){
+        Stop-Process -Id $holder.Id -Force -ErrorAction SilentlyContinue
+        throw 'Mapped-view holder did not exit.'
+    }
+    if($holder.ExitCode -ne 0){throw "Mapped-view holder failed, exit=$($holder.ExitCode)"}
+    $holder=$null
+
+    Prepare-GateRoot $gateExe $postRoot
+    $postFile=Join-Path $postRoot 'postactivation-map.bin'
+    New-TestFile $postFile
+    $originalHash=(Get-FileHash -LiteralPath $postFile -Algorithm SHA256).Hash
+
+    $postOut=Join-Path $ResultsDirectory 'postactivation-gate.out.log'
+    $postErr=$postOut + '.err'
+    $postShutdown=Join-Path $ResultsDirectory 'postactivation.shutdown'
+    $gatePost=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $postRoot),'--store',(Quote-Arg $postStore),'--session','postactivation',
+        '--shutdown-file',(Quote-Arg $postShutdown)
+    ) $postOut $postErr
+    Wait-LogPattern $postOut 'kernel gate ACTIVE' $gatePost 45
+
+    & $helperExe map-write --file $postFile
+    if($LASTEXITCODE -ne 0){throw "Post-activation mapped write helper failed, exit=$LASTEXITCODE"}
+
+    $session=Join-Path $postStore 'Sessions\postactivation'
+    $sectionJournal=Join-Path $session 'section-state\writable-section-journal.jsonl'
+    $null=Wait-JournalMatch $sectionJournal {
+        param($x)
+        [int]$x.state -eq 1 -and
+        [string]::Equals([IO.Path]::GetFullPath([string]$x.trackedPath),$postFile,[StringComparison]::OrdinalIgnoreCase)
+    } 30 'BaselineVerified writable-section evidence'
+    $summary.postActivationBaselineVerified=$true
+
+    $pagingJournal=Join-Path $session 'paging-state\paging-write-journal.jsonl'
+    $null=Wait-JournalMatch $pagingJournal {
+        param($x)
+        [string]::Equals([IO.Path]::GetFullPath([string]$x.trackedPath),$postFile,[StringComparison]::OrdinalIgnoreCase) -and
+        [uint64]$x.length -gt 0
+    } 30 'paging-write evidence'
+    $summary.postActivationPagingObserved=$true
+
+    $rollbackJournal=Join-Path $session 'journal.jsonl'
+    $capture=Wait-JournalMatch $rollbackJournal {
+        param($x)
+        [string]::Equals([IO.Path]::GetFullPath([string]$x.originalPath),$postFile,[StringComparison]::OrdinalIgnoreCase)
+    } 15 'full pre-image journal record'
+    if(-not [string]::Equals([string]$capture.originalSha256,$originalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw "Full pre-image hash does not match the original mapped file. expected=$originalHash actual=$($capture.originalSha256)"
+    }
+    $snapshot=Join-Path $session ([string]$capture.snapshotRelativePath)
+    if(-not (Test-Path -LiteralPath $snapshot -PathType Leaf)){throw "Full pre-image object missing: $snapshot"}
+    $snapshotHash=(Get-FileHash -LiteralPath $snapshot -Algorithm SHA256).Hash
+    if(-not [string]::Equals($snapshotHash,$originalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw "Full pre-image object hash mismatch. expected=$originalHash actual=$snapshotHash"
+    }
+    $mutatedHash=(Get-FileHash -LiteralPath $postFile -Algorithm SHA256).Hash
+    if([string]::Equals($mutatedHash,$originalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'Mapped write did not mutate the test file.'
+    }
+    $summary.preimageHashMatched=$true
+
+    # End this successful session through the explicit v16 maintenance transition.
+    Stop-GateGracefully $gatePost $postShutdown $postOut $postErr 'post-activation gate'
+    $gatePost=$null
+
+    # Scenario 3: an abrupt GateClient loss after activation must not silently disable protection.
+    Prepare-GateRoot $gateExe $disconnectRoot
+    Prepare-GateRoot $gateExe $disconnectWrongRoot
+    $disconnectTarget=Join-Path $disconnectRoot 'degraded-target.bin'
+    New-TestFile $disconnectTarget
+    New-TestFile $disconnectOutside
+    $disconnectOriginalHash=(Get-FileHash -LiteralPath $disconnectTarget -Algorithm SHA256).Hash
+
+    $disconnectOut=Join-Path $ResultsDirectory 'disconnect-gate.out.log'
+    $disconnectErr=$disconnectOut + '.err'
+    $disconnectShutdown=Join-Path $ResultsDirectory 'disconnect.shutdown'
+    $gateDisconnect=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $disconnectRoot),
+        '--store',(Quote-Arg $disconnectStore),
+        '--session','disconnect-active',
+        '--shutdown-file',(Quote-Arg $disconnectShutdown)
+    ) $disconnectOut $disconnectErr
+    Wait-LogPattern $disconnectOut 'kernel gate ACTIVE' $gateDisconnect 45
+
+    # This is intentionally NOT graceful: emulate process death after the kernel promised protection.
+    Stop-LabProcess $gateDisconnect 'abrupt GateClient'
+    $gateDisconnect=$null
+
+    $readBytes=[IO.File]::ReadAllBytes($disconnectTarget)
+    if($readBytes.Length -ne 65536){throw 'Read-only access failed or returned unexpected data while protection was degraded.'}
+    $summary.disconnectReadAllowed=$true
+
+    $denied=$false
+    try{
+        $fs=[IO.File]::Open($disconnectTarget,[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::Read)
+        try{$fs.WriteByte(0x5A);$fs.Flush($true)}finally{$fs.Dispose()}
+    }
+    catch{
+        if(Test-AccessDeniedException $_.Exception){$denied=$true}
+        else{throw}
+    }
+    if(-not $denied){throw 'Resolved in-root mutation unexpectedly succeeded after abrupt GateClient loss.'}
+    $summary.disconnectDeniedMutation=$true
+    $disconnectAfterDenied=(Get-FileHash -LiteralPath $disconnectTarget -Algorithm SHA256).Hash
+    if(-not [string]::Equals($disconnectAfterDenied,$disconnectOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'Protected target changed despite degraded fail-safe denial.'
+    }
+    $summary.disconnectPreservedTargetHash=$true
+
+    [IO.File]::WriteAllText($disconnectOutside,'outside-root-write-must-remain-allowed')
+    if((Get-Content -LiteralPath $disconnectOutside -Raw) -ne 'outside-root-write-must-remain-allowed'){
+        throw 'Out-of-root mutation failed while a different retained root was degraded.'
+    }
+    $summary.disconnectOutOfRootAllowed=$true
+
+    # A different root must not be able to replace/release the retained degraded scope.
+    $wrongOut=Join-Path $ResultsDirectory 'disconnect-wrong-gate.out.log'
+    $wrongErr=$wrongOut + '.err'
+    $gateWrong=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $disconnectWrongRoot),
+        '--store',(Quote-Arg $disconnectWrongStore),
+        '--session','disconnect-wrong'
+    ) $wrongOut $wrongErr
+    if(-not $gateWrong.WaitForExit(15000)){
+        Stop-Process -Id $gateWrong.Id -Force -ErrorAction SilentlyContinue
+        throw 'Wrong-root GateClient unexpectedly stayed connected while a degraded root was retained.'
+    }
+    if($gateWrong.ExitCode -eq 0){throw 'Wrong-root GateClient unexpectedly connected while a degraded root was retained.'}
+    $gateWrong=$null
+    $summary.wrongRootReconnectRejected=$true
+
+    # Exact-root recovery must reconnect only to the retained root, rerun preflight, and return Protected.
+    $reconnectOut=Join-Path $ResultsDirectory 'disconnect-reconnect-gate.out.log'
+    $reconnectErr=$reconnectOut + '.err'
+    $reconnectShutdown=Join-Path $ResultsDirectory 'disconnect-reconnect.shutdown'
+    $gateReconnect=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $disconnectRoot),
+        '--store',(Quote-Arg $disconnectStore),
+        '--session','disconnect-reconnect',
+        '--shutdown-file',(Quote-Arg $reconnectShutdown)
+    ) $reconnectOut $reconnectErr
+    Wait-LogPattern $reconnectOut 'kernel gate ACTIVE' $gateReconnect 45
+    $summary.sameRootReconnectActivated=$true
+
+    [IO.File]::WriteAllText($disconnectTarget,'same-root-reconnect-preserved-write')
+    if((Get-Content -LiteralPath $disconnectTarget -Raw) -ne 'same-root-reconnect-preserved-write'){
+        throw 'Same-root mutation did not succeed after v16 reconnect/preflight.'
+    }
+    $summary.sameRootMutationAllowed=$true
+
+    Stop-GateGracefully $gateReconnect $reconnectShutdown $reconnectOut $reconnectErr 'disconnect-reconnect gate'
+    $gateReconnect=$null
+
+    # Only after explicit Maintenance/deactivation may the root behave as ordinary unprotected I/O again.
+    [IO.File]::WriteAllText($disconnectTarget,'released-after-maintenance')
+    if((Get-Content -LiteralPath $disconnectTarget -Raw) -ne 'released-after-maintenance'){
+        throw 'Mutation did not succeed after explicit graceful gate release.'
+    }
+    $summary.gracefulReleaseSucceeded=$true
+
+    # Scenario 4: protocol-v18 retained scope ambiguity must fail closed on the protected volume,
+    # and a rename entering the root from a proven outside source must not bypass destination scope.
+    Prepare-GateRoot $gateExe $scopeRoot
+    $scopeTarget=Join-Path $scopeRoot 'ambiguity-target.bin'
+    New-TestFile $scopeTarget
+    $scopeOriginalHash=(Get-FileHash -LiteralPath $scopeTarget -Algorithm SHA256).Hash
+
+    $scopeReady=Join-Path $ResultsDirectory 'scope-ambiguity.ready'
+    $scopeGo=Join-Path $ResultsDirectory 'scope-ambiguity.go'
+    $scopeResult=Join-Path $ResultsDirectory 'scope-ambiguity.result'
+    $scopeProbeOut=Join-Path $ResultsDirectory 'scope-ambiguity-probe.out.log'
+    $scopeProbeErr=Join-Path $ResultsDirectory 'scope-ambiguity-probe.err.log'
+    $scopeProbe=Start-LoggedProcess $helperExe @(
+        'containment-probe',
+        '--file',(Quote-Arg $scopeTarget),
+        '--ready',(Quote-Arg $scopeReady),
+        '--go',(Quote-Arg $scopeGo),
+        '--result',(Quote-Arg $scopeResult)
+    ) $scopeProbeOut $scopeProbeErr
+    Wait-Path $scopeReady 15 'scope ambiguity probe readiness'
+
+    $scopeOut=Join-Path $ResultsDirectory 'scope-gate.out.log'
+    $scopeErr=$scopeOut + '.err'
+    $scopeShutdown=Join-Path $ResultsDirectory 'scope.shutdown'
+    $gateScope=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $scopeRoot),
+        '--store',(Quote-Arg $scopeStore),
+        '--session','scope-v17',
+        '--scope-ambiguity-pid',([string]$scopeProbe.Id),
+        '--shutdown-file',(Quote-Arg $scopeShutdown)
+    ) $scopeOut $scopeErr
+    Wait-LogPattern $scopeOut 'LAB scope ambiguity\s+: ARMED' $gateScope 45
+    Wait-LogPattern $scopeOut 'kernel gate ACTIVE' $gateScope 45
+
+    New-Item -ItemType File -Path $scopeGo -Force | Out-Null
+    Wait-Path $scopeResult 15 'scope ambiguity probe result'
+    if(-not $scopeProbe.WaitForExit(15000)){
+        Stop-Process -Id $scopeProbe.Id -Force -ErrorAction SilentlyContinue
+        throw 'Scope ambiguity runtime probe did not exit.'
+    }
+    $scopeOutcome=(Get-Content -LiteralPath $scopeResult -Raw).Trim()
+    if($scopeOutcome -ne 'denied'){
+        throw "Protected-volume ambiguity probe was not denied. outcome=$scopeOutcome exit=$($scopeProbe.ExitCode)"
+    }
+    if($scopeProbe.ExitCode -ne 0){
+        throw "Scope ambiguity runtime probe returned unexpected exit=$($scopeProbe.ExitCode), outcome=$scopeOutcome"
+    }
+    $summary.scopeAmbiguityDeniedMutation=$true
+    $scopeAfterHash=(Get-FileHash -LiteralPath $scopeTarget -Algorithm SHA256).Hash
+    if(-not [string]::Equals($scopeAfterHash,$scopeOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'Scope ambiguity probe changed the protected target despite fail-safe denial.'
+    }
+    $summary.scopeAmbiguityPreservedTargetHash=$true
+    $scopeProbe=$null
+
+    New-TestFile $scopeOutsideSource
+    $scopeOutsideHash=(Get-FileHash -LiteralPath $scopeOutsideSource -Algorithm SHA256).Hash
+    $scopeInsideDestination=Join-Path $scopeRoot 'outside-to-inside.bin'
+    $renameDenied=$false
+    try{
+        [IO.File]::Move($scopeOutsideSource,$scopeInsideDestination)
+    }
+    catch{
+        if(Test-AccessDeniedException $_.Exception){$renameDenied=$true}
+        else{throw}
+    }
+    if(-not $renameDenied){
+        throw 'Outside-to-inside RENAME unexpectedly bypassed protected destination scope.'
+    }
+    $summary.crossBoundaryRenameDenied=$true
+    if(-not (Test-Path -LiteralPath $scopeOutsideSource -PathType Leaf)){
+        throw 'Denied outside-to-inside RENAME did not preserve the source pathname.'
+    }
+    $scopeOutsideAfterHash=(Get-FileHash -LiteralPath $scopeOutsideSource -Algorithm SHA256).Hash
+    if(-not [string]::Equals($scopeOutsideAfterHash,$scopeOutsideHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'Denied outside-to-inside RENAME changed the source file.'
+    }
+    $summary.crossBoundaryRenameSourcePreserved=$true
+    if(Test-Path -LiteralPath $scopeInsideDestination){
+        throw 'Denied outside-to-inside RENAME created the protected destination pathname.'
+    }
+    $summary.crossBoundaryRenameDestinationAbsent=$true
+
+    Stop-GateGracefully $gateScope $scopeShutdown $scopeOut $scopeErr 'protocol-v18 scope gate'
+    $gateScope=$null
+
+    # Scenario 5: activation-bound containment is scoped to one kernel process identity.
+    Prepare-GateRoot $gateExe $containRoot
+    $containedFile=Join-Path $containRoot 'contained-target.bin'
+    $peerFile=Join-Path $containRoot 'ordinary-peer.bin'
+    New-TestFile $containedFile
+    New-TestFile $peerFile
+    $containedOriginalHash=(Get-FileHash -LiteralPath $containedFile -Algorithm SHA256).Hash
+    $peerOriginalHash=(Get-FileHash -LiteralPath $peerFile -Algorithm SHA256).Hash
+
+    $containReady=Join-Path $ResultsDirectory 'containment.ready'
+    $containGo=Join-Path $ResultsDirectory 'containment.go'
+    $containResult=Join-Path $ResultsDirectory 'containment.result'
+    $containProbeOut=Join-Path $ResultsDirectory 'containment-probe.out.log'
+    $containProbeErr=Join-Path $ResultsDirectory 'containment-probe.err.log'
+    $containProbe=Start-LoggedProcess $helperExe @(
+        'containment-probe','--file',(Quote-Arg $containedFile),
+        '--ready',(Quote-Arg $containReady),
+        '--go',(Quote-Arg $containGo),
+        '--result',(Quote-Arg $containResult)
+    ) $containProbeOut $containProbeErr
+    Wait-Path $containReady 15 'containment probe readiness'
+
+    $containOut=Join-Path $ResultsDirectory 'containment-gate.out.log'
+    $containErr=$containOut + '.err'
+    $containShutdown=Join-Path $ResultsDirectory 'containment.shutdown'
+    $gateContain=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $containRoot),
+        '--store',(Quote-Arg $containStore),
+        '--session','containment',
+        '--contain-pid',([string]$containProbe.Id),
+        '--shutdown-file',(Quote-Arg $containShutdown)
+    ) $containOut $containErr
+    Wait-LogPattern $containOut 'LAB containment\s+: ACTIVE' $gateContain 45
+
+    New-Item -ItemType File -Path $containGo -Force | Out-Null
+    Wait-Path $containResult 15 'containment probe result'
+    if(-not $containProbe.WaitForExit(15000)){
+        Stop-Process -Id $containProbe.Id -Force -ErrorAction SilentlyContinue
+        throw 'Contained runtime probe did not exit.'
+    }
+    $containOutcome=(Get-Content -LiteralPath $containResult -Raw).Trim()
+    if($containOutcome -ne 'denied'){
+        throw "Contained process mutation was not denied. outcome=$containOutcome exit=$($containProbe.ExitCode)"
+    }
+    if($containProbe.ExitCode -ne 0){
+        throw "Contained runtime probe returned unexpected exit=$($containProbe.ExitCode), outcome=$containOutcome"
+    }
+    $summary.containmentDeniedTarget=$true
+    $containedAfterHash=(Get-FileHash -LiteralPath $containedFile -Algorithm SHA256).Hash
+    if(-not [string]::Equals($containedAfterHash,$containedOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'Contained process changed the protected target despite kernel containment.'
+    }
+    $summary.containmentPreservedTargetHash=$true
+    $containProbe=$null
+
+    & $helperExe map-write --file $peerFile
+    if($LASTEXITCODE -ne 0){throw "Ordinary peer mapped-write failed under PID-scoped containment, exit=$LASTEXITCODE"}
+    $peerAfterHash=(Get-FileHash -LiteralPath $peerFile -Algorithm SHA256).Hash
+    if([string]::Equals($peerAfterHash,$peerOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'Ordinary peer was unexpectedly prevented from mutating under single-process containment.'
+    }
+    $summary.containmentAllowedPeer=$true
+
+    Stop-GateGracefully $gateContain $containShutdown $containOut $containErr 'pre-armed containment gate'
+    $gateContain=$null
+
+    # Scenario 6: a preserved gate reply can atomically transition the exact requestor into containment.
+    Prepare-GateRoot $gateExe $transitionRoot
+    $transitionFileA=Join-Path $transitionRoot 'transition-a.bin'
+    $transitionFileB=Join-Path $transitionRoot 'transition-b.bin'
+    New-TestFile $transitionFileA
+    New-TestFile $transitionFileB
+
+    $transitionReady=Join-Path $ResultsDirectory 'containment-transition.ready'
+    $transitionGo=Join-Path $ResultsDirectory 'containment-transition.go'
+    $transitionResult=Join-Path $ResultsDirectory 'containment-transition.result'
+    $transitionProbeOut=Join-Path $ResultsDirectory 'containment-transition-probe.out.log'
+    $transitionProbeErr=Join-Path $ResultsDirectory 'containment-transition-probe.err.log'
+    $transitionProbe=Start-LoggedProcess $helperExe @(
+        'containment-transition',
+        '--file-a',(Quote-Arg $transitionFileA),
+        '--file-b',(Quote-Arg $transitionFileB),
+        '--ready',(Quote-Arg $transitionReady),
+        '--go',(Quote-Arg $transitionGo),
+        '--result',(Quote-Arg $transitionResult)
+    ) $transitionProbeOut $transitionProbeErr
+    Wait-Path $transitionReady 15 'event-bound containment probe readiness'
+
+    $transitionOut=Join-Path $ResultsDirectory 'containment-transition-gate.out.log'
+    $transitionErr=$transitionOut + '.err'
+    $transitionShutdown=Join-Path $ResultsDirectory 'containment-transition.shutdown'
+    $gateTransition=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $transitionRoot),
+        '--store',(Quote-Arg $transitionStore),
+        '--session','containment-transition',
+        '--contain-after-pid',([string]$transitionProbe.Id),
+        '--contain-after-events','4',
+        '--contain-after-paths','2',
+        '--shutdown-file',(Quote-Arg $transitionShutdown)
+    ) $transitionOut $transitionErr
+    Wait-LogPattern $transitionOut 'LAB transition\s+: pid=' $gateTransition 45
+    Wait-LogPattern $transitionOut 'kernel gate ACTIVE' $gateTransition 45
+
+    New-Item -ItemType File -Path $transitionGo -Force | Out-Null
+    Wait-Path $transitionResult 30 'event-bound containment probe result'
+    if(-not $transitionProbe.WaitForExit(15000)){
+        Stop-Process -Id $transitionProbe.Id -Force -ErrorAction SilentlyContinue
+        throw 'Event-bound containment runtime probe did not exit.'
+    }
+    $transitionOutcome=(Get-Content -LiteralPath $transitionResult -Raw).Trim()
+    if($transitionOutcome -ne 'denied-after-threshold'){
+        throw "Event-bound containment did not deny the next mutation. outcome=$transitionOutcome exit=$($transitionProbe.ExitCode)"
+    }
+    if($transitionProbe.ExitCode -ne 0){
+        throw "Event-bound containment runtime probe returned unexpected exit=$($transitionProbe.ExitCode), outcome=$transitionOutcome"
+    }
+    $summary.transitionDeniedNextWrite=$true
+
+    $transitionJournal=Join-Path $transitionStore 'Sessions\containment-transition\containment-state\containment-journal.jsonl'
+    $transitionRequest=Wait-JournalMatch $transitionJournal {
+        param($x)
+        [int]$x.phase -eq 1 -and
+        [uint64]$x.processId -eq [uint64]$transitionProbe.Id -and
+        [int]$x.evidenceCount -eq 4 -and
+        [int]$x.distinctPathCount -eq 2 -and
+        $x.containmentActive -eq $false
+    } 30 'durable event-bound containment request'
+    $summary.transitionRequested=$true
+
+    $transitionActive=Wait-JournalMatch $transitionJournal {
+        param($x)
+        [int]$x.phase -eq 2 -and
+        [uint64]$x.kernelSequence -eq [uint64]$transitionRequest.kernelSequence -and
+        [uint64]$x.processId -eq [uint64]$transitionRequest.processId -and
+        $x.containmentActive -eq $true -and
+        [uint64]$x.containedProcessId -eq [uint64]$transitionRequest.processId
+    } 30 'kernel-active event-bound containment receipt'
+    $summary.transitionKernelActive=$true
+    Wait-LogPattern $transitionOut 'LAB CONTAINMENT ACTIVE' $gateTransition 30
+    $transitionProbe=$null
+
+    Stop-GateGracefully $gateTransition $transitionShutdown $transitionOut $transitionErr 'event-bound containment gate'
+    $gateTransition=$null
+
+    $summary.passed=$true
+}
+catch{
+    $runtimeFailure=$_
+}
+finally{
+    if($dirHolder -and -not $dirHolder.HasExited){
+        if($dirRelease){New-Item -ItemType File -Path $dirRelease -Force -ErrorAction SilentlyContinue | Out-Null}
+        Stop-Process -Id $dirHolder.Id -Force -ErrorAction SilentlyContinue
+    }
+    if($dormantHolder -and -not $dormantHolder.HasExited){
+        if($dormantRelease){New-Item -ItemType File -Path $dormantRelease -Force -ErrorAction SilentlyContinue | Out-Null}
+        Stop-Process -Id $dormantHolder.Id -Force -ErrorAction SilentlyContinue
+    }
+    if($holder -and -not $holder.HasExited){
+        if($release){New-Item -ItemType File -Path $release -Force -ErrorAction SilentlyContinue | Out-Null}
+        Stop-Process -Id $holder.Id -Force -ErrorAction SilentlyContinue
+    }
+    if($containProbe -and -not $containProbe.HasExited){
+        if($containGo){New-Item -ItemType File -Path $containGo -Force -ErrorAction SilentlyContinue | Out-Null}
+        Stop-Process -Id $containProbe.Id -Force -ErrorAction SilentlyContinue
+    }
+    if($transitionProbe -and -not $transitionProbe.HasExited){
+        if($transitionGo){New-Item -ItemType File -Path $transitionGo -Force -ErrorAction SilentlyContinue | Out-Null}
+        Stop-Process -Id $transitionProbe.Id -Force -ErrorAction SilentlyContinue
+    }
+    if($scopeProbe -and -not $scopeProbe.HasExited){
+        if($scopeGo){New-Item -ItemType File -Path $scopeGo -Force -ErrorAction SilentlyContinue | Out-Null}
+        Stop-Process -Id $scopeProbe.Id -Force -ErrorAction SilentlyContinue
+    }
+    foreach($p in @($gateDir,$gateDormant,$gateHardPre,$gateHardActive,$gateFsctl,$gatePre,$gatePost,$gateScope,$gateContain,$gateTransition,$gateDisconnect,$gateWrong,$gateReconnect)){
+        if($p -and -not $p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}
+    }
+
+    if($installed){
+        try{
+            & $unloadScript -Volume $volume
+            $summary.cleanupPassed=$true
+        }
+        catch{
+            $cleanupFailure=$_
+            $summary.cleanupError=$_.Exception.Message
+            $summary.passed=$false
+        }
+    }
+    else{
+        $summary.cleanupPassed=$true
+    }
+
+    $summary.completedUtc=(Get-Date).ToUniversalTime().ToString('o')
+    $summary | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'runtime-result.json') -Encoding utf8
+}
+
+if($runtimeFailure){
+    if($cleanupFailure){
+        throw "Runtime scenario failed: $($runtimeFailure.Exception.Message) Cleanup also failed: $($cleanupFailure.Exception.Message)"
+    }
+    throw $runtimeFailure
+}
+if($cleanupFailure){
+    throw $cleanupFailure
+}
+
+Write-Host "RUNTIME MINIFILTER LAB PASSED: $ResultsDirectory" -ForegroundColor Green
+){
+        throw "Kernel accepted or ambiguously handled a forged GateClient PID. outcome=$spoofOutcome"
+    }
+    $summary.spoofedClientProcessIdRejected=$true
 
     # Scenario 0: a directory handle that already owns DELETE access must prevent activation.
     Prepare-GateRoot $gateExe $dirRoot

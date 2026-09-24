@@ -478,7 +478,7 @@ foreach($block in @($preWriteBlock,$preSetBlock)){
     }
 }
 
-$scopeStart=$src.IndexOf('static RG_SCOPE_CLASSIFICATION RgClassifyMutationScope(')
+$scopeStart=$src.LastIndexOf('static RG_SCOPE_CLASSIFICATION RgClassifyMutationScope(')
 $scopeEnd=$src.IndexOf('static BOOLEAN RgIsContainedRequestor',$scopeStart)
 if($scopeStart -lt 0 -or $scopeEnd -lt 0){throw 'Volume-aware mutation scope classifier source block missing.'}
 $scopeBlock=$src.Substring($scopeStart,$scopeEnd-$scopeStart)

@@ -53,6 +53,7 @@ $codeOwners=Get-Content -LiteralPath $codeOwnersPath -Raw
 
 foreach($required in @(
     'The default normal package remains Audit',
+    'Version 0.8.1 can admit a cryptographically bound ProductionProtection package',
     'reports `EnforceUnavailable` until a separately qualified production driver/GateClient lifecycle completes',
     'Ambiguous-scope analysis',
     'Kernel-mode requestor / compromised kernel component / BYOVD path',
@@ -89,7 +90,9 @@ foreach($required in @(
     '0.7.31 sustained mixed-workload qualification does not widen the security boundary',
     '0.7.32 introduced protocol v16 and the GateClient-loss fail-safe foundation',
     '0.7.33 advances the wire contract to protocol v17 and binds the protected root to an exact referenced Filter Manager volume',
-    'Version 0.8.0 adds an explicit Enforce configuration/state contract',
+    'Version 0.8.1 adds fail-closed admission for a future ProductionProtection package',
+    'GateClient and the driver catalog must use the same signer',
+    'SYS/INF must verify as catalog members',
     'CODEOWNERS',
     'does not itself require approval'
 )){

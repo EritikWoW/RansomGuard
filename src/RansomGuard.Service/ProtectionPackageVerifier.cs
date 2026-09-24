@@ -92,20 +92,31 @@ internal static class ProtectionPackageVerifier
                     $"Driver catalog signature verification is '{catSignature.Status}', not ValidCached.",
                     observed, descriptor.Altitude, true, true, true, true);
 
-            // Deliberate fail-closed boundary. A valid signed .cat file plus matching local hashes does
-            // not prove that this SYS hash is actually a member of that catalog. The next milestone
-            // must verify SYS -> CAT membership with the Windows catalog APIs before driver load.
+            sys.Position = 0;
+            var sysMembership = DriverCatalogTrust.VerifyMember(sys, sysPath, catPath);
+            if (!string.Equals(sysMembership.Status, "ValidCatalogMember", StringComparison.Ordinal))
+                return Rejected("DriverCatalogMembershipRejected", true,
+                    $"Driver SYS is not a trusted member of the supplied catalog: {sysMembership.Status}.",
+                    observed, descriptor.Altitude, true, true, true, true, true);
+
+            inf.Position = 0;
+            var infMembership = DriverCatalogTrust.VerifyMember(inf, infPath, catPath);
+            if (!string.Equals(infMembership.Status, "ValidCatalogMember", StringComparison.Ordinal))
+                return Rejected("InfCatalogMembershipRejected", true,
+                    $"Driver INF is not a trusted member of the supplied catalog: {infMembership.Status}.",
+                    observed, descriptor.Altitude, true, true, true, true, true);
+
             return new(
-                "CatalogMembershipPending",
+                "Admitted",
                 true,
                 true,
                 true,
                 true,
                 true,
                 true,
-                false,
-                false,
-                "Package identity/signatures passed, but SYS-to-CAT membership is not yet cryptographically verified; driver load is refused.",
+                true,
+                true,
+                "Protection package identity, signatures and SYS/INF catalog membership passed. Lifecycle activation is a separate milestone.",
                 descriptor.Altitude,
                 observed);
         }
@@ -193,7 +204,8 @@ internal static class ProtectionPackageVerifier
         bool descriptor = false,
         bool hashes = false,
         bool gateSignature = false,
-        bool catalogSignature = false) =>
+        bool catalogSignature = false,
+        bool catalogMembership = false) =>
         new(
             state,
             present,
@@ -202,7 +214,7 @@ internal static class ProtectionPackageVerifier
             hashes,
             gateSignature,
             catalogSignature,
-            false,
+            catalogMembership,
             false,
             reason,
             altitude,

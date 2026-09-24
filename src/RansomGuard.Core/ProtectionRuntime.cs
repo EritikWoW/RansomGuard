@@ -155,6 +155,21 @@ public sealed class ProtectionStateMachine
         }
     }
 
+    public void MarkReconnectedProtected(string reason)
+    {
+        lock (_gate)
+        {
+            RequireEnforce();
+            if (!_rollbackReady || _phase != ProtectionPhase.DegradedProtected || string.IsNullOrWhiteSpace(reason))
+                throw new InvalidOperationException("A ProductionGate reconnect may return to Protected only from DegradedProtected after rollback readiness.");
+            _phase = ProtectionPhase.Protected;
+            _kernelConnected = true;
+            _automaticContainmentActive = false;
+            _reason = reason;
+            _observedUtc = DateTime.UtcNow;
+        }
+    }
+
     public void BeginMaintenance(string reason)
     {
         lock (_gate)

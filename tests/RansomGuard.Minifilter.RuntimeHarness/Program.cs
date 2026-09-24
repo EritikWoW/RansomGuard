@@ -5,7 +5,7 @@ if (!OperatingSystem.IsWindows())
     throw new PlatformNotSupportedException("RansomGuard minifilter runtime harness is Windows-only.");
 
 if (args.Length == 0)
-    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | map-write --file <path> [--ready <marker> --go <marker>] | create-new --file <path> [--ready <marker> --go <marker>] | rename-file --source <path> --destination <path> [--ready <marker> --go <marker>] | truncate-eof --file <path> --length <bytes> --ready <marker> --go <marker> | delete-file --file <path> --ready <marker> --go <marker> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker> | containment-transition --file-a <path> --file-b <path> --ready <marker> --go <marker> --result <marker>");
+    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-write-handle --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | map-write --file <path> [--ready <marker> --go <marker>] | create-new --file <path> [--ready <marker> --go <marker>] | rename-file --source <path> --destination <path> [--ready <marker> --go <marker>] | truncate-eof --file <path> --length <bytes> --ready <marker> --go <marker> | delete-file --file <path> --ready <marker> --go <marker> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker> | containment-transition --file-a <path> --file-b <path> --ready <marker> --go <marker> --result <marker>");
 
 var command = args[0].ToLowerInvariant();
 var options = Parse(args.Skip(1).ToArray());
@@ -16,6 +16,12 @@ try
     {
         case "hold-map":
             HoldMappedView(
+                Require(options, "--file"),
+                Require(options, "--ready"),
+                Require(options, "--release"));
+            break;
+        case "hold-write-handle":
+            HoldWritableHandle(
                 Require(options, "--file"),
                 Require(options, "--ready"),
                 Require(options, "--release"));
@@ -172,6 +178,42 @@ static void HoldMappedView(string filePath, string readyMarker, string releaseMa
         if (view != IntPtr.Zero) _ = Native.UnmapViewOfFile(view);
         if (mapping != IntPtr.Zero) _ = Native.CloseHandle(mapping);
         file.Dispose();
+    }
+}
+
+static void HoldWritableHandle(string filePath, string readyMarker, string releaseMarker)
+{
+    EnsureFile(filePath);
+    Directory.CreateDirectory(Path.GetDirectoryName(readyMarker)!);
+    if (File.Exists(readyMarker)) File.Delete(readyMarker);
+    if (File.Exists(releaseMarker)) File.Delete(releaseMarker);
+
+    const uint GenericWrite = 0x40000000;
+    const uint ShareRead = 0x00000001;
+    const uint ShareWrite = 0x00000002;
+    const uint ShareDelete = 0x00000004;
+    const uint OpenExisting = 3;
+    const uint FileAttributeNormal = 0x00000080;
+
+    using var file = Native.CreateFileW(
+        filePath,
+        GenericWrite,
+        ShareRead | ShareWrite | ShareDelete,
+        IntPtr.Zero,
+        OpenExisting,
+        FileAttributeNormal,
+        IntPtr.Zero);
+    if (file.IsInvalid)
+        throw new System.ComponentModel.Win32Exception(
+            Marshal.GetLastWin32Error(), $"CreateFileW writable handle failed for '{filePath}'.");
+
+    File.WriteAllText(readyMarker, $"pid={Environment.ProcessId};file={filePath};utc={DateTime.UtcNow:O}");
+    var deadline = DateTime.UtcNow.AddMinutes(5);
+    while (!File.Exists(releaseMarker))
+    {
+        if (DateTime.UtcNow >= deadline)
+            throw new TimeoutException("Timed out waiting for writable-handle release marker.");
+        Thread.Sleep(100);
     }
 }
 

@@ -44,6 +44,11 @@ foreach($required in @(
     'RgCurrentProtectedClientMode',
     'RgIsGateClientMode',
     'gClientProcessId',
+    'gClientProcess',
+    'RgIsGateClientRequestor',
+    'PsGetCurrentProcess',
+    'PsGetProcessId',
+    'ObReferenceObject',
     'RG_GATE_TIMEOUT_MS',
     'RG_MAX_GATE_INFLIGHT',
     'gGateInFlight',
@@ -456,6 +461,14 @@ $connectEnd=$src.IndexOf('static NTSTATUS RgMessage(PVOID ConnectionCookie',$con
 if($connectStart -lt 0 -or $connectEnd -lt 0){throw 'Connect source block missing.'}
 $connectBlock=$src.Substring($connectStart,$connectEnd-$connectStart)
 foreach($required in @(
+    'candidateClientProcess = PsGetCurrentProcess()',
+    'ObReferenceObject(candidateClientProcess)',
+    'actualClientProcessId = (ULONGLONG)(ULONG_PTR)PsGetProcessId(candidateClientProcess)',
+    'context->ClientProcessId != actualClientProcessId',
+    'gClientProcess = candidateClientProcess',
+    'candidateClientProcess = NULL',
+    'InterlockedExchange64(&gClientProcessId, (LONG64)actualClientProcessId)',
+    'ObDereferenceObject(candidateClientProcess)',
     'FltGetVolumeFromName(gFilter, &volumeName, &candidateVolume)',
     'context->GateVolumeLengthBytes',
     'gGateVolumeLengthBytes != (USHORT)volumeBytes',
@@ -605,6 +618,11 @@ if($src -notmatch 'static VOID RgDisconnect[\s\S]*RgClearContainedProcess\(\)' -
    $src -notmatch 'NTSTATUS RgUnload[\s\S]*RgClearContainedProcess\(\)'){
     throw 'Disconnect and unload must release the referenced containment process object.'
 }
+if($src -notmatch [regex]::Escape('releaseClientProcess = gClientProcess') -or
+   $src -notmatch [regex]::Escape('gClientProcess = NULL') -or
+   $src -notmatch [regex]::Escape('ObDereferenceObject(releaseClientProcess)')){
+    throw 'Disconnect/unload must release the referenced GateClient process object.'
+}
 if($src -notmatch 'static VOID RgDisconnect[\s\S]*RgClearScopeAmbiguityProbe\(\)' -or
    $src -notmatch 'NTSTATUS RgUnload[\s\S]*RgClearScopeAmbiguityProbe\(\)'){
     throw 'Disconnect and unload must release the referenced LAB scope-ambiguity process object.'
@@ -624,8 +642,24 @@ if($src -notmatch [regex]::Escape('FltGetVolumeFromName(gFilter, &volumeName, &c
    $src -notmatch [regex]::Escape('FltObjectDereference(releaseVolume)')){
     throw 'Protected volume must use a Filter Manager rundown reference with explicit release.'
 }
-if($src -notmatch [regex]::Escape('Event->ProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId')){
-    throw 'Gate client PID must be excluded from ambiguous-volume enforcement to prevent rollback-store self-deadlock.'
+$clientRequestorStart=$src.LastIndexOf('static BOOLEAN RgIsGateClientRequestor(PFLT_CALLBACK_DATA Data)')
+$clientRequestorEnd=$src.IndexOf('static BOOLEAN RgIsContainedRequestor',$clientRequestorStart)
+if($clientRequestorStart -lt 0 -or $clientRequestorEnd -lt 0){
+    throw 'GateClient process-object identity helper source block missing.'
+}
+$clientRequestorBlock=$src.Substring($clientRequestorStart,$clientRequestorEnd-$clientRequestorStart)
+foreach($required in @(
+    'requestor = FltGetRequestorProcess(Data)',
+    'gClientProcess != NULL && gClientProcess == requestor',
+    'ExAcquireFastMutex(&gPortMutex)',
+    'ExReleaseFastMutex(&gPortMutex)'
+)){
+    if($clientRequestorBlock -notmatch [regex]::Escape($required)){
+        throw "GateClient process-object self-exemption invariant missing: $required"
+    }
+}
+if($src -match [regex]::Escape('Event->ProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId')){
+    throw 'Ambiguous-volume self-exemption must use exact GateClient PEPROCESS identity, not a client-supplied PID.'
 }
 if($proto -notmatch 'RG_CREATE_DISPOSITION_SHIFT'){throw 'Protocol must carry CREATE disposition/options semantics.'}
 if($proto -notmatch 'DestinationPathStatus' -or $proto -notmatch 'DestinationPath\[RG_PATH_CHARS\]'){throw 'Protocol v8 must carry bounded rename destination path metadata.'}

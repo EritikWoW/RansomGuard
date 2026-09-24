@@ -32,7 +32,7 @@ Security-sensitive assets include:
 
 ### Ordinary product / Enforce foundation
 
-The normal service obtains filesystem telemetry through ETW and publishes bounded read-only status through the local named pipe. Audit is the default mode and remains non-blocking. Schema 4 may explicitly request Enforce. Version 0.8.3 first inspects a fixed ProductionProtection package: the actual running service image anchors the signer identity; GateClient and the driver catalog must use the same signer; SYS/INF must verify as catalog members; LAB provider/placeholder altitude are rejected. Package admission performs no lifecycle mutation, so the request is still published as `EnforceUnavailable`.
+The normal service obtains filesystem telemetry through ETW and publishes bounded read-only status through the local named pipe. Audit is the default mode and remains non-blocking. Schema 4 may explicitly request Enforce. Version 0.8.4 first inspects a fixed ProductionProtection package: the actual running service image anchors the signer identity; GateClient and the driver catalog must use the same signer; SYS/INF must verify as catalog members; LAB provider/placeholder altitude are rejected. Package admission performs no lifecycle mutation, so the request is still published as `EnforceUnavailable`.
 
 The protection state machine is the only source of a kernel-enforcement claim. SCM `Running`, driver installation, a live UI, or a connected-but-not-activated kernel channel cannot set `KernelEnforcementActive=true`. Rollback repository validation must complete before any future kernel-start transition.
 

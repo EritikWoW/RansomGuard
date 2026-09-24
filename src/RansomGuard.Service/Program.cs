@@ -56,7 +56,22 @@ try
         // write gate is intentionally not enabled until Windows VM validation is complete.
         var rollbackRepository=new RollbackRepository(store.Rollback);
         rollbackRepository.VerifyAll();
-        store.Audit(new{Type="RollbackStoreReady",Utc=DateTime.UtcNow,Root=store.Rollback,Sessions=rollbackRepository.SessionIds().Length,Mode="FoundationOnly"});
+
+        var protection=new ProtectionStateMachine(settings.Mode);
+        protection.MarkRollbackReady();
+        if(string.Equals(settings.Mode,"Enforce",StringComparison.Ordinal))
+        {
+            // 0.8.0 establishes the production state/config/API contract only. It must not
+            // treat an installed/running LAB driver as production enforcement. Driver/GateClient
+            // lifecycle activation is a separate qualified milestone.
+            protection.MarkUnavailable(
+                "Production driver/GateClient lifecycle is not enabled in the 0.8.0 foundation build.");
+        }
+        store.Audit(new{
+            Type="RollbackStoreReady",Utc=DateTime.UtcNow,Root=store.Rollback,
+            Sessions=rollbackRepository.SessionIds().Length,RequestedMode=settings.Mode,
+            Protection=protection.Snapshot()
+        });
         using var lab=isLab?new LabSession(args[0]=="--lab-full-dump"):null;
         var samples=new ContentSampler();
         foreach(var file in settings.CanaryFiles)
@@ -73,7 +88,7 @@ try
         // Baseline fixture samples are not canaries: register only configured canaries in RiskEngine.
         var builder=Host.CreateApplicationBuilder(new HostApplicationBuilderSettings{Args=Array.Empty<string>(),ContentRootPath=AppContext.BaseDirectory});
         builder.Services.AddWindowsService(o=>o.ServiceName="RansomGuardV03");
-        var runtime=new RuntimeState();
+        var runtime=new RuntimeState(protection.Snapshot());
         builder.Services.AddSingleton(runtime);
         var scopedTrust=new ScopedTrustCoordinator(store,runtime);
         builder.Services.AddHostedService(sp=>new ScopedTrustPublisher(scopedTrust));

@@ -89,6 +89,31 @@ using var port = Native.Connect(PortName, context);
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); Native.Cancel(port); };
 
+async Task MonitorShutdownFileAsync()
+{
+    if (string.IsNullOrWhiteSpace(options.ShutdownFile))
+        return;
+
+    try
+    {
+        while (!cts.IsCancellationRequested)
+        {
+            if (File.Exists(options.ShutdownFile))
+            {
+                Console.WriteLine($"LAB graceful shutdown marker observed: {options.ShutdownFile}");
+                cts.Cancel();
+                Native.Cancel(port);
+                return;
+            }
+            await Task.Delay(100, cts.Token).ConfigureAwait(false);
+        }
+    }
+    catch (OperationCanceledException) when (cts.IsCancellationRequested)
+    {
+    }
+}
+var shutdownMonitor = MonitorShutdownFileAsync();
+
 var headerSize = Marshal.SizeOf<FilterMessageHeader>();
 var eventSize = Marshal.SizeOf<RgEvent>();
 var replyHeaderSize = Marshal.SizeOf<FilterReplyHeader>();
@@ -474,6 +499,9 @@ finally
     Marshal.FreeHGlobal(buffer);
     if (activeWorkers.Count != 0)
         await Task.WhenAll(activeWorkers).ConfigureAwait(false);
+    if (!cts.IsCancellationRequested)
+        cts.Cancel();
+    await shutdownMonitor.ConfigureAwait(false);
 }
 
 repository.VerifyAll();
@@ -1863,7 +1891,8 @@ sealed record Options(
     bool DropFirstRenameCompletion,
     bool DropFirstTruncateCompletion,
     bool DropFirstDeleteCompletion,
-    bool ReconcileOnly)
+    bool ReconcileOnly,
+    string? ShutdownFile)
 {
     public const int DefaultGateWorkers = 4;
     public const int MaxGateWorkers = 8;
@@ -1892,6 +1921,7 @@ sealed record Options(
         var dropFirstTruncateCompletion = false;
         var dropFirstDeleteCompletion = false;
         var reconcileOnly = false;
+        string? shutdownFile = null;
         for (var i = 0; i < args.Length; i++)
         {
             switch (args[i].ToLowerInvariant())
@@ -1943,15 +1973,20 @@ sealed record Options(
                 case "--drop-first-truncate-completion": dropFirstTruncateCompletion = true; break;
                 case "--drop-first-delete-completion": dropFirstDeleteCompletion = true; break;
                 case "--reconcile-only": reconcileOnly = true; break;
+                case "--shutdown-file" when i + 1 < args.Length:
+                    shutdownFile = Path.GetFullPath(args[++i]);
+                    break;
                 case "--prepare-root": prepare = true; break;
                 default: throw new ArgumentException($"Unknown/incomplete argument: {args[i]}");
             }
         }
         if (string.IsNullOrWhiteSpace(root)) throw new ArgumentException("Pass --root <disposable-test-directory>.");
-        if (prepare && (containPid.HasValue || containAfterPid.HasValue || dropFirstCreateCompletion || dropFirstRenameCompletion || dropFirstTruncateCompletion || dropFirstDeleteCompletion || reconcileOnly))
-            throw new ArgumentException("Containment/fault/reconciliation options cannot be combined with --prepare-root.");
-        if (reconcileOnly && (containPid.HasValue || containAfterPid.HasValue || dropFirstCreateCompletion || dropFirstRenameCompletion || dropFirstTruncateCompletion || dropFirstDeleteCompletion || containThresholdSpecified))
-            throw new ArgumentException("--reconcile-only cannot be combined with containment or fault injection.");
+        if (shutdownFile is not null && PathPolicy.Under(shutdownFile, root))
+            throw new ArgumentException("--shutdown-file must be outside the protected LAB root.");
+        if (prepare && (containPid.HasValue || containAfterPid.HasValue || dropFirstCreateCompletion || dropFirstRenameCompletion || dropFirstTruncateCompletion || dropFirstDeleteCompletion || reconcileOnly || shutdownFile is not null))
+            throw new ArgumentException("Containment/fault/reconciliation/shutdown options cannot be combined with --prepare-root.");
+        if (reconcileOnly && (containPid.HasValue || containAfterPid.HasValue || dropFirstCreateCompletion || dropFirstRenameCompletion || dropFirstTruncateCompletion || dropFirstDeleteCompletion || containThresholdSpecified || shutdownFile is not null))
+            throw new ArgumentException("--reconcile-only cannot be combined with containment, fault injection, or a shutdown marker.");
         if ((dropFirstCreateCompletion ? 1 : 0) + (dropFirstRenameCompletion ? 1 : 0) + (dropFirstTruncateCompletion ? 1 : 0) + (dropFirstDeleteCompletion ? 1 : 0) > 1)
             throw new ArgumentException("Only one completion-loss injection may be armed per GateClient session.");
         if (containPid.HasValue && containAfterPid.HasValue)
@@ -1965,7 +2000,7 @@ sealed record Options(
             root, store, session, prepare, gateWorkers, maxStoreMiB, minFreeMiB,
             containPid, containAfterPid, containAfterEvents, containAfterPaths,
             dropFirstCreateCompletion, dropFirstRenameCompletion, dropFirstTruncateCompletion,
-            dropFirstDeleteCompletion, reconcileOnly);
+            dropFirstDeleteCompletion, reconcileOnly, shutdownFile);
     }
 }
 

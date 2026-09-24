@@ -2326,9 +2326,14 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
         InterlockedCompareExchange(&gClientConnected, 0, 0) == 0 ||
         !RgIsGateClientMode(RgCurrentClientMode())) {
         status = STATUS_REVISION_MISMATCH;
-    } else if (request->Command == RgControlQueryActivation ||
-               request->Command == RgControlQueryContainment) {
+    } else if (request->Command == RgControlQueryActivation) {
         if (request->TargetProcessId != 0) {
+            status = STATUS_INVALID_PARAMETER;
+        }
+    } else if (request->Command == RgControlQueryContainment) {
+        if (RgCurrentClientMode() != RgClientLabGate) {
+            status = STATUS_NOT_SUPPORTED;
+        } else if (request->TargetProcessId != 0) {
             status = STATUS_INVALID_PARAMETER;
         }
     } else if (request->Command == RgControlArmPreflight) {

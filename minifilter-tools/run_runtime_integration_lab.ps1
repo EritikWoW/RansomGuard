@@ -598,11 +598,13 @@ try{
 
     $containOut=Join-Path $ResultsDirectory 'containment-gate.out.log'
     $containErr=$containOut + '.err'
+    $containShutdown=Join-Path $ResultsDirectory 'containment.shutdown'
     $gateContain=Start-LoggedProcess $gateExe @(
         '--root',(Quote-Arg $containRoot),
         '--store',(Quote-Arg $containStore),
         '--session','containment',
-        '--contain-pid',([string]$containProbe.Id)
+        '--contain-pid',([string]$containProbe.Id),
+        '--shutdown-file',(Quote-Arg $containShutdown)
     ) $containOut $containErr
     Wait-LogPattern $containOut 'LAB containment\s+: ACTIVE' $gateContain 45
 
@@ -635,10 +637,10 @@ try{
     }
     $summary.containmentAllowedPeer=$true
 
-    Stop-LabProcess $gateContain 'pre-armed containment gate'
+    Stop-GateGracefully $gateContain $containShutdown $containOut $containErr 'pre-armed containment gate'
     $gateContain=$null
 
-    # Scenario 4: a preserved gate reply can atomically transition the exact requestor into containment.
+    # Scenario 5: a preserved gate reply can atomically transition the exact requestor into containment.
     Prepare-GateRoot $gateExe $transitionRoot
     $transitionFileA=Join-Path $transitionRoot 'transition-a.bin'
     $transitionFileB=Join-Path $transitionRoot 'transition-b.bin'
@@ -662,13 +664,15 @@ try{
 
     $transitionOut=Join-Path $ResultsDirectory 'containment-transition-gate.out.log'
     $transitionErr=$transitionOut + '.err'
+    $transitionShutdown=Join-Path $ResultsDirectory 'containment-transition.shutdown'
     $gateTransition=Start-LoggedProcess $gateExe @(
         '--root',(Quote-Arg $transitionRoot),
         '--store',(Quote-Arg $transitionStore),
         '--session','containment-transition',
         '--contain-after-pid',([string]$transitionProbe.Id),
         '--contain-after-events','4',
-        '--contain-after-paths','2'
+        '--contain-after-paths','2',
+        '--shutdown-file',(Quote-Arg $transitionShutdown)
     ) $transitionOut $transitionErr
     Wait-LogPattern $transitionOut 'LAB transition\s+: pid=' $gateTransition 45
     Wait-LogPattern $transitionOut 'kernel gate ACTIVE' $gateTransition 45
@@ -711,6 +715,9 @@ try{
     Wait-LogPattern $transitionOut 'LAB CONTAINMENT ACTIVE' $gateTransition 30
     $transitionProbe=$null
 
+    Stop-GateGracefully $gateTransition $transitionShutdown $transitionOut $transitionErr 'event-bound containment gate'
+    $gateTransition=$null
+
     $summary.passed=$true
 }
 catch{
@@ -733,7 +740,7 @@ finally{
         if($transitionGo){New-Item -ItemType File -Path $transitionGo -Force -ErrorAction SilentlyContinue | Out-Null}
         Stop-Process -Id $transitionProbe.Id -Force -ErrorAction SilentlyContinue
     }
-    foreach($p in @($gateDir,$gatePre,$gatePost,$gateContain,$gateTransition)){
+    foreach($p in @($gateDir,$gatePre,$gatePost,$gateContain,$gateTransition,$gateDisconnect,$gateWrong,$gateReconnect)){
         if($p -and -not $p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}
     }
 

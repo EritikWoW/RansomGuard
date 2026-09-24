@@ -65,6 +65,8 @@ foreach($required in @(
     'overflow width of 16 against a kernel admission cap of 8 (8 allowed / 8 denied)',
     'Persisted reboot timestamps are SHA-bound and parsed from raw offset-bearing JSON',
     '0.7.31 adds a separate sustained mixed-workload qualification harness',
+    '0.7.32 separates initial connection state from an already armed protection session',
+    'RgControlAuthorizeDisconnect',
     'Source presence is not qualification evidence',
     'current runner reported ReFS creation unsupported',
     'Do not describe the current normal bundle as production ransomware blocking'
@@ -82,6 +84,8 @@ foreach($required in @(
     'The 0.7.30 qualification campaign materially increases confidence in this LAB boundary but does not change it into a production claim.',
     '16 requests against cap 8 -> 8 allowed / 8 denied',
     '0.7.31 adds a manual sustained mixed-workload qualification contract',
+    '0.7.32 adds an activated GateClient-loss fail-safe boundary without changing protocol v15',
+    'RgControlAuthorizeDisconnect',
     'Source presence or a hosted compile is not treated as endurance evidence',
     'CODEOWNERS',
     'does not itself require approval'
@@ -93,6 +97,10 @@ foreach($required in @(
 
 foreach($required in @(
     'Data->RequestorMode == KernelMode',
+    'gProtectionArmed',
+    'gFailSafeActive',
+    'gDisconnectAuthorized',
+    'RgControlAuthorizeDisconnect',
     'Unresolved/out-of-root CREATEs fail open',
     'Unresolved/out-of-root paths fail open',
     'return FLT_PREOP_SUCCESS_NO_CALLBACK'
@@ -108,6 +116,9 @@ if($driver -notmatch 'FltCreateCommunicationPort\([^;]+RgConnect\s*,\s*RgDisconn
 if(-not $protocol.Contains('#define RG_PROTOCOL_VERSION 15u')){
     throw 'Threat-model protocol-v15 boundary changed without review.'
 }
+if(-not $protocol.Contains('RgControlAuthorizeDisconnect = 6')){
+    throw 'Threat-model orderly-disconnect control boundary changed without review.'
+}
 if(-not $gateClient.Contains('ProtocolVersion = 15')){
     throw 'GateClient protocol-v15 connection boundary changed without threat-model review.'
 }
@@ -116,6 +127,8 @@ foreach($required in @(
     'if (GateMessagePolicy.RequiresReply((RgEventType)ev.EventType))',
     'await worker.ConfigureAwait(false);',
     'FilterReplyMessage',
+    'RgControlCommand.AuthorizeDisconnect',
+    'var cleanShutdown = workerFailureCount == 0',
     'synchronous handle'
 )){
     if(-not $gateClient.Contains($required)){
@@ -176,4 +189,4 @@ foreach($workflowPath in $workflowPaths){
     }
 }
 
-Write-Host "Threat-model gate PASSED: docs match AuditOnly/fail-open/kernel exclusions, protocol v15, serialized synchronous gate semantics, current Driver Verifier/fault qualification limits, supply-chain controls, CODEOWNERS routing, build_windows.ps1 and all $($workflowPaths.Count) repository workflows invoke this gate."
+Write-Host "Threat-model gate PASSED: docs match AuditOnly/fail-open/kernel exclusions, protocol v15, activated GateClient-loss fail-safe/orderly-disconnect semantics, serialized synchronous gate semantics, current qualification limits, supply-chain controls, CODEOWNERS routing, build_windows.ps1 and all $($workflowPaths.Count) repository workflows invoke this gate."

@@ -1,8 +1,12 @@
-# RansomGuard 0.8.4.0
+# RansomGuard 0.8.5.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
 and recover data through rollback plus adaptive crypto analysis.
+
+## GateClient process identity boundary
+
+0.8.5.0 removes user-mode PID trust from the minifilter connection boundary without changing protocol v18. The connect callback references the actual calling `PEPROCESS`, derives the real PID from that kernel object, and rejects a connect context whose `ClientProcessId` does not match. The exact referenced GateClient process object is retained for the live connection and is used for rollback/protocol self-I/O exemption by object identity rather than a client-asserted PID. Rejected connects, disconnect and unload all release the process reference. A VM negative probe must prove that a valid protocol/root/volume connection with a forged PID is rejected before normal GateClient scenarios run.
 
 ## Data-mutating FSCTL boundary
 
@@ -171,7 +175,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.8.4.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.8.5.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 Manual disposable-VM runtime workflows:
 

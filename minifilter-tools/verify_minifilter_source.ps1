@@ -645,7 +645,7 @@ if($infText -notmatch 'Instance1\.Altitude\s*=\s*"370099\.4242"'){throw 'Unexpec
 Write-Host 'LAB pre-write gate source check PASSED, including protocol-v17 protected-volume scope classification, disconnect fail-safe state, DELETE/TRUNCATE reconciliation, event-bound PEPROCESS containment, fail-closed activation preflight, bounded admission and paging/section evidence.' -ForegroundColor Green
 Write-Host 'Gate scope: one explicit NT root negotiated by the single connected client.'
 Write-Host 'In-scope mutations normally require an explicit preservation decision; an activation-bound contained PEPROCESS is denied before the user-mode gate.'
-Write-Host 'Out-of-scope/unresolved I/O remains fail-open; no process-control or kernel file-writing APIs are present.'
+Write-Host 'Resolved out-of-root I/O and ambiguity on other volumes stay outside the gate; ambiguous destructive ordinary user-mode I/O on the bound gate volume fails closed. No process-control or kernel file-writing APIs are present.'
 Write-Host 'Demand start: yes; automatic attachment suppressed: yes.'
 Write-Host 'x64 build/validation tools required; ApiValidator remains enabled.'
 Write-Warning 'Altitude 370099.4242 is an UNASSIGNED LAB placeholder. Never ship it. Microsoft must allocate the production altitude.'

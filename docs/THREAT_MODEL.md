@@ -106,7 +106,11 @@ The ordinary observation predicate rejects `RequestorMode == KernelMode`. This i
 
 ### Gate disconnect/unavailable state
 
-The preservation guarantee exists only while the LAB protocol is connected and activated. Driver presence alone is not sufficient. Production enforcement therefore needs an explicit health/authorization state with operator-visible degradation semantics.
+An activated LAB gate no longer treats an unexpected GateClient disconnect as equivalent to protection being disabled. If the client disappears without first issuing the explicit maintenance deactivation command, the kernel preserves the negotiated LAB root/mode in a `DEGRADED_PROTECTED` latch. Resolved, known in-scope mutation-capable CREATE, ordinary WRITE, RENAME/TRUNCATE/DELETE set-information requests, and creation of new writable sections for already tracked streams fail closed while that latch is active. A new GateClient cannot silently replace the root or clear the latch; current LAB recovery from this state is driver unload/reload.
+
+A controlled shutdown is different: GateClient explicitly asks the kernel to deactivate the gate only after its receive loop and active workers have drained, then disconnects. Process kill, crash, handle loss or other exits that do not send that command therefore remain distinguishable from authorized maintenance.
+
+This is an Engineering LAB hardening step, not yet a complete production health state machine. Existing writable mappings are not converted into synchronous user-mode gates after disconnect; they remain covered by the baseline/pre-image captured before the mapping was permitted. Unresolved/name-query-failed scope classification is still a separate fail-open production blocker. Operator-visible service health, authenticated maintenance policy and qualified reconnect/recovery semantics remain future production work.
 
 ## Fail-closed analysis and availability risk
 

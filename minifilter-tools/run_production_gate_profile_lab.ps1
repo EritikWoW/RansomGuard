@@ -193,7 +193,9 @@ try{
         Stop-Process -Id $reject.Id -Force -ErrorAction SilentlyContinue
         throw 'ProductionGate LAB-option rejection probe timed out.'
     }
-    $rejectText=(if(Test-Path $rejectErr){Get-Content $rejectErr -Raw}else{''}) + (if(Test-Path $rejectOut){Get-Content $rejectOut -Raw}else{''})
+    $rejectErrText=if(Test-Path -LiteralPath $rejectErr){Get-Content -LiteralPath $rejectErr -Raw}else{''}
+    $rejectOutText=if(Test-Path -LiteralPath $rejectOut){Get-Content -LiteralPath $rejectOut -Raw}else{''}
+    $rejectText=$rejectErrText+$rejectOutText
     if($reject.ExitCode -eq 0 -or $rejectText -notmatch 'ProductionGate forbids LAB prepare/fault/reconciliation/shutdown/containment options'){
         throw 'ProductionGate did not reject a LAB-only containment option.'
     }
@@ -257,7 +259,9 @@ try{
         Stop-Process -Id $labWrong.Id -Force -ErrorAction SilentlyContinue
         throw 'LabGate unexpectedly stayed connected to retained ProductionGate state.'
     }
-    $labText=(if(Test-Path $labOut){Get-Content $labOut -Raw}else{''}) + (if(Test-Path $labErr){Get-Content $labErr -Raw}else{''})
+    $labOutText=if(Test-Path -LiteralPath $labOut){Get-Content -LiteralPath $labOut -Raw}else{''}
+    $labErrText=if(Test-Path -LiteralPath $labErr){Get-Content -LiteralPath $labErr -Raw}else{''}
+    $labText=$labOutText+$labErrText
     if($labWrong.ExitCode -eq 0 -or $labText -match 'kernel gate ACTIVE'){
         throw 'LabGate unexpectedly replaced retained ProductionGate state.'
     }

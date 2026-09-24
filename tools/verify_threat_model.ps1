@@ -99,9 +99,11 @@ foreach($required in @(
     'return FLT_PREOP_SUCCESS_NO_CALLBACK',
     'gProtectionRequired',
     'gDegradedProtected',
+    'gMaintenanceRequested',
     'gGracefulDisconnectAuthorized',
     'RgProtectionDegradedProtected',
     'RgControlDeactivateGate',
+    'InterlockedExchange(&gMaintenanceRequested, 1)',
     'InterlockedExchange(&gDegradedProtected, 1)',
     'InterlockedExchange(&gClientConnected, 0)'
 )){

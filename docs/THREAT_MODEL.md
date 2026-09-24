@@ -1,8 +1,8 @@
 # RansomGuard threat model
 
-Status: engineering threat model for RansomGuard 0.8.1.x, covering the default Audit product, Production Enforce state/package admission contracts, and the Engineering LAB minifilter.
+Status: engineering threat model for RansomGuard 0.8.2.x, covering the default Audit product, Production Enforce state/package admission, protocol-v18 ProductionGate contract, and the Engineering LAB minifilter.
 
-This document describes what the current implementation protects, what it deliberately does not protect, and how ambiguous I/O is handled. It is not a claim of production readiness. The default normal package remains Audit. Version 0.8.1 can admit a cryptographically bound ProductionProtection package but still reports `EnforceUnavailable` until a separately qualified production driver/GateClient lifecycle completes; the blocking minifilter path remains Engineering LAB only.
+This document describes what the current implementation protects, what it deliberately does not protect, and how ambiguous I/O is handled. It is not a claim of production readiness. The default normal package remains Audit. Version 0.8.2 adds a distinct protocol-v18 ProductionGate client contract above the admitted ProductionProtection package, but the normal service still reports `EnforceUnavailable` until the separately qualified driver/GateClient lifecycle is wired in. Exact-head disposable-VM evidence is required for the new kernel mode before merge.
 
 ## Security goals
 
@@ -38,13 +38,21 @@ The protection state machine is the only source of a kernel-enforcement claim. S
 
 A detector result is evidence for review; it is not yet an authorization to block a normal process. The UI does not turn SCM Running into proof that ETW monitoring is healthy. ETW startup/runtime failure enters an explicit diagnostics-only state.
 
+### Gate wire contract
+
+Protocol v18 has separate `Audit`, `LabGate` and `ProductionGate` client identities. LabGate retains the existing explicit containment/fault qualification controls. ProductionGate reuses preservation, activation preflight, protected-volume ambiguity and degraded-protection state, but kernel mode rejects LAB containment reply flags and the LAB containment/scope-ambiguity control commands. When protection is active, the retained root/volume also retains the exact client mode, so an unexpected ProductionGate disconnect cannot reconnect as LabGate.
+
+Production GateClient CLI additionally rejects LAB prepare/reconcile/fault/containment arguments and requires explicit pre-provisioned rollback/control paths plus a unique session. Its readiness JSON is emitted only after kernel Protected activation and is not independently sufficient after child death; a supervisor must correlate it with the exact live child PID/session.
+
+This v18 change remains unqualified until the exact PR head passes the disposable-VM ProductionGate campaign. Hosted source/compile results alone are not runtime evidence.
+
 ### Engineering LAB gate
 
 The LAB path consists of:
 
 `user-mode requestor -> Filter Manager/minifilter -> synchronous GateClient decision -> durable rollback store -> allow/deny`
 
-The minifilter and GateClient trust each other only inside the explicitly negotiated LAB protocol/session. The current wire contract is protocol v17; protocol drift is a compatibility/security boundary, not a best-effort condition. The gate is scoped to one explicit protected root plus the exact local Filter Manager volume object that contains that root. The rollback store must be outside the protected root.
+The minifilter and GateClient trust each other only inside the explicitly negotiated LAB protocol/session. The current wire contract is protocol v18; protocol drift and client-mode drift are compatibility/security boundaries, not best-effort conditions. The gate is scoped to one explicit protected root plus the exact local Filter Manager volume object that contains that root. The rollback store must be outside the protected root.
 
 The Filter Manager server port currently permits one client connection. GateClient uses one synchronous communication handle. Kernel admission may have multiple blocking requests waiting, but user-mode reply-required preservation is deliberately serialized: the worker handling a gate request must send its reply before the receive loop issues the next blocking `FilterGetMessage`. Configurable GateClient slots bound no-reply completion/evidence processing; they are not a claim of multiple simultaneous preservation replies. This distinction is part of the availability model and must not be blurred in performance or security claims.
 

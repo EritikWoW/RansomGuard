@@ -149,7 +149,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.7.31.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.7.32.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 Manual disposable-VM runtime workflows:
 

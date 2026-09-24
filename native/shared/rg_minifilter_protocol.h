@@ -73,7 +73,8 @@ typedef enum _RG_CONTROL_COMMAND {
     RgControlQueryActivation = 2,
     RgControlArmPreflight = 3,
     RgControlActivateAndContainProcess = 4,
-    RgControlQueryContainment = 5
+    RgControlQueryContainment = 5,
+    RgControlDeactivateGate = 6
 } RG_CONTROL_COMMAND;
 
 #pragma pack(push, 1)

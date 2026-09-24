@@ -5,7 +5,7 @@ if (!OperatingSystem.IsWindows())
     throw new PlatformNotSupportedException("RansomGuard minifilter runtime harness is Windows-only.");
 
 if (args.Length == 0)
-    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | map-write --file <path> | create-new --file <path> | rename-file --source <path> --destination <path> | truncate-eof --file <path> --length <bytes> --ready <marker> --go <marker> | delete-file --file <path> --ready <marker> --go <marker> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker> | containment-transition --file-a <path> --file-b <path> --ready <marker> --go <marker> --result <marker>");
+    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | map-write --file <path> [--ready <marker> --go <marker>] | create-new --file <path> [--ready <marker> --go <marker>] | rename-file --source <path> --destination <path> [--ready <marker> --go <marker>] | truncate-eof --file <path> --length <bytes> --ready <marker> --go <marker> | delete-file --file <path> --ready <marker> --go <marker> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker> | containment-transition --file-a <path> --file-b <path> --ready <marker> --go <marker> --result <marker>");
 
 var command = args[0].ToLowerInvariant();
 var options = Parse(args.Skip(1).ToArray());
@@ -27,15 +27,23 @@ try
                 Require(options, "--release"));
             break;
         case "map-write":
-            MapAndWrite(Require(options, "--file"));
+            MapAndWrite(
+                Require(options, "--file"),
+                OptionalPath(options, "--ready"),
+                OptionalPath(options, "--go"));
             break;
         case "create-new":
-            CreateNewFile(Require(options, "--file"));
+            CreateNewFile(
+                Require(options, "--file"),
+                OptionalPath(options, "--ready"),
+                OptionalPath(options, "--go"));
             break;
         case "rename-file":
             RenameFile(
                 Require(options, "--source"),
-                Require(options, "--destination"));
+                Require(options, "--destination"),
+                OptionalPath(options, "--ready"),
+                OptionalPath(options, "--go"));
             break;
         case "truncate-eof":
             TruncateEndOfFile(
@@ -97,6 +105,35 @@ static string Require(Dictionary<string, string> options, string name) =>
     options.TryGetValue(name, out var value) && !string.IsNullOrWhiteSpace(value)
         ? Path.GetFullPath(value)
         : throw new ArgumentException($"Missing {name}.");
+
+static string? OptionalPath(Dictionary<string, string> options, string name) =>
+    options.TryGetValue(name, out var value) && !string.IsNullOrWhiteSpace(value)
+        ? Path.GetFullPath(value)
+        : null;
+
+static void WaitForOptionalBarrier(string? readyMarker, string? goMarker, string stage)
+{
+    if (readyMarker is null && goMarker is null)
+        return;
+    if (readyMarker is null || goMarker is null)
+        throw new ArgumentException($"{stage} requires both --ready and --go when a barrier is requested.");
+
+    foreach (var marker in new[] { readyMarker, goMarker })
+    {
+        var parent = Path.GetDirectoryName(marker);
+        if (!string.IsNullOrWhiteSpace(parent)) Directory.CreateDirectory(parent);
+    }
+    if (File.Exists(readyMarker)) File.Delete(readyMarker);
+
+    File.WriteAllText(readyMarker, $"pid={Environment.ProcessId};stage={stage};utc={DateTime.UtcNow:O}");
+    var deadline = DateTime.UtcNow.AddSeconds(45);
+    while (!File.Exists(goMarker))
+    {
+        if (DateTime.UtcNow >= deadline)
+            throw new TimeoutException($"Timed out waiting for {stage} start barrier.");
+        Thread.Sleep(10);
+    }
+}
 
 static long RequireInt64(Dictionary<string, string> options, string name) =>
     options.TryGetValue(name, out var value) &&
@@ -332,7 +369,7 @@ static bool TryWriteTransitionByte(SafeFileHandle handle, long offset, byte valu
     return true;
 }
 
-static void CreateNewFile(string filePath)
+static void CreateNewFile(string filePath, string? readyMarker, string? goMarker)
 {
     if (File.Exists(filePath) || Directory.Exists(filePath))
         throw new IOException("create-new requires an absent path: " + filePath);
@@ -340,6 +377,8 @@ static void CreateNewFile(string filePath)
     var parent = Path.GetDirectoryName(filePath);
     if (string.IsNullOrWhiteSpace(parent) || !Directory.Exists(parent))
         throw new DirectoryNotFoundException("create-new parent directory does not exist: " + parent);
+
+    WaitForOptionalBarrier(readyMarker, goMarker, "create-new");
 
     const uint GenericWrite = 0x40000000;
     const uint ShareRead = 0x00000001;
@@ -366,7 +405,11 @@ static void CreateNewFile(string filePath)
     // and a second mutation would test shutdown timing instead of lost CREATE completion.
 }
 
-static void RenameFile(string sourcePath, string destinationPath)
+static void RenameFile(
+    string sourcePath,
+    string destinationPath,
+    string? readyMarker,
+    string? goMarker)
 {
     if (!File.Exists(sourcePath))
         throw new FileNotFoundException("rename-file source does not exist.", sourcePath);
@@ -381,6 +424,7 @@ static void RenameFile(string sourcePath, string destinationPath)
         !Directory.Exists(destinationParent))
         throw new DirectoryNotFoundException("rename-file requires existing source/destination parent directories.");
 
+    WaitForOptionalBarrier(readyMarker, goMarker, "rename-file");
     File.Move(sourcePath, destinationPath, overwrite: false);
 }
 
@@ -498,9 +542,10 @@ static void DeleteFileByDisposition(string filePath, string readyMarker, string 
     // and lets the filesystem finalize (or refuse) the previously accepted disposition.
 }
 
-static void MapAndWrite(string filePath)
+static void MapAndWrite(string filePath, string? readyMarker, string? goMarker)
 {
     EnsureFile(filePath);
+    WaitForOptionalBarrier(readyMarker, goMarker, "map-write");
     var (file, mapping, view) = CreateWritableView(filePath);
     try
     {

@@ -28,6 +28,7 @@ jobs:
           .\tools\verify_powershell_automation.ps1
           .\tools\verify_supply_chain.ps1
           .\tools\verify_fault_campaign_vm_harness.ps1
+          .\tools\verify_driver_verifier_vm_harness.ps1
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0 node24 pinned # v4 pinned

@@ -2,7 +2,8 @@
 param(
     [ValidatePattern('^[A-Za-z]:$')][string]$Volume='C:',
     [string]$PackageDirectory='',
-    [ValidateSet('','LAB-MINIFILTER')][string]$Confirmation=''
+    [ValidateSet('','LAB-MINIFILTER')][string]$Confirmation='',
+    [switch]$StageOnly
 )
 
 $ErrorActionPreference='Stop'
@@ -54,7 +55,11 @@ if($infText -notmatch 'Instance1\.Flags\s*=\s*0x1'){
 
 Write-Host "VM detected: $vmText"
 Write-Host "Package: $PackageDirectory"
-Write-Host "Target volume: $Volume ONLY"
+if($StageOnly){
+    Write-Host 'Mode: signed package registration only; driver will NOT be loaded or attached.'
+}else{
+    Write-Host "Target volume: $Volume ONLY"
+}
 Write-Warning 'Kernel code can crash Windows. Confirm the VM has a disposable snapshot.'
 
 $confirm=if($Confirmation){$Confirmation}else{Read-Host 'Type LAB-MINIFILTER to install/load/attach only in this VM'}
@@ -194,6 +199,11 @@ $packageSysHash=(Get-FileHash -LiteralPath $sys -Algorithm SHA256).Hash
 $installedSysHash=(Get-FileHash -LiteralPath $imagePath -Algorithm SHA256).Hash
 if(-not [string]::Equals($packageSysHash,$installedSysHash,[StringComparison]::OrdinalIgnoreCase)){
     throw "REFUSED: registered minifilter image is stale or mismatched. package=$packageSysHash installed=$installedSysHash path=$imagePath"
+}
+
+if($StageOnly){
+    Write-Host 'Signed RansomGuardMinifilter package is registered with exact image bytes and remains demand-start; it was not loaded or attached.' -ForegroundColor Green
+    return
 }
 
 $loadOutput=(& fltmc load RansomGuardMinifilter 2>&1 | Out-String)

@@ -1,7 +1,7 @@
-# RansomGuard rollback architecture — current through 0.7.25.0
+# RansomGuard rollback architecture — current through 0.7.30.0
 
 RansomGuard is moving from detection-only telemetry to `preserve -> contain -> recover`.
-The current 0.7.25 engineering line retains the deliberately constrained minifilter gate, range-aware WRITE COW, CREATE/RENAME/TRUNCATE preservation, activation/mapping evidence, verified copy-out recovery, bounded storage and crash-resumable retention. Protocol v15 adds a separate DELETE lifecycle: durable intent before allow, authoritative disposition result, exact-handle cleanup evidence, and separately observed pathname topology. Cleanup/restart observations never become authoritative disposition completion.
+The current 0.7.30 engineering line retains the deliberately constrained minifilter gate, range-aware WRITE COW, CREATE/RENAME/TRUNCATE/DELETE transaction evidence, activation/mapping evidence, verified copy-out recovery, bounded storage, crash-resumable retention, low-disk/reboot qualification and targeted Driver Verifier testing. Protocol v15 keeps DELETE lifecycle evidence separate: durable intent before allow, authoritative disposition result, exact-handle cleanup evidence, and independently observed pathname topology. Cleanup/restart observations never become authoritative disposition completion.
 
 ## WRITE ordering
 

@@ -585,15 +585,23 @@ try{
         $overflowRound++
         $group=@()
         $roundTargets=@()
+        $ready=@()
+        $goPath=Join-Path $ResultsDirectory ("overflow-r{0:D2}.go" -f $overflowRound)
+        Remove-Item -LiteralPath $goPath -Force -ErrorAction SilentlyContinue
         for($i=0;$i -lt $Parallelism;$i++){
             $target=Join-Path $root ("overflow-r{0:D2}-{1:D2}.bin" -f $overflowRound,$i)
+            $readyPath=Join-Path $ResultsDirectory ("overflow-r{0:D2}-{1:D2}.ready" -f $overflowRound,$i)
             $roundTargets+=@($target)
+            $ready+=@($readyPath)
             $item=Start-Helper ("overflow-r{0:D2}-{1:D2}" -f $overflowRound,$i) @(
-                'create-new','--file',(Quote-Arg $target))
+                'create-new','--file',(Quote-Arg $target),
+                '--ready',(Quote-Arg $readyPath),'--go',(Quote-Arg $goPath))
             $group+=@($item)
             $allHelpers.Add($item)
         }
 
+        Wait-AllPaths $ready 45 'all CREATE overflow helpers to reach the shared start barrier'
+        Set-Content -LiteralPath $goPath -Value 'go' -Encoding ASCII
         $probe=Wait-StressGroupAllowAccessDenied $group 60 'CREATE overflow'
         for($i=0;$i -lt $group.Count;$i++){
             $item=$group[$i]
@@ -621,11 +629,20 @@ try{
     $summary.admissionOverflowPassed=$true
 
     $group=@()
+    $ready=@()
+    $goPath=Join-Path $ResultsDirectory 'create-qualification.go'
+    Remove-Item -LiteralPath $goPath -Force -ErrorAction SilentlyContinue
     for($i=0;$i -lt $qualificationParallelism;$i++){
-        $item=Start-Helper ("create-{0:D2}" -f $i) @('create-new','--file',(Quote-Arg $createTargets[$i]))
+        $readyPath=Join-Path $ResultsDirectory ("create-{0:D2}.ready" -f $i)
+        $ready+=@($readyPath)
+        $item=Start-Helper ("create-{0:D2}" -f $i) @(
+            'create-new','--file',(Quote-Arg $createTargets[$i]),
+            '--ready',(Quote-Arg $readyPath),'--go',(Quote-Arg $goPath))
         $group+=$item
         $allHelpers.Add($item)
     }
+    Wait-AllPaths $ready 45 'all CREATE qualification helpers to reach the shared start barrier'
+    Set-Content -LiteralPath $goPath -Value 'go' -Encoding ASCII
     Wait-StressGroup $group 60 'CREATE qualification'
     foreach($path in $createTargets){
         if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "CREATE qualification target missing after helper success: $path"}
@@ -633,13 +650,21 @@ try{
     $summary.createPassed=$true
 
     $group=@()
+    $ready=@()
+    $goPath=Join-Path $ResultsDirectory 'rename-qualification.go'
+    Remove-Item -LiteralPath $goPath -Force -ErrorAction SilentlyContinue
     for($i=0;$i -lt $qualificationParallelism;$i++){
+        $readyPath=Join-Path $ResultsDirectory ("rename-{0:D2}.ready" -f $i)
+        $ready+=@($readyPath)
         $item=Start-Helper ("rename-{0:D2}" -f $i) @(
             'rename-file','--source',(Quote-Arg $renameSources[$i]),
-            '--destination',(Quote-Arg $renameDestinations[$i]))
+            '--destination',(Quote-Arg $renameDestinations[$i]),
+            '--ready',(Quote-Arg $readyPath),'--go',(Quote-Arg $goPath))
         $group+=$item
         $allHelpers.Add($item)
     }
+    Wait-AllPaths $ready 45 'all RENAME qualification helpers to reach the shared start barrier'
+    Set-Content -LiteralPath $goPath -Value 'go' -Encoding ASCII
     Wait-StressGroup $group 60 'RENAME'
     for($i=0;$i -lt $qualificationParallelism;$i++){
         if((Test-Path -LiteralPath $renameSources[$i]) -or
@@ -700,11 +725,20 @@ try{
     $summary.deletePassed=$true
 
     $group=@()
+    $ready=@()
+    $goPath=Join-Path $ResultsDirectory 'mapped-qualification.go'
+    Remove-Item -LiteralPath $goPath -Force -ErrorAction SilentlyContinue
     for($i=0;$i -lt $qualificationParallelism;$i++){
-        $item=Start-Helper ("mapped-{0:D2}" -f $i) @('map-write','--file',(Quote-Arg $mappedTargets[$i]))
+        $readyPath=Join-Path $ResultsDirectory ("mapped-{0:D2}.ready" -f $i)
+        $ready+=@($readyPath)
+        $item=Start-Helper ("mapped-{0:D2}" -f $i) @(
+            'map-write','--file',(Quote-Arg $mappedTargets[$i]),
+            '--ready',(Quote-Arg $readyPath),'--go',(Quote-Arg $goPath))
         $group+=$item
         $allHelpers.Add($item)
     }
+    Wait-AllPaths $ready 45 'all MAPPED-WRITE qualification helpers to reach the shared start barrier'
+    Set-Content -LiteralPath $goPath -Value 'go' -Encoding ASCII
     Wait-StressGroup $group 90 'MAPPED-WRITE'
     $summary.mappedWritePassed=$true
 

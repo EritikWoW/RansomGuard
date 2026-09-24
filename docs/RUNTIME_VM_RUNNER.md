@@ -74,3 +74,14 @@ Treat each runtime campaign as destructive to the VM image even if cleanup succe
 The runtime harness refuses a RootBase or ResultsDirectory that traverses a filesystem reparse point/junction, so destructive LAB operations and evidence remain bound to the reviewed local paths.
 
 Do not reuse this runner for ordinary development, credentials, personal files or production workloads.
+
+## Driver Verifier campaign
+
+`Minifilter Driver Verifier VM lab` is intentionally separate from the ordinary runtime workflow. Use only a disposable snapshot of this runner.
+
+The workflow phases are `arm`, `runtime`, and `clear`. ARM configures standard Driver Verifier checks for **only** `RansomGuardMinifilter.sys` and sets `bootmode=oneboot`; it never selects all drivers and never reboots the VM. Reboot the VM manually, then start the self-hosted runner **as Administrator** before dispatching `runtime`.
+
+The runtime phase builds/signs the exact commit, proves the loaded driver is currently under Driver Verifier, runs the bounded-concurrency stress harness, rejects any bugcheck event in the campaign window, unloads the filter, and executes `verifier /reset`. Reboot the VM manually again, restart the runner elevated, and dispatch `clear`. CLEAR proves the target is absent from both scheduled and current verifier state.
+
+If the VM bugchecks or fails to boot while Verifier is active, do not keep retrying Actions jobs. The campaign uses one-boot mode specifically to reduce boot-loop risk; recover by reverting the disposable VM checkpoint if necessary. Never perform this qualification on a primary workstation.
+

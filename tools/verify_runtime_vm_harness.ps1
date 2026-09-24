@@ -152,6 +152,352 @@ foreach($required in @(
     'Win32_ComputerSystem',
     'install_minifilter_lab.ps1',
     'unload_minifilter_lab.ps1',
+    'client-spoof',
+    'spoofedClientProcessIdRejected',
+    'connect-spoof',
+    'forged GateClient PID',
+    '^rejected:0x[0-9A-F]{8}
+    'prewritehandle',
+    'dormantWritableHandleRejected',
+    'hold-write-handle',
+    'Dormant writable-handle activation failed for an unexpected reason',
+    'prehardlink',
+    'preexistingHardLinkRejected',
+    'NumberOfLinks=2',
+    'hardLinkInsideToOutsideDenied',
+    'hardLinkOutsideToInsideDenied',
+    'hardLinkOutsideToOutsideAllowed',
+    'hardLinkExInsideToOutsideDenied',
+    'hardLinkExOutsideToInsideDenied',
+    'hardLinkExOutsideToOutsideAllowed',
+    'Protected inside-to-outside hard-link creation was not denied.',
+    'Protected outside-to-inside hard-link creation was not denied.',
+    'Outside-to-outside hard-link creation was over-blocked.',
+    'Protected inside-to-outside FileLinkInformationEx creation was not denied.',
+    'Protected outside-to-inside FileLinkInformationEx creation was not denied.',
+    'Outside-to-outside FileLinkInformationEx creation was over-blocked.',
+    'fsctl-zero',
+    'FSCTL_SET_ZERO_DATA',
+    'fsctlZeroAllowedWithBaseline',
+    'fsctlZeroMutatedTarget',
+    'fsctlZeroPreimageHashMatched',
+    'FSCTL pre-image journal hash mismatch',
+    'FSCTL pre-image object hash mismatch',
+    'preexisting-map.bin',
+    'writableViewPresent',
+    'postactivation-map.bin',
+    'BaselineVerified writable-section evidence',
+    'paging-write evidence',
+    'originalSha256',
+    'runtime-result.json',
+    'containment',
+    '--contain-pid',
+    'containmentDeniedTarget',
+    'containmentPreservedTargetHash',
+    'containmentAllowedPeer',
+    'containment-transition',
+    '--contain-after-pid',
+    'transitionRequested',
+    'transitionKernelActive',
+    'transitionDeniedNextWrite',
+    'containment-journal.jsonl',
+    'Stop-GateGracefully $gatePost',
+    'Stop-GateGracefully $gateContain',
+    'Stop-GateGracefully $gateTransition',
+    'Stop-LabProcess $gateDisconnect',
+    'Test-AccessDeniedException',
+    '$cursor=$cursor.InnerException',
+    '$win32=([int]$cursor.HResult -band 0xFFFF)',
+    'disconnectDeniedMutation',
+    'disconnectPreservedTargetHash',
+    'disconnectReadAllowed',
+    'disconnectOutOfRootAllowed',
+    'wrongRootReconnectRejected',
+    'sameRootReconnectActivated',
+    'sameRootMutationAllowed',
+    'gracefulReleaseSucceeded',
+    '--scope-ambiguity-pid',
+    'LAB scope ambiguity\s+: ARMED',
+    'scopeAmbiguityDeniedMutation',
+    'scopeAmbiguityPreservedTargetHash',
+    'crossBoundaryRenameDenied',
+    'crossBoundaryRenameSourcePreserved',
+    'crossBoundaryRenameDestinationAbsent',
+    'Outside-to-inside RENAME unexpectedly bypassed protected destination scope.',
+    '--shutdown-file',
+    'Kernel gate graceful deactivation: MAINTENANCE authorized',
+    '.VersionInfo.FileVersion',
+    'version=$gateVersion',
+    'cleanupPassed=$false',
+    'cleanupError=$null',
+    '$runtimeFailure=$null',
+    '$cleanupFailure=$null',
+    'runtime-package.json',
+    'Assert-NoReparsePath',
+    'Assert-NoReparsePath -Path $RootBase -Label ''RootBase''',
+    'Assert-NoReparsePath -Path $ResultsDirectory -Label ''ResultsDirectory''',
+    'driverProvenance.schema',
+    'driverProvenance.productVersion',
+    'driverSysSha256',
+    'driverInfSha256',
+    'driverCatSha256'
+)){
+    if($runtime -notmatch [regex]::Escape($required)){throw "Runtime integration script missing invariant: $required"}
+}
+
+$readiness=Get-Content -LiteralPath $readinessScript -Raw
+foreach($required in @(
+    'WindowsBuiltInRole]::Administrator',
+    'RANSOMGUARD_LAB_VM',
+    'Win32_ComputerSystem',
+    'Cert:\CurrentUser\My',
+    'Cert:\LocalMachine\My',
+    'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
+    'fltKernel.h',
+    'FltMgr.lib',
+    'signtool.exe',
+    'Inf2Cat.exe',
+    'infverif.exe',
+    'ApiValidator.exe',
+    'Aitstatic.exe',
+    'pwsh.exe',
+    'Confirm-SecureBootUEFI',
+    'Set-AuthenticodeSignature',
+    'X509EnhancedKeyUsageExtension',
+    '2.5.29.37',
+    'EnhancedKeyUsages',
+    'TrustedPublisher',
+    'testsigning',
+    'fltmc filters',
+    'fltmc.exe',
+    'pnputil.exe'
+)){
+    if($readiness -notmatch [regex]::Escape($required)){throw "Runtime runner readiness check missing invariant: $required"}
+}
+
+if($readiness -match [regex]::Escape('EnhancedKeyUsageList')){
+    throw 'Runtime runner readiness must decode the certificate EKU extension directly; EnhancedKeyUsageList provider projections are not stable across PowerShell hosts.'
+}
+
+$package=Get-Content -LiteralPath $packageScript -Raw
+foreach($required in @(
+    'build_minifilter.ps1',
+    'signtool.exe',
+    'Inf2Cat.exe',
+    'RANSOMGUARD_LAB_VM',
+    'runtime-package.json',
+    'git -C $root rev-parse HEAD',
+    'schema=2',
+    'productVersion=$productVersion',
+    'infSha256=',
+    'Get-AuthenticodeSignature',
+    'SignerCertificate',
+    'signer thumbprint does not match requested lab certificate',
+    'RansomGuardMinifilter.cat'
+)){
+    if($package -notmatch [regex]::Escape($required)){throw "Runtime package script missing invariant: $required"}
+}
+
+$forbidden=@(
+    'Set-MpPreference',
+    'Add-MpPreference',
+    'Remove-MpPreference',
+    'certutil -addstore',
+    'Import-Certificate',
+    'Set-SecureBootUEFI',
+    'Disable-WindowsOptionalFeature'
+)
+foreach($path in @($runtimeScript,$productionGateScript,$packageScript,$readinessScript,$workflowPath)){
+    $text=Get-Content -LiteralPath $path -Raw
+    foreach($token in $forbidden){
+        if($text -match [regex]::Escape($token)){throw "Runtime VM harness must not modify boot/security/trust policy: $token in $path"}
+    }
+    if($text -match '(?im)\bbcdedit(?:\.exe)?\b[^\r\n]*(?:/set|/deletevalue|/create|/copy|/delete|/import)\b'){
+        throw "Runtime VM harness may query BCD state but must never mutate it: $path"
+    }
+}
+
+$helper=Get-Content -LiteralPath $helperSource -Raw
+foreach($requiredDiagnostic in @(
+    'RUNTIME HARNESS ERROR',
+    'HResult: 0x{ex.HResult:X8}',
+    'Win32Error:',
+    'Environment.ExitCode = 20'
+)){
+    if($helper -notmatch [regex]::Escape($requiredDiagnostic)){throw "Runtime mapping helper missing explicit crash diagnostic: $requiredDiagnostic"}
+}
+
+foreach($required in @(
+    'connect-spoof',
+    'ConnectSpoof',
+    'FilterConnectCommunicationPort',
+    'RgConnectContext',
+    'ClientProcessId',
+    'QueryDosDevice',
+    'hold-map',
+    'hold-write-handle',
+    'CreateFileW writable handle failed',
+    'hold-dir-delete',
+    'hard-link',
+    'HardLinkProbe',
+    'CreateHardLinkW',
+    'hard-link-ex',
+    'HardLinkExProbe',
+    'NtSetInformationFile',
+    'FileLinkInformationEx',
+    'RtlNtStatusToDosError',
+    'denied-ex',
+    'allowed-ex',
+    'win32-error:',
+    'fsctl-zero',
+    'FsctlZeroData',
+    'FsctlSetZeroData = 0x000980C8',
+    'DeviceIoControl',
+    'FileZeroDataInformation',
+    'FlushFileBuffers',
+    'map-write',
+    'containment-probe',
+    'containment-transition',
+    'ContainmentTransitionProbe',
+    'denied-after-threshold',
+    'RANSOMGUARD-CONTAINMENT-PROBE-SHOULD-NOT-WRITE',
+    'DeleteAccess',
+    'FileFlagBackupSemantics',
+    'CreateFileMappingW',
+    'MapViewOfFile',
+    'FlushViewOfFile',
+    'FlushFileBuffers',
+    'UnmapViewOfFile'
+)){
+    if($helper -notmatch [regex]::Escape($required)){throw "Runtime mapping helper missing invariant: $required"}
+}
+$holdStart=$helper.IndexOf('static void HoldMappedView')
+$holdEnd=$helper.IndexOf('static void MapAndWrite',$holdStart)
+if($holdStart -lt 0 -or $holdEnd -lt 0){throw 'HoldMappedView source block missing.'}
+$hold=$helper.Substring($holdStart,$holdEnd-$holdStart)
+$closeMap=$hold.IndexOf('Native.CloseHandle(mapping)')
+$closeFile=$hold.IndexOf('file.Dispose()')
+$ready=$hold.IndexOf('File.WriteAllText(readyMarker')
+if($closeMap -lt 0 -or $closeFile -lt 0 -or $ready -lt 0 -or $closeMap -gt $ready -or $closeFile -gt $ready){
+    throw 'Pre-existing mapping scenario must close file/mapping handles before advertising the held mapped view.'
+}
+
+$dirHoldStart=$helper.IndexOf('static void HoldDirectoryDeleteHandle')
+$dirHoldEnd=$helper.IndexOf('static void MapAndWrite',$dirHoldStart)
+if($dirHoldStart -lt 0 -or $dirHoldEnd -lt 0){throw 'HoldDirectoryDeleteHandle source block missing.'}
+$dirHold=$helper.Substring($dirHoldStart,$dirHoldEnd-$dirHoldStart)
+foreach($required in @('DeleteAccess','ShareRead | ShareWrite | ShareDelete','FileFlagBackupSemantics','CreateFileW','readyMarker','releaseMarker')){
+    if($dirHold -notmatch [regex]::Escape($required)){throw "Directory DELETE-handle runtime helper missing invariant: $required"}
+}
+
+$containStart=$helper.IndexOf('static void ContainmentProbe')
+$containEnd=$helper.IndexOf('static void MapAndWrite',$containStart)
+if($containStart -lt 0 -or $containEnd -lt 0){throw 'ContainmentProbe source block missing.'}
+$containBlock=$helper.Substring($containStart,$containEnd-$containStart)
+foreach($required in @('readyMarker','goMarker','resultMarker','File.AppendAllText','UnauthorizedAccessException','(ex.HResult & 0xFFFF) == 5','Environment.ExitCode = 9')){
+    if($containBlock -notmatch [regex]::Escape($required)){throw "Containment runtime helper missing invariant: $required"}
+}
+if($runtime -notmatch [regex]::Escape("'LAB containment\s+: ACTIVE'") -or
+   $runtime -notmatch [regex]::Escape("if(`$containOutcome -ne 'denied'){") -or
+   $runtime -notmatch [regex]::Escape('peerAfterHash,$peerOriginalHash')){
+    throw 'Runtime containment scenario must prove target denial/hash preservation and ordinary-peer mutation.'
+}
+
+$transitionStart=$helper.IndexOf('static void ContainmentTransitionProbe')
+$transitionEnd=$helper.IndexOf('static void MapAndWrite',$transitionStart)
+if($transitionStart -lt 0 -or $transitionEnd -lt 0){throw 'ContainmentTransitionProbe source block missing.'}
+$transitionBlock=$helper.Substring($transitionStart,$transitionEnd-$transitionStart)
+foreach($required in @(
+    'OpenTransitionWriteHandle(fileA)',
+    'OpenTransitionWriteHandle(fileB)',
+    'WriteTransitionByte(a, 0, 0xA1',
+    'WriteTransitionByte(b, 0, 0xB2',
+    'TryWriteTransitionByte(a, 1, 0xC3',
+    'FileFlagWriteThrough',
+    'Native.SetFilePointerEx',
+    'Native.WriteFile',
+    'error == 5',
+    'denied-after-threshold'
+)){
+    if($transitionBlock -notmatch [regex]::Escape($required)){throw "Event-bound containment runtime helper missing invariant: $required"}
+}
+if($transitionBlock -match 'FileStream\(' -or $transitionBlock -match '\.Flush\(true\)'){
+    throw 'Event-bound containment runtime helper must use direct WriteFile operations; buffered FileStream/Flush can split one logical step into multiple gated writes.'
+}
+foreach($required in @(
+    "'--contain-after-pid'",
+    "'--contain-after-events','4'",
+    "'--contain-after-paths','2'",
+    '[int]$x.phase -eq 1',
+    '[int]$x.evidenceCount -eq 4',
+    '[int]$x.distinctPathCount -eq 2',
+    '[int]$x.phase -eq 2',
+    'transitionRequest.kernelSequence',
+    'LAB CONTAINMENT ACTIVE'
+)){
+    if($runtime -notmatch [regex]::Escape($required)){throw "Event-bound containment runtime scenario missing invariant: $required"}
+}
+
+$install=Get-Content -LiteralPath $installScript -Raw
+if($install -notmatch [regex]::Escape("ValidateSet('','LAB-MINIFILTER')") -or
+   $install -notmatch [regex]::Escape('$Confirmation')){
+    throw 'Install script must support explicit VM-only noninteractive confirmation for the runtime workflow.'
+}
+foreach($required in @(
+    'ImagePath',
+    'packageSysHash',
+    'installedSysHash',
+    'registered minifilter image is stale or mismatched',
+    'already loaded before install',
+    'rundll32 DefaultInstall failed',
+    'Registered minifilter service StartType',
+    'Registered minifilter instance contract is invalid'
+)){
+    if($install -notmatch [regex]::Escape($required)){throw "Install script missing exact-package image verification invariant: $required"}
+}
+foreach($required in @(
+    'fltmc instances -f RansomGuardMinifilter',
+    '$instancesExit=$LASTEXITCODE',
+    '$instances -notmatch [regex]::Escape($Volume)'
+)){
+    if($install -notmatch [regex]::Escape($required)){throw "Install script missing attach-verification invariant: $required"}
+}
+if($install -match [regex]::Escape('fltmc instances -f RansomGuardMinifilter -v $Volume')){
+    throw 'Install script uses an invalid fltmc instances syntax: -f and -v are mutually exclusive.'
+}
+
+$unload=Get-Content -LiteralPath $unloadScript -Raw
+foreach($required in @(
+    'fltmc detach RansomGuardMinifilter',
+    'fltmc unload RansomGuardMinifilter',
+    'fltmc filters',
+    'RansomGuardMinifilter is still loaded after cleanup'
+)){
+    if($unload -notmatch [regex]::Escape($required)){throw "Runtime cleanup script missing final-state invariant: $required"}
+}
+$cleanupArmIndex=$runtime.IndexOf('$installed=$true')
+$installInvokeIndex=$runtime.IndexOf('& $installScript')
+if($cleanupArmIndex -lt 0 -or $installInvokeIndex -lt 0 -or $cleanupArmIndex -gt $installInvokeIndex){
+    throw 'Runtime harness must arm minifilter cleanup before invoking the installer.'
+}
+
+$buildText=Get-Content -LiteralPath $build -Raw
+foreach($required in @(
+    'RansomGuard.Minifilter.RuntimeHarness.csproj',
+    'MinifilterLab\RuntimeHarness',
+    'verify_runtime_vm_harness.ps1',
+    'verify_powershell_automation.ps1'
+)){
+    if($buildText -notmatch [regex]::Escape($required)){throw "Engineering LAB build missing runtime harness packaging invariant: $required"}
+}
+
+$buildWrapperText=Get-Content -LiteralPath $buildWrapper -Raw
+foreach($required in @('where.exe pwsh.exe','set "PS_EXE=pwsh.exe"','powershell.exe','if /I not "%GITHUB_ACTIONS%"=="true" pause')){
+    if($buildWrapperText -notmatch [regex]::Escape($required)){throw "Windows build wrapper missing PowerShell host invariant: $required"}
+}
+
+Write-Host 'Runtime VM harness source gate PASSED: manual self-hosted VM only, exact-commit signed driver provenance, kernel-bound GateClient process identity plus protocol-v18 LAB/ProductionGate, hard-link and data-mutating FSCTL regressions, no boot/trust/Defender mutation.' -ForegroundColor Green
+,
     'predirectory',
     'preexistingDirectoryHandleRejected',
     'prewritehandle',

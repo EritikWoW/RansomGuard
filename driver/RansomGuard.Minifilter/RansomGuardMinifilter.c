@@ -300,6 +300,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
     NTSTATUS status;
     LONG mode;
     BOOLEAN degraded;
+    BOOLEAN gateClientRequestor;
     RG_SCOPE_CLASSIFICATION scope;
     ULONG gateError = 0;
     ULONG gateDecision = RgGateDeny;
@@ -319,7 +320,11 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
     if (!RgIsGateClientMode(mode) && !degraded) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
-    if (RgIsGateClientRequestor(Data)) {
+
+    gateClientRequestor = RgIsGateClientRequestor(Data);
+    if (gateClientRequestor &&
+        (InterlockedCompareExchange(&gGateActivated, 0, 0) != 0 ||
+         InterlockedCompareExchange(&gPreflightProbeArmed, 0, 0) == 0)) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
@@ -328,17 +333,22 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
         (void)RgInjectScopeAmbiguityProbe(Data, &event);
     }
 
-    if (InterlockedCompareExchange(&gGateActivated, 0, 0) == 0 &&
-        event.ProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId, 0, 0) &&
-        RgEventPathMatchesGateRoot(&event) &&
-        InterlockedExchange(&gPreflightProbeArmed, 0) == 1) {
-        status = RgCreateCreatePostContext(Data, event.Sequence, &postContext);
-        if (!NT_SUCCESS(status)) {
-            return RgCompleteDenied(Data);
+    if (gateClientRequestor) {
+        if (InterlockedCompareExchange(&gGateActivated, 0, 0) == 0 &&
+            RgEventPathMatchesGateRoot(&event) &&
+            InterlockedExchange(&gPreflightProbeArmed, 0) == 1) {
+            status = RgCreateCreatePostContext(Data, event.Sequence, &postContext);
+            if (!NT_SUCCESS(status)) {
+                return RgCompleteDenied(Data);
+            }
+            postContext->ActivationPreflight = 1;
+            *CompletionContext = postContext;
+            return FLT_PREOP_SUCCESS_WITH_CALLBACK;
         }
-        postContext->ActivationPreflight = 1;
-        *CompletionContext = postContext;
-        return FLT_PREOP_SUCCESS_WITH_CALLBACK;
+
+        // GateClient is exempt from its own protection traffic, but only the explicitly
+        // armed in-root CREATE above may participate in activation preflight.
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
     scope = RgClassifyMutationScope(&event, FltObjects);

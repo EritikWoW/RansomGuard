@@ -288,6 +288,9 @@ FLT_PREOP_CALLBACK_STATUS RgPreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJ
     }
 
     status = RgPopulateEvent(&event, Data, FltObjects, RgEventCreate, 0);
+    if (RgCreateMayMutate(&event)) {
+        (void)RgInjectScopeAmbiguityProbe(Data, &event);
+    }
 
     if (InterlockedCompareExchange(&gGateActivated, 0, 0) == 0 &&
         event.ProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId, 0, 0) &&
@@ -415,6 +418,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreWrite(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJE
     }
 
     (void)RgPopulateEvent(&event, Data, FltObjects, RgEventWrite, 0);
+    (void)RgInjectScopeAmbiguityProbe(Data, &event);
     scope = RgClassifyMutationScope(&event, FltObjects);
     if (scope == RgScopeOutside) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
@@ -477,6 +481,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
     }
 
     status = RgPopulateEvent(&event, Data, FltObjects, eventType, infoClass);
+    (void)RgInjectScopeAmbiguityProbe(Data, &event);
     scope = RgClassifyMutationScope(&event, FltObjects);
     if (scope == RgScopeOutside) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;

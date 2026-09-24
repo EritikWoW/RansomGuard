@@ -1,3 +1,14 @@
+# RansomGuard 0.8.0.0
+
+- Added configuration schema 4 with explicit `Mode=Audit` / `Mode=Enforce`. Audit remains the default.
+- Added a pure production protection state machine covering AuditOnly, EnforceStarting, EnforceUnavailable, KernelConnected, Protected, DegradedProtected, Maintenance, Failed and Stopped.
+- Rollback repository validation is now represented as an explicit prerequisite before future production kernel startup may proceed.
+- The read-only status/diagnostics API now exposes requested mode, effective protection state, rollback readiness, kernel-channel connection, kernel-enforcement claim and automatic-containment state.
+- `KernelEnforcementActive` is never inferred from an installed/running driver service. It becomes true only for explicit Protected/DegradedProtected state-machine phases.
+- Enforce foundation configuration requires exactly one explicit non-drive protected root, cannot disable the signed-driver requirement, and keeps automatic containment disabled until a dedicated detector-to-containment policy milestone is qualified.
+- This milestone deliberately does **not** install/start/load the driver or spawn GateClient from the normal service. The normal bundle still excludes SYS/CAT/INF/GateClient, and an Enforce request reports `EnforceUnavailable` until the production lifecycle milestone is implemented and qualified.
+- Protocol remains v17; the previously qualified 0.7.33 LAB kernel path is unchanged.
+
 # RansomGuard 0.7.33.0
 
 - Introduced minifilter/GateClient protocol v17 without increasing the fixed 544-byte connect-context size; the former reserved field now carries the protected NT-volume prefix length.

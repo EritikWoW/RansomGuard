@@ -1,8 +1,8 @@
 # RansomGuard threat model
 
-Status: engineering threat model for RansomGuard 0.7.33.x, covering the current Audit product and Engineering LAB minifilter.
+Status: engineering threat model for RansomGuard 0.8.0.x, covering the default Audit product, the Production Enforce foundation state contract, and the Engineering LAB minifilter.
 
-This document describes what the current implementation protects, what it deliberately does not protect, and how ambiguous I/O is handled. It is not a claim of production readiness. The ordinary product remains AuditOnly; the blocking minifilter path is Engineering LAB only.
+This document describes what the current implementation protects, what it deliberately does not protect, and how ambiguous I/O is handled. It is not a claim of production readiness. The default normal package remains Audit. Version 0.8.0 accepts an explicit Enforce request but reports `EnforceUnavailable` until a separately qualified production driver/GateClient lifecycle completes; the blocking minifilter path remains Engineering LAB only.
 
 ## Security goals
 
@@ -30,11 +30,13 @@ Security-sensitive assets include:
 
 ## Trust boundaries
 
-### Ordinary product
+### Ordinary product / Enforce foundation
 
-The normal service obtains filesystem telemetry through ETW and publishes bounded read-only status through the local named pipe. Ordinary applications are always AuditOnly. A detector result is evidence for review; it is not an authorization to block a normal process.
+The normal service obtains filesystem telemetry through ETW and publishes bounded read-only status through the local named pipe. Audit is the default mode and remains non-blocking. Schema 4 may explicitly request Enforce, but 0.8.0 does not yet install/start/load the production driver or spawn GateClient; that request is published as `EnforceUnavailable`.
 
-The UI does not turn SCM Running into proof that ETW monitoring is healthy. ETW startup/runtime failure enters an explicit diagnostics-only state.
+The protection state machine is the only source of a kernel-enforcement claim. SCM `Running`, driver installation, a live UI, or a connected-but-not-activated kernel channel cannot set `KernelEnforcementActive=true`. Rollback repository validation must complete before any future kernel-start transition.
+
+A detector result is evidence for review; it is not yet an authorization to block a normal process. The UI does not turn SCM Running into proof that ETW monitoring is healthy. ETW startup/runtime failure enters an explicit diagnostics-only state.
 
 ### Engineering LAB gate
 
@@ -161,7 +163,7 @@ This model does not justify treating an arbitrary pre-existing mapping as safe. 
 
 ETW/RiskEngine is a trigger and evidence source, not the preservation guarantee.
 
-The current normal service deliberately returns AuditOnly for ordinary applications, including suspicious/canary cases. The existing containment primitive is LAB-only and can bind one explicitly authorized process to a referenced kernel process object. Production detector-to-containment orchestration remains unimplemented.
+The current normal service does not authorize detector-driven blocking for ordinary applications, including suspicious/canary cases. Audit mode stays non-blocking; Enforce mode in 0.8.0 remains unavailable until production lifecycle activation exists. The existing containment primitive is LAB-only and can bind one explicitly authorized process to a referenced kernel process object. Production detector-to-containment orchestration remains unimplemented.
 
 Before production containment is enabled, the authorization chain must prove at least:
 
@@ -229,7 +231,7 @@ The project must remain non-production until, at minimum:
 
 Until those conditions are met, use these descriptions:
 
-- normal product: **audit/telemetry + recovery foundations**;
+- normal product: **Audit by default, plus an explicit non-active Production Enforce state/config foundation**;
 - minifilter: **Engineering LAB preservation/containment prototype**;
 - rollback: **verified conservative copy-out recovery**;
 - crypto recovery: **experimental, format-specific research path**.

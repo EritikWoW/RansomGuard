@@ -4,7 +4,7 @@ Read [THREAT_MODEL.md](THREAT_MODEL.md) first. It is the canonical statement of 
 
 ## Current product boundary
 
-The normal RansomGuard product is AuditOnly for ordinary applications. It does not install or load the Engineering LAB minifilter and does not claim production ransomware blocking.
+The normal RansomGuard package defaults to Audit and does not install or load the Engineering LAB minifilter. Version 0.8.0 adds an explicit Enforce configuration/state contract, but this foundation milestone does not activate the production driver/GateClient lifecycle. An Enforce request therefore reports `EnforceUnavailable` rather than claiming kernel protection.
 
 The Engineering LAB minifilter is restricted to disposable test environments and explicit test data. Its current user/kernel wire contract is protocol v17. Protocol v17 binds the negotiated root to an exact Filter Manager volume object so destructive user-mode name-query ambiguity can fail safe only on that protected volume. Its altitude is an unassigned LAB placeholder and its test-signing path is not a production trust anchor.
 

@@ -1,7 +1,8 @@
-# RansomGuard 0.7.33.0 - guided setup
+# RansomGuard 0.8.0.0 - guided setup
 
-This document describes the current audit-only guided setup. It does not enable automatic
-blocking, install/load the kernel driver, change Defender, or widen trust rules.
+This document describes the default Audit guided setup. Version 0.8.0 adds an explicit
+Enforce configuration/state contract, but this foundation milestone still does not install/load the
+production kernel driver or claim active blocking. It does not change Defender or widen trust rules.
 The dashboard, chosen icons, Ukrainian/English languages and theme palettes remain.
 
 ## Ordinary user workflow

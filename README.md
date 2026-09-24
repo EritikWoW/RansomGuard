@@ -1,12 +1,14 @@
-# RansomGuard 0.7.33.0
+# RansomGuard 0.8.0.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
 and recover data through rollback plus adaptive crypto analysis.
 
-## Core preservation milestone
+## Production Enforce foundation
 
-0.7.33.0 introduces protocol v17 and a protected-volume scope boundary for the Engineering LAB minifilter. GateClient binds the exact NT volume that contains the negotiated root; destructive ordinary user-mode operations whose normalized name cannot be classified now fail closed when their callback is on that bound volume, instead of silently treating "unknown" as "outside". RENAME scope is classified from both source and destination, so an outside-to-inside rename cannot bypass the root gate. Proven out-of-root operations and ambiguous callbacks on other volumes remain outside this gate, limiting availability impact. Protocol-v16 GateClient-loss protection remains intact: unexpected disconnect retains the exact root/volume and enters `DEGRADED_PROTECTED`, while a clean transaction-complete shutdown uses explicit `DeactivateGate`. The normal product remains AuditOnly; kernel-mode requestors, paging/section caveats and Administrator/SYSTEM tamper remain outside the current guarantee.
+0.8.0.0 establishes the normal-service protection-mode contract without silently promoting the Engineering LAB driver into production. Configuration schema 4 accepts explicit `Mode=Audit` or `Mode=Enforce`; Enforce requires one explicit non-drive protected root, keeps the signed-driver requirement mandatory, and keeps automatic containment disabled in this foundation milestone. The service publishes an explicit protection state machine (`EnforceStarting`, `EnforceUnavailable`, `KernelConnected`, `Protected`, `DegradedProtected`, `Maintenance`, `Failed`) and never derives `KernelEnforcementActive` from SCM driver state alone. Rollback repository validation is a prerequisite for any future kernel-start transition.
+
+The default normal package remains Audit and still contains no driver/GateClient production lifecycle. Requesting Enforce in this milestone therefore reports `EnforceUnavailable` rather than falling back to a false Protected claim. The previously qualified protocol-v17 LAB minifilter remains the preservation/enforcement core that the next production-lifecycle milestone will connect.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 
@@ -149,7 +151,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.7.33.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.8.0.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 Manual disposable-VM runtime workflows:
 

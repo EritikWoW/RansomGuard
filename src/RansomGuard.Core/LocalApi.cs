@@ -39,7 +39,8 @@ public sealed record GuardStatusDto(
     DateTime? LastHeartbeatUtc,
     string SafetyNote,
     string[]? MonitoredRoots = null,
-    MonitoringHealthDto? Monitor = null);
+    MonitoringHealthDto? Monitor = null,
+    ProtectionStatusDto? Protection = null);
 
 public sealed record TelemetryDto(
     DateTime? ObservedUtc,
@@ -81,7 +82,9 @@ public sealed record DiagnosticsDto(
     string PipePolicy,
     TelemetryDto Telemetry,
     string[] Notes,
-    MonitoringHealthDto? Monitor = null, ScopedRuleSetDto? ScopedRules = null);
+    MonitoringHealthDto? Monitor = null,
+    ScopedRuleSetDto? ScopedRules = null,
+    ProtectionStatusDto? Protection = null);
 
 // No key material, memory addresses or arbitrary write commands are sent to the UI.
 public sealed record RecoverySummaryDto(string State, string? Algorithm, bool KeyRecovered,

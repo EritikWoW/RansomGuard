@@ -32,7 +32,8 @@ foreach($required in @(
     @('Product target current verifier campaign','0.7.30 adds a dedicated Driver Verifier qualification',$target),
     @('Product target mixed endurance campaign','0.7.31 adds a dedicated long-duration/mixed-workload qualification contract',$target),
     @('Product target disconnect fail-safe','0.7.32 introduced protocol v16 and an explicit GateClient-loss protection state',$target),
-    @('Product target protected-volume scope','0.7.33 introduces protocol v17 and closes the previous ordinary user-mode name-query fail-open on the negotiated protected volume',$target)
+    @('Product target protected-volume scope','0.7.33 introduces protocol v17 and closes the previous ordinary user-mode name-query fail-open on the negotiated protected volume',$target),
+    @('Product target Enforce foundation','0.8.0 starts the production-enforcement integration layer above the already qualified protocol-v17 LAB core',$target)
 )){
     $label=[string]$required[0]
     $needle=[string]$required[1]
@@ -52,4 +53,4 @@ foreach($stale in @(
     }
 }
 
-Write-Host "Documentation consistency gate PASSED: operator docs, product target, README and changelog match version $version, protocol v17, 0.7.28 bounded concurrency, 0.7.29 fault campaigns, 0.7.30 Driver Verifier, 0.7.31 mixed endurance, 0.7.32 GateClient-loss fail-safe and 0.7.33 protected-volume scope."
+Write-Host "Documentation consistency gate PASSED: operator docs, product target, README and changelog match version $version, protocol v17, qualified 0.7.x kernel milestones and the 0.8.0 Production Enforce foundation boundary."

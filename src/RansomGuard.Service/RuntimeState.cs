@@ -11,10 +11,16 @@ internal sealed class RuntimeState
     private TelemetryDto _telemetry = new(null,null,0,0,0,0,0,0,0,0,0,0);
     private MonitoringHealthDto _monitor = new("Starting", DateTime.UtcNow, "");
     private KernelComponentStatus _driver = new("Unknown",false,false,"Not queried yet.");
+    private ProtectionStatusDto _protection;
     private RecoverySummaryDto _recovery = new("NotStarted",null,false,0,0,0,
         "Offline recovery needs a dump and a supported encrypted file format. Ordinary processes remain audit-only.",DateTime.UtcNow);
     private ScopedRuleSetDto? _scopedRules;
     private long _revision, _telemetryRevision, _incidentRevision, _recoveryRevision;
+    public RuntimeState(ProtectionStatusDto protection)
+    {
+        ProtectionStateMachine.ValidateSnapshot(protection);
+        _protection = protection;
+    }
     public DateTime StartedUtc => _startedUtc;
     public ChangePulse.Subscription Subscribe() => _pulse.Subscribe();
     public void UpdateMonitor(MonitoringHealthDto health)
@@ -44,6 +50,13 @@ internal sealed class RuntimeState
     { lock (_gate) { _telemetry=telemetry; _revision++; _telemetryRevision++; } _pulse.Signal(); }
     public void UpdateRecovery(RecoverySummaryDto value)
     { lock (_gate) { _recovery=value; _revision++; _recoveryRevision++; } _pulse.Signal(); }
+    public void UpdateProtection(ProtectionStatusDto value)
+    {
+        ProtectionStateMachine.ValidateSnapshot(value);
+        lock (_gate) { _protection=value; _revision++; _telemetryRevision++; }
+        _pulse.Signal();
+    }
+    public ProtectionStatusDto Protection() { lock(_gate) return _protection; }
     public void RefreshDriverStatus()
     {
         var result=DriverServiceProbe.Query("RansomGuardMinifilter");
@@ -62,22 +75,30 @@ internal sealed class RuntimeState
         }
         _pulse.Signal();
     }
-    private GuardStatusDto StatusLocked(GuardSettings settings) => new(
-        "RansomGuard","0.7.1.0",_startedUtc,Math.Max(0,(DateTime.UtcNow-_startedUtc).TotalSeconds),
-        MonitoringHealth.ProtectionMode(_monitor),false,false,_driver,settings.ProtectedRoots.Length,
-        settings.CanaryFiles.Length,_incidents.Count,DateTime.UtcNow,
-        "Live connection is not proof of file monitoring or protection. Ordinary applications remain AUDIT ONLY.",
-        settings.ProtectedRoots.ToArray(),_monitor);
+    private GuardStatusDto StatusLocked(GuardSettings settings)
+    {
+        var mode = string.Equals(_protection.RequestedMode, "Audit", StringComparison.Ordinal)
+            ? MonitoringHealth.ProtectionMode(_monitor)
+            : _protection.State;
+        var note = _protection.KernelEnforcementActive
+            ? _protection.Reason
+            : "Live connection and a running driver service are not proof of kernel enforcement. " + _protection.Reason;
+        return new(
+            "RansomGuard",ProductInfo.Version,_startedUtc,Math.Max(0,(DateTime.UtcNow-_startedUtc).TotalSeconds),
+            mode,_protection.AutomaticContainmentActive,_protection.KernelEnforcementActive,_driver,settings.ProtectedRoots.Length,
+            settings.CanaryFiles.Length,_incidents.Count,DateTime.UtcNow,note,
+            settings.ProtectedRoots.ToArray(),_monitor,_protection);
+    }
     public GuardStatusDto Status(GuardSettings settings) { lock(_gate)return StatusLocked(settings); }
     public IncidentSummaryDto[] Incidents(int limit)
     { lock(_gate)return _incidents.Take(LocalApiContract.ClampIncidentLimit(limit)).ToArray(); }
-    private DiagnosticsDto DiagnosticsLocked() => new("0.7.1.0",RuntimeInformation.FrameworkDescription,
+    private DiagnosticsDto DiagnosticsLocked() => new(ProductInfo.Version,RuntimeInformation.FrameworkDescription,
         RuntimeInformation.OSDescription,Environment.Is64BitProcess,$@"\\.\pipe\{LocalApiContract.PipeName}",
         "Local read-only framed stream. NETWORK and ANONYMOUS denied. Bounded snapshots; 4 connections; write deadlines.",
         _telemetry,new[]{"Live UI does not remove ETW delivery delay.",
-        "The durable rollback repository is initialized and validated at service startup, but automatic pre-write capture is not enabled until the minifilter write gate is validated.",
+        "The durable rollback repository must validate before production kernel startup may begin.",
         "No key material is sent to the UI. Reconnect receives only the latest 50 incident summaries; the protected archive is separate.",
-        "A connected UI is not proof of kernel enforcement. Ordinary applications remain audit-only in this release."},_monitor,_scopedRules);
+        "A connected UI or SCM Running state is not proof of kernel enforcement; use the explicit protection state."},_monitor,_scopedRules,_protection);
     public DiagnosticsDto Diagnostics() {lock(_gate)return DiagnosticsLocked();}
     public LiveFrame Frame(GuardSettings settings,long sequence,bool full,ref long telemetrySeen,
         ref long incidentSeen,ref long recoverySeen,ref long stateSeen)
@@ -158,7 +179,7 @@ internal static class DriverServiceProbe
                 };
                 var running = status.CurrentState == 4;
                 return new(state, true, running, running
-                    ? "Service reports running. v0.7.1.0 UI still does not claim kernel enforcement without separate VM validation."
+                    ? "Service reports running. Kernel enforcement is claimed only by the explicit protection state machine after activation."
                     : "Installed but not running.");
             }
             finally { CloseServiceHandle(service); }

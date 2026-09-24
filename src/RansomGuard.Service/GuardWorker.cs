@@ -42,10 +42,14 @@ internal sealed class GuardWorker:BackgroundService
         }
 
         _runtime.UpdateMonitor(new("Running", DateTime.UtcNow, monitor.SessionName));
-        _log.LogInformation("RansomGuard v{Version}. Mode=AUDIT for ALL ordinary applications. Lab enrolled={Lab}. No Kill or tree-freeze.", ProductInfo.Version, _lab is not null);
+        var protection=_runtime.Protection();
+        _log.LogInformation(
+            "RansomGuard v{Version}. RequestedMode={RequestedMode}; ProtectionState={ProtectionState}; KernelEnforcement={KernelEnforcement}; Lab enrolled={Lab}.",
+            ProductInfo.Version,protection.RequestedMode,protection.State,protection.KernelEnforcementActive,_lab is not null);
         _log.LogInformation("Owned ETW session: {Session}. Clean Ctrl+C shutdown releases this session.", monitor.SessionName);
         foreach (var root in _settings.ProtectedRoots) _log.LogInformation("Monitored root: {Root}", root);
-        _store.Audit(new { Utc=DateTime.UtcNow, Event="Startup", Version=ProductInfo.Version, Mode="Audit",
+        _store.Audit(new { Utc=DateTime.UtcNow, Event="Startup", Version=ProductInfo.Version,
+            RequestedMode=_settings.Mode, Protection=protection,
             Lab=_lab is not null, Roots=_settings.ProtectedRoots, monitor.SessionName });
 
         using var pipeline = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -146,8 +150,10 @@ internal sealed class GuardWorker:BackgroundService
             lastAudit=heartbeatUtc;
             _store.Audit(new{Utc=heartbeatUtc,Event="Heartbeat",m.EventsLost,QueueDropped=m.Dropped,
                 Resolution=paths,DeliveryLatency=latency,IncidentQueueDropped=incidentDrops,_engine.WindowEvictions,_engine.TruncatedWindows});
-            _log.LogInformation("Telemetry: ETW loss={EtwLoss}; queue loss={QueueLoss}; paths resolved={Resolved}, unresolved={Unresolved}; delivery p50={P50:F1}ms p95={P95:F1}ms p99={P99:F1}ms max={Max:F1}ms; mode=AUDIT",
-                m.EventsLost,m.Dropped,paths.Resolved,paths.Unresolved,latency.P50Ms,latency.P95Ms,latency.P99Ms,latency.MaxMs);
+            var protection=_runtime.Protection();
+            _log.LogInformation("Telemetry: ETW loss={EtwLoss}; queue loss={QueueLoss}; paths resolved={Resolved}, unresolved={Unresolved}; delivery p50={P50:F1}ms p95={P95:F1}ms p99={P99:F1}ms max={Max:F1}ms; requested={RequestedMode}; protection={ProtectionState}",
+                m.EventsLost,m.Dropped,paths.Resolved,paths.Unresolved,latency.P50Ms,latency.P95Ms,latency.P99Ms,latency.MaxMs,
+                protection.RequestedMode,protection.State);
             if(paths.Unresolved>0)_log.LogInformation("Unresolved path categories: {Categories}",string.Join(", ",paths.Categories.Where(x=>x.Key.StartsWith("unresolved-",StringComparison.Ordinal)).Select(x=>$"{x.Key}={x.Value}")));
         }
     }

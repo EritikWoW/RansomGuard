@@ -575,7 +575,10 @@ static NTSTATUS RgPopulateEvent(PRG_EVENT Event, PFLT_CALLBACK_DATA Data,
 
     if (!NT_SUCCESS(status) || nameInfo == NULL) {
         Event->PathStatus = RgPathQueryFailed;
-        return status;
+        if (EventType == RgEventRename) {
+            RgPopulateRenameDestination(Event, Data, FltObjects);
+        }
+        return NT_SUCCESS(status) ? STATUS_UNSUCCESSFUL : status;
     }
 
     status = FltParseFileNameInformation(nameInfo);
@@ -1512,17 +1515,18 @@ static FLT_POSTOP_CALLBACK_STATUS RgPostSetInformationSafe(PFLT_CALLBACK_DATA Da
     return FLT_POSTOP_FINISHED_PROCESSING;
 }
 
-static BOOLEAN RgEventPathMatchesGateRoot(const RG_EVENT *Event)
+static BOOLEAN RgPathMatchesGateRoot(ULONG PathStatus, const WCHAR *Path)
 {
     UNICODE_STRING eventPath;
     UNICODE_STRING root;
     BOOLEAN result = FALSE;
 
-    if (Event->PathStatus != RgPathResolved && Event->PathStatus != RgPathTruncated) {
+    if (Path == NULL ||
+        (PathStatus != RgPathResolved && PathStatus != RgPathTruncated)) {
         return FALSE;
     }
 
-    RtlInitUnicodeString(&eventPath, Event->Path);
+    RtlInitUnicodeString(&eventPath, Path);
 
     ExAcquireFastMutex(&gPortMutex);
     if (gGateRootLengthBytes != 0 &&
@@ -1537,13 +1541,23 @@ static BOOLEAN RgEventPathMatchesGateRoot(const RG_EVENT *Event)
             result = TRUE;
         } else if (eventPath.Length > root.Length && RtlPrefixUnicodeString(&root, &eventPath, TRUE)) {
             USHORT index = root.Length / sizeof(WCHAR);
-            if (Event->Path[index] == L'\\') {
+            if (Path[index] == L'\\') {
                 result = TRUE;
             }
         }
     }
     ExReleaseFastMutex(&gPortMutex);
     return result;
+}
+
+static BOOLEAN RgEventPathMatchesGateRoot(const RG_EVENT *Event)
+{
+    return RgPathMatchesGateRoot(Event->PathStatus, Event->Path);
+}
+
+static BOOLEAN RgEventDestinationPathMatchesGateRoot(const RG_EVENT *Event)
+{
+    return RgPathMatchesGateRoot(Event->DestinationPathStatus, Event->DestinationPath);
 }
 
 static BOOLEAN RgEventIsInsideGateRoot(const RG_EVENT *Event)
@@ -1556,6 +1570,71 @@ static BOOLEAN RgEventIsInsideGateRoot(const RG_EVENT *Event)
     }
 
     return RgEventPathMatchesGateRoot(Event);
+}
+
+static BOOLEAN RgIsOnGateVolume(PCFLT_RELATED_OBJECTS FltObjects)
+{
+    BOOLEAN result = FALSE;
+
+    if (FltObjects == NULL || FltObjects->Volume == NULL) {
+        return FALSE;
+    }
+
+    ExAcquireFastMutex(&gPortMutex);
+    result = (gGateVolume != NULL && gGateVolume == FltObjects->Volume);
+    ExReleaseFastMutex(&gPortMutex);
+    return result;
+}
+
+static RG_SCOPE_CLASSIFICATION RgClassifyMutationScope(
+    const RG_EVENT *Event,
+    PCFLT_RELATED_OBJECTS FltObjects)
+{
+    RG_SCOPE_CLASSIFICATION sourceScope;
+    RG_SCOPE_CLASSIFICATION destinationScope;
+
+    if (Event == NULL) {
+        return RgScopeOutside;
+    }
+
+    // GateClient owns the rollback store and activation protocol. Never make its own volume I/O
+    // depend on the synchronous gate, even if a name query is temporarily unavailable.
+    if (Event->ProcessId != 0 &&
+        Event->ProcessId == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId, 0, 0)) {
+        return RgScopeOutside;
+    }
+
+    if (Event->PathStatus == RgPathResolved || Event->PathStatus == RgPathTruncated) {
+        sourceScope = RgEventPathMatchesGateRoot(Event) ? RgScopeInside : RgScopeOutside;
+    } else {
+        sourceScope = RgScopeAmbiguous;
+    }
+
+    if (Event->EventType == RgEventRename) {
+        if (Event->DestinationPathStatus == RgPathResolved ||
+            Event->DestinationPathStatus == RgPathTruncated) {
+            destinationScope = RgEventDestinationPathMatchesGateRoot(Event)
+                ? RgScopeInside
+                : RgScopeOutside;
+        } else {
+            destinationScope = RgScopeAmbiguous;
+        }
+
+        if (sourceScope == RgScopeInside || destinationScope == RgScopeInside) {
+            return RgScopeInside;
+        }
+        if (sourceScope == RgScopeOutside && destinationScope == RgScopeOutside) {
+            return RgScopeOutside;
+        }
+
+        return RgIsOnGateVolume(FltObjects) ? RgScopeAmbiguous : RgScopeOutside;
+    }
+
+    if (sourceScope == RgScopeAmbiguous) {
+        return RgIsOnGateVolume(FltObjects) ? RgScopeAmbiguous : RgScopeOutside;
+    }
+
+    return sourceScope;
 }
 
 static BOOLEAN RgIsContainedRequestor(PFLT_CALLBACK_DATA Data)

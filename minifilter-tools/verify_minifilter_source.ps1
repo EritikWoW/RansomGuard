@@ -170,6 +170,13 @@ if($gateBlock -notmatch 'RgAcquireClientPort\(RgClientLabGate' -or
    $gateBlock -notmatch 'RgReleaseClientPort\(\)'){
     throw 'RgGateEvent must use the short-lived client-port lease around FltSendMessage.'
 }
+
+if(([regex]::Matches($gateBlock,[regex]::Escape('InterlockedCompareExchange(&gDisconnectAuthorized, 0, 0) != 0'))).Count -lt 2){
+    throw 'RgGateEvent must reject both newly admitted and already-replied requests once orderly disconnect authorization closes admission.'
+}
+if($gateBlock -notmatch [regex]::Escape('*ErrorCode = (ULONG)STATUS_DEVICE_NOT_READY')){
+    throw 'Orderly-disconnect gate rejection must expose an explicit device-not-ready failure.'
+}
 foreach($required in @(
     'reply.Flags & ~RG_GATE_REPLY_FLAG_CONTAIN_REQUESTOR',
     'FlagOn(reply.Flags, RG_GATE_REPLY_FLAG_CONTAIN_REQUESTOR)',
@@ -303,9 +310,10 @@ if($messageBlock -notmatch [regex]::Escape('request->TargetProcessId <= 4') -or
 
 if($messageBlock -notmatch [regex]::Escape('InterlockedExchange(&gProtectionArmed, 1)') -or
    $messageBlock -notmatch [regex]::Escape('request->Command == RgControlAuthorizeDisconnect') -or
+   $messageBlock -notmatch [regex]::Escape('InterlockedCompareExchange(&gDisconnectAuthorized, 1, 0)') -or
    $messageBlock -notmatch [regex]::Escape('InterlockedCompareExchange(&gGateInFlight, 0, 0) != 0') -or
-   $messageBlock -notmatch [regex]::Escape('InterlockedExchange(&gDisconnectAuthorized, 1)')){
-    throw 'Activated LAB protection must be armed and orderly disconnect authorization must require a quiescent gate.'
+   $messageBlock -notmatch [regex]::Escape('InterlockedExchange(&gDisconnectAuthorized, 0)')){
+    throw 'Activated LAB protection must atomically close new gate admission before orderly disconnect is authorized.'
 }
 
 $observeStart=$src.IndexOf('static BOOLEAN RgShouldObserve(')

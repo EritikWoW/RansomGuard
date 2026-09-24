@@ -1,3 +1,14 @@
+# RansomGuard 0.8.2.0
+
+- Introduced protocol v18 with a distinct `RgClientProductionGate` wire identity alongside Audit and Engineering LabGate.
+- ProductionGate reuses the bounded preserve-before-allow, activation-preflight, protected-volume ambiguity and degraded-protection core while the kernel rejects LAB containment reply flags and LAB containment/scope-ambiguity controls.
+- Added a retained protection-client-mode latch so an activated ProductionGate that disconnects unexpectedly can reconnect only as ProductionGate to the exact retained root/volume; it cannot downgrade into LabGate.
+- Added explicit GateClient `--production` contract requiring pre-provisioned `--store`, bounded path-safe `--session`, unique `--ready-file` and `--shutdown-file`; LAB prepare/reconcile/fault/containment options are rejected.
+- ProductionGate does not create the rollback/control directories itself and rejects root/store overlap and reparse-bearing production control/storage paths.
+- Added one-shot machine-readable ProductionGate readiness written only after activation reaches kernel Protected. The readiness record includes protocol, PID, root/store/session and preflight counts and never claims automatic containment.
+- Normal package/service lifecycle remains unchanged: no production driver install/start/load/attach and no GateClient supervision yet.
+- Exact-head disposable-VM ProductionGate qualification is required before this kernel/protocol milestone may merge.
+
 # RansomGuard 0.8.1.0
 
 - Added the fixed ProductionProtection package descriptor/layout for future Enforce lifecycle activation.

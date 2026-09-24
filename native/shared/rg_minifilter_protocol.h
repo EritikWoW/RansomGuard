@@ -1,7 +1,8 @@
 #pragma once
 
 // Wire protocol between the RansomGuard lab minifilter and user-mode clients.
-// v15 adds DELETE disposition-result and handle-cleanup finalization evidence without changing RG_EVENT size.
+// v15 retains DELETE lifecycle evidence and extends the control plane with an explicit
+// orderly-disconnect authorization command without changing packed structure sizes.
 // The driver binds the exact requestor PEPROCESS for that IRP before allowing it to continue.
 // The production bundle still does not install or enable the driver.
 
@@ -73,7 +74,8 @@ typedef enum _RG_CONTROL_COMMAND {
     RgControlQueryActivation = 2,
     RgControlArmPreflight = 3,
     RgControlActivateAndContainProcess = 4,
-    RgControlQueryContainment = 5
+    RgControlQueryContainment = 5,
+    RgControlAuthorizeDisconnect = 6
 } RG_CONTROL_COMMAND;
 
 #pragma pack(push, 1)

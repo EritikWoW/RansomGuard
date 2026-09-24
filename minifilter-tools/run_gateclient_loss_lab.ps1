@@ -92,7 +92,7 @@ function Wait-Path([string]$Path,[int]$Seconds,[string]$Description){
         if(Test-Path -LiteralPath $Path){return}
         Start-Sleep -Milliseconds 100
     }
-    throw "Timed out waiting for $Description: $Path"
+    throw "Timed out waiting for ${Description}: $Path"
 }
 
 function Wait-JournalMatch(

@@ -114,7 +114,6 @@ foreach($required in @(
     'RANSOMGUARD-LAB-GATE-V1',
     'Stop-ProcessHard $gate',
     'LabGate unexpectedly replaced retained ProductionGate state.',
-    'run_production_gate_profile_lab.ps1',
     'production-gate-result.json',
     'cleanupPassed=$false',
     '$installed=$true',

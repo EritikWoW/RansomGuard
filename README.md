@@ -1,8 +1,12 @@
-# RansomGuard 0.8.3.0
+# RansomGuard 0.8.4.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
 and recover data through rollback plus adaptive crypto analysis.
+
+## Data-mutating FSCTL boundary
+
+0.8.4.0 closes the reviewed data-mutation FSCTL gap without changing protocol v18. The minifilter now registers `IRP_MJ_FILE_SYSTEM_CONTROL` and explicitly mediates `FSCTL_SET_ZERO_DATA`, `FSCTL_DUPLICATE_EXTENTS_TO_FILE`, `FSCTL_DUPLICATE_EXTENTS_TO_FILE_EX`, `FSCTL_OFFLOAD_WRITE`, `FSCTL_FILE_LEVEL_TRIM` and `FSCTL_SET_SPARSE`. Audit remains non-blocking. LAB/ProductionGate operations inside the protected root (or ambiguous on its bound volume) fail closed unless the stream already carries a durable `SnapshotCommitted`/`BaselineCommitted` preservation context from its mutation-capable CREATE. The FSCTL callback never performs synchronous user-mode preservation; it relies on the earlier durable baseline or denies the operation.
 
 ## Hard-link alias boundary
 
@@ -167,7 +171,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.8.3.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.8.4.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 Manual disposable-VM runtime workflows:
 

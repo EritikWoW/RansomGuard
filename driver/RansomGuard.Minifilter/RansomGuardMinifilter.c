@@ -1623,6 +1623,13 @@ static BOOLEAN RgGateEvent(PFLT_CALLBACK_DATA Data,
     timeout.QuadPart = -(RG_GATE_TIMEOUT_MS * 10LL * 1000LL);
 
     inFlight = InterlockedIncrement(&gGateInFlight);
+    if (InterlockedCompareExchange(&gDisconnectAuthorized, 0, 0) != 0) {
+        InterlockedDecrement(&gGateInFlight);
+        if (ErrorCode != NULL) {
+            *ErrorCode = (ULONG)STATUS_DEVICE_NOT_READY;
+        }
+        return FALSE;
+    }
     if (inFlight > RG_MAX_GATE_INFLIGHT) {
         InterlockedDecrement(&gGateInFlight);
         if (ErrorCode != NULL) {
@@ -1639,6 +1646,13 @@ static BOOLEAN RgGateEvent(PFLT_CALLBACK_DATA Data,
     }
 
     InterlockedDecrement(&gGateInFlight);
+
+    if (InterlockedCompareExchange(&gDisconnectAuthorized, 0, 0) != 0) {
+        if (ErrorCode != NULL) {
+            *ErrorCode = (ULONG)STATUS_DEVICE_NOT_READY;
+        }
+        return FALSE;
+    }
 
     if (ErrorCode != NULL) {
         *ErrorCode = NT_SUCCESS(status) ? reply.ErrorCode : (ULONG)status;
@@ -2011,11 +2025,14 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
                    InterlockedCompareExchange(&gProtectionArmed, 0, 0) == 0 ||
                    InterlockedCompareExchange(&gFailSafeActive, 0, 0) != 0 ||
                    InterlockedCompareExchange(&gPreflightProbeArmed, 0, 0) != 0 ||
-                   InterlockedCompareExchange(&gActivationHazard, 0, 0) != 0 ||
-                   InterlockedCompareExchange(&gGateInFlight, 0, 0) != 0) {
+                   InterlockedCompareExchange(&gActivationHazard, 0, 0) != 0) {
+            status = STATUS_DEVICE_BUSY;
+        } else if (InterlockedCompareExchange(&gDisconnectAuthorized, 1, 0) != 0) {
+            status = STATUS_DEVICE_BUSY;
+        } else if (InterlockedCompareExchange(&gGateInFlight, 0, 0) != 0) {
+            InterlockedExchange(&gDisconnectAuthorized, 0);
             status = STATUS_DEVICE_BUSY;
         } else {
-            InterlockedExchange(&gDisconnectAuthorized, 1);
             status = STATUS_SUCCESS;
         }
     } else {

@@ -27,6 +27,7 @@ jobs:
         run: |
           .\tools\verify_powershell_automation.ps1
           .\tools\verify_supply_chain.ps1
+          .\tools\verify_threat_model.ps1
 
       - name: Add x64 MSBuild to PATH
         uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3 node24 pinned # v2 pinned

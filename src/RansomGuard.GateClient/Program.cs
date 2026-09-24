@@ -87,6 +87,28 @@ var context = new RgConnectContext
 using var port = Native.Connect(PortName, context);
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); Native.Cancel(port); };
+Task? shutdownMarkerWatcher = null;
+if (options.ShutdownMarker is not null)
+{
+    if (File.Exists(options.ShutdownMarker))
+        throw new InvalidOperationException($"Shutdown marker already exists before GateClient start: {options.ShutdownMarker}");
+
+    Console.WriteLine($"LAB orderly shutdown marker : {options.ShutdownMarker}");
+    shutdownMarkerWatcher = Task.Run(async () =>
+    {
+        while (!cts.IsCancellationRequested)
+        {
+            if (File.Exists(options.ShutdownMarker))
+            {
+                Console.WriteLine("LAB orderly shutdown marker observed; draining GateClient.");
+                cts.Cancel();
+                Native.Cancel(port);
+                return;
+            }
+            await Task.Delay(100).ConfigureAwait(false);
+        }
+    });
+}
 
 var headerSize = Marshal.SizeOf<FilterMessageHeader>();
 var eventSize = Marshal.SizeOf<RgEvent>();
@@ -470,9 +492,13 @@ catch (OperationCanceledException) when (cts.IsCancellationRequested)
 }
 finally
 {
+    cts.Cancel();
+    Native.Cancel(port);
     Marshal.FreeHGlobal(buffer);
     if (activeWorkers.Count != 0)
         await Task.WhenAll(activeWorkers).ConfigureAwait(false);
+    if (shutdownMarkerWatcher is not null)
+        await shutdownMarkerWatcher.ConfigureAwait(false);
 }
 
 repository.VerifyAll();
@@ -1858,7 +1884,8 @@ sealed record Options(
     bool DropFirstRenameCompletion,
     bool DropFirstTruncateCompletion,
     bool DropFirstDeleteCompletion,
-    bool ReconcileOnly)
+    bool ReconcileOnly,
+    string? ShutdownMarker)
 {
     public const int DefaultGateWorkers = 4;
     public const int MaxGateWorkers = 8;
@@ -1887,6 +1914,7 @@ sealed record Options(
         var dropFirstTruncateCompletion = false;
         var dropFirstDeleteCompletion = false;
         var reconcileOnly = false;
+        string? shutdownMarker = null;
         for (var i = 0; i < args.Length; i++)
         {
             switch (args[i].ToLowerInvariant())
@@ -1938,6 +1966,9 @@ sealed record Options(
                 case "--drop-first-truncate-completion": dropFirstTruncateCompletion = true; break;
                 case "--drop-first-delete-completion": dropFirstDeleteCompletion = true; break;
                 case "--reconcile-only": reconcileOnly = true; break;
+                case "--shutdown-marker" when i + 1 < args.Length:
+                    shutdownMarker = Path.GetFullPath(args[++i]);
+                    break;
                 case "--prepare-root": prepare = true; break;
                 default: throw new ArgumentException($"Unknown/incomplete argument: {args[i]}");
             }
@@ -1955,12 +1986,18 @@ sealed record Options(
             throw new ArgumentException("Containment thresholds require --contain-after-pid.");
         if (containAfterPaths > containAfterEvents)
             throw new ArgumentException("--contain-after-paths cannot exceed --contain-after-events.");
+        if (shutdownMarker is not null && PathPolicy.Under(shutdownMarker, root))
+            throw new ArgumentException("--shutdown-marker must be outside the protected LAB root.");
+        if (prepare && shutdownMarker is not null)
+            throw new ArgumentException("--shutdown-marker cannot be combined with --prepare-root.");
+        if (reconcileOnly && shutdownMarker is not null)
+            throw new ArgumentException("--shutdown-marker cannot be combined with --reconcile-only.");
         store ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RansomGuardV072", "GateRollback");
         return new Options(
             root, store, session, prepare, gateWorkers, maxStoreMiB, minFreeMiB,
             containPid, containAfterPid, containAfterEvents, containAfterPaths,
             dropFirstCreateCompletion, dropFirstRenameCompletion, dropFirstTruncateCompletion,
-            dropFirstDeleteCompletion, reconcileOnly);
+            dropFirstDeleteCompletion, reconcileOnly, shutdownMarker);
     }
 }
 

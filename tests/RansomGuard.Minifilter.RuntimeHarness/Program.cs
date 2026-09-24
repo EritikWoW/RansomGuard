@@ -370,8 +370,7 @@ static void HardLinkExProbe(
     var buffer = Marshal.AllocHGlobal(bufferLength);
     try
     {
-        for (var offset = 0; offset < bufferLength; offset += sizeof(int))
-            Marshal.WriteInt32(buffer, offset, 0);
+        Marshal.Copy(new byte[bufferLength], 0, buffer, bufferLength);
 
         // FILE_LINK_INFORMATION on RS5+ starts with the ULONG Flags member when used
         // with FileLinkInformationEx. RootDirectory then scopes the relative FileName.

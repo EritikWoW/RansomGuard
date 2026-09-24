@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -147,7 +148,7 @@ internal static class ProtectionPackageVerifier
     {
         if (stream.Length > maxBytes) throw new InvalidDataException("INF exceeds size limit.");
         stream.Position = 0;
-        using var reader = new StreamReader(stream, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: 1024, leaveOpen: true);
         var text = reader.ReadToEnd();
         stream.Position = 0;
         return text;
@@ -174,11 +175,12 @@ internal static class ProtectionPackageVerifier
             !string.Equals(provider.Groups["value"].Value, descriptor.Provider, StringComparison.Ordinal))
             throw new InvalidDataException("INF provider does not match the production package descriptor.");
 
-        var protocolVersion = Regex.Match(
+        var driverVersion = Regex.Match(
             inf,
             @"(?im)^\s*DriverVer\s*=\s*[^,]+,(?<value>\d+\.\d+\.\d+\.\d+)\s*$");
-        if (!protocolVersion.Success)
-            throw new InvalidDataException("INF DriverVer is missing or malformed.");
+        if (!driverVersion.Success ||
+            !string.Equals(driverVersion.Groups["value"].Value, descriptor.Version, StringComparison.Ordinal))
+            throw new InvalidDataException("INF DriverVer does not match the production package descriptor.");
     }
 
     private static ProtectionPackageAdmission Rejected(

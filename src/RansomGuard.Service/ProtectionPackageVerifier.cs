@@ -36,14 +36,17 @@ internal static class ProtectionPackageVerifier
             FileSafety.NoReparse(root);
 
             var descriptorPath = Path.Combine(root, DescriptorName);
+            var servicePath = Path.Combine(Path.GetFullPath(applicationBaseDirectory), "RansomGuard.Service.exe");
             var gatePath = Path.Combine(root, "GateClient", "RansomGuard.GateClient.exe");
             var driverDirectory = Path.Combine(root, "Driver");
             var sysPath = Path.Combine(driverDirectory, "RansomGuardMinifilter.sys");
             var infPath = Path.Combine(driverDirectory, "RansomGuardMinifilter.inf");
             var catPath = Path.Combine(driverDirectory, "RansomGuardMinifilter.cat");
-            foreach (var path in new[] { descriptorPath, gatePath, sysPath, infPath, catPath })
+            foreach (var path in new[] { servicePath, descriptorPath, gatePath, sysPath, infPath, catPath })
                 FileSafety.NoReparse(path);
 
+            if (!File.Exists(servicePath))
+                return Rejected("ServiceIdentityMissing", true, "Running package does not contain the expected RansomGuard.Service.exe identity.", observed);
             if (!File.Exists(descriptorPath) || !File.Exists(gatePath) ||
                 !File.Exists(sysPath) || !File.Exists(infPath) || !File.Exists(catPath))
                 return Rejected("Incomplete", true, "Production protection package layout is incomplete.", observed);
@@ -56,6 +59,7 @@ internal static class ProtectionPackageVerifier
             }
             ProtectionPackagePolicy.ValidateDescriptor(descriptor, expectedVersion);
 
+            using var service = OpenExactFile(servicePath, 4096, MaxGateClientBytes);
             using var gate = OpenExactFile(gatePath, 4096, MaxGateClientBytes);
             using var sys = OpenExactFile(sysPath, 4096, MaxDriverBytes);
             using var inf = OpenExactFile(infPath, 64, MaxInfBytes);
@@ -71,25 +75,51 @@ internal static class ProtectionPackageVerifier
                 !DecisionPolicy.HashEqual(catHash, descriptor.DriverCatSha256))
                 return Rejected("HashMismatch", true, "Protection package bytes do not match the descriptor SHA-256 values.", observed, descriptor.Altitude, true);
 
+            var serviceVersion = FileVersionInfo.GetVersionInfo(servicePath).FileVersion;
             var gateVersion = FileVersionInfo.GetVersionInfo(gatePath).FileVersion;
-            if (!string.Equals(gateVersion, expectedVersion, StringComparison.Ordinal))
-                return Rejected("VersionMismatch", true, "GateClient FileVersion does not match the service.", observed, descriptor.Altitude, true, true);
+            if (!string.Equals(serviceVersion, expectedVersion, StringComparison.Ordinal) ||
+                !string.Equals(gateVersion, expectedVersion, StringComparison.Ordinal))
+                return Rejected("VersionMismatch", true, "Service/GateClient FileVersion does not match the package version.", observed, descriptor.Altitude, true, true);
+
+            service.Position = 0;
+            var serviceSignature = Authenticode.Check(service, servicePath);
+            if (!string.Equals(serviceSignature.Status, "ValidCached", StringComparison.Ordinal) ||
+                string.IsNullOrWhiteSpace(serviceSignature.CertificateThumbprint))
+                return Rejected("ServiceSignatureRejected", true,
+                    $"Service Authenticode verification is '{serviceSignature.Status}' or has no signer identity.",
+                    observed, descriptor.Altitude, true, true, true);
 
             var infText = ReadTextFromStart(inf, MaxInfBytes);
             ValidateInf(infText, descriptor);
 
             gate.Position = 0;
             var gateSignature = Authenticode.Check(gate, gatePath);
-            if (!string.Equals(gateSignature.Status, "ValidCached", StringComparison.Ordinal))
+            if (!string.Equals(gateSignature.Status, "ValidCached", StringComparison.Ordinal) ||
+                string.IsNullOrWhiteSpace(gateSignature.CertificateThumbprint))
                 return Rejected("GateClientSignatureRejected", true,
-                    $"GateClient Authenticode verification is '{gateSignature.Status}', not ValidCached.",
+                    $"GateClient Authenticode verification is '{gateSignature.Status}' or has no signer identity.",
+                    observed, descriptor.Altitude, true, true, true);
+            if (!string.Equals(
+                    gateSignature.CertificateThumbprint,
+                    serviceSignature.CertificateThumbprint,
+                    StringComparison.OrdinalIgnoreCase))
+                return Rejected("GateClientSignerMismatch", true,
+                    "GateClient signer certificate does not match the running service signer.",
                     observed, descriptor.Altitude, true, true, true);
 
             cat.Position = 0;
             var catSignature = Authenticode.Check(cat, catPath);
-            if (!string.Equals(catSignature.Status, "ValidCached", StringComparison.Ordinal))
+            if (!string.Equals(catSignature.Status, "ValidCached", StringComparison.Ordinal) ||
+                string.IsNullOrWhiteSpace(catSignature.CertificateThumbprint))
                 return Rejected("CatalogSignatureRejected", true,
-                    $"Driver catalog signature verification is '{catSignature.Status}', not ValidCached.",
+                    $"Driver catalog signature verification is '{catSignature.Status}' or has no signer identity.",
+                    observed, descriptor.Altitude, true, true, true, true);
+            if (!string.Equals(
+                    catSignature.CertificateThumbprint,
+                    serviceSignature.CertificateThumbprint,
+                    StringComparison.OrdinalIgnoreCase))
+                return Rejected("CatalogSignerMismatch", true,
+                    "Driver catalog signer certificate does not match the running service signer.",
                     observed, descriptor.Altitude, true, true, true, true);
 
             sys.Position = 0;
@@ -118,7 +148,8 @@ internal static class ProtectionPackageVerifier
                 true,
                 "Protection package identity, signatures and SYS/INF catalog membership passed. Lifecycle activation is a separate milestone.",
                 descriptor.Altitude,
-                observed);
+                observed,
+                serviceSignature.CertificateThumbprint);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or
                                    InvalidOperationException or JsonException or CryptographicException)

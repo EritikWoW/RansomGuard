@@ -128,24 +128,24 @@ Check(rejected,"foundation cannot publish automatic containment even in Protecte
 
 var productionHash=new string('A',64);
 var productionPackage=new ProtectionPackageDescriptor(
-    1,"ProductionProtection","0.8.2.0",18,"RansomGuard","385201",
+    1,"ProductionProtection","0.8.3.0",18,"RansomGuard","385201",
     productionHash,productionHash,productionHash,productionHash);
-ProtectionPackagePolicy.ValidateDescriptor(productionPackage,"0.8.2.0");
+ProtectionPackagePolicy.ValidateDescriptor(productionPackage,"0.8.3.0");
 Check(true,"production protection package descriptor accepted");
 rejected=false;try{
-    ProtectionPackagePolicy.ValidateDescriptor(productionPackage with{Altitude=ProtectionPackagePolicy.LabPlaceholderAltitude},"0.8.2.0");
+    ProtectionPackagePolicy.ValidateDescriptor(productionPackage with{Altitude=ProtectionPackagePolicy.LabPlaceholderAltitude},"0.8.3.0");
 }catch(InvalidOperationException){rejected=true;}
 Check(rejected,"LAB placeholder altitude rejected from production package");
 rejected=false;try{
-    ProtectionPackagePolicy.ValidateDescriptor(productionPackage with{Provider="RansomGuard Lab"},"0.8.2.0");
+    ProtectionPackagePolicy.ValidateDescriptor(productionPackage with{Provider="RansomGuard Lab"},"0.8.3.0");
 }catch(InvalidOperationException){rejected=true;}
 Check(rejected,"LAB provider rejected from production package");
 rejected=false;try{
-    ProtectionPackagePolicy.ValidateDescriptor(productionPackage with{Protocol=17},"0.8.2.0");
+    ProtectionPackagePolicy.ValidateDescriptor(productionPackage with{Protocol=17},"0.8.3.0");
 }catch(InvalidOperationException){rejected=true;}
 Check(rejected,"wrong protection package protocol rejected");
 rejected=false;try{
-    ProtectionPackagePolicy.ValidateDescriptor(productionPackage with{DriverSysSha256="not-a-hash"},"0.8.2.0");
+    ProtectionPackagePolicy.ValidateDescriptor(productionPackage with{DriverSysSha256="not-a-hash"},"0.8.3.0");
 }catch(InvalidOperationException){rejected=true;}
 Check(rejected,"malformed protection package hash rejected");
 rejected=false;try{

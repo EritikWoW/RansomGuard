@@ -2456,6 +2456,7 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
     volumeBytes = context->GateVolumeLengthBytes;
     if ((rootBytes % sizeof(WCHAR)) != 0 || rootBytes >= sizeof(context->GateRoot) ||
         (volumeBytes % sizeof(WCHAR)) != 0 || volumeBytes >= sizeof(context->GateRoot)) {
+        ObDereferenceObject(candidateClientProcess);
         return STATUS_INVALID_PARAMETER;
     }
 
@@ -2464,15 +2465,18 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
             rootBytes < (4 * sizeof(WCHAR)) ||
             volumeBytes < (4 * sizeof(WCHAR)) ||
             volumeBytes > rootBytes) {
+            ObDereferenceObject(candidateClientProcess);
             return STATUS_INVALID_PARAMETER;
         }
 
         rootChars = rootBytes / sizeof(WCHAR);
         volumeChars = volumeBytes / sizeof(WCHAR);
         if (context->GateRoot[0] != L'\\' || context->GateRoot[rootChars] != L'\0') {
+            ObDereferenceObject(candidateClientProcess);
             return STATUS_INVALID_PARAMETER;
         }
         if (volumeBytes < rootBytes && context->GateRoot[volumeChars] != L'\\') {
+            ObDereferenceObject(candidateClientProcess);
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -2481,6 +2485,7 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
         }
         rootBytes = rootChars * sizeof(WCHAR);
         if (volumeBytes > rootBytes) {
+            ObDereferenceObject(candidateClientProcess);
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -2489,9 +2494,11 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
         volumeName.MaximumLength = (USHORT)volumeBytes;
         status = FltGetVolumeFromName(gFilter, &volumeName, &candidateVolume);
         if (!NT_SUCCESS(status) || candidateVolume == NULL) {
+            ObDereferenceObject(candidateClientProcess);
             return NT_SUCCESS(status) ? STATUS_FLT_VOLUME_NOT_FOUND : status;
         }
     } else if (rootBytes != 0 || volumeBytes != 0) {
+        ObDereferenceObject(candidateClientProcess);
         return STATUS_INVALID_PARAMETER;
     }
 

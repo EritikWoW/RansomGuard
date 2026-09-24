@@ -84,7 +84,6 @@ static VOID RgPopulateRenameDestination(_Inout_ PRG_EVENT Event, _Inout_ PFLT_CA
 static BOOLEAN RgPathMatchesGateRoot(_In_ ULONG PathStatus, _In_reads_z_ const WCHAR *Path);
 static BOOLEAN RgEventPathMatchesGateRoot(_In_ const RG_EVENT *Event);
 static BOOLEAN RgEventDestinationPathMatchesGateRoot(_In_ const RG_EVENT *Event);
-static BOOLEAN RgEventIsInsideGateRoot(_In_ const RG_EVENT *Event);
 static BOOLEAN RgIsOnGateVolume(_In_ PCFLT_RELATED_OBJECTS FltObjects);
 static RG_SCOPE_CLASSIFICATION RgClassifyMutationScope(
     _In_ const RG_EVENT *Event,
@@ -1558,18 +1557,6 @@ static BOOLEAN RgEventPathMatchesGateRoot(const RG_EVENT *Event)
 static BOOLEAN RgEventDestinationPathMatchesGateRoot(const RG_EVENT *Event)
 {
     return RgPathMatchesGateRoot(Event->DestinationPathStatus, Event->DestinationPath);
-}
-
-static BOOLEAN RgEventIsInsideGateRoot(const RG_EVENT *Event)
-{
-    ULONGLONG requestorPid;
-
-    requestorPid = Event->ProcessId;
-    if (requestorPid == (ULONGLONG)InterlockedCompareExchange64(&gClientProcessId, 0, 0)) {
-        return FALSE;
-    }
-
-    return RgEventPathMatchesGateRoot(Event);
 }
 
 static BOOLEAN RgIsOnGateVolume(PCFLT_RELATED_OBJECTS FltObjects)

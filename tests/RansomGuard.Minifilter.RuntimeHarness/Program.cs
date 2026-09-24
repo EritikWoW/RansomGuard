@@ -957,10 +957,6 @@ static class Native
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool FlushFileBuffers(SafeFileHandle hFile);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool SetFileInformationByHandle(
         SafeFileHandle hFile,
         int fileInformationClass,

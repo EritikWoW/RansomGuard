@@ -1,3 +1,12 @@
+# RansomGuard 0.8.3.0
+
+- Closed the hard-link alias protection gap while retaining protocol v18.
+- Activation preflight now queries the exact frozen file handle and refuses any protected regular file with `NumberOfLinks != 1`.
+- Kernel `IRP_MJ_SET_INFORMATION` handling now recognizes `FileLinkInformation` and `FileLinkInformationEx` in gate modes.
+- Hard-link source and destination names are normalized/classified together: touching the protected root is denied, ambiguity on the protected volume fails closed, and proven outside-to-outside hard links remain allowed.
+- Added RuntimeHarness `hard-link` probes plus VM evidence requirements for pre-existing alias rejection, inside-to-outside denial, outside-to-inside denial and outside-to-outside non-overblocking.
+- The normal product remains Audit by default; production service lifecycle activation is still separate.
+
 # RansomGuard 0.8.2.0
 
 - Advanced the minifilter/GateClient wire contract to protocol v18 and added the distinct `RgClientProductionGate` mode.

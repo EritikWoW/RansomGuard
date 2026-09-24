@@ -110,6 +110,35 @@ using var port = Native.Connect(PortName, context);
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); Native.Cancel(port); };
 
+async Task MonitorServiceControlAsync()
+{
+    if (!options.ServiceControlStdin)
+        return;
+
+    try
+    {
+        while (!cts.IsCancellationRequested)
+        {
+            var line = await Console.In.ReadLineAsync().WaitAsync(cts.Token).ConfigureAwait(false);
+            if (line is null)
+                return;
+            if (!string.Equals(line, "shutdown", StringComparison.Ordinal))
+            {
+                Console.Error.WriteLine("Production service control ignored an unknown command.");
+                continue;
+            }
+
+            Console.WriteLine($"RG-LIFECYCLE STOPPING schema=1 pid={Environment.ProcessId} session={sessionId}");
+            cts.Cancel();
+            Native.Cancel(port);
+            return;
+        }
+    }
+    catch (OperationCanceledException) when (cts.IsCancellationRequested)
+    {
+    }
+}
+
 async Task MonitorShutdownFileAsync()
 {
     if (string.IsNullOrWhiteSpace(options.ShutdownFile))
@@ -133,6 +162,7 @@ async Task MonitorShutdownFileAsync()
     {
     }
 }
+var serviceControlMonitor = MonitorServiceControlAsync();
 var shutdownMonitor = MonitorShutdownFileAsync();
 
 var headerSize = Marshal.SizeOf<FilterMessageHeader>();
@@ -153,6 +183,8 @@ Console.WriteLine(activationSummary.ContainedProcessId is ulong containedPid
     : options.Profile == GateProfile.Production
         ? "Production containment: disabled by profile."
         : "LAB containment  : not pre-armed.");
+if (options.Profile == GateProfile.Production && options.ServiceControlStdin)
+    Console.WriteLine($"RG-LIFECYCLE READY schema=1 pid={Environment.ProcessId} session={sessionId} profile=ProductionGate");
 
 if (options.Profile == GateProfile.Lab && options.ScopeAmbiguityPid is ulong scopeAmbiguityPid)
 {
@@ -547,6 +579,7 @@ finally
         await Task.WhenAll(activeWorkers).ConfigureAwait(false);
     if (!cts.IsCancellationRequested)
         cts.Cancel();
+    await serviceControlMonitor.ConfigureAwait(false);
     await shutdownMonitor.ConfigureAwait(false);
 }
 
@@ -630,10 +663,14 @@ if (cleanShutdown)
             $"Kernel refused clean gate deactivation. NTSTATUS=0x{deactivationReply.Status:X8}, state={(RgProtectionState)deactivationReply.ProtectionState}.");
 
     Console.WriteLine("Kernel gate graceful deactivation: MAINTENANCE authorized; port close may release the retained LAB root.");
+    if (options.Profile == GateProfile.Production && options.ServiceControlStdin)
+        Console.WriteLine($"RG-LIFECYCLE STOPPED schema=1 pid={Environment.ProcessId} session={sessionId} clean=1");
 }
 else
 {
     Console.Error.WriteLine("Kernel gate graceful deactivation NOT authorized; disconnect must remain fail-safe for the retained LAB root.");
+    if (options.Profile == GateProfile.Production && options.ServiceControlStdin)
+        Console.WriteLine($"RG-LIFECYCLE STOPPED schema=1 pid={Environment.ProcessId} session={sessionId} clean=0");
 }
 
 static class ActivationPreflight
@@ -1972,6 +2009,7 @@ sealed record Options(
     bool DropFirstTruncateCompletion,
     bool DropFirstDeleteCompletion,
     bool ReconcileOnly,
+    bool ServiceControlStdin,
     string? ShutdownFile)
 {
     public const int DefaultGateWorkers = 4;
@@ -2003,6 +2041,7 @@ sealed record Options(
         var dropFirstTruncateCompletion = false;
         var dropFirstDeleteCompletion = false;
         var reconcileOnly = false;
+        var serviceControlStdin = false;
         string? shutdownFile = null;
         for (var i = 0; i < args.Length; i++)
         {
@@ -2062,6 +2101,7 @@ sealed record Options(
                 case "--drop-first-truncate-completion": dropFirstTruncateCompletion = true; break;
                 case "--drop-first-delete-completion": dropFirstDeleteCompletion = true; break;
                 case "--reconcile-only": reconcileOnly = true; break;
+                case "--service-control-stdin": serviceControlStdin = true; break;
                 case "--shutdown-file" when i + 1 < args.Length:
                     shutdownFile = Path.GetFullPath(args[++i]);
                     break;
@@ -2085,6 +2125,8 @@ sealed record Options(
             throw new ArgumentException("Containment thresholds require --contain-after-pid.");
         if (containAfterPaths > containAfterEvents)
             throw new ArgumentException("--contain-after-paths cannot exceed --contain-after-events.");
+        if (serviceControlStdin && profile != GateProfile.Production)
+            throw new ArgumentException("--service-control-stdin is reserved for the ProductionGate service lifecycle.");
 
         if (profile == GateProfile.Production)
         {
@@ -2116,7 +2158,7 @@ sealed record Options(
             profile, root, store!, session, prepare, gateWorkers, maxStoreMiB, minFreeMiB,
             containPid, scopeAmbiguityPid, containAfterPid, containAfterEvents, containAfterPaths,
             dropFirstCreateCompletion, dropFirstRenameCompletion, dropFirstTruncateCompletion,
-            dropFirstDeleteCompletion, reconcileOnly, shutdownFile);
+            dropFirstDeleteCompletion, reconcileOnly, serviceControlStdin, shutdownFile);
     }
 }
 

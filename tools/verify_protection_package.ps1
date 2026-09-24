@@ -27,6 +27,9 @@ $build=Get-Content -LiteralPath $buildPath -Raw
 if($core -notmatch [regex]::Escape('bool ReadyForLifecycle')){
     throw 'ProtectionPackageAdmission must expose an explicit ReadyForLifecycle claim.'
 }
+if($core -notmatch [regex]::Escape('string? SignerCertificateSha256 = null')){
+    throw 'ProtectionPackageAdmission must retain the admitted signer certificate identity.'
+}
 
 foreach($required in @(
     'ProductionProtection',
@@ -42,6 +45,7 @@ foreach($required in @(
 
 foreach($required in @(
     'Path.Combine(Path.GetFullPath(applicationBaseDirectory), DirectoryName)',
+    'Path.Combine(Path.GetFullPath(applicationBaseDirectory), "RansomGuard.Service.exe")',
     'Path.Combine(root, "GateClient", "RansomGuard.GateClient.exe")',
     'Path.Combine(driverDirectory, "RansomGuardMinifilter.sys")',
     'Path.Combine(driverDirectory, "RansomGuardMinifilter.inf")',
@@ -53,9 +57,13 @@ foreach($required in @(
     'DecisionPolicy.HashEqual(sysHash, descriptor.DriverSysSha256)',
     'DecisionPolicy.HashEqual(infHash, descriptor.DriverInfSha256)',
     'DecisionPolicy.HashEqual(catHash, descriptor.DriverCatSha256)',
+    'FileVersionInfo.GetVersionInfo(servicePath).FileVersion',
     'FileVersionInfo.GetVersionInfo(gatePath).FileVersion',
+    'Authenticode.Check(service, servicePath)',
     'Authenticode.Check(gate, gatePath)',
     'Authenticode.Check(cat, catPath)',
+    'GateClient signer certificate does not match the running service signer.',
+    'Driver catalog signer certificate does not match the running service signer.',
     'LAB identity/placeholder altitude is forbidden in a production protection package.',
     'INF altitude does not match the production package descriptor.',
     'INF provider does not match the production package descriptor.',

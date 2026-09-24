@@ -30,7 +30,7 @@ foreach($required in @(
     @('Product target concurrency stress','0.7.28 adds a dedicated bounded-concurrency runtime qualification',$target),
     @('Product target fault campaign','0.7.29 adds separate storage-pressure and real-reboot fault qualifications',$target),
     @('Product target current verifier campaign','0.7.30 adds a dedicated Driver Verifier qualification',$target),
-    @('Product target mixed endurance campaign','0.7.31 adds a dedicated long-duration/mixed-workload qualification contract',$target)
+    @('Product target mixed endurance campaign','0.7.31 adds a dedicated long-duration/mixed-workload qualification contract',$target),
     @('Product target degraded disconnect campaign','0.7.32 adds a degraded-protected GateClient-loss qualification contract',$target)
 )){
     $label=[string]$required[0]

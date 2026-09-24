@@ -57,6 +57,17 @@ function Quote-Arg([string]$Value){
     return '"' + $Value.Replace('"','\"') + '"'
 }
 
+function Test-AccessDeniedException([Exception]$Exception){
+    $cursor=$Exception
+    while($null -ne $cursor){
+        if($cursor -is [UnauthorizedAccessException]){return $true}
+        $win32=([int]$cursor.HResult -band 0xFFFF)
+        if($win32 -eq 5){return $true}
+        $cursor=$cursor.InnerException
+    }
+    return $false
+}
+
 function Start-LoggedProcess(
     [string]$FilePath,
     [string[]]$Arguments,
@@ -511,8 +522,7 @@ try{
         try{$fs.WriteByte(0x5A);$fs.Flush($true)}finally{$fs.Dispose()}
     }
     catch{
-        $win32=($_.Exception.HResult -band 0xFFFF)
-        if($_.Exception -is [UnauthorizedAccessException] -or $win32 -eq 5){$denied=$true}
+        if(Test-AccessDeniedException $_.Exception){$denied=$true}
         else{throw}
     }
     if(-not $denied){throw 'Resolved in-root mutation unexpectedly succeeded after abrupt GateClient loss.'}

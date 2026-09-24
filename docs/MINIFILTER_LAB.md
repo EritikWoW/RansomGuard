@@ -174,7 +174,7 @@ success. Missing or partially resolved completion data remains explicit, and mis
 CREATE classification still begins with a path-based pre-operation probe, so do not use the lab gate as a
 general-purpose protected folder yet.
 
-Stop the client with Ctrl+C before unloading the filter.
+Stop the client with Ctrl+C before unloading the filter. In 0.7.32, a clean Ctrl+C shutdown reaches the orderly-disconnect authorization path only after durable session state is clean; force-killing an already activated GateClient intentionally leaves the root in kernel fail-safe mode.
 
 ## Writable-open preservation
 
@@ -219,7 +219,7 @@ Protocol v12 adds an optional `--contain-pid <pid>` GateClient mode for isolated
 
 Containment is armed atomically with successful activation preflight. For the contained process only, mutation-capable CREATE and non-paging WRITE/RENAME/DELETE/TRUNCATE inside the selected root are denied in kernel mode before the normal user-mode preservation gate. Read-only opens are not denied by the containment classifier. Other processes continue through the ordinary preservation workflow.
 
-The control protocol intentionally has no release/clear/bypass command. Disconnecting GateClient or unloading the LAB driver releases the process reference and clears containment. This is Engineering LAB functionality only; the ordinary service/detector does not invoke it.
+The containment control protocol intentionally has no release/clear/bypass command. Disconnecting GateClient or unloading the LAB driver still releases the referenced containment process object. Starting in 0.7.32, however, an unexpected disconnect after gate activation does not clear the protected-root enforcement state: it latches the exact root in kernel fail-safe mode. `RgControlAuthorizeDisconnect` is an orderly session-lifecycle command, not a containment bypass; GateClient requests it only after clean durable shutdown eligibility.
 
 ## Event-bound containment transition — 0.7.21
 
@@ -234,6 +234,18 @@ The transition counter advances only for successful blocking gate replies that a
 When the threshold is met, GateClient reserves storage and durably appends a Requested record to `containment-state\containment-journal.jsonl` before setting the containment reply flag. The minifilter accepts that flag only on an allowed preservation decision, references the exact requestor process object from the current callback data, installs the latch, and queues a no-reply `ContainmentActivated` event related to the original gate sequence. GateClient then appends the linked KernelActive receipt.
 
 There is still no release/bypass command. A missing KernelActive receipt leaves the session faulted. This path is intentionally LAB-only and does not allow the ordinary service heuristic to contain arbitrary applications.
+
+## GateClient-loss fail-safe — 0.7.32
+
+Protocol v15 now separates a live Filter Manager connection from the fact that an explicit LAB root has already been activated. Successful activation sets a kernel protection-armed state. If GateClient then exits or is killed without orderly-disconnect authorization, the driver keeps the exact normalized root and LAB mode and enters a fail-safe latch.
+
+While latched, resolved in-root mutation-capable CREATE and non-paging WRITE/RENAME/DELETE/TRUNCATE requests still enter the blocking gate path. Because no GateClient port can return a preservation decision, those destructive requests fail closed. Read-only CREATE remains allowed. Name-query/unresolved scope is still intentionally fail-open, kernel-mode requestors remain outside the ordinary gate path, and paging/writable-section callbacks remain evidence-oriented; do not interpret this change as universal fail-closed filesystem enforcement.
+
+A replacement GateClient may connect only with the exact latched root. The reconnect clears the temporary fail-safe flag but resets activation to NotActivated while retaining protection-armed state. GateClient must repeat directory/file/writable-mapping activation preflight, and external resolved in-root mutations remain denied during that revalidation. If the replacement client disappears again before activation completes, disconnect returns to the fail-safe latch.
+
+Orderly shutdown uses `RgControlAuthorizeDisconnect`. GateClient does not request it until workers have drained, the repository verifies, metadata transaction stores are pending-free, containment activation receipts are complete and the rollback lifecycle is durably Completed. In kernel, authorization atomically blocks new gate admission and succeeds only if no blocking request is already in flight. Only that authorized disconnect clears the latched root without unloading the driver.
+
+This behavior requires disposable-VM runtime qualification. Source/compile success alone does not prove that process death, port disconnect, reconnect and Filter Manager timing behave as intended.
 
 ## Fault campaign — 0.7.29
 

@@ -83,7 +83,37 @@ function Read-And-VerifyState([string]$StatePath){
     if(-not [string]::Equals($expected,$actual,[StringComparison]::OrdinalIgnoreCase)){
         throw "Driver Verifier state SHA-256 mismatch. expected=$expected actual=$actual"
     }
-    return [pscustomobject]@{State=(Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json -Depth 30);Hash=$actual}
+    $raw=Get-Content -LiteralPath $StatePath -Raw
+    return [pscustomobject]@{State=($raw | ConvertFrom-Json -Depth 30);Hash=$actual;RawJson=$raw}
+}
+
+function Get-JsonStringProperty([string]$RawJson,[string]$PropertyName){
+    $doc=[Text.Json.JsonDocument]::Parse($RawJson)
+    try{
+        $element=$doc.RootElement.GetProperty($PropertyName)
+        if($element.ValueKind -ne [Text.Json.JsonValueKind]::String){
+            throw "Driver Verifier state property '$PropertyName' must be a JSON string."
+        }
+        $value=$element.GetString()
+        if([string]::IsNullOrWhiteSpace($value)){
+            throw "Driver Verifier state property '$PropertyName' is empty."
+        }
+        return $value
+    }finally{
+        $doc.Dispose()
+    }
+}
+
+function Get-JsonUtcTimestamp([string]$RawJson,[string]$PropertyName){
+    $value=Get-JsonStringProperty $RawJson $PropertyName
+    if($value -notmatch '(?i)(?:Z|[+-][0-9]{2}:[0-9]{2})$'){
+        throw "Driver Verifier state timestamp '$PropertyName' must contain an explicit UTC/offset designator. Found '$value'."
+    }
+    $dto=[DateTimeOffset]::Parse(
+        $value,
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::None)
+    return $dto.UtcDateTime
 }
 
 Assert-Administrator
@@ -112,7 +142,7 @@ if(-not [bool]$state.stressPassed -or -not [bool]$state.noBugcheckAfterStress -o
     throw 'Driver Verifier CLEAR state does not prove a successful runtime qualification with reset scheduled.'
 }
 
-$runtimeBoot=[DateTime]::Parse([string]$state.runtimeBootUtc,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+$runtimeBoot=Get-JsonUtcTimestamp $verified.RawJson 'runtimeBootUtc'
 $currentBoot=([datetime](Get-CimInstance Win32_OperatingSystem).LastBootUpTime).ToUniversalTime()
 if($currentBoot -le $runtimeBoot.AddSeconds(1)){
     throw "No reboot was observed after verifier /reset. runtimeBoot=$($runtimeBoot.ToString('o')) currentBoot=$($currentBoot.ToString('o'))"

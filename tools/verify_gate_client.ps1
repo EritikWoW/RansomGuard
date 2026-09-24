@@ -117,6 +117,9 @@ foreach($required in @(
   'Native.Control',
   'RgControlCommand.ActivateGate',
   'RgControlCommand.ActivateAndContainProcess',
+  'RgControlCommand.DeactivateGate',
+  'plannedDeactivationRequested',
+  'maintenance deactivation confirmed',
   '--contain-pid',
   '--drop-first-create-completion',
   '--drop-first-rename-completion',
@@ -555,6 +558,17 @@ if($loopDispatch -lt 0 -or $replyRequired -lt 0 -or $replyAwait -lt 0 -or
    $loopDispatch -gt $replyRequired -or $replyRequired -gt $replyAwait){
   throw 'Reply-required worker must complete before the synchronous receive loop advances to its next iteration.'
 }
+$deactivateEnum=$text.IndexOf('DeactivateGate = 6')
+$shutdownFlag=$text.IndexOf('plannedDeactivationRequested = 0')
+$shutdownDrain=$text.IndexOf('await Task.WhenAll(activeWorkers).ConfigureAwait(false);')
+$shutdownControl=$text.IndexOf('Command = (uint)RgControlCommand.DeactivateGate',$shutdownDrain)
+$shutdownVerify=$text.IndexOf('deactivate.GateActivated != 0',$shutdownControl)
+if($deactivateEnum -lt 0 -or $shutdownFlag -lt 0 -or $shutdownDrain -lt 0 -or
+   $shutdownControl -lt 0 -or $shutdownVerify -lt 0 -or
+   $shutdownDrain -gt $shutdownControl -or $shutdownControl -gt $shutdownVerify){
+  throw 'Controlled GateClient shutdown must drain workers, explicitly deactivate the LAB gate, and verify inactive kernel state.'
+}
+
 $verifyBeforeRestart=$text.IndexOf('repository.VerifyAll()')
 $restartObserve=$text.IndexOf('RestartReconciliation.ObservePendingAsync(',$verifyBeforeRestart)
 $reconcileOnly=$text.IndexOf('if (options.ReconcileOnly)',$restartObserve)

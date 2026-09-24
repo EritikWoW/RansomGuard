@@ -9,6 +9,7 @@ C_ASSERT(sizeof(RG_CONTROL_REPLY) == 32);
 static PFLT_FILTER gFilter = NULL;
 static PFLT_PORT gServerPort = NULL;
 static PFLT_PORT gClientPort = NULL;
+static PFLT_VOLUME gGateVolume = NULL;
 static FAST_MUTEX gPortMutex;
 static EX_RUNDOWN_REF gRundown;
 static EX_RUNDOWN_REF gPortRundown;
@@ -32,6 +33,13 @@ static volatile LONG gDropped = 0;
 static volatile LONG64 gSequence = 0;
 static WCHAR gGateRoot[RG_GATE_ROOT_CHARS];
 static USHORT gGateRootLengthBytes = 0;
+static USHORT gGateVolumeLengthBytes = 0;
+
+typedef enum _RG_SCOPE_CLASSIFICATION {
+    RgScopeOutside = 0,
+    RgScopeInside = 1,
+    RgScopeAmbiguous = 2
+} RG_SCOPE_CLASSIFICATION;
 
 static VOID RgQueueEvent(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects,
                          _In_ RG_EVENT_TYPE EventType, _In_ ULONG FileInformationClass);
@@ -73,8 +81,14 @@ static NTSTATUS RgPopulateEvent(_Out_ PRG_EVENT Event, _Inout_ PFLT_CALLBACK_DAT
 static NTSTATUS RgReadDeleteDispositionFlags(_In_ PFLT_CALLBACK_DATA Data, _Out_ PULONG Flags);
 static VOID RgPopulateRenameDestination(_Inout_ PRG_EVENT Event, _Inout_ PFLT_CALLBACK_DATA Data,
                                         _In_ PCFLT_RELATED_OBJECTS FltObjects);
+static BOOLEAN RgPathMatchesGateRoot(_In_ ULONG PathStatus, _In_reads_z_ const WCHAR *Path);
 static BOOLEAN RgEventPathMatchesGateRoot(_In_ const RG_EVENT *Event);
+static BOOLEAN RgEventDestinationPathMatchesGateRoot(_In_ const RG_EVENT *Event);
 static BOOLEAN RgEventIsInsideGateRoot(_In_ const RG_EVENT *Event);
+static BOOLEAN RgIsOnGateVolume(_In_ PCFLT_RELATED_OBJECTS FltObjects);
+static RG_SCOPE_CLASSIFICATION RgClassifyMutationScope(
+    _In_ const RG_EVENT *Event,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects);
 static BOOLEAN RgIsContainedRequestor(_In_ PFLT_CALLBACK_DATA Data);
 static BOOLEAN RgCreateMayMutate(_In_ const RG_EVENT *Event);
 static VOID RgClearContainedProcess(VOID);

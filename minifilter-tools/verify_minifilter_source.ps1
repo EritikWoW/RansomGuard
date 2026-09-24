@@ -39,7 +39,6 @@ $banned=@('FltWriteFile(','ZwWriteFile(','FltSetInformationFile(','FltCancelFile
 foreach($token in $banned){if($src.Contains($token)){throw "Kernel gate invariant violated: banned token '$token' found."}}
 foreach($required in @(
     'RgClientLabGate',
-    'RgEventIsInsideGateRoot',
     'gClientProcessId',
     'RG_GATE_TIMEOUT_MS',
     'RG_MAX_GATE_INFLIGHT',

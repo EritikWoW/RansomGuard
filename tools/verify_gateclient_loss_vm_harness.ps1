@@ -41,7 +41,6 @@ foreach($required in @(
     'unexpectedDisconnectObserved',
     'failSafeWriteDenied',
     'failSafeCreateDenied',
-    "createFailure -notmatch '(?m)^Win32Error:\\s*5\\s*\u0024'",
     'differentRootRejected',
     'sameRootReconnectActivated',
     'sameRootCompletionDurable',
@@ -69,7 +68,8 @@ foreach($required in @(
     'failSafeWriteDenied',
     'create-new',
     'failSafeCreateDenied',
-    "createFailure -notmatch '(?m)^Win32Error:\\s*5\\s*
+    'createFailure -notmatch ''(?m)^Win32Error:\s*5\s*$''',
+    'different-root-rejected',
     'differentRootRejected',
     '--shutdown-marker',
     'same-root-reconnect',

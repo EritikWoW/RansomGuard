@@ -1,3 +1,13 @@
+# RansomGuard 0.8.5.0
+
+- Removed trust in the user-mode `ClientProcessId` field as a security identity while retaining protocol v18.
+- The minifilter connect callback now references `PsGetCurrentProcess()`, derives the actual PID through `PsGetProcessId`, and rejects a context whose claimed PID differs from the connecting process.
+- The connected GateClient `PEPROCESS` is retained for the lifetime of the port and released on rejected connect, disconnect and unload paths.
+- GateClient rollback/protocol self-I/O exemption now compares the exact requestor process object instead of a PID supplied in the wire context.
+- LAB containment refuses the exact connected GateClient process object in addition to PID/system checks.
+- Added a runtime negative probe that submits a valid protocol/root/volume connect context with a forged PID and requires the kernel to reject it before ordinary GateClient qualification continues.
+- Existing FSCTL, hard-link, dormant-handle, mapped-write, degraded reconnect, scope, containment, filesystem-matrix and ProductionGate regressions remain required.
+
 # RansomGuard 0.8.4.0
 
 - Registered `IRP_MJ_FILE_SYSTEM_CONTROL` in the minifilter while retaining protocol v18.

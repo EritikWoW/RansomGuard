@@ -30,7 +30,8 @@ foreach($required in @(
     @('Product target concurrency stress','0.7.28 adds a dedicated bounded-concurrency runtime qualification',$target),
     @('Product target fault campaign','0.7.29 adds separate storage-pressure and real-reboot fault qualifications',$target),
     @('Product target current verifier campaign','0.7.30 adds a dedicated Driver Verifier qualification',$target),
-    @('Product target mixed endurance campaign','0.7.31 adds a dedicated long-duration/mixed-workload qualification contract',$target)
+    @('Product target mixed endurance campaign','0.7.31 adds a dedicated long-duration/mixed-workload qualification contract',$target),
+    @('Product target GateClient-loss fail-safe','0.7.32 hardens the activated GateClient-loss boundary',$target)
 )){
     $label=[string]$required[0]
     $needle=[string]$required[1]
@@ -50,4 +51,4 @@ foreach($stale in @(
     }
 }
 
-Write-Host "Documentation consistency gate PASSED: operator docs, product target, README and changelog match version $version, protocol v15, 0.7.28 bounded concurrency, 0.7.29 fault campaigns, 0.7.30 Driver Verifier and the 0.7.31 mixed endurance milestone."
+Write-Host "Documentation consistency gate PASSED: operator docs, product target, README and changelog match version $version, protocol v15, 0.7.28 bounded concurrency, 0.7.29 fault campaigns, 0.7.30 Driver Verifier, 0.7.31 mixed endurance and the 0.7.32 GateClient-loss fail-safe milestone."

@@ -52,6 +52,7 @@ foreach($required in @(
     'Get-FileHash -LiteralPath $artifact[1] -Algorithm SHA256',
     'Remove-Item -LiteralPath $results -Recurse -Force',
     "'cleanupPassed'",
+    "'dormantWritableHandleRejected'",
     "'disconnectDeniedMutation'",
     "'disconnectPreservedTargetHash'",
     "'disconnectReadAllowed'",
@@ -143,7 +144,10 @@ foreach($required in @(
     'unload_minifilter_lab.ps1',
     'predirectory',
     'preexistingDirectoryHandleRejected',
-    'hold-dir-delete',
+    'prewritehandle',
+    'dormantWritableHandleRejected',
+    'hold-write-handle',
+    'Dormant writable-handle activation failed for an unexpected reason',
     'preexisting-map.bin',
     'writableViewPresent',
     'postactivation-map.bin',
@@ -290,6 +294,8 @@ foreach($requiredDiagnostic in @(
 
 foreach($required in @(
     'hold-map',
+    'hold-write-handle',
+    'CreateFileW writable handle failed',
     'hold-dir-delete',
     'map-write',
     'containment-probe',

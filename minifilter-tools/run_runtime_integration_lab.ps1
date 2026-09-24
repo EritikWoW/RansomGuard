@@ -256,6 +256,7 @@ New-Item -ItemType Directory -Path $RootBase -Force | Out-Null
 Assert-NoReparsePath -Path $RootBase -Label 'RootBase'
 
 $dirRoot=Join-Path $RootBase "predirectory-$stamp"
+$dormantRoot=Join-Path $RootBase "prewritehandle-$stamp"
 $preRoot=Join-Path $RootBase "preexisting-$stamp"
 $postRoot=Join-Path $RootBase "postactivation-$stamp"
 $containRoot=Join-Path $RootBase "containment-$stamp"
@@ -266,6 +267,7 @@ $disconnectOutside=Join-Path $RootBase "disconnect-outside-$stamp.bin"
 $scopeRoot=Join-Path $RootBase "scope-$stamp"
 $scopeOutsideSource=Join-Path $RootBase "scope-outside-$stamp.bin"
 $dirStore=Join-Path $ResultsDirectory 'predirectory-store'
+$dormantStore=Join-Path $ResultsDirectory 'prewritehandle-store'
 $preStore=Join-Path $ResultsDirectory 'preexisting-store'
 $postStore=Join-Path $ResultsDirectory 'postactivation-store'
 $containStore=Join-Path $ResultsDirectory 'containment-store'
@@ -289,6 +291,7 @@ $summary=[ordered]@{
     driverInfSha256=$actualInfSha256
     driverCatSha256=$actualCatSha256
     preexistingDirectoryHandleRejected=$false
+    dormantWritableHandleRejected=$false
     preexistingMappingRejected=$false
     postActivationBaselineVerified=$false
     postActivationPagingObserved=$false
@@ -319,8 +322,10 @@ $summary=[ordered]@{
 
 $installed=$false
 $dirHolder=$null
+$dormantHolder=$null
 $holder=$null
 $gateDir=$null
+$gateDormant=$null
 $gatePre=$null
 $gatePost=$null
 $gateContain=$null
@@ -333,6 +338,7 @@ $containProbe=$null
 $transitionProbe=$null
 $scopeProbe=$null
 $dirRelease=$null
+$dormantRelease=$null
 $release=$null
 $containGo=$null
 $transitionGo=$null
@@ -401,6 +407,53 @@ try{
     if($dirHolder.ExitCode -ne 0){throw "Directory DELETE-handle holder failed, exit=$($dirHolder.ExitCode)"}
     $dirHolder=$null
     $gateDir=$null
+
+    # Scenario 1: a dormant pre-activation writable handle must prevent activation even
+    # when no writable mapping exists yet. The topology hold uses ShareRead only, so any
+    # existing WRITE access must surface as a sharing violation before ActivateGate.
+    Prepare-GateRoot $gateExe $dormantRoot
+    $dormantFile=Join-Path $dormantRoot 'dormant-write-handle.bin'
+    New-TestFile $dormantFile
+    $dormantReady=Join-Path $ResultsDirectory 'prewritehandle.ready'
+    $dormantRelease=Join-Path $ResultsDirectory 'prewritehandle.release'
+    $dormantHolderOut=Join-Path $ResultsDirectory 'prewritehandle-holder.out.log'
+    $dormantHolderErr=Join-Path $ResultsDirectory 'prewritehandle-holder.err.log'
+    $dormantHolder=Start-LoggedProcess $helperExe @(
+        'hold-write-handle','--file',(Quote-Arg $dormantFile),'--ready',(Quote-Arg $dormantReady),'--release',(Quote-Arg $dormantRelease)
+    ) $dormantHolderOut $dormantHolderErr
+    Wait-Path $dormantReady 15 'pre-existing dormant writable handle'
+
+    $dormantOut=Join-Path $ResultsDirectory 'prewritehandle-gate.out.log'
+    $dormantErr=$dormantOut + '.err'
+    $gateDormant=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $dormantRoot),'--store',(Quote-Arg $dormantStore),'--session','prewritehandle'
+    ) $dormantOut $dormantErr
+
+    if(-not $gateDormant.WaitForExit(30000)){
+        Stop-Process -Id $gateDormant.Id -Force -ErrorAction SilentlyContinue
+        throw 'Activation unexpectedly stayed alive with a dormant pre-existing writable handle.'
+    }
+    if($gateDormant.ExitCode -eq 0){
+        throw 'Activation unexpectedly succeeded with a dormant pre-existing writable handle.'
+    }
+    $dormantFailure=((Get-Content -LiteralPath $dormantOut -Raw -ErrorAction SilentlyContinue)+[Environment]::NewLine+
+        (Get-Content -LiteralPath $dormantErr -Raw -ErrorAction SilentlyContinue))
+    if($dormantFailure -notmatch '(?i)Activation topology preflight|sharing|used by another process|could not hold file'){
+        throw "Dormant writable-handle activation failed for an unexpected reason: $dormantFailure"
+    }
+    if($dormantFailure -match 'already has a user-writable mapped view'){
+        throw 'Dormant writable-handle proof accidentally used the existing-mapping rejection path.'
+    }
+    $summary.dormantWritableHandleRejected=$true
+
+    New-Item -ItemType File -Path $dormantRelease -Force | Out-Null
+    if(-not $dormantHolder.WaitForExit(15000)){
+        Stop-Process -Id $dormantHolder.Id -Force -ErrorAction SilentlyContinue
+        throw 'Dormant writable-handle holder did not exit.'
+    }
+    if($dormantHolder.ExitCode -ne 0){throw "Dormant writable-handle holder failed, exit=$($dormantHolder.ExitCode)"}
+    $dormantHolder=$null
+    $gateDormant=$null
 
     Prepare-GateRoot $gateExe $preRoot
     $preFile=Join-Path $preRoot 'preexisting-map.bin'
@@ -835,6 +888,10 @@ finally{
         if($dirRelease){New-Item -ItemType File -Path $dirRelease -Force -ErrorAction SilentlyContinue | Out-Null}
         Stop-Process -Id $dirHolder.Id -Force -ErrorAction SilentlyContinue
     }
+    if($dormantHolder -and -not $dormantHolder.HasExited){
+        if($dormantRelease){New-Item -ItemType File -Path $dormantRelease -Force -ErrorAction SilentlyContinue | Out-Null}
+        Stop-Process -Id $dormantHolder.Id -Force -ErrorAction SilentlyContinue
+    }
     if($holder -and -not $holder.HasExited){
         if($release){New-Item -ItemType File -Path $release -Force -ErrorAction SilentlyContinue | Out-Null}
         Stop-Process -Id $holder.Id -Force -ErrorAction SilentlyContinue
@@ -851,7 +908,7 @@ finally{
         if($scopeGo){New-Item -ItemType File -Path $scopeGo -Force -ErrorAction SilentlyContinue | Out-Null}
         Stop-Process -Id $scopeProbe.Id -Force -ErrorAction SilentlyContinue
     }
-    foreach($p in @($gateDir,$gatePre,$gatePost,$gateScope,$gateContain,$gateTransition,$gateDisconnect,$gateWrong,$gateReconnect)){
+    foreach($p in @($gateDir,$gateDormant,$gatePre,$gatePost,$gateScope,$gateContain,$gateTransition,$gateDisconnect,$gateWrong,$gateReconnect)){
         if($p -and -not $p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}
     }
 

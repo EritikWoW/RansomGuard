@@ -1,8 +1,16 @@
-# RansomGuard 0.8.1.0
+# RansomGuard 0.8.2.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
 and recover data through rollback plus adaptive crypto analysis.
+
+## ProductionGate protocol contract
+
+0.8.2.0 introduces protocol v18 and a distinct kernel/user-mode `ProductionGate` client mode. It reuses the preserve-before-allow, activation-preflight, protected-volume ambiguity and degraded-protection mechanisms already exercised by the Engineering LAB gate, but ProductionGate is isolated from LAB controls at both layers: the CLI rejects prepare/reconcile/fault-injection/containment options, and the kernel rejects containment reply flags plus LAB containment/scope-ambiguity control commands. A protected session retains its exact client mode across an unexpected disconnect, so a degraded ProductionGate cannot reconnect as LabGate.
+
+Production startup also requires explicit root/store/session/shutdown/readiness paths. The rollback/control paths must be non-overlapping and non-reparse, the rollback store must already be provisioned, and the one-shot readiness JSON is created only after activation reaches kernel `Protected`. Readiness is not sufficient by itself after a crash; a future supervisor must also prove that the reported PID/session is still the exact live child.
+
+This is still a contract/qualification milestone, not service lifecycle activation. The normal bundle does not install/load the driver or spawn GateClient. Exact-head disposable-VM qualification of ProductionGate is required before this PR can make a runtime claim.
 
 ## Production protection package admission
 
@@ -33,7 +41,7 @@ undone by truncating the recovered copy to that length.
 Rename, delete-disposition and explicit truncate/allocation-length operations remain on the conservative
 **full-file pre-image** path for now.
 
-The engineering minifilter protocol is now v17 and reports CREATE, WRITE, RENAME, DELETE and TRUNCATE-class metadata operations; v17 retains the v16 protection-health/deactivation state machine and additionally binds the protected NT volume for ambiguous-scope fail-safe classification. DELETE can emit correlated no-reply `DeleteDispositionResult` and `DeleteFinalized` events without changing the fixed RG_EVENT wire size. A successful disposition result proves only that the filesystem accepted the disposition request; exact-handle cleanup is recorded separately and is not treated as proof that the pathname has disappeared.
+The engineering minifilter wire protocol is now v18. v18 retains the v17 protected-volume ambiguity boundary and v16 protection-health/deactivation state machine, adds the isolated ProductionGate client mode, and continues to report CREATE, WRITE, RENAME, DELETE and TRUNCATE-class metadata operations. DELETE can emit correlated no-reply `DeleteDispositionResult` and `DeleteFinalized` events without changing the fixed RG_EVENT wire size. A successful disposition result proves only that the filesystem accepted the disposition request; exact-handle cleanup is recorded separately and is not treated as proof that the pathname has disappeared.
 
 For CREATE, the gate distinguishes Windows create dispositions instead of treating every open as destructive:
 existing `FILE_SUPERSEDE`, `FILE_OVERWRITE` and `FILE_OVERWRITE_IF` require a durable full pre-image;
@@ -157,7 +165,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.8.1.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.8.2.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 Manual disposable-VM runtime workflows:
 

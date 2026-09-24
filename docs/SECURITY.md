@@ -38,7 +38,7 @@ Queues/windows are intentionally bounded. Event loss, queue drops, stale evidenc
 
 ## LAB preservation boundary
 
-For ordinary user-mode destructive mutations while the LAB gate is connected and activated, resolved in-root operations follow preserve-before-allow. A name/scope query that cannot classify a destructive operation on the exact bound protected volume is treated as ambiguous and fails closed in kernel; proven out-of-root operations remain outside the gate.
+For ordinary user-mode destructive mutations while the LAB gate is connected and activated, resolved in-root operations follow preserve-before-allow. If the default normalized-name query is unavailable, the driver first retries from Filter Manager's name cache; a scope that still cannot be classified on the exact bound protected volume is treated as ambiguous and fails closed in kernel. Proven out-of-root operations remain outside the gate.
 
 The current LAB communication path has one Filter Manager client connection and one synchronous GateClient handle. Multiple kernel requests can encounter the bounded admission path, while user-mode reply-required preservation is serialized so each `FilterReplyMessage` completes before the next blocking receive. Configurable message slots bound no-reply evidence/completion work; they are not a claim of parallel preservation decisions.
 

@@ -1,13 +1,12 @@
 #pragma once
 
-// Wire protocol between the RansomGuard lab minifilter and user-mode clients.
-// v17 keeps the v16 protection-state machine and repurposes the former reserved connect field
-// as GateVolumeLengthBytes so the kernel can bind the exact protected PFLT_VOLUME. This lets
-// path-query ambiguity fail safe only on the protected volume while other volumes remain outside scope.
-// The driver binds the exact requestor PEPROCESS for containment before allowing that IRP to continue.
-// The production bundle still does not install or enable the driver.
+// Wire protocol between the RansomGuard minifilter and user-mode clients.
+// v18 keeps the v17 protected-volume scope contract and adds a distinct ProductionGate client mode.
+// LAB-only containment/fault controls remain unavailable to ProductionGate in kernel; a degraded
+// protected session retains its original gate mode so it cannot reconnect under a different policy profile.
+// Driver installation/loading remains a separate production lifecycle milestone.
 
-#define RG_PROTOCOL_VERSION 17u
+#define RG_PROTOCOL_VERSION 18u
 #define RG_PATH_CHARS 512u
 #define RG_GATE_ROOT_CHARS 260u
 #define RG_PORT_NAME L"\\RansomGuardMinifilterPort"
@@ -56,7 +55,8 @@ typedef enum _RG_IDENTITY_STATUS {
 
 typedef enum _RG_CLIENT_MODE {
     RgClientAudit = 1,
-    RgClientLabGate = 2
+    RgClientLabGate = 2,
+    RgClientProductionGate = 3
 } RG_CLIENT_MODE;
 
 typedef enum _RG_PROTECTION_STATE {

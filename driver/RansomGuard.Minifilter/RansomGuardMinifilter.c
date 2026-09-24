@@ -1986,8 +1986,8 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
                    InterlockedCompareExchange(&gPreflightProbeArmed, 0, 0) != 0) {
             status = STATUS_DEVICE_BUSY;
         } else {
-            InterlockedExchange(&gGateActivated, 1);
             InterlockedExchange(&gProtectionArmed, 1);
+            InterlockedExchange(&gGateActivated, 1);
             status = STATUS_SUCCESS;
         }
     } else if (request->Command == RgControlActivateAndContainProcess) {
@@ -2011,8 +2011,8 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
                     gContainedProcess = targetProcess;
                     targetProcess = NULL;
                     InterlockedExchange64(&gContainedProcessId, (LONG64)request->TargetProcessId);
-                    InterlockedExchange(&gGateActivated, 1);
                     InterlockedExchange(&gProtectionArmed, 1);
+                    InterlockedExchange(&gGateActivated, 1);
                     status = STATUS_SUCCESS;
                 }
                 ExReleaseFastMutex(&gPortMutex);

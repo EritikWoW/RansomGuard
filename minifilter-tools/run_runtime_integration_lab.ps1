@@ -427,8 +427,10 @@ try{
 
     $postOut=Join-Path $ResultsDirectory 'postactivation-gate.out.log'
     $postErr=$postOut + '.err'
+    $postShutdown=Join-Path $ResultsDirectory 'postactivation.shutdown'
     $gatePost=Start-LoggedProcess $gateExe @(
-        '--root',(Quote-Arg $postRoot),'--store',(Quote-Arg $postStore),'--session','postactivation'
+        '--root',(Quote-Arg $postRoot),'--store',(Quote-Arg $postStore),'--session','postactivation',
+        '--shutdown-file',(Quote-Arg $postShutdown)
     ) $postOut $postErr
     Wait-LogPattern $postOut 'kernel gate ACTIVE' $gatePost 45
 
@@ -472,13 +474,107 @@ try{
     }
     $summary.preimageHashMatched=$true
 
-    # The filter communication port allows one gate client. End this successful
-    # session before activating the next root so the disconnect callback clears
-    # gate/containment state and the next client can connect deterministically.
-    Stop-LabProcess $gatePost 'post-activation gate'
+    # End this successful session through the explicit v16 maintenance transition.
+    Stop-GateGracefully $gatePost $postShutdown $postOut $postErr 'post-activation gate'
     $gatePost=$null
 
-    # Scenario 3: activation-bound containment is scoped to one kernel process identity.
+    # Scenario 3: an abrupt GateClient loss after activation must not silently disable protection.
+    Prepare-GateRoot $gateExe $disconnectRoot
+    Prepare-GateRoot $gateExe $disconnectWrongRoot
+    $disconnectTarget=Join-Path $disconnectRoot 'degraded-target.bin'
+    New-TestFile $disconnectTarget
+    New-TestFile $disconnectOutside
+    $disconnectOriginalHash=(Get-FileHash -LiteralPath $disconnectTarget -Algorithm SHA256).Hash
+
+    $disconnectOut=Join-Path $ResultsDirectory 'disconnect-gate.out.log'
+    $disconnectErr=$disconnectOut + '.err'
+    $disconnectShutdown=Join-Path $ResultsDirectory 'disconnect.shutdown'
+    $gateDisconnect=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $disconnectRoot),
+        '--store',(Quote-Arg $disconnectStore),
+        '--session','disconnect-active',
+        '--shutdown-file',(Quote-Arg $disconnectShutdown)
+    ) $disconnectOut $disconnectErr
+    Wait-LogPattern $disconnectOut 'kernel gate ACTIVE' $gateDisconnect 45
+
+    # This is intentionally NOT graceful: emulate process death after the kernel promised protection.
+    Stop-LabProcess $gateDisconnect 'abrupt GateClient'
+    $gateDisconnect=$null
+
+    $readBytes=[IO.File]::ReadAllBytes($disconnectTarget)
+    if($readBytes.Length -ne 65536){throw 'Read-only access failed or returned unexpected data while protection was degraded.'}
+    $summary.disconnectReadAllowed=$true
+
+    $denied=$false
+    try{
+        $fs=[IO.File]::Open($disconnectTarget,[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::Read)
+        try{$fs.WriteByte(0x5A);$fs.Flush($true)}finally{$fs.Dispose()}
+    }
+    catch{
+        $win32=($_.Exception.HResult -band 0xFFFF)
+        if($_.Exception -is [UnauthorizedAccessException] -or $win32 -eq 5){$denied=$true}
+        else{throw}
+    }
+    if(-not $denied){throw 'Resolved in-root mutation unexpectedly succeeded after abrupt GateClient loss.'}
+    $summary.disconnectDeniedMutation=$true
+    $disconnectAfterDenied=(Get-FileHash -LiteralPath $disconnectTarget -Algorithm SHA256).Hash
+    if(-not [string]::Equals($disconnectAfterDenied,$disconnectOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'Protected target changed despite degraded fail-safe denial.'
+    }
+    $summary.disconnectPreservedTargetHash=$true
+
+    [IO.File]::WriteAllText($disconnectOutside,'outside-root-write-must-remain-allowed')
+    if((Get-Content -LiteralPath $disconnectOutside -Raw) -ne 'outside-root-write-must-remain-allowed'){
+        throw 'Out-of-root mutation failed while a different retained root was degraded.'
+    }
+    $summary.disconnectOutOfRootAllowed=$true
+
+    # A different root must not be able to replace/release the retained degraded scope.
+    $wrongOut=Join-Path $ResultsDirectory 'disconnect-wrong-gate.out.log'
+    $wrongErr=$wrongOut + '.err'
+    $gateWrong=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $disconnectWrongRoot),
+        '--store',(Quote-Arg $disconnectWrongStore),
+        '--session','disconnect-wrong'
+    ) $wrongOut $wrongErr
+    if(-not $gateWrong.WaitForExit(15000)){
+        Stop-Process -Id $gateWrong.Id -Force -ErrorAction SilentlyContinue
+        throw 'Wrong-root GateClient unexpectedly stayed connected while a degraded root was retained.'
+    }
+    if($gateWrong.ExitCode -eq 0){throw 'Wrong-root GateClient unexpectedly connected while a degraded root was retained.'}
+    $gateWrong=$null
+    $summary.wrongRootReconnectRejected=$true
+
+    # Exact-root recovery must reconnect only to the retained root, rerun preflight, and return Protected.
+    $reconnectOut=Join-Path $ResultsDirectory 'disconnect-reconnect-gate.out.log'
+    $reconnectErr=$reconnectOut + '.err'
+    $reconnectShutdown=Join-Path $ResultsDirectory 'disconnect-reconnect.shutdown'
+    $gateReconnect=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $disconnectRoot),
+        '--store',(Quote-Arg $disconnectStore),
+        '--session','disconnect-reconnect',
+        '--shutdown-file',(Quote-Arg $reconnectShutdown)
+    ) $reconnectOut $reconnectErr
+    Wait-LogPattern $reconnectOut 'kernel gate ACTIVE' $gateReconnect 45
+    $summary.sameRootReconnectActivated=$true
+
+    [IO.File]::WriteAllText($disconnectTarget,'same-root-reconnect-preserved-write')
+    if((Get-Content -LiteralPath $disconnectTarget -Raw) -ne 'same-root-reconnect-preserved-write'){
+        throw 'Same-root mutation did not succeed after v16 reconnect/preflight.'
+    }
+    $summary.sameRootMutationAllowed=$true
+
+    Stop-GateGracefully $gateReconnect $reconnectShutdown $reconnectOut $reconnectErr 'disconnect-reconnect gate'
+    $gateReconnect=$null
+
+    # Only after explicit Maintenance/deactivation may the root behave as ordinary unprotected I/O again.
+    [IO.File]::WriteAllText($disconnectTarget,'released-after-maintenance')
+    if((Get-Content -LiteralPath $disconnectTarget -Raw) -ne 'released-after-maintenance'){
+        throw 'Mutation did not succeed after explicit graceful gate release.'
+    }
+    $summary.gracefulReleaseSucceeded=$true
+
+    # Scenario 4: activation-bound containment is scoped to one kernel process identity.
     Prepare-GateRoot $gateExe $containRoot
     $containedFile=Join-Path $containRoot 'contained-target.bin'
     $peerFile=Join-Path $containRoot 'ordinary-peer.bin'

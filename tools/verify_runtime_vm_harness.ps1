@@ -48,6 +48,15 @@ foreach($required in @(
     'Get-FileHash -LiteralPath $artifact[1] -Algorithm SHA256',
     'Remove-Item -LiteralPath $results -Recurse -Force',
     "'cleanupPassed'",
+    "'disconnectDeniedMutation'",
+    "'disconnectPreservedTargetHash'",
+    "'disconnectReadAllowed'",
+    "'disconnectOutOfRootAllowed'",
+    "'wrongRootReconnectRejected'",
+    "'sameRootReconnectActivated'",
+    "'sameRootMutationAllowed'",
+    "'gracefulReleaseSucceeded'",
+    'Runtime result schema must be 2',
     'Runtime result invariant',
     'Runtime cleanup reported an error',
     'certificateThumbprint',
@@ -66,6 +75,15 @@ if($workflow -match 'ransomguard-runtime-driver/\*\*'){
 $runtime=Get-Content -LiteralPath $runtimeScript -Raw
 if($runtime -match [regex]::Escape("version='0.7.21.0'")){
     throw 'Runtime evidence must not hard-code the product version.'
+}
+
+if($runtime -notmatch [regex]::Escape('schema=2')){
+    throw 'Runtime evidence schema must be 2 for GateClient-loss qualification.'
+}
+foreach($forbiddenForcedGate in @('$gatePost','$gateContain','$gateTransition')){
+    if($runtime.Contains("Stop-LabProcess $forbiddenForcedGate")){
+        throw "Successful active GateClient session must not be force-stopped: $forbiddenForcedGate"
+    }
 }
 
 foreach($required in @(
@@ -95,8 +113,20 @@ foreach($required in @(
     'transitionKernelActive',
     'transitionDeniedNextWrite',
     'containment-journal.jsonl',
-    'Stop-LabProcess $gatePost',
-    'Stop-LabProcess $gateContain',
+    'Stop-GateGracefully $gatePost',
+    'Stop-GateGracefully $gateContain',
+    'Stop-GateGracefully $gateTransition',
+    'Stop-LabProcess $gateDisconnect',
+    'disconnectDeniedMutation',
+    'disconnectPreservedTargetHash',
+    'disconnectReadAllowed',
+    'disconnectOutOfRootAllowed',
+    'wrongRootReconnectRejected',
+    'sameRootReconnectActivated',
+    'sameRootMutationAllowed',
+    'gracefulReleaseSucceeded',
+    '--shutdown-file',
+    'Kernel gate graceful deactivation: MAINTENANCE authorized',
     '.VersionInfo.FileVersion',
     'version=$gateVersion',
     'cleanupPassed=$false',
@@ -342,4 +372,4 @@ foreach($required in @('where.exe pwsh.exe','set "PS_EXE=pwsh.exe"','powershell.
     if($buildWrapperText -notmatch [regex]::Escape($required)){throw "Windows build wrapper missing PowerShell host invariant: $required"}
 }
 
-Write-Host 'Runtime VM harness source gate PASSED: manual self-hosted VM only, exact-commit signed driver provenance, mapping coverage, pre-armed containment and event-bound containment transition, no boot/trust/Defender mutation.' -ForegroundColor Green
+Write-Host 'Runtime VM harness source gate PASSED: manual self-hosted VM only, exact-commit signed driver provenance, protocol-v16 GateClient-loss fail-safe/reconnect/release coverage, mapping and containment coverage, no boot/trust/Defender mutation.' -ForegroundColor Green

@@ -13,11 +13,21 @@ $driverPath=Join-Path $RepositoryRoot 'driver\RansomGuard.Minifilter\RansomGuard
 $policyPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\DecisionPolicy.cs'
 $workerPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\GuardWorker.cs'
 $gateClientPath=Join-Path $RepositoryRoot 'src\RansomGuard.GateClient\Program.cs'
+$protocolPath=Join-Path $RepositoryRoot 'native\shared\rg_minifilter_protocol.h'
+$verifierGatePath=Join-Path $RepositoryRoot 'tools\verify_driver_verifier_vm_harness.ps1'
+$workflowPaths=@(
+    '.github\workflows\windows-ci.yml',
+    '.github\workflows\minifilter-ci.yml',
+    '.github\workflows\minifilter-runtime-vm.yml',
+    '.github\workflows\minifilter-stress-vm.yml',
+    '.github\workflows\minifilter-crash-vm.yml',
+    '.github\workflows\minifilter-verifier-vm.yml'
+) | ForEach-Object { Join-Path $RepositoryRoot $_ }
 $globalPath=Join-Path $RepositoryRoot 'global.json'
 $supplyGatePath=Join-Path $RepositoryRoot 'tools\verify_supply_chain.ps1'
 $codeOwnersPath=Join-Path $RepositoryRoot '.github\CODEOWNERS'
 
-foreach($path in @($threatPath,$securityPath,$driverPath,$policyPath,$workerPath,$gateClientPath,$globalPath,$supplyGatePath,$codeOwnersPath)){
+foreach($path in @($threatPath,$securityPath,$driverPath,$policyPath,$workerPath,$gateClientPath,$protocolPath,$verifierGatePath,$globalPath,$supplyGatePath,$codeOwnersPath)+$workflowPaths){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){
         throw "Threat-model source missing: $path"
     }
@@ -29,6 +39,8 @@ $driver=Get-Content -LiteralPath $driverPath -Raw
 $policy=Get-Content -LiteralPath $policyPath -Raw
 $worker=Get-Content -LiteralPath $workerPath -Raw
 $gateClient=Get-Content -LiteralPath $gateClientPath -Raw
+$protocol=Get-Content -LiteralPath $protocolPath -Raw
+$verifierGate=Get-Content -LiteralPath $verifierGatePath -Raw
 $global=Get-Content -LiteralPath $globalPath -Raw | ConvertFrom-Json
 $supplyGate=Get-Content -LiteralPath $supplyGatePath -Raw
 $codeOwners=Get-Content -LiteralPath $codeOwnersPath -Raw
@@ -42,6 +54,10 @@ foreach($required in @(
     'Production detector-to-containment orchestration remains unimplemented.',
     'one synchronous communication handle',
     'reply-required preservation is deliberately serialized',
+    'current wire contract is protocol v15',
+    'For the exact 0.7.30 Driver Verifier qualification head',
+    'overflow width of 16 against a kernel admission cap of 8 (8 allowed / 8 denied)',
+    'Persisted reboot timestamps are SHA-bound and parsed from raw offset-bearing JSON',
     'current runner reported ReFS creation unsupported',
     'Do not describe the current normal bundle as production ransomware blocking'
 )){
@@ -52,6 +68,17 @@ foreach($required in @(
 
 if(-not $security.Contains('[THREAT_MODEL.md](THREAT_MODEL.md)')){
     throw 'SECURITY.md must link to the canonical threat model.'
+}
+foreach($required in @(
+    'current user/kernel wire contract is protocol v15',
+    'The 0.7.30 qualification campaign materially increases confidence in this LAB boundary but does not change it into a production claim.',
+    '16 requests against cap 8 -> 8 allowed / 8 denied',
+    'CODEOWNERS',
+    'does not itself require approval'
+)){
+    if(-not $security.Contains($required)){
+        throw "SECURITY.md is missing required current-boundary statement: $required"
+    }
 }
 
 foreach($required in @(
@@ -67,6 +94,12 @@ foreach($required in @(
 
 if($driver -notmatch 'FltCreateCommunicationPort\([^;]+RgConnect\s*,\s*RgDisconnect\s*,\s*RgMessage\s*,\s*1\s*\)'){
     throw 'Threat-model single-client port boundary changed without review.'
+}
+if(-not $protocol.Contains('#define RG_PROTOCOL_VERSION 15u')){
+    throw 'Threat-model protocol-v15 boundary changed without review.'
+}
+if(-not $gateClient.Contains('ProtocolVersion = 15')){
+    throw 'GateClient protocol-v15 connection boundary changed without threat-model review.'
 }
 foreach($required in @(
     'using var workerSlots = new SemaphoreSlim(options.GateWorkers, options.GateWorkers);',
@@ -106,6 +139,27 @@ foreach($required in @(
 if(-not $codeOwners.Contains('does not require approval or provide independent review')){
     throw 'CODEOWNERS must explicitly state that routing alone does not enforce review.'
 }
+foreach($required in @(
+    '/driver/ @EritikWoW',
+    '/src/RansomGuard.GateClient/ @EritikWoW',
+    '/.github/workflows/ @EritikWoW',
+    '/docs/THREAT_MODEL.md @EritikWoW',
+    '/tools/verify_threat_model.ps1 @EritikWoW'
+)){
+    if(-not $codeOwners.Contains($required)){
+        throw "CODEOWNERS security-routing invariant missing: $required"
+    }
+}
 
+if(-not $verifierGate.Contains('persisted reboot timestamps are parsed from raw offset-bearing JSON without timezone coercion')){
+    throw 'Threat model requires the timezone-safe Driver Verifier reboot-proof source gate.'
+}
 
-Write-Host 'Threat-model gate PASSED: docs match AuditOnly/fail-open/kernel exclusions, serialized synchronous gate semantics, current supply-chain controls, and explicit governance limits.'
+foreach($workflowPath in $workflowPaths){
+    $workflow=Get-Content -LiteralPath $workflowPath -Raw
+    if(-not $workflow.Contains('.\tools\verify_threat_model.ps1')){
+        throw "Threat-model gate is not wired into workflow: $workflowPath"
+    }
+}
+
+Write-Host 'Threat-model gate PASSED: docs match AuditOnly/fail-open/kernel exclusions, protocol v15, serialized synchronous gate semantics, current Driver Verifier/fault qualification limits, supply-chain controls, CODEOWNERS routing, and all repository workflows invoke this gate.'

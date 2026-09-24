@@ -293,8 +293,111 @@ try{
         Stop-Process -Id $createProbe.Id -Force -ErrorAction SilentlyContinue
         throw 'Fail-safe CREATE probe did not exit.'
     }
-    if($createProbe.ExitCode -eq 0 -or (Test-Path -LiteralPath $createDenied)){
-        throw "Mutation-capable CREATE was not fail-closed without GateClient. exit=$($createProbe.ExitCode)"
+    $createFailure=if(Test-Path -LiteralPath $createErr){Get-Content -LiteralPath $createErr -Raw}else{''}
+    if($createProbe.ExitCode -eq 0 -or (Test-Path -LiteralPath $createDenied) -or
+       $createFailure -notmatch '(?m)^Win32Error:\s*5\s*
+
+    $differentGate=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $rootB),
+        '--store',(Quote-Arg $differentStore),
+        '--session','different-root-rejected'
+    ) $differentOut $differentErr
+    if(-not $differentGate.WaitForExit(15000)){
+        Stop-Process -Id $differentGate.Id -Force -ErrorAction SilentlyContinue
+        throw 'Different-root GateClient unexpectedly stayed connected while fail-safe root A was latched.'
+    }
+    if($differentGate.ExitCode -eq 0){
+        throw 'Different-root GateClient unexpectedly connected successfully while fail-safe root A was latched.'
+    }
+    $summary.differentRootRejected=$true
+    $differentGate=$null
+
+    Remove-Item -LiteralPath $reconnectShutdown -Force -ErrorAction SilentlyContinue
+    $reconnectGate=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $rootA),
+        '--store',(Quote-Arg $storeA),
+        '--session','same-root-reconnect',
+        '--shutdown-marker',(Quote-Arg $reconnectShutdown)
+    ) $reconnectOut $reconnectErr
+    Wait-LogPattern $reconnectOut 'kernel gate ACTIVE' $reconnectGate 45
+    $summary.sameRootReconnectActivated=$true
+
+    & $helperExe create-new --file $afterReconnect
+    if($LASTEXITCODE -ne 0 -or -not(Test-Path -LiteralPath $afterReconnect -PathType Leaf)){
+        throw "Same-root reconnect did not restore preserved mutation flow. helperExit=$LASTEXITCODE"
+    }
+    $summary.sameRootMutationAllowed=$true
+
+    $completionJournal=Join-Path $storeA 'Sessions\same-root-reconnect\create-state\create-completion-journal.jsonl'
+    $null=Wait-JournalMatch $completionJournal {
+        param($x)
+        -not [string]::IsNullOrWhiteSpace([string]$x.finalPath) -and
+        [string]::Equals([IO.Path]::GetFullPath([string]$x.finalPath),$afterReconnect,[StringComparison]::OrdinalIgnoreCase)
+    } 20 'same-root CREATE authoritative completion'
+    $summary.sameRootCompletionDurable=$true
+
+    Stop-GateClientClean $reconnectGate $reconnectShutdown $reconnectOut 'same-root reconnect GateClient'
+    $summary.orderlyDisconnectAuthorized=$true
+    $reconnectGate=$null
+
+    # Without unloading the driver, a different root must now be able to connect
+    # and activate. This proves the authorized disconnect cleared the prior latch.
+    Remove-Item -LiteralPath $postCleanShutdown -Force -ErrorAction SilentlyContinue
+    $postCleanGate=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $rootB),
+        '--store',(Quote-Arg $postCleanStore),
+        '--session','post-clean-different-root',
+        '--shutdown-marker',(Quote-Arg $postCleanShutdown)
+    ) $postCleanOut $postCleanErr
+    Wait-LogPattern $postCleanOut 'kernel gate ACTIVE' $postCleanGate 45
+    $summary.postCleanDifferentRootActivated=$true
+
+    Stop-GateClientClean $postCleanGate $postCleanShutdown $postCleanOut 'post-clean different-root GateClient'
+    $summary.postCleanOrderlyDisconnectAuthorized=$true
+    $postCleanGate=$null
+
+    $summary.passed=$true
+}
+catch{
+    $failure=$_
+    $summary.passed=$false
+}
+finally{
+    if($probe -and -not $probe.HasExited){Stop-Process -Id $probe.Id -Force -ErrorAction SilentlyContinue}
+    foreach($p in @($initialGate,$differentGate,$reconnectGate,$postCleanGate)){
+        if($p -and -not $p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}
+    }
+
+    if($installed){
+        try{
+            & $unloadScript -Volume $volume
+            $summary.cleanupPassed=$true
+        }catch{
+            $cleanupFailure=$_
+            $summary.cleanupPassed=$false
+            $summary.cleanupError=$_.Exception.Message
+            $summary.passed=$false
+        }
+    }else{
+        $summary.cleanupPassed=$true
+    }
+
+    $summary.finishedUtc=[DateTime]::UtcNow.ToString('o')
+    $summary | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'gateclient-loss-result.json') -Encoding UTF8
+}
+
+if($failure){
+    if($cleanupFailure){
+        throw "GateClient-loss qualification failed: $($failure.Exception.Message) Cleanup also failed: $($cleanupFailure.Exception.Message)"
+    }
+    throw $failure
+}
+if(-not $summary.cleanupPassed){throw "GateClient-loss cleanup failed: $($summary.cleanupError)"}
+if(-not $summary.passed){throw 'GateClient-loss qualification did not pass.'}
+
+Write-Host "GATECLIENT-LOSS LAB PASSED. kill-deny WRITE/CREATE, different-root rejection, same-root revalidation, durable completion, orderly disconnect and post-clean different-root activation all verified. Evidence: $ResultsDirectory" -ForegroundColor Green
+){
+        throw "Mutation-capable CREATE was not proven ACCESS_DENIED without GateClient. exit=$($createProbe.ExitCode) stderr=$createFailure"
     }
     $summary.failSafeCreateDenied=$true
 

@@ -1,8 +1,8 @@
 # RansomGuard threat model
 
-Status: engineering threat model for RansomGuard 0.8.4.x, covering the default Audit product, Production Enforce state/package admission contracts, protocol-v18 LAB/ProductionGate separation, hard-link alias policy, and the Engineering minifilter.
+Status: engineering threat model for RansomGuard 0.8.5.x, covering the default Audit product, Production Enforce state/package admission contracts, protocol-v18 LAB/ProductionGate separation, hard-link alias policy, and the Engineering minifilter.
 
-This document describes what the current implementation protects, what it deliberately does not protect, and how ambiguous I/O is handled. It is not a claim of production readiness. The default normal package remains Audit. Version 0.8.4 retains the cryptographically bound ProductionProtection package and distinct protocol-v18 ProductionGate profile, adds explicit mediation for the reviewed data-mutating FSCTL class on top of the hard-link policy, but still reports `EnforceUnavailable` until a separately qualified production driver/GateClient lifecycle completes.
+This document describes what the current implementation protects, what it deliberately does not protect, and how ambiguous I/O is handled. It is not a claim of production readiness. The default normal package remains Audit. Version 0.8.5 retains the cryptographically bound ProductionProtection package, protocol-v18 ProductionGate separation, hard-link and data-mutating-FSCTL policy, and additionally kernel-binds GateClient identity to the actual connecting process object. It still reports `EnforceUnavailable` until a separately qualified production driver/GateClient lifecycle completes.
 
 ## Security goals
 
@@ -32,7 +32,7 @@ Security-sensitive assets include:
 
 ### Ordinary product / Enforce foundation
 
-The normal service obtains filesystem telemetry through ETW and publishes bounded read-only status through the local named pipe. Audit is the default mode and remains non-blocking. Schema 4 may explicitly request Enforce. Version 0.8.4 first inspects a fixed ProductionProtection package: the actual running service image anchors the signer identity; GateClient and the driver catalog must use the same signer; SYS/INF must verify as catalog members; LAB provider/placeholder altitude are rejected. Package admission performs no lifecycle mutation, so the request is still published as `EnforceUnavailable`.
+The normal service obtains filesystem telemetry through ETW and publishes bounded read-only status through the local named pipe. Audit is the default mode and remains non-blocking. Schema 4 may explicitly request Enforce. Version 0.8.5 first inspects a fixed ProductionProtection package: the actual running service image anchors the signer identity; GateClient and the driver catalog must use the same signer; SYS/INF must verify as catalog members; LAB provider/placeholder altitude are rejected. Package admission performs no lifecycle mutation, so the request is still published as `EnforceUnavailable`.
 
 The protection state machine is the only source of a kernel-enforcement claim. SCM `Running`, driver installation, a live UI, or a connected-but-not-activated kernel channel cannot set `KernelEnforcementActive=true`. Rollback repository validation must complete before any future kernel-start transition.
 
@@ -45,6 +45,8 @@ The LAB path consists of:
 `user-mode requestor -> Filter Manager/minifilter -> synchronous GateClient decision -> durable rollback store -> allow/deny`
 
 The minifilter and GateClient trust each other only inside the explicitly negotiated protocol/session. The current wire contract is protocol v18; protocol drift is a compatibility/security boundary, not a best-effort condition. v18 retains the v17 exact protected-root/volume scope and adds distinct `LabGate` and `ProductionGate` profiles. ProductionGate cannot request LAB containment/scope-fault controls or set the containment reply flag, and a degraded session retains its original profile for reconnect. The gate is scoped to one explicit protected root plus the exact local Filter Manager volume object that contains that root. The rollback store must be outside the protected root; ProductionGate fixes it to the service-managed ProgramData rollback repository.
+
+The connection identity itself is kernel-derived. The connect callback references `PsGetCurrentProcess()`, derives its PID with `PsGetProcessId`, and rejects a `ClientProcessId` mismatch. The referenced `PEPROCESS` is retained for the live connection and exact-object requestor comparison is used for GateClient self-I/O exemption. The wire PID is therefore not a trust anchor.
 
 The Filter Manager server port currently permits one client connection. GateClient uses one synchronous communication handle. Kernel admission may have multiple blocking requests waiting, but user-mode reply-required preservation is deliberately serialized: the worker handling a gate request must send its reply before the receive loop issues the next blocking `FilterGetMessage`. Configurable GateClient slots bound no-reply completion/evidence processing; they are not a claim of multiple simultaneous preservation replies. This distinction is part of the availability model and must not be blurred in performance or security claims.
 

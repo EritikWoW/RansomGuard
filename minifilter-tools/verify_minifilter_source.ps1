@@ -195,6 +195,23 @@ if($gateBlock -notmatch [regex]::Escape('else if (allow && RgIsContainedRequesto
     throw 'Sibling in-flight mutations must be denied if containment becomes active while they wait for user mode.'
 }
 
+$queueStart=$src.IndexOf('static VOID RgQueueEvent(PFLT_CALLBACK_DATA Data')
+$rawQueueStart=$src.IndexOf('static VOID RgQueueRawEvent(const RG_EVENT *Event',$queueStart)
+$sendWorkerStart=$src.IndexOf('static VOID RgSendWorker(PVOID Parameter)',$rawQueueStart)
+if($queueStart -lt 0 -or $rawQueueStart -lt 0 -or $sendWorkerStart -lt 0){
+    throw 'Evidence queue source boundaries missing.'
+}
+$queueBlock=$src.Substring($queueStart,$rawQueueStart-$queueStart)
+$rawQueueBlock=$src.Substring($rawQueueStart,$sendWorkerStart-$rawQueueStart)
+foreach($block in @($queueBlock,$rawQueueBlock)){
+    $pendingIncrement=$block.IndexOf('pending = InterlockedIncrement(&gPending)')
+    $maintenanceReject=$block.IndexOf('InterlockedCompareExchange(&gMaintenanceRequested, 0, 0) != 0',$pendingIncrement)
+    $pendingDecrement=$block.IndexOf('InterlockedDecrement(&gPending)',$maintenanceReject)
+    if($pendingIncrement -lt 0 -or $maintenanceReject -lt 0 -or $pendingDecrement -lt 0 -or
+       $pendingIncrement -gt $maintenanceReject -or $maintenanceReject -gt $pendingDecrement){
+        throw 'Maintenance must close new queued evidence admission after reserving gPending so deactivation cannot miss a racing worker.'
+    }
+}
 
 if($src -match 'IRP_MJ_WRITE\s*,\s*FLTFL_OPERATION_REGISTRATION_SKIP_PAGING_IO'){
     throw 'Paging-write visibility requires IRP_MJ_WRITE callbacks to receive paging I/O.'

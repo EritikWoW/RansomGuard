@@ -27,6 +27,7 @@ static volatile LONG gGateActivated = 0;
 static volatile LONG gActivationHazard = 0;
 static volatile LONG gPreflightProbeArmed = 0;
 static volatile LONG gProtectionRequired = 0;
+static volatile LONG gProtectionClientMode = 0;
 static volatile LONG gDegradedProtected = 0;
 static volatile LONG gMaintenanceRequested = 0;
 static volatile LONG gGracefulDisconnectAuthorized = 0;
@@ -2222,6 +2223,7 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
         status = STATUS_DEVICE_BUSY;
     } else if (InterlockedCompareExchange(&gProtectionRequired, 0, 0) != 0 &&
                (!RgIsGateClientMode((LONG)context->ClientMode) ||
+                InterlockedCompareExchange(&gProtectionClientMode, 0, 0) != (LONG)context->ClientMode ||
                 gGateRootLengthBytes != (USHORT)rootBytes ||
                 gGateVolumeLengthBytes != (USHORT)volumeBytes ||
                 gGateVolume == NULL ||
@@ -2236,6 +2238,7 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
         }
 
         if (InterlockedCompareExchange(&gProtectionRequired, 0, 0) == 0) {
+            InterlockedExchange(&gProtectionClientMode, 0);
             releaseVolume = gGateVolume;
             gGateVolume = NULL;
             gGateVolumeLengthBytes = 0;
@@ -2335,6 +2338,7 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
                    InterlockedCompareExchange(&gPreflightProbeArmed, 0, 0) != 0) {
             status = STATUS_DEVICE_BUSY;
         } else {
+            InterlockedExchange(&gProtectionClientMode, RgCurrentClientMode());
             InterlockedExchange(&gProtectionRequired, 1);
             InterlockedExchange(&gDegradedProtected, 0);
             InterlockedExchange(&gMaintenanceRequested, 0);
@@ -2365,6 +2369,7 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
                     gContainedProcess = targetProcess;
                     targetProcess = NULL;
                     InterlockedExchange64(&gContainedProcessId, (LONG64)request->TargetProcessId);
+                    InterlockedExchange(&gProtectionClientMode, RgCurrentClientMode());
                     InterlockedExchange(&gProtectionRequired, 1);
                     InterlockedExchange(&gDegradedProtected, 0);
                     InterlockedExchange(&gMaintenanceRequested, 0);
@@ -2426,6 +2431,7 @@ static NTSTATUS RgMessage(PVOID ConnectionCookie,
                 RgClearContainedProcess();
                 InterlockedExchange(&gGateActivated, 0);
                 InterlockedExchange(&gProtectionRequired, 0);
+                InterlockedExchange(&gProtectionClientMode, 0);
                 InterlockedExchange(&gDegradedProtected, 0);
                 InterlockedExchange(&gGracefulDisconnectAuthorized, 1);
                 status = STATUS_SUCCESS;
@@ -2480,9 +2486,10 @@ static VOID RgDisconnect(PVOID ConnectionCookie)
     if (protectionRequired != 0 && gracefulDisconnect == 0) {
         // Keep the negotiated root plus protected-volume reference and fail safe for
         // resolved in-root or ambiguous protected-volume destructive user-mode mutations.
-        // A replacement v17 GateClient may reconnect only to this exact root/volume and rerun preflight.
+        // A replacement v18 GateClient may reconnect only with the retained client mode to this exact root/volume and rerun preflight.
     } else {
         InterlockedExchange(&gProtectionRequired, 0);
+        InterlockedExchange(&gProtectionClientMode, 0);
         InterlockedExchange(&gDegradedProtected, 0);
         releaseVolume = gGateVolume;
         gGateVolume = NULL;
@@ -2531,6 +2538,7 @@ NTSTATUS RgUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
     InterlockedExchange(&gClientConnected, 0);
     InterlockedExchange(&gClientMode, 0);
     InterlockedExchange(&gProtectionRequired, 0);
+    InterlockedExchange(&gProtectionClientMode, 0);
     InterlockedExchange(&gDegradedProtected, 0);
     InterlockedExchange(&gMaintenanceRequested, 0);
     InterlockedExchange(&gGracefulDisconnectAuthorized, 0);

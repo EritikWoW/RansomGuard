@@ -18,6 +18,7 @@ try {
     & (Join-Path $PSScriptRoot 'tools\verify_powershell_automation.ps1') -RepositoryRoot $PSScriptRoot
     & (Join-Path $PSScriptRoot 'tools\verify_supply_chain.ps1') -RepositoryRoot $PSScriptRoot
     & (Join-Path $PSScriptRoot 'tools\verify_docs_consistency.ps1') -RepositoryRoot $PSScriptRoot
+    & (Join-Path $PSScriptRoot 'tools\verify_threat_model.ps1') -RepositoryRoot $PSScriptRoot
 
     if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { throw 'Install .NET 10 SDK on the BUILD PC. Target PCs do not need a runtime.' }
     $version = (& dotnet --version).Trim()
@@ -218,7 +219,7 @@ try {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'docs\LAB_QUICKSTART.txt') -Destination (Join-Path $labRelease 'START_HERE.txt') -Force
         $labDocs=Join-Path $labRelease 'docs'
         New-Item -ItemType Directory -Path $labDocs -Force | Out-Null
-        foreach($file in @('MINIFILTER_LAB.md','ROLLBACK_ARCHITECTURE.md','ROLLBACK_RECOVERY.md','ROLLBACK_RETENTION.md','PRODUCT_TARGET.md','SECURITY.md','TESTING.md')){
+        foreach($file in @('MINIFILTER_LAB.md','ROLLBACK_ARCHITECTURE.md','ROLLBACK_RECOVERY.md','ROLLBACK_RETENTION.md','PRODUCT_TARGET.md','SECURITY.md','THREAT_MODEL.md','TESTING.md')){
             Copy-Item -LiteralPath (Join-Path $PSScriptRoot ('docs\'+$file)) -Destination $labDocs
         }
     }

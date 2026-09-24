@@ -2059,7 +2059,7 @@ static VOID RgDisconnect(PVOID ConnectionCookie)
 
     UNREFERENCED_PARAMETER(ConnectionCookie);
 
-    authorized = InterlockedExchange(&gDisconnectAuthorized, 0);
+    authorized = InterlockedCompareExchange(&gDisconnectAuthorized, 0, 0);
     RgClearContainedProcess();
 
     ExAcquireFastMutex(&gPortMutex);
@@ -2092,6 +2092,7 @@ static VOID RgDisconnect(PVOID ConnectionCookie)
     if (gClientPort != NULL) {
         FltCloseClientPort(gFilter, &gClientPort);
     }
+    InterlockedExchange(&gDisconnectAuthorized, 0);
     ExReleaseFastMutex(&gPortMutex);
 
     RgWaitForPortUsers();

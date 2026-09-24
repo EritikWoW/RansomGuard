@@ -679,6 +679,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreFileSystemControl(
     // containment, or missing durable CREATE preservation are all fail-closed.
     if (scope == RgScopeAmbiguous ||
         degraded ||
+        InterlockedCompareExchange(&gMaintenanceRequested, 0, 0) != 0 ||
         InterlockedCompareExchange(&gGateActivated, 0, 0) == 0 ||
         RgIsContainedRequestor(Data) ||
         !RgStreamHasDurablePreservation(FltObjects)) {

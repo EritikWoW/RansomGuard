@@ -5,7 +5,7 @@ if (!OperatingSystem.IsWindows())
     throw new PlatformNotSupportedException("RansomGuard minifilter runtime harness is Windows-only.");
 
 if (args.Length == 0)
-    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-write-handle --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | hard-link --existing <path> --link <path> --result <marker> [--ready <marker> --go <marker>] | hard-link-ex --existing <path> --link <path> --result <marker> [--ready <marker> --go <marker>] | map-write --file <path> [--ready <marker> --go <marker>] | create-new --file <path> [--ready <marker> --go <marker>] | rename-file --source <path> --destination <path> [--ready <marker> --go <marker>] | truncate-eof --file <path> --length <bytes> --ready <marker> --go <marker> | delete-file --file <path> --ready <marker> --go <marker> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker> | containment-transition --file-a <path> --file-b <path> --ready <marker> --go <marker> --result <marker>");
+    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-write-handle --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | hard-link --existing <path> --link <path> --result <marker> [--ready <marker> --go <marker>] | hard-link-ex --existing <path> --link <path> --result <marker> [--ready <marker> --go <marker>] | fsctl-zero --file <path> --offset <bytes> --length <bytes> --result <marker> | map-write --file <path> [--ready <marker> --go <marker>] | create-new --file <path> [--ready <marker> --go <marker>] | rename-file --source <path> --destination <path> [--ready <marker> --go <marker>] | truncate-eof --file <path> --length <bytes> --ready <marker> --go <marker> | delete-file --file <path> --ready <marker> --go <marker> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker> | containment-transition --file-a <path> --file-b <path> --ready <marker> --go <marker> --result <marker>");
 
 var command = args[0].ToLowerInvariant();
 var options = Parse(args.Skip(1).ToArray());
@@ -47,6 +47,13 @@ try
                 Require(options, "--result"),
                 OptionalPath(options, "--ready"),
                 OptionalPath(options, "--go"));
+            break;
+        case "fsctl-zero":
+            FsctlZeroData(
+                Require(options, "--file"),
+                RequireInt64(options, "--offset"),
+                RequireInt64(options, "--length"),
+                Require(options, "--result"));
             break;
         case "map-write":
             MapAndWrite(
@@ -410,6 +417,65 @@ static void HardLinkExProbe(
     {
         Marshal.FreeHGlobal(buffer);
     }
+}
+
+static void FsctlZeroData(string filePath, long offset, long length, string resultMarker)
+{
+    EnsureFile(filePath);
+    if (length <= 0)
+        throw new ArgumentOutOfRangeException(nameof(length), "FSCTL zero length must be positive.");
+
+    var resultParent = Path.GetDirectoryName(resultMarker);
+    if (!string.IsNullOrWhiteSpace(resultParent)) Directory.CreateDirectory(resultParent);
+    if (File.Exists(resultMarker)) File.Delete(resultMarker);
+
+    const uint GenericWrite = 0x40000000;
+    const uint ShareRead = 0x00000001;
+    const uint ShareWrite = 0x00000002;
+    const uint ShareDelete = 0x00000004;
+    const uint OpenExisting = 3;
+    const uint FileAttributeNormal = 0x00000080;
+    const uint FileFlagWriteThrough = 0x80000000;
+    const uint FsctlSetZeroData = 0x000980C8;
+
+    using var file = Native.CreateFileW(
+        filePath,
+        GenericWrite,
+        ShareRead | ShareWrite | ShareDelete,
+        IntPtr.Zero,
+        OpenExisting,
+        FileAttributeNormal | FileFlagWriteThrough,
+        IntPtr.Zero);
+    if (file.IsInvalid)
+        throw new System.ComponentModel.Win32Exception(
+            Marshal.GetLastWin32Error(), $"CreateFileW writable FSCTL handle failed for '{filePath}'.");
+
+    var info = new Native.FileZeroDataInformation
+    {
+        FileOffset = offset,
+        BeyondFinalZero = checked(offset + length)
+    };
+    if (!Native.DeviceIoControl(
+            file,
+            FsctlSetZeroData,
+            ref info,
+            checked((uint)Marshal.SizeOf<Native.FileZeroDataInformation>()),
+            IntPtr.Zero,
+            0,
+            out _,
+            IntPtr.Zero))
+    {
+        var error = Marshal.GetLastWin32Error();
+        File.WriteAllText(resultMarker, "win32-error:" + error.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        throw new System.ComponentModel.Win32Exception(
+            error, $"FSCTL_SET_ZERO_DATA failed for '{filePath}'.");
+    }
+
+    if (!Native.FlushFileBuffers(file))
+        throw new System.ComponentModel.Win32Exception(
+            Marshal.GetLastWin32Error(), $"FlushFileBuffers failed after FSCTL_SET_ZERO_DATA for '{filePath}'.");
+
+    File.WriteAllText(resultMarker, "allowed");
 }
 
 static void ContainmentProbe(string filePath, string readyMarker, string goMarker, string resultMarker)
@@ -869,6 +935,25 @@ static class Native
 
     [DllImport("ntdll.dll")]
     public static extern uint RtlNtStatusToDosError(int status);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct FileZeroDataInformation
+    {
+        public long FileOffset;
+        public long BeyondFinalZero;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool DeviceIoControl(
+        SafeFileHandle hDevice,
+        uint dwIoControlCode,
+        ref FileZeroDataInformation lpInBuffer,
+        uint nInBufferSize,
+        IntPtr lpOutBuffer,
+        uint nOutBufferSize,
+        out uint lpBytesReturned,
+        IntPtr lpOverlapped);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

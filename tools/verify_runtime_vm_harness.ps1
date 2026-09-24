@@ -60,6 +60,9 @@ foreach($required in @(
     "'hardLinkExInsideToOutsideDenied'",
     "'hardLinkExOutsideToInsideDenied'",
     "'hardLinkExOutsideToOutsideAllowed'",
+    "'fsctlZeroAllowedWithBaseline'",
+    "'fsctlZeroMutatedTarget'",
+    "'fsctlZeroPreimageHashMatched'",
     "'disconnectDeniedMutation'",
     "'disconnectPreservedTargetHash'",
     "'disconnectReadAllowed'",
@@ -170,6 +173,13 @@ foreach($required in @(
     'Protected inside-to-outside FileLinkInformationEx creation was not denied.',
     'Protected outside-to-inside FileLinkInformationEx creation was not denied.',
     'Outside-to-outside FileLinkInformationEx creation was over-blocked.',
+    'fsctl-zero',
+    'FSCTL_SET_ZERO_DATA',
+    'fsctlZeroAllowedWithBaseline',
+    'fsctlZeroMutatedTarget',
+    'fsctlZeroPreimageHashMatched',
+    'FSCTL pre-image journal hash mismatch',
+    'FSCTL pre-image object hash mismatch',
     'preexisting-map.bin',
     'writableViewPresent',
     'postactivation-map.bin',
@@ -330,6 +340,12 @@ foreach($required in @(
     'denied-ex',
     'allowed-ex',
     'win32-error:',
+    'fsctl-zero',
+    'FsctlZeroData',
+    'FsctlSetZeroData = 0x000980C8',
+    'DeviceIoControl',
+    'FileZeroDataInformation',
+    'FlushFileBuffers',
     'map-write',
     'containment-probe',
     'containment-transition',
@@ -471,4 +487,4 @@ foreach($required in @('where.exe pwsh.exe','set "PS_EXE=pwsh.exe"','powershell.
     if($buildWrapperText -notmatch [regex]::Escape($required)){throw "Windows build wrapper missing PowerShell host invariant: $required"}
 }
 
-Write-Host 'Runtime VM harness source gate PASSED: manual self-hosted VM only, exact-commit signed driver provenance, protocol-v18 LAB regression plus dedicated ProductionGate activation/degraded/profile-mismatch/reconnect evidence, no boot/trust/Defender mutation.' -ForegroundColor Green
+Write-Host 'Runtime VM harness source gate PASSED: manual self-hosted VM only, exact-commit signed driver provenance, protocol-v18 LAB/ProductionGate regressions plus hard-link and data-mutating FSCTL preservation evidence, no boot/trust/Defender mutation.' -ForegroundColor Green

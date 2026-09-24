@@ -1,6 +1,6 @@
 # Production protection package admission
 
-Version 0.8.3 retains the trust/admission boundary for the future Production Enforce driver lifecycle and requires the protocol-v18 ProductionGate wire contract. It does **not** install, start, load, attach or unload the minifilter.
+Version 0.8.4 retains the trust/admission boundary for the future Production Enforce driver lifecycle and requires the protocol-v18 ProductionGate wire contract. It does **not** install, start, load, attach or unload the minifilter.
 
 The normal package remains Audit by default and still excludes the protection package. When `Mode=Enforce` is requested, the service inspects only this fixed layout beside its own executable:
 
@@ -21,7 +21,7 @@ The descriptor schema is:
 {
   "Schema": 1,
   "Profile": "ProductionProtection",
-  "Version": "0.8.3.0",
+  "Version": "0.8.4.0",
   "Protocol": 18,
   "Provider": "RansomGuard",
   "Altitude": "<Microsoft-assigned-production-altitude>",
@@ -36,6 +36,6 @@ Admission is fail-closed. The service verifies the fixed non-reparse paths and f
 
 The running `RansomGuard.Service.exe`, GateClient and driver catalog must all have a cache-verifiable Authenticode signature. GateClient and CAT must be signed by the same signing certificate as the running service. The driver SYS and INF must each verify as members of the supplied signed CAT through the Windows catalog APIs (`CryptCATAdminAcquireContext2`, `CryptCATAdminCalcHashFromFileHandle2` and catalog-mode `WinVerifyTrust`).
 
-A successful result is only **ReadyForLifecycle**. It is not a Protected claim and does not perform any SCM, Filter Manager or process lifecycle action. Version 0.8.3 still reports `EnforceUnavailable` after package admission because production install/load/attach/GateClient supervision is the next separately qualified milestone.
+A successful result is only **ReadyForLifecycle**. It is not a Protected claim and does not perform any SCM, Filter Manager or process lifecycle action. Version 0.8.4 still reports `EnforceUnavailable` after package admission because production install/load/attach/GateClient supervision is the next separately qualified milestone.
 
 This source-level admission boundary does not prove that an altitude was actually assigned by Microsoft merely because a numeric value is present in the package. Release governance must bind the shipped altitude to the external Microsoft assignment before distribution. Likewise, local Administrator/SYSTEM tamper resistance remains a later self-protection milestone.

@@ -727,7 +727,85 @@ if($proto -notmatch 'RgGateBaselineCommitted' -or $proto -notmatch 'RgGateNoPres
 if($infText -notmatch 'StartType\s*=\s*3'){throw 'Driver must remain demand-start in the lab prototype.'}
 if($infText -notmatch 'Instance1\.Flags\s*=\s*0x1'){throw 'Automatic volume attachment must remain suppressed.'}
 if($infText -notmatch 'Instance1\.Altitude\s*=\s*"370099\.4242"'){throw 'Unexpected LAB altitude. Review altitude policy manually.'}
-Write-Host 'Minifilter source check PASSED, including protocol-v18 LAB/ProductionGate separation, retained-profile degraded reconnect, protected-volume scope classification, disconnect fail-safe state, LAB-only containment/fault controls, bounded admission and paging/section evidence.' -ForegroundColor Green
+
+$fsctlCallbackStart=$src.IndexOf('FLT_PREOP_CALLBACK_STATUS RgPreFileSystemControl(')
+$fsctlCallbackEnd=$src.IndexOf('static NTSTATUS RgGetNormalizedNameInformation(',$fsctlCallbackStart)
+if($fsctlCallbackStart -lt 0 -or $fsctlCallbackEnd -lt 0){
+    throw 'Data-mutating FSCTL mediation callback source block missing.'
+}
+$fsctlCallback=$src.Substring($fsctlCallbackStart,$fsctlCallbackEnd-$fsctlCallbackStart)
+foreach($required in @(
+    'Data->Iopb->Parameters.FileSystemControl.Common.FsControlCode',
+    'RgIsDataMutatingFsctl(fsctl)',
+    'RgClassifyMutationScope(&event, FltObjects)',
+    'scope == RgScopeAmbiguous',
+    'InterlockedCompareExchange(&gMaintenanceRequested, 0, 0) != 0',
+    'RgIsContainedRequestor(Data)',
+    'RgStreamHasDurablePreservation(FltObjects)',
+    'return RgCompleteDenied(Data)',
+    'return FLT_PREOP_SUCCESS_NO_CALLBACK'
+)){
+    if($fsctlCallback -notmatch [regex]::Escape($required)){
+        throw "FSCTL mediation invariant missing: $required"
+    }
+}
+foreach($required in @(
+    'IRP_MJ_FILE_SYSTEM_CONTROL',
+    'FSCTL_SET_ZERO_DATA',
+    'FSCTL_DUPLICATE_EXTENTS_TO_FILE',
+    'FSCTL_DUPLICATE_EXTENTS_TO_FILE_EX',
+    'FSCTL_OFFLOAD_WRITE',
+    'FSCTL_FILE_LEVEL_TRIM',
+    'FSCTL_SET_SPARSE'
+)){
+    if($src -notmatch [regex]::Escape($required)){
+        throw "Mutating FSCTL coverage invariant missing: $required"
+    }
+}
+
+$fsctlListStart=$src.LastIndexOf('static BOOLEAN RgIsDataMutatingFsctl(')
+$fsctlListEnd=$src.IndexOf('static BOOLEAN RgStreamHasDurablePreservation(',$fsctlListStart)
+if($fsctlListStart -lt 0 -or $fsctlListEnd -lt 0){
+    throw 'Mutating FSCTL allowlist source block missing.'
+}
+$fsctlList=$src.Substring($fsctlListStart,$fsctlListEnd-$fsctlListStart)
+foreach($required in @(
+    'case FSCTL_SET_ZERO_DATA:',
+    'case FSCTL_DUPLICATE_EXTENTS_TO_FILE:',
+    'case FSCTL_DUPLICATE_EXTENTS_TO_FILE_EX:',
+    'case FSCTL_OFFLOAD_WRITE:',
+    'case FSCTL_FILE_LEVEL_TRIM:',
+    'case FSCTL_SET_SPARSE:'
+)){
+    if($fsctlList -notmatch [regex]::Escape($required)){
+        throw "Mutating FSCTL classification missing: $required"
+    }
+}
+
+$fsctlPreservationStart=$src.LastIndexOf('static BOOLEAN RgStreamHasDurablePreservation(')
+$fsctlPreservationEnd=$src.IndexOf('FLT_PREOP_CALLBACK_STATUS RgPreFileSystemControl(',$fsctlPreservationStart)
+if($fsctlPreservationStart -lt 0 -or $fsctlPreservationEnd -lt 0){
+    throw 'FSCTL preservation-context helper source block missing.'
+}
+$fsctlPreservation=$src.Substring($fsctlPreservationStart,$fsctlPreservationEnd-$fsctlPreservationStart)
+foreach($required in @(
+    'FltGetStreamContext',
+    'context->PathStatus == RgPathResolved',
+    'context->CreateRequestSequence != 0',
+    'context->PreservationDecision == RgGateSnapshotCommitted',
+    'context->PreservationDecision == RgGateBaselineCommitted',
+    'FltReleaseContext(context)'
+)){
+    if($fsctlPreservation -notmatch [regex]::Escape($required)){
+        throw "FSCTL preservation-context invariant missing: $required"
+    }
+}
+
+if($src -notmatch [regex]::Escape('{ IRP_MJ_FILE_SYSTEM_CONTROL, 0, RgPreFileSystemControl, NULL, NULL }')){
+    throw 'IRP_MJ_FILE_SYSTEM_CONTROL must be registered with the FSCTL mediation callback.'
+}
+
+Write-Host 'Minifilter source check PASSED, including protocol-v18 LAB/ProductionGate separation, retained-profile degraded reconnect, protected-volume scope classification, hard-link policy, data-mutating FSCTL mediation, disconnect fail-safe state, LAB-only containment/fault controls, bounded admission and paging/section evidence.' -ForegroundColor Green
 Write-Host 'Gate scope: one explicit NT root negotiated by the single connected client.'
 Write-Host 'In-scope mutations normally require an explicit preservation decision; an activation-bound contained PEPROCESS is denied before the user-mode gate.'
 Write-Host 'Resolved out-of-root I/O and ambiguity on other volumes stay outside the gate; ambiguous destructive ordinary user-mode I/O on the bound gate volume fails closed. No process-control or kernel file-writing APIs are present.'

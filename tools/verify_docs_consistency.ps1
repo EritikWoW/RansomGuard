@@ -38,7 +38,8 @@ foreach($required in @(
     @('Product target protection package','0.8.1 adds the production protection-package trust/admission boundary above the 0.8.0 Enforce state foundation',$target),
     @('Product target ProductionGate','0.8.2 separates the future production preservation client from Engineering LAB behavior at the wire/kernel boundary',$target),
     @('Product target hard-link policy','0.8.3 closes the current hard-link alias class while retaining protocol v18',$target),
-    @('Protection package document','Version 0.8.3 retains the trust/admission boundary for the future Production Enforce driver lifecycle and requires the protocol-v18 ProductionGate wire contract',$protectionPackage),
+    @('Product target mutating FSCTL policy','0.8.4 closes the reviewed data-mutating FSCTL class while retaining protocol v18',$target),
+    @('Protection package document','Version 0.8.4 retains the trust/admission boundary for the future Production Enforce driver lifecycle and requires the protocol-v18 ProductionGate wire contract',$protectionPackage),
     @('Protection package catalog membership','The driver SYS and INF must each verify as members of the supplied signed CAT',$protectionPackage)
 )){
     $label=[string]$required[0]
@@ -59,4 +60,4 @@ foreach($stale in @(
     }
 }
 
-Write-Host "Documentation consistency gate PASSED: operator docs, product target, README and changelog match version $version, current protocol v18, qualified 0.7.x kernel milestones, 0.8.0 Enforce foundation, 0.8.1 package admission, 0.8.2 ProductionGate separation and 0.8.3 hard-link alias policy."
+Write-Host "Documentation consistency gate PASSED: operator docs, product target, README and changelog match version $version, current protocol v18, qualified 0.7.x kernel milestones, 0.8.0 Enforce foundation, 0.8.1 package admission, 0.8.2 ProductionGate separation, 0.8.3 hard-link alias policy and 0.8.4 mutating-FSCTL mediation."

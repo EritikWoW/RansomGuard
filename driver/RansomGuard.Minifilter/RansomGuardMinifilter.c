@@ -99,6 +99,8 @@ static VOID RgPopulateLinkDestination(_Inout_ PRG_EVENT Event, _Inout_ PFLT_CALL
 static RG_SCOPE_CLASSIFICATION RgClassifyHardLinkScope(
     _In_ const RG_EVENT *Event,
     _In_ PCFLT_RELATED_OBJECTS FltObjects);
+static BOOLEAN RgIsDataMutatingFsctl(_In_ ULONG FsControlCode);
+static BOOLEAN RgStreamHasDurablePreservation(_In_ PCFLT_RELATED_OBJECTS FltObjects);
 static BOOLEAN RgPathMatchesGateRoot(_In_ ULONG PathStatus, _In_z_ const WCHAR *Path);
 static BOOLEAN RgEventPathMatchesGateRoot(_In_ const RG_EVENT *Event);
 static BOOLEAN RgEventDestinationPathMatchesGateRoot(_In_ const RG_EVENT *Event);
@@ -161,6 +163,7 @@ static const FLT_OPERATION_REGISTRATION gCallbacks[] = {
     { IRP_MJ_CREATE, 0, RgPreCreate, RgPostCreate, NULL },
     { IRP_MJ_WRITE, 0, RgPreWrite, NULL, NULL },
     { IRP_MJ_SET_INFORMATION, 0, RgPreSetInformation, RgPostSetInformation, NULL },
+    { IRP_MJ_FILE_SYSTEM_CONTROL, 0, RgPreFileSystemControl, NULL, NULL },
     { IRP_MJ_CLEANUP, 0, RgPreCleanup, RgPostCleanup, NULL },
     { IRP_MJ_ACQUIRE_FOR_SECTION_SYNCHRONIZATION, 0, RgPreAcquireForSectionSynchronization, NULL, NULL },
     { IRP_MJ_OPERATION_END }
@@ -586,6 +589,106 @@ FLT_PREOP_CALLBACK_STATUS RgPreSetInformation(PFLT_CALLBACK_DATA Data, PCFLT_REL
         return FLT_PREOP_SUCCESS_WITH_CALLBACK;
     }
 
+    return FLT_PREOP_SUCCESS_NO_CALLBACK;
+}
+
+static BOOLEAN RgIsDataMutatingFsctl(ULONG FsControlCode)
+{
+    switch (FsControlCode) {
+    case FSCTL_SET_ZERO_DATA:
+    case FSCTL_DUPLICATE_EXTENTS_TO_FILE:
+    case FSCTL_DUPLICATE_EXTENTS_TO_FILE_EX:
+    case FSCTL_OFFLOAD_WRITE:
+    case FSCTL_FILE_LEVEL_TRIM:
+    case FSCTL_SET_SPARSE:
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
+static BOOLEAN RgStreamHasDurablePreservation(PCFLT_RELATED_OBJECTS FltObjects)
+{
+    PRG_STREAM_CONTEXT context = NULL;
+    NTSTATUS status;
+    BOOLEAN protected = FALSE;
+
+    if (FltObjects == NULL || FltObjects->Instance == NULL || FltObjects->FileObject == NULL) {
+        return FALSE;
+    }
+
+    status = FltGetStreamContext(
+        FltObjects->Instance,
+        FltObjects->FileObject,
+        (PFLT_CONTEXT *)&context);
+    if (!NT_SUCCESS(status) || context == NULL) {
+        return FALSE;
+    }
+
+    protected =
+        context->PathStatus == RgPathResolved &&
+        context->CreateRequestSequence != 0 &&
+        (context->PreservationDecision == RgGateSnapshotCommitted ||
+         context->PreservationDecision == RgGateBaselineCommitted);
+
+    FltReleaseContext(context);
+    return protected;
+}
+
+FLT_PREOP_CALLBACK_STATUS RgPreFileSystemControl(
+    PFLT_CALLBACK_DATA Data,
+    PCFLT_RELATED_OBJECTS FltObjects,
+    PVOID *CompletionContext)
+{
+    RG_EVENT event;
+    ULONG fsctl;
+    LONG mode;
+    BOOLEAN degraded;
+    RG_SCOPE_CLASSIFICATION scope;
+
+    *CompletionContext = NULL;
+
+    if (!RgShouldObserve(Data)) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    fsctl = Data->Iopb->Parameters.FileSystemControl.Common.FsControlCode;
+    if (!RgIsDataMutatingFsctl(fsctl)) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    degraded = RgIsDegradedProtected();
+    mode = RgCurrentClientMode();
+
+    // Audit remains observational/non-blocking. Gate profiles explicitly mediate the
+    // data-changing FSCTLs that can bypass ordinary IRP_MJ_WRITE delivery.
+    if (mode == RgClientAudit && !degraded) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+    if (!RgIsGateClientMode(mode) && !degraded) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    (void)RgPopulateEvent(&event, Data, FltObjects, RgEventInvalid, fsctl);
+    scope = RgClassifyMutationScope(&event, FltObjects);
+    if (scope == RgScopeOutside) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    // Ambiguous protected-volume scope, disconnected/degraded protection, preflight,
+    // containment, or missing durable CREATE preservation are all fail-closed.
+    if (scope == RgScopeAmbiguous ||
+        degraded ||
+        InterlockedCompareExchange(&gMaintenanceRequested, 0, 0) != 0 ||
+        InterlockedCompareExchange(&gGateActivated, 0, 0) == 0 ||
+        RgIsContainedRequestor(Data) ||
+        !RgStreamHasDurablePreservation(FltObjects)) {
+        return RgCompleteDenied(Data);
+    }
+
+    // The full/absence baseline was durably committed before the write-capable handle
+    // returned. Let the filesystem perform the FSCTL without synchronously re-entering
+    // user mode from IRP_MJ_FILE_SYSTEM_CONTROL.
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
 

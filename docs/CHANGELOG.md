@@ -1,4 +1,14 @@
-# RansomGuard 0.7.31.0
+# RansomGuard 0.7.32.0
+
+- Added an activated GateClient-loss fail-safe latch without changing minifilter protocol v15.
+- The kernel now distinguishes initial/not-armed connections from an already activated protection session. Unexpected loss after activation retains the exact negotiated root and LAB mode instead of clearing enforcement state.
+- While the fail-safe latch is active, resolved in-root mutation-capable CREATE and non-paging WRITE/RENAME/TRUNCATE/DELETE remain on the blocking path and fail closed because no user-mode preservation reply is available.
+- A replacement GateClient may reconnect only to the same latched root. Reconnect resets activation to NotActivated and requires the existing full file/directory preflight again while external in-root mutations remain denied.
+- Clean shutdown is explicit: GateClient asks the kernel to authorize disconnect only after worker drain, repository verification, zero pending CREATE/RENAME/TRUNCATE/DELETE transactions, no pending containment acknowledgement and a Completed rollback-session lifecycle record.
+- Unresolved/name-query scope remains fail-open, kernel-mode requestors remain excluded, and paging/mapped-write callbacks are still evidence-only. This closes the silent GateClient-death bypass for resolved synchronous in-root mutations but is not yet a production Enforce claim.
+
+## Previous 0.7.31 milestone
+
 
 - Added a dedicated manual sustained mixed-workload qualification without changing minifilter protocol v15.
 - The existing bounded-concurrency harness now supports an optional long-lived mixed phase while preserving its default 0.7.28 behavior when mixed rounds are disabled.

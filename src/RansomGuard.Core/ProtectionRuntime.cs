@@ -69,8 +69,8 @@ public sealed class ProtectionStateMachine
         var expectedKernel = phase is ProtectionPhase.Protected or ProtectionPhase.DegradedProtected;
         if (value.KernelEnforcementActive != expectedKernel)
             throw new InvalidOperationException("KernelEnforcementActive does not match the protection phase.");
-        if (value.AutomaticContainmentActive && phase != ProtectionPhase.Protected)
-            throw new InvalidOperationException("Automatic containment can be active only in Protected state.");
+        if (value.AutomaticContainmentActive)
+            throw new InvalidOperationException("Automatic containment cannot be published by the 0.8.0 foundation state contract.");
         if (requested == RequestedProtectionMode.Audit && phase != ProtectionPhase.AuditOnly && phase != ProtectionPhase.Failed && phase != ProtectionPhase.Stopped)
             throw new InvalidOperationException("Audit mode cannot publish an Enforce protection phase.");
         if (requested == RequestedProtectionMode.Enforce && phase == ProtectionPhase.AuditOnly)
@@ -126,7 +126,7 @@ public sealed class ProtectionStateMachine
         }
     }
 
-    public void MarkProtected(bool automaticContainmentActive)
+    public void MarkProtected()
     {
         lock (_gate)
         {
@@ -134,10 +134,8 @@ public sealed class ProtectionStateMachine
             if (!_rollbackReady || !_kernelConnected || _phase != ProtectionPhase.KernelConnected)
                 throw new InvalidOperationException("Protected requires rollback readiness and an activated kernel channel.");
             _phase = ProtectionPhase.Protected;
-            _automaticContainmentActive = automaticContainmentActive;
-            _reason = automaticContainmentActive
-                ? "Kernel enforcement and automatic containment policy are active."
-                : "Kernel enforcement is active; automatic containment is not enabled.";
+            _automaticContainmentActive = false;
+            _reason = "Kernel enforcement is active; automatic containment is not enabled.";
             _observedUtc = DateTime.UtcNow;
         }
     }

@@ -350,14 +350,23 @@ $disconnectStart=$src.IndexOf('static VOID RgDisconnect(PVOID ConnectionCookie)'
 $disconnectEnd=$src.IndexOf('NTSTATUS RgInstanceSetup',$disconnectStart)
 if($disconnectStart -lt 0 -or $disconnectEnd -lt 0){throw 'Kernel disconnect callback source boundary missing.'}
 $disconnectBlock=$src.Substring($disconnectStart,$disconnectEnd-$disconnectStart)
+if($disconnectBlock.IndexOf('authorized = InterlockedCompareExchange(&gDisconnectAuthorized, 0, 0)') -gt
+   $disconnectBlock.IndexOf('InterlockedExchange(&gClientConnected, 0)')){
+    throw 'Orderly-disconnect barrier must be observed before client teardown begins.'
+}
+if($disconnectBlock.IndexOf('InterlockedExchange(&gDisconnectAuthorized, 0)') -lt
+   $disconnectBlock.IndexOf('InterlockedExchange(&gClientConnected, 0)')){
+    throw 'Orderly-disconnect barrier must remain raised until gClientConnected is cleared.'
+}
 foreach($required in @(
-    'authorized = InterlockedExchange(&gDisconnectAuthorized, 0)',
+    'authorized = InterlockedCompareExchange(&gDisconnectAuthorized, 0, 0)',
     'preserveFailSafe',
     'InterlockedCompareExchange(&gProtectionArmed, 0, 0) != 0',
     'InterlockedExchange(&gGateActivated, 1)',
     'InterlockedExchange(&gFailSafeActive, 1)',
     'gGateRootLengthBytes = 0',
-    'RtlSecureZeroMemory(gGateRoot, sizeof(gGateRoot))'
+    'RtlSecureZeroMemory(gGateRoot, sizeof(gGateRoot))',
+    'InterlockedExchange(&gDisconnectAuthorized, 0)'
 )){
     if($disconnectBlock -notmatch [regex]::Escape($required)){throw "Disconnect fail-safe invariant missing: $required"}
 }

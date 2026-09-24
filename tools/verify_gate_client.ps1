@@ -495,7 +495,7 @@ if($preflightBlock -match 'Native\.Reply\('){throw 'Activation preflight events 
 $containOption=$text.IndexOf('case "--contain-pid"')
 $containRejectSystem=$text.IndexOf('parsedPid <= 4',$containOption)
 $containRejectSelf=$text.IndexOf('parsedPid == Environment.ProcessId',$containOption)
-$containPrepareReject=$text.IndexOf('Containment/fault/reconciliation options cannot be combined with --prepare-root')
+$containPrepareReject=$text.IndexOf('Containment/fault/reconciliation/shutdown options cannot be combined with --prepare-root')
 if($containOption -lt 0 -or $containRejectSystem -lt 0 -or $containRejectSelf -lt 0 -or $containPrepareReject -lt 0){
   throw 'LAB containment CLI must reject system/self PID and prepare-only combinations.'
 }

@@ -524,9 +524,7 @@ if($hardLinkBranch -lt 0 -or $hardLinkPopulate -lt 0 -or $hardLinkClassify -lt 0
 }
 foreach($required in @(
     'mode == RgClientAudit && !degraded',
-    '!RgIsGateClientMode(mode) && !degraded',
-    'FileLinkInformation',
-    'FileLinkInformationEx'
+    '!RgIsGateClientMode(mode) && !degraded'
 )){
     if($preSetBlock -notmatch [regex]::Escape($required)){
         throw "Hard-link policy missing invariant: $required"

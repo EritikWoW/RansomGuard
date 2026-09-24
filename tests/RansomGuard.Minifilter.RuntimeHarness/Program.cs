@@ -5,7 +5,7 @@ if (!OperatingSystem.IsWindows())
     throw new PlatformNotSupportedException("RansomGuard minifilter runtime harness is Windows-only.");
 
 if (args.Length == 0)
-    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-write-handle --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | hard-link --existing <path> --link <path> --result <marker> [--ready <marker> --go <marker>] | map-write --file <path> [--ready <marker> --go <marker>] | create-new --file <path> [--ready <marker> --go <marker>] | rename-file --source <path> --destination <path> [--ready <marker> --go <marker>] | truncate-eof --file <path> --length <bytes> --ready <marker> --go <marker> | delete-file --file <path> --ready <marker> --go <marker> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker> | containment-transition --file-a <path> --file-b <path> --ready <marker> --go <marker> --result <marker>");
+    throw new ArgumentException("Use: hold-map --file <path> --ready <marker> --release <marker> | hold-write-handle --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | hard-link --existing <path> --link <path> --result <marker> [--ready <marker> --go <marker>] | hard-link-ex --existing <path> --link <path> --result <marker> [--ready <marker> --go <marker>] | map-write --file <path> [--ready <marker> --go <marker>] | create-new --file <path> [--ready <marker> --go <marker>] | rename-file --source <path> --destination <path> [--ready <marker> --go <marker>] | truncate-eof --file <path> --length <bytes> --ready <marker> --go <marker> | delete-file --file <path> --ready <marker> --go <marker> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker> | containment-transition --file-a <path> --file-b <path> --ready <marker> --go <marker> --result <marker>");
 
 var command = args[0].ToLowerInvariant();
 var options = Parse(args.Skip(1).ToArray());
@@ -34,6 +34,14 @@ try
             break;
         case "hard-link":
             HardLinkProbe(
+                Require(options, "--existing"),
+                Require(options, "--link"),
+                Require(options, "--result"),
+                OptionalPath(options, "--ready"),
+                OptionalPath(options, "--go"));
+            break;
+        case "hard-link-ex":
+            HardLinkExProbe(
                 Require(options, "--existing"),
                 Require(options, "--link"),
                 Require(options, "--result"),
@@ -298,6 +306,111 @@ static void HardLinkProbe(
     File.WriteAllText(resultMarker, "win32-error:" + error.ToString(System.Globalization.CultureInfo.InvariantCulture));
     throw new System.ComponentModel.Win32Exception(
         error, $"CreateHardLinkW failed unexpectedly. existing='{existingPath}', link='{linkPath}'.");
+}
+
+static void HardLinkExProbe(
+    string existingPath,
+    string linkPath,
+    string resultMarker,
+    string? readyMarker,
+    string? goMarker)
+{
+    EnsureFile(existingPath);
+    var linkParent = Path.GetDirectoryName(linkPath);
+    if (string.IsNullOrWhiteSpace(linkParent))
+        throw new ArgumentException("Hard-link destination must have a parent directory.", nameof(linkPath));
+    Directory.CreateDirectory(linkParent);
+
+    var resultParent = Path.GetDirectoryName(resultMarker);
+    if (!string.IsNullOrWhiteSpace(resultParent)) Directory.CreateDirectory(resultParent);
+    if (File.Exists(linkPath)) File.Delete(linkPath);
+    if (File.Exists(resultMarker)) File.Delete(resultMarker);
+
+    WaitForOptionalBarrier(readyMarker, goMarker, "hard-link-ex");
+
+    const uint GenericRead = 0x80000000;
+    const uint ShareRead = 0x00000001;
+    const uint ShareWrite = 0x00000002;
+    const uint ShareDelete = 0x00000004;
+    const uint OpenExisting = 3;
+    const uint FileAttributeNormal = 0x00000080;
+    const uint FileFlagBackupSemantics = 0x02000000;
+    const int FileLinkInformationEx = 72;
+
+    using var source = Native.CreateFileW(
+        existingPath,
+        GenericRead,
+        ShareRead | ShareWrite | ShareDelete,
+        IntPtr.Zero,
+        OpenExisting,
+        FileAttributeNormal,
+        IntPtr.Zero);
+    if (source.IsInvalid)
+        throw new System.ComponentModel.Win32Exception(
+            Marshal.GetLastWin32Error(), $"CreateFileW source failed for FileLinkInformationEx '{existingPath}'.");
+
+    using var directory = Native.CreateFileW(
+        linkParent,
+        GenericRead,
+        ShareRead | ShareWrite | ShareDelete,
+        IntPtr.Zero,
+        OpenExisting,
+        FileFlagBackupSemantics,
+        IntPtr.Zero);
+    if (directory.IsInvalid)
+        throw new System.ComponentModel.Win32Exception(
+            Marshal.GetLastWin32Error(), $"CreateFileW destination directory failed for FileLinkInformationEx '{linkParent}'.");
+
+    var leaf = Path.GetFileName(linkPath);
+    var nameBytes = System.Text.Encoding.Unicode.GetBytes(leaf);
+    var rootDirectoryOffset = IntPtr.Size == 8 ? 8 : 4;
+    var fileNameLengthOffset = rootDirectoryOffset + IntPtr.Size;
+    var fileNameOffset = fileNameLengthOffset + sizeof(uint);
+    var bufferLength = checked(fileNameOffset + nameBytes.Length);
+    var buffer = Marshal.AllocHGlobal(bufferLength);
+    try
+    {
+        for (var offset = 0; offset < bufferLength; offset += sizeof(int))
+            Marshal.WriteInt32(buffer, offset, 0);
+
+        // FILE_LINK_INFORMATION on RS5+ starts with the ULONG Flags member when used
+        // with FileLinkInformationEx. RootDirectory then scopes the relative FileName.
+        Marshal.WriteInt32(buffer, 0, 0);
+        Marshal.WriteIntPtr(buffer, rootDirectoryOffset, directory.DangerousGetHandle());
+        Marshal.WriteInt32(buffer, fileNameLengthOffset, nameBytes.Length);
+        Marshal.Copy(nameBytes, 0, IntPtr.Add(buffer, fileNameOffset), nameBytes.Length);
+
+        var status = Native.NtSetInformationFile(
+            source,
+            out _,
+            buffer,
+            checked((uint)bufferLength),
+            FileLinkInformationEx);
+
+        if (status >= 0)
+        {
+            File.WriteAllText(resultMarker, "allowed-ex");
+            return;
+        }
+
+        var error = Native.RtlNtStatusToDosError(status);
+        if (error == 5)
+        {
+            File.WriteAllText(resultMarker, "denied-ex");
+            return;
+        }
+
+        File.WriteAllText(
+            resultMarker,
+            $"ntstatus:0x{unchecked((uint)status):X8};win32:{error}");
+        throw new System.ComponentModel.Win32Exception(
+            checked((int)error),
+            $"NtSetInformationFile(FileLinkInformationEx) failed unexpectedly. status=0x{unchecked((uint)status):X8}; existing='{existingPath}', link='{linkPath}'.");
+    }
+    finally
+    {
+        Marshal.FreeHGlobal(buffer);
+    }
 }
 
 static void ContainmentProbe(string filePath, string readyMarker, string goMarker, string resultMarker)
@@ -739,6 +852,24 @@ static class Native
         string lpFileName,
         string lpExistingFileName,
         IntPtr lpSecurityAttributes);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct IoStatusBlock
+    {
+        public IntPtr Status;
+        public UIntPtr Information;
+    }
+
+    [DllImport("ntdll.dll")]
+    public static extern int NtSetInformationFile(
+        SafeFileHandle fileHandle,
+        out IoStatusBlock ioStatusBlock,
+        IntPtr fileInformation,
+        uint length,
+        int fileInformationClass);
+
+    [DllImport("ntdll.dll")]
+    public static extern uint RtlNtStatusToDosError(int status);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

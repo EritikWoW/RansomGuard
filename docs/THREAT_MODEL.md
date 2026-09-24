@@ -1,8 +1,8 @@
 # RansomGuard threat model
 
-Status: engineering threat model for RansomGuard 0.8.2.x, covering the default Audit product, Production Enforce state/package admission contracts, protocol-v18 LAB/ProductionGate separation, and the Engineering minifilter.
+Status: engineering threat model for RansomGuard 0.8.3.x, covering the default Audit product, Production Enforce state/package admission contracts, protocol-v18 LAB/ProductionGate separation, hard-link alias policy, and the Engineering minifilter.
 
-This document describes what the current implementation protects, what it deliberately does not protect, and how ambiguous I/O is handled. It is not a claim of production readiness. The default normal package remains Audit. Version 0.8.2 can admit a cryptographically bound ProductionProtection package and defines a distinct protocol-v18 ProductionGate profile, but still reports `EnforceUnavailable` until a separately qualified production driver/GateClient lifecycle completes.
+This document describes what the current implementation protects, what it deliberately does not protect, and how ambiguous I/O is handled. It is not a claim of production readiness. The default normal package remains Audit. Version 0.8.3 retains the cryptographically bound ProductionProtection package and distinct protocol-v18 ProductionGate profile, adds fail-closed hard-link alias policy to the engineering gate, but still reports `EnforceUnavailable` until a separately qualified production driver/GateClient lifecycle completes.
 
 ## Security goals
 
@@ -32,7 +32,7 @@ Security-sensitive assets include:
 
 ### Ordinary product / Enforce foundation
 
-The normal service obtains filesystem telemetry through ETW and publishes bounded read-only status through the local named pipe. Audit is the default mode and remains non-blocking. Schema 4 may explicitly request Enforce. Version 0.8.2 first inspects a fixed ProductionProtection package: the actual running service image anchors the signer identity; GateClient and the driver catalog must use the same signer; SYS/INF must verify as catalog members; LAB provider/placeholder altitude are rejected. Package admission performs no lifecycle mutation, so the request is still published as `EnforceUnavailable`.
+The normal service obtains filesystem telemetry through ETW and publishes bounded read-only status through the local named pipe. Audit is the default mode and remains non-blocking. Schema 4 may explicitly request Enforce. Version 0.8.3 first inspects a fixed ProductionProtection package: the actual running service image anchors the signer identity; GateClient and the driver catalog must use the same signer; SYS/INF must verify as catalog members; LAB provider/placeholder altitude are rejected. Package admission performs no lifecycle mutation, so the request is still published as `EnforceUnavailable`.
 
 The protection state machine is the only source of a kernel-enforcement claim. SCM `Running`, driver installation, a live UI, or a connected-but-not-activated kernel channel cannot set `KernelEnforcementActive=true`. Rollback repository validation must complete before any future kernel-start transition.
 
@@ -83,6 +83,9 @@ The current driver does not mean "driver loaded = protected".
 | LAB/Production gate/degraded state, unresolved/unknown pathname on a different volume | Operation continues | The protected root does not impose a volume-wide/global denial policy elsewhere |
 | RENAME with either resolved source or destination inside the protected root | Gated; unsupported cross-boundary preservation is denied by user-mode policy | Destination cannot bypass root scope |
 | RENAME with one unresolved side on the bound protected volume and no proven in-root side | Denied in kernel | Ambiguous cross-boundary topology fails safe |
+| Protected regular file has `NumberOfLinks != 1` during activation | Activation refused before Protected | Existing outside alias cannot enter the protected session |
+| `FileLinkInformation` / `FileLinkInformationEx` touches protected source or destination | Denied in kernel | New hard-link aliases cannot cross the protection boundary |
+| Hard-link source/destination both proven outside root | Operation continues | Protected root does not impose volume-wide hard-link denial |
 | LAB/Production gate, external in-root mutation before activation completes | Denied | Prevents mutation racing activation preflight |
 | LAB gate active, resolved in-root mutation, containment latch matches requestor | Denied before userspace preservation | Containment enforcement |
 | ProductionGate receives LAB-only containment/query/fault control or containment reply flag | Rejected with `STATUS_NOT_SUPPORTED` / fail-closed gate decision | Production preservation profile cannot activate LAB test/containment control surface |
@@ -106,6 +109,8 @@ GateClient derives the NT device-volume prefix for the selected local LAB root a
 - **Ambiguous**: the destructive ordinary user-mode request cannot be classified by name and the callback belongs to the exact bound protected volume.
 
 Ambiguous mutation-capable CREATE, non-paging WRITE, RENAME, DELETE and TRUNCATE are denied in kernel. Read-only CREATE remains available because it cannot perform the destructive mutation being protected. RENAME evaluates both source and destination: either side inside makes the operation in-scope; both sides proven outside remain out-of-scope; an unresolved side on the protected volume fails safe.
+
+0.8.3 applies the same source+destination rule to hard-link creation without adding a new user-mode transaction type. Activation also checks `FileStandardInfo.NumberOfLinks` on the exact frozen handle after FILE_ID equality and requires exactly one link. This deliberately keeps protected regular files single-named for the current recovery model: pre-existing aliases refuse activation, new inside↔outside aliases are denied, and proven outside↔outside links remain allowed.
 
 GateClient's own process identity is excluded from ambiguous-volume denial because the rollback store and protocol activity must not become dependent on the synchronous gate they service. This is an explicit trusted-component exception, not a general process allow-list.
 

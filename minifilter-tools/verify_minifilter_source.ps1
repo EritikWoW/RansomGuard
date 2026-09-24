@@ -507,7 +507,7 @@ if($src -notmatch 'FltCreateCommunicationPort\([^;]*RgConnect,\s*RgDisconnect,\s
 }
 if($proto -notmatch '#define\s+RG_PROTOCOL_VERSION\s+17u'){throw 'Minifilter protocol must be v17 for protected-volume scope binding.'}
 if($proto -notmatch 'RG_GATE_ROOT_CHARS'){throw 'Protocol must carry an explicit bounded gate root.'}
-foreach($required in @('RgControlActivateAndContainProcess','RgControlQueryContainment','RgControlDeactivateGate','TargetProcessId','ContainmentActive','ProtectionState','ContainedProcessId','RG_GATE_REPLY_FLAG_CONTAIN_REQUESTOR','RgEventContainmentActivated','RgProtectionDegradedProtected','RgProtectionMaintenance')){
+foreach($required in @('RgControlActivateAndContainProcess','RgControlQueryContainment','RgControlDeactivateGate','RgControlArmScopeAmbiguity','TargetProcessId','ContainmentActive','ProtectionState','ContainedProcessId','RG_GATE_REPLY_FLAG_CONTAIN_REQUESTOR','RgEventContainmentActivated','RgProtectionDegradedProtected','RgProtectionMaintenance')){
     if($proto -notmatch [regex]::Escape($required)){throw "Protocol v17 protection/containment field missing: $required"}
 }
 if($proto -notmatch 'GateVolumeLengthBytes'){throw 'Protocol v17 must carry the protected NT volume length inside the fixed-size connect context.'}

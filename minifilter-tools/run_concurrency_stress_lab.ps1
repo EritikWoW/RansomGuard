@@ -510,6 +510,9 @@ $summary=[ordered]@{
     mixedRoundPauseMilliseconds=$MixedRoundPauseMilliseconds
     mixedRoundsCompleted=0
     mixedOperationsCompleted=0
+    mixedStartedUtc=$null
+    mixedFinishedUtc=$null
+    mixedElapsedSeconds=0.0
     mixedWorkloadPassed=($MixedRounds -eq 0)
     admissionOverflowPassed=$false
     overflowRounds=0
@@ -779,6 +782,8 @@ try{
     $summary.mappedWritePassed=$true
 
     if($MixedRounds -gt 0){
+        $mixedStopwatch=[Diagnostics.Stopwatch]::StartNew()
+        $summary.mixedStartedUtc=[DateTime]::UtcNow.ToString('o')
         for($i=0;$i -lt $MixedRounds;$i++){
             $round=$i+1
             $group=@()
@@ -853,6 +858,13 @@ try{
             if($MixedRoundPauseMilliseconds -gt 0 -and $round -lt $MixedRounds){
                 Start-Sleep -Milliseconds $MixedRoundPauseMilliseconds
             }
+        }
+        $mixedStopwatch.Stop()
+        $summary.mixedFinishedUtc=[DateTime]::UtcNow.ToString('o')
+        $summary.mixedElapsedSeconds=[Math]::Round($mixedStopwatch.Elapsed.TotalSeconds,3)
+        $minimumPauseSeconds=[Math]::Max(0,(($MixedRounds-1)*$MixedRoundPauseMilliseconds/1000.0)-2.0)
+        if($summary.mixedElapsedSeconds -lt $minimumPauseSeconds){
+            throw "Mixed workload elapsed time '$($summary.mixedElapsedSeconds)' seconds is shorter than configured inter-round pause budget '$minimumPauseSeconds' seconds."
         }
         $summary.mixedWorkloadPassed=$true
     }

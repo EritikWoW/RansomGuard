@@ -45,6 +45,10 @@ internal static class ProtectionPackageVerifier
             foreach (var path in new[] { servicePath, descriptorPath, gatePath, sysPath, infPath, catPath })
                 FileSafety.NoReparse(path);
 
+            var runningImage = Environment.ProcessPath;
+            if (string.IsNullOrWhiteSpace(runningImage) || !WinPaths.Equal(runningImage, servicePath))
+                return Rejected("ServiceIdentityMismatch", true,
+                    "The running process image is not the fixed RansomGuard.Service.exe beside the protection package.", observed);
             if (!File.Exists(servicePath))
                 return Rejected("ServiceIdentityMissing", true, "Running package does not contain the expected RansomGuard.Service.exe identity.", observed);
             if (!File.Exists(descriptorPath) || !File.Exists(gatePath) ||

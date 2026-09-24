@@ -2124,9 +2124,11 @@ sealed record Options(
             if (string.IsNullOrWhiteSpace(store))
                 throw new ArgumentException("ProductionGate requires explicit --store.");
             if (string.IsNullOrWhiteSpace(session) || session.Length > 128 ||
+                session is "." or ".." ||
                 session.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
+                !session.All(ch => char.IsAsciiLetterOrDigit(ch) || ch is '-' or '_' or '.') ||
                 !string.Equals(Path.GetFileName(session), session, StringComparison.Ordinal))
-                throw new ArgumentException("ProductionGate requires a bounded path-safe --session id.");
+                throw new ArgumentException("ProductionGate requires a bounded ASCII path-safe --session id.");
             if (string.IsNullOrWhiteSpace(readyFile))
                 throw new ArgumentException("ProductionGate requires explicit --ready-file.");
             if (string.IsNullOrWhiteSpace(shutdownFile))
@@ -2225,8 +2227,9 @@ static class ProductionRootPolicy
     {
         var full = Path.GetFullPath(root).TrimEnd('\\');
         var drive = Path.GetPathRoot(full)?.TrimEnd('\\');
-        if (string.IsNullOrWhiteSpace(drive) || full.Equals(drive, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("ProductionGate root cannot be an entire drive.");
+        if (string.IsNullOrWhiteSpace(drive) || drive.Length != 2 || drive[1] != ':' ||
+            full.Equals(drive, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("ProductionGate root must be a non-drive local DOS path.");
         if (!Directory.Exists(full))
             throw new DirectoryNotFoundException(full);
         PathPolicy.NoReparseComponents(full);

@@ -11,16 +11,18 @@ $settingsPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\Settings.cs'
 $runtimePath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\ProtectionRuntime.cs'
 $serviceRuntimePath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\RuntimeState.cs'
 $programPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\Program.cs'
+$lifecyclePath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\ProductionProtectionLifecycle.cs'
 $appSettingsPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\appsettings.json'
 $buildPath=Join-Path $RepositoryRoot 'build_windows.ps1'
-foreach($path in @($settingsPath,$runtimePath,$serviceRuntimePath,$programPath,$appSettingsPath,$buildPath)){
-    if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Enforce foundation file missing: $path"}
+foreach($path in @($settingsPath,$runtimePath,$serviceRuntimePath,$programPath,$lifecyclePath,$appSettingsPath,$buildPath)){
+    if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Production Enforce lifecycle file missing: $path"}
 }
 
 $settings=Get-Content -LiteralPath $settingsPath -Raw
 $runtime=Get-Content -LiteralPath $runtimePath -Raw
 $serviceRuntime=Get-Content -LiteralPath $serviceRuntimePath -Raw
 $program=Get-Content -LiteralPath $programPath -Raw
+$lifecycle=Get-Content -LiteralPath $lifecyclePath -Raw
 $appSettings=Get-Content -LiteralPath $appSettingsPath -Raw
 $build=Get-Content -LiteralPath $buildPath -Raw
 
@@ -29,6 +31,10 @@ foreach($required in @(
     'Mode must be exactly Audit or Enforce.',
     'RequireSignedDriver',
     'AutomaticContainment',
+    'GateWorkers',
+    'RollbackMaxStoreMiB',
+    'RollbackMinFreeMiB',
+    'ReconnectDelaySeconds',
     '0.8.0 Enforce foundation requires exactly one explicit ProtectedRoot',
     'Enforce ProtectedRoot cannot be an entire drive.'
 )){
@@ -43,15 +49,10 @@ foreach($required in @(
     'ProtectionPhase.DegradedProtected',
     'ProtectionPhase.Maintenance',
     'Kernel enforcement cannot start before rollback repository validation.',
-    '_phase != ProtectionPhase.Protected',
-    '_phase is not (ProtectionPhase.Protected or ProtectionPhase.DegradedProtected)',
-    'EnforceUnavailable is a startup/pre-activation state and cannot replace an active protection state.',
+    'MarkReconnectedProtected',
+    'A ProductionGate reconnect may return to Protected only from DegradedProtected after rollback readiness.',
     'KernelEnforcementActive does not match the protection phase.',
-    'Automatic containment cannot be published by the 0.8.0 foundation state contract.',
     'Enforce mode cannot silently downgrade to AuditOnly.',
-    'KernelConnected requires rollback readiness and a live kernel channel.',
-    'Pre-activation Enforce states cannot claim a connected kernel channel.',
-    'Protected state requires a connected kernel channel.',
     'DegradedProtected represents loss of the user-mode kernel channel.',
     'var kernelEnforcement = _phase is ProtectionPhase.Protected or ProtectionPhase.DegradedProtected'
 )){
@@ -59,11 +60,60 @@ foreach($required in @(
 }
 
 $rollbackReady=$program.IndexOf('protection.MarkRollbackReady()')
-$unavailable=$program.IndexOf('protection.MarkUnavailable(',$rollbackReady)
-$runtimeCreate=$program.IndexOf('new RuntimeState(protection.Snapshot())',$unavailable)
-if($rollbackReady -lt 0 -or $unavailable -lt 0 -or $runtimeCreate -lt 0 -or
-   $rollbackReady -gt $unavailable -or $unavailable -gt $runtimeCreate){
-    throw 'Service startup must validate rollback readiness, publish EnforceUnavailable for this foundation milestone, then construct RuntimeState from that explicit snapshot.'
+$inspect=$program.IndexOf('ProtectionPackageVerifier.Inspect(AppContext.BaseDirectory,ProductInfo.Version)',$rollbackReady)
+$admissionCheck=$program.IndexOf('!protectionPackage.ReadyForLifecycle',$inspect)
+$runtimeCreate=$program.IndexOf('new RuntimeState(protection.Snapshot())',$admissionCheck)
+$lifecycleRegistration=$program.IndexOf('new ProductionProtectionLifecycle(',$runtimeCreate)
+if($rollbackReady -lt 0 -or $inspect -lt 0 -or $admissionCheck -lt 0 -or $runtimeCreate -lt 0 -or $lifecycleRegistration -lt 0 -or
+   $rollbackReady -gt $inspect -or $inspect -gt $admissionCheck -or $admissionCheck -gt $runtimeCreate -or $runtimeCreate -gt $lifecycleRegistration){
+    throw 'Service startup must validate rollback readiness, inspect package admission, create explicit runtime state, then register the production lifecycle only for an admitted package.'
+}
+
+foreach($required in @(
+    'ProtectionPackageAdmission _admission',
+    '_admission.ReadyForLifecycle',
+    '_protection.BeginKernelStartup()',
+    'ProductionDriverLifecycle.EnsureReadyAsync',
+    '_protection.MarkKernelConnected()',
+    '_protection.MarkProtected()',
+    '_protection.MarkDegraded(',
+    '_protection.MarkReconnectedProtected(',
+    '--production',
+    '--service-control-stdin',
+    'RG-LIFECYCLE READY',
+    'RG-LIFECYCLE STOPPED',
+    'ProductionDriverLifecycle.StopAfterMaintenanceAsync',
+    '_protection.BeginMaintenance(',
+    'pnputil.exe',
+    'rundll32.exe',
+    'setupapi.dll,InstallHinfSection',
+    'fltmc.exe',
+    'new[] { "load", ServiceName }',
+    'new[] { "attach", ServiceName, volume }',
+    'new[] { "detach", ServiceName, volume }',
+    'new[] { "unload", ServiceName }',
+    'Registry.LocalMachine.OpenSubKey',
+    'FileSafety.NoReparse',
+    'DecisionPolicy.HashEqual(packageHash, installedHash)',
+    'Registered production minifilter altitude/attachment flags do not match the admitted package.'
+)){
+    if($lifecycle -notmatch [regex]::Escape($required)){throw "Production lifecycle invariant missing: $required"}
+}
+
+$begin=$lifecycle.IndexOf('_protection.BeginKernelStartup()')
+$driver=$lifecycle.IndexOf('ProductionDriverLifecycle.EnsureReadyAsync',$begin)
+$startClient=$lifecycle.IndexOf('StartGateClient(',$driver)
+$kernelConnected=$lifecycle.IndexOf('_protection.MarkKernelConnected()',$startClient)
+$protected=$lifecycle.IndexOf('_protection.MarkProtected()',$kernelConnected)
+if($begin -lt 0 -or $driver -lt 0 -or $startClient -lt 0 -or $kernelConnected -lt 0 -or $protected -lt 0 -or
+   $begin -gt $driver -or $driver -gt $startClient -or $startClient -gt $kernelConnected -or $kernelConnected -gt $protected){
+    throw 'Production activation ordering must be rollback/startup state -> exact driver lifecycle -> ProductionGate -> kernel-connected -> Protected.'
+}
+
+$degraded=$lifecycle.IndexOf('_protection.MarkDegraded(')
+$reconnected=$lifecycle.IndexOf('_protection.MarkReconnectedProtected(',$degraded)
+if($degraded -lt 0 -or $reconnected -lt 0 -or $degraded -gt $reconnected){
+    throw 'Unexpected ProductionGate loss must publish DegradedProtected before a successful reconnect can return to Protected.'
 }
 
 foreach($required in @(
@@ -77,30 +127,16 @@ foreach($required in @(
 )){
     if($serviceRuntime -notmatch [regex]::Escape($required)){throw "Runtime status invariant missing: $required"}
 }
-if($serviceRuntime -match '"0\.7\.1\.0"'){
-    throw 'RuntimeState still contains the stale 0.7.1.0 literal.'
-}
 
 $app=($appSettings | ConvertFrom-Json)
 if([int]$app.SchemaVersion -ne 4 -or [string]$app.Mode -ne 'Audit'){
-    throw 'Default appsettings must remain schema 4 / Audit until production lifecycle qualification is complete.'
+    throw 'Default appsettings must remain schema 4 / Audit.'
 }
 if($app.Enforce.RequireSignedDriver -ne $true -or $app.Enforce.AutomaticContainment -ne $false){
     throw 'Default Enforce policy must require signed driver and keep automatic containment disabled.'
 }
-
-# This milestone defines the production contract only. Do not silently add driver/service mutation
-# to the normal service before the dedicated lifecycle qualification exists.
-foreach($forbidden in @(
-    'fltmc.exe',
-    'FilterLoad(',
-    'StartServiceW(',
-    'CreateServiceW(',
-    'sc.exe start RansomGuardMinifilter'
-)){
-    if(($program+$serviceRuntime) -match [regex]::Escape($forbidden)){
-        throw "0.8.0 foundation must not mutate driver lifecycle yet: $forbidden"
-    }
+if([int]$app.Enforce.GateWorkers -lt 1 -or [int]$app.Enforce.GateWorkers -gt 8){
+    throw 'Default Enforce GateWorkers must stay within the qualified 1..8 bound.'
 }
 
 foreach($required in @(
@@ -110,8 +146,8 @@ foreach($required in @(
     'kernelWriteGateActive=$false'
 )){
     if($build -notmatch [regex]::Escape($required)){
-        throw "Normal bundle boundary missing: $required"
+        throw "Normal Audit bundle boundary missing: $required"
     }
 }
 
-Write-Host 'Production Enforce foundation gate PASSED: explicit schema/state contract, rollback-before-kernel ordering, no false Protected claim, and no normal-bundle driver lifecycle mutation.' -ForegroundColor Green
+Write-Host 'Production Enforce lifecycle gate PASSED: admitted package only, rollback-before-kernel ordering, deterministic driver registration/load/attach, explicit ProductionGate readiness, degraded reconnect, and clean maintenance deactivation.' -ForegroundColor Green

@@ -73,6 +73,11 @@ foreach($required in @(
     'RG_EVENT_FLAG_DELETE_CLEANUP',
     'FileDispositionInformation',
     'FileDispositionInformationEx',
+    'FileLinkInformation',
+    'FileLinkInformationEx',
+    'RgIsHardLinkSetInfo',
+    'RgPopulateLinkDestination',
+    'RgClassifyHardLinkScope',
     'IRP_MJ_CLEANUP',
     'RgPreCleanup',
     'RgPostCleanup',
@@ -504,6 +509,29 @@ if($preSetBlock -notmatch [regex]::Escape('if (RgIsContainedRequestor(Data))') -
    $preSetBlock.IndexOf('if (RgIsContainedRequestor(Data))') -gt $preSetBlock.IndexOf('RgGateEvent(Data, &event')){
     throw 'RENAME/DELETE/TRUNCATE must fail in kernel for the contained process before the user-mode gate.'
 }
+$hardLinkBranch=$preSetBlock.IndexOf('if (RgIsHardLinkSetInfo((FILE_INFORMATION_CLASS)infoClass))')
+$hardLinkPopulate=$preSetBlock.IndexOf('RgPopulateLinkDestination(&event, Data, FltObjects)',$hardLinkBranch)
+$hardLinkClassify=$preSetBlock.IndexOf('RgClassifyHardLinkScope(&event, FltObjects)',$hardLinkPopulate)
+$hardLinkOutside=$preSetBlock.IndexOf('scope == RgScopeOutside',$hardLinkClassify)
+$hardLinkDeny=$preSetBlock.IndexOf('return RgCompleteDenied(Data);',$hardLinkOutside)
+$normalSetInfo=$preSetBlock.IndexOf('if (!RgIsInterestingSetInfo((FILE_INFORMATION_CLASS)infoClass, &eventType))')
+if($hardLinkBranch -lt 0 -or $hardLinkPopulate -lt 0 -or $hardLinkClassify -lt 0 -or
+   $hardLinkOutside -lt 0 -or $hardLinkDeny -lt 0 -or $normalSetInfo -lt 0 -or
+   $hardLinkBranch -gt $hardLinkPopulate -or $hardLinkPopulate -gt $hardLinkClassify -or
+   $hardLinkClassify -gt $hardLinkOutside -or $hardLinkOutside -gt $hardLinkDeny -or
+   $hardLinkDeny -gt $normalSetInfo){
+    throw 'Hard-link topology changes must be classified source+destination and denied in/ambiguous protected scope before normal SET_INFORMATION dispatch.'
+}
+foreach($required in @(
+    'mode == RgClientAudit && !degraded',
+    '!RgIsGateClientMode(mode) && !degraded',
+    'FileLinkInformation',
+    'FileLinkInformationEx'
+)){
+    if($preSetBlock -notmatch [regex]::Escape($required)){
+        throw "Hard-link policy missing invariant: $required"
+    }
+}
 foreach($block in @($preCreateBlock,$preWriteBlock,$preSetBlock)){
     if($block -notmatch [regex]::Escape('RgClassifyMutationScope(&event, FltObjects)')){
         throw 'Mutation callback must classify source/destination scope through the protocol-v18 volume-aware classifier.'
@@ -528,6 +556,22 @@ foreach($block in @($preWriteBlock,$preSetBlock)){
     $classify=$block.IndexOf('RgClassifyMutationScope(&event, FltObjects)')
     if($inject -lt 0 -or $classify -lt 0 -or $inject -gt $classify){
         throw 'WRITE/SET_INFORMATION scope ambiguity probe must execute before scope classification.'
+    }
+}
+
+$hardScopeStart=$src.LastIndexOf('static RG_SCOPE_CLASSIFICATION RgClassifyHardLinkScope(')
+$hardScopeEnd=$src.IndexOf('static NTSTATUS RgCreateRenamePostContext',$hardScopeStart)
+if($hardScopeStart -lt 0 -or $hardScopeEnd -lt 0){throw 'Hard-link scope classifier source block missing.'}
+$hardScopeBlock=$src.Substring($hardScopeStart,$hardScopeEnd-$hardScopeStart)
+foreach($required in @(
+    'RgEventPathMatchesGateRoot(Event)',
+    'RgEventDestinationPathMatchesGateRoot(Event)',
+    'sourceScope == RgScopeInside || destinationScope == RgScopeInside',
+    'sourceScope == RgScopeOutside && destinationScope == RgScopeOutside',
+    'RgIsOnGateVolume(FltObjects) ? RgScopeAmbiguous : RgScopeOutside'
+)){
+    if($hardScopeBlock -notmatch [regex]::Escape($required)){
+        throw "Hard-link source/destination scope invariant missing: $required"
     }
 }
 

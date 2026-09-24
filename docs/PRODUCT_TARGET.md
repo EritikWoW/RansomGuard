@@ -14,11 +14,13 @@ pre-mutation preservation path.
 
 ## Current milestone
 
+0.8.2 separates the future production preservation client from Engineering LAB behavior at the wire/kernel boundary. Protocol v18 introduces `ProductionGate`; the kernel retains the original gate profile through DegradedProtected reconnect, rejects LAB-only containment reply flags and containment/fault controls in ProductionGate, and routes gate evidence by the retained profile. GateClient production profile uses the fixed service rollback repository and rejects all LAB prepare/fault/reconciliation/shutdown/containment options. The normal service still does not install/load/attach the driver or supervise GateClient, so this milestone does not yet create a production blocking claim.
+
 0.8.1 adds the production protection-package trust/admission boundary above the 0.8.0 Enforce state foundation. Before any future lifecycle action, the normal service can inspect only a fixed package beside its own running image and require exact version/protocol/hashes, production provider/altitude syntax, running-service signer binding, GateClient/catalog signer equality, and SYS/INF membership in the supplied signed catalog. Admission is inspection-only: no driver install/start/load/attach or GateClient supervision occurs, and Enforce still reports `EnforceUnavailable` after a successful admission.
 
 0.8.0 starts the production-enforcement integration layer above the already qualified protocol-v17 LAB core. The normal service now has an explicit schema/state contract for Audit versus Enforce, requires rollback-store readiness before any future kernel-start transition, and exposes protection truth separately from SCM driver status. This is intentionally a foundation milestone: the default package remains Audit, contains no production driver/GateClient lifecycle, and an Enforce request reports `EnforceUnavailable` until that lifecycle is separately implemented and qualified.
 
-The current engineering branch uses protocol v17 and combines range-aware write COW, durable CREATE/RENAME/TRUNCATE/DELETE lifecycle reconciliation, protected-volume scope classification, verified copy-out recovery, bounded retention, event-bound LAB containment and disposable-VM filesystem qualification:
+The current engineering branch uses protocol v18 and combines range-aware write COW, durable CREATE/RENAME/TRUNCATE/DELETE lifecycle reconciliation, protected-volume scope classification, verified copy-out recovery, bounded retention, event-bound LAB containment and disposable-VM filesystem qualification:
 
 `CREATE -> classify disposition -> durable existing-file pre-image OR originally-absent baseline -> allow`
 

@@ -1,8 +1,8 @@
 # RansomGuard threat model
 
-Status: engineering threat model for RansomGuard 0.8.1.x, covering the default Audit product, Production Enforce state/package admission contracts, and the Engineering LAB minifilter.
+Status: engineering threat model for RansomGuard 0.8.2.x, covering the default Audit product, Production Enforce state/package admission contracts, protocol-v18 LAB/ProductionGate separation, and the Engineering minifilter.
 
-This document describes what the current implementation protects, what it deliberately does not protect, and how ambiguous I/O is handled. It is not a claim of production readiness. The default normal package remains Audit. Version 0.8.1 can admit a cryptographically bound ProductionProtection package but still reports `EnforceUnavailable` until a separately qualified production driver/GateClient lifecycle completes; the blocking minifilter path remains Engineering LAB only.
+This document describes what the current implementation protects, what it deliberately does not protect, and how ambiguous I/O is handled. It is not a claim of production readiness. The default normal package remains Audit. Version 0.8.2 can admit a cryptographically bound ProductionProtection package and defines a distinct protocol-v18 ProductionGate profile, but still reports `EnforceUnavailable` until a separately qualified production driver/GateClient lifecycle completes.
 
 ## Security goals
 
@@ -32,7 +32,7 @@ Security-sensitive assets include:
 
 ### Ordinary product / Enforce foundation
 
-The normal service obtains filesystem telemetry through ETW and publishes bounded read-only status through the local named pipe. Audit is the default mode and remains non-blocking. Schema 4 may explicitly request Enforce. Version 0.8.1 first inspects a fixed ProductionProtection package: the actual running service image anchors the signer identity; GateClient and the driver catalog must use the same signer; SYS/INF must verify as catalog members; LAB provider/placeholder altitude are rejected. Package admission performs no lifecycle mutation, so the request is still published as `EnforceUnavailable`.
+The normal service obtains filesystem telemetry through ETW and publishes bounded read-only status through the local named pipe. Audit is the default mode and remains non-blocking. Schema 4 may explicitly request Enforce. Version 0.8.2 first inspects a fixed ProductionProtection package: the actual running service image anchors the signer identity; GateClient and the driver catalog must use the same signer; SYS/INF must verify as catalog members; LAB provider/placeholder altitude are rejected. Package admission performs no lifecycle mutation, so the request is still published as `EnforceUnavailable`.
 
 The protection state machine is the only source of a kernel-enforcement claim. SCM `Running`, driver installation, a live UI, or a connected-but-not-activated kernel channel cannot set `KernelEnforcementActive=true`. Rollback repository validation must complete before any future kernel-start transition.
 
@@ -44,7 +44,7 @@ The LAB path consists of:
 
 `user-mode requestor -> Filter Manager/minifilter -> synchronous GateClient decision -> durable rollback store -> allow/deny`
 
-The minifilter and GateClient trust each other only inside the explicitly negotiated LAB protocol/session. The current wire contract is protocol v17; protocol drift is a compatibility/security boundary, not a best-effort condition. The gate is scoped to one explicit protected root plus the exact local Filter Manager volume object that contains that root. The rollback store must be outside the protected root.
+The minifilter and GateClient trust each other only inside the explicitly negotiated protocol/session. The current wire contract is protocol v18; protocol drift is a compatibility/security boundary, not a best-effort condition. v18 retains the v17 exact protected-root/volume scope and adds distinct `LabGate` and `ProductionGate` profiles. ProductionGate cannot request LAB containment/scope-fault controls or set the containment reply flag, and a degraded session retains its original profile for reconnect. The gate is scoped to one explicit protected root plus the exact local Filter Manager volume object that contains that root. The rollback store must be outside the protected root; ProductionGate fixes it to the service-managed ProgramData rollback repository.
 
 The Filter Manager server port currently permits one client connection. GateClient uses one synchronous communication handle. Kernel admission may have multiple blocking requests waiting, but user-mode reply-required preservation is deliberately serialized: the worker handling a gate request must send its reply before the receive loop issues the next blocking `FilterGetMessage`. Configurable GateClient slots bound no-reply completion/evidence processing; they are not a claim of multiple simultaneous preservation replies. This distinction is part of the availability model and must not be blurred in performance or security claims.
 
@@ -75,19 +75,20 @@ The current driver does not mean "driver loaded = protected".
 
 | State/condition | Current behavior | Security interpretation |
 |---|---|---|
-| No GateClient has activated a LAB session, or driver is unloading | Observation path can return without enforcement | No preservation guarantee |
+| No gate-profile GateClient has activated a session, or driver is unloading | Observation path can return without enforcement | No preservation guarantee |
 | Client in Audit mode | Event may be queued; operation continues | Telemetry only |
-| Client mode unknown/not LAB gate without a retained protection latch | Operation continues | No blocking guarantee |
-| LAB gate, pathname proven outside root | Operation continues | Explicitly out of scope |
-| LAB gate/degraded state, destructive ordinary user-mode pathname is unresolved/unknown and callback volume equals the bound protected volume | Denied in kernel | Ambiguous protected-volume scope fails safe |
-| LAB gate/degraded state, unresolved/unknown pathname on a different volume | Operation continues | The protected root does not impose a volume-wide/global denial policy elsewhere |
+| Client mode unknown/not a LAB/Production gate without a retained protection latch | Operation continues | No blocking guarantee |
+| LAB/Production gate, pathname proven outside root | Operation continues | Explicitly out of scope |
+| LAB/Production gate/degraded state, destructive ordinary user-mode pathname is unresolved/unknown and callback volume equals the bound protected volume | Denied in kernel | Ambiguous protected-volume scope fails safe |
+| LAB/Production gate/degraded state, unresolved/unknown pathname on a different volume | Operation continues | The protected root does not impose a volume-wide/global denial policy elsewhere |
 | RENAME with either resolved source or destination inside the protected root | Gated; unsupported cross-boundary preservation is denied by user-mode policy | Destination cannot bypass root scope |
 | RENAME with one unresolved side on the bound protected volume and no proven in-root side | Denied in kernel | Ambiguous cross-boundary topology fails safe |
-| LAB gate, external in-root mutation before activation completes | Denied | Prevents mutation racing activation preflight |
+| LAB/Production gate, external in-root mutation before activation completes | Denied | Prevents mutation racing activation preflight |
 | LAB gate active, resolved in-root mutation, containment latch matches requestor | Denied before userspace preservation | Containment enforcement |
-| LAB gate active, resolved in-root mutation, preservation/gate decision fails | Denied | Fail-closed preservation path |
-| Activated LAB gate loses GateClient unexpectedly | Kernel publishes `DegradedProtected`, retains exact root and denies resolved ordinary user-mode mutation-capable CREATE/non-paging WRITE/RENAME/DELETE/TRUNCATE | Prevents silent active-session protection loss |
-| Protocol-v17 GateClient reconnects after degraded loss | Accepted only for the exact retained root on the same referenced protected volume; returns to Preflight before Protected | Re-establishes user-mode preservation only after activation preflight |
+| ProductionGate receives LAB-only containment/query/fault control or containment reply flag | Rejected with `STATUS_NOT_SUPPORTED` / fail-closed gate decision | Production preservation profile cannot activate LAB test/containment control surface |
+| LAB/Production gate active, resolved in-root mutation, preservation/gate decision fails | Denied | Fail-closed preservation path |
+| Activated LAB/Production gate loses GateClient unexpectedly | Kernel publishes `DegradedProtected`, retains exact root and denies resolved ordinary user-mode mutation-capable CREATE/non-paging WRITE/RENAME/DELETE/TRUNCATE | Prevents silent active-session protection loss |
+| Protocol-v18 GateClient reconnects after degraded loss | Accepted only for the exact retained LAB/Production profile, root and referenced protected volume; returns to Preflight before Protected | Prevents profile substitution and re-establishes user-mode preservation only after activation preflight |
 | Clean transaction-complete GateClient requests DeactivateGate | Kernel first enters Maintenance-requested admission closure; only after gate/pending work drains does it authorize release and allow the subsequent port close to clear the retained root | Explicit two-phase release rather than disconnect-as-disable |
 | LAB storage admission/quota/free-space check fails | Denied | Preservation integrity wins over availability |
 | Paging write on tracked stream | Non-blocking evidence only | Relies on pre-preserved CREATE baseline; paging path is not a synchronous policy gate |
@@ -96,7 +97,7 @@ The current driver does not mean "driver loaded = protected".
 
 ## Ambiguous-scope analysis
 
-Protocol v17 removes the previous ordinary user-mode destructive `name query failed -> allow` behavior on the negotiated protected volume without converting the entire machine into fail-closed I/O. Before classifying a normalized name as unresolved, the driver retries through Filter Manager with `QUERY_ALWAYS_ALLOW_CACHE_LOOKUP`; only residual uncertainty reaches the volume-aware Ambiguous state.
+Protocol v18 retains the protected-volume ambiguity policy introduced in v17: ordinary user-mode destructive `name query failed -> allow` is not permitted on the negotiated protected volume, without converting the entire machine into fail-closed I/O. Before classifying a normalized name as unresolved, the driver retries through Filter Manager with `QUERY_ALWAYS_ALLOW_CACHE_LOOKUP`; only residual uncertainty reaches the volume-aware Ambiguous state.
 
 GateClient derives the NT device-volume prefix for the selected local LAB root and sends its byte length in the fixed-size connect context. The kernel resolves that prefix with Filter Manager and retains the referenced `PFLT_VOLUME` for the protected session. Scope classification then uses three states:
 
@@ -108,13 +109,13 @@ Ambiguous mutation-capable CREATE, non-paging WRITE, RENAME, DELETE and TRUNCATE
 
 GateClient's own process identity is excluded from ambiguous-volume denial because the rollback store and protocol activity must not become dependent on the synchronous gate they service. This is an explicit trusted-component exception, not a general process allow-list.
 
-Protocol v17 also contains a LAB-only negative fault-injection control used for qualification. `ArmScopeAmbiguity` references one already-running non-system target process object and forces only that process's next destructive callback to `PathStatus=QueryFailed`. It cannot manufacture an allow decision or disable scope enforcement, is consumed one-shot, and the referenced process object is cleared on successful deactivation, disconnect and unload. It is test infrastructure, not a production policy command.
+Protocol v18 retains the LAB-only negative fault-injection control used for qualification, but ProductionGate rejects that control in kernel. `ArmScopeAmbiguity` references one already-running non-system target process object and forces only that process's next destructive callback to `PathStatus=QueryFailed`. It cannot manufacture an allow decision or disable scope enforcement, is consumed one-shot, and the referenced process object is cleared on successful deactivation, disconnect and unload. It is test infrastructure, not a production policy command.
 
 The production design rule remains:
 
 `failure condition -> attacker influence -> certainty request is in protected namespace -> permit/deny/degrade -> telemetry/operator action`
 
-Protocol v17 therefore no longer silently interprets "unable to prove in scope" as "proven out of scope" for ordinary destructive user-mode operations on the protected volume. It does not claim that all Windows namespace aliases, paging paths or malicious kernel requestors are now covered.
+Protocol v18 therefore retains the v17 rule that "unable to prove in scope" is not silently interpreted as "proven out of scope" for ordinary destructive user-mode operations on the protected volume. It does not claim that all Windows namespace aliases, paging paths or malicious kernel requestors are now covered.
 
 ### Kernel requestors
 
@@ -122,7 +123,7 @@ The ordinary observation predicate rejects `RequestorMode == KernelMode`. This i
 
 ### Gate disconnect/unavailable state
 
-Protocol v17 retains the v16 removal of the silent active-session `client died -> protection off` transition and extends the retained scope with the exact referenced protected volume. Once activation succeeds, the kernel sets a protection-required latch. If GateClient disappears without an authorized whole-gate deactivation, the driver publishes `DegradedProtected` before publishing client loss, retains the exact negotiated root and volume reference, denies resolved in-root destructive operations, and also denies ambiguous destructive ordinary user-mode operations on that protected volume. A replacement v17 GateClient may reconnect only to that same retained root on the same Filter Manager volume and begins again in Preflight.
+Protocol v18 retains the v16/v17 fail-safe disconnect behavior and additionally retains the exact LAB/Production gate profile with the protected root and referenced volume. Once activation succeeds, the kernel sets a protection-required latch. If GateClient disappears without an authorized whole-gate deactivation, the driver publishes `DegradedProtected` before publishing client loss, retains the exact negotiated root and volume reference, denies resolved in-root destructive operations, and also denies ambiguous destructive ordinary user-mode operations on that protected volume. A replacement v18 GateClient may reconnect only with the same retained gate profile, root and Filter Manager volume and begins again in Preflight.
 
 A clean shutdown is a distinct two-phase maintenance transition. GateClient first requires a clean durable transaction/lifecycle state and then sends `DeactivateGate`. The kernel immediately publishes a maintenance-requested latch that closes new synchronous gate admission, closes new queued evidence admission, and causes any already-replied request racing the transition to be denied. That latch is **not** release authorization: while blocking gate sends or queued evidence work remain, the command returns busy and the protection-required latch stays armed. If GateClient dies during this drain, disconnect still enters `DegradedProtected`. Only after gate/pending work reaches zero does the kernel clear the protection-required latch, authorize graceful disconnect and report Maintenance; the subsequent port close may then clear the root.
 
@@ -163,7 +164,7 @@ This model does not justify treating an arbitrary pre-existing mapping as safe. 
 
 ETW/RiskEngine is a trigger and evidence source, not the preservation guarantee.
 
-The current normal service does not authorize detector-driven blocking for ordinary applications, including suspicious/canary cases. Audit mode stays non-blocking; Enforce mode in 0.8.0 remains unavailable until production lifecycle activation exists. The existing containment primitive is LAB-only and can bind one explicitly authorized process to a referenced kernel process object. Production detector-to-containment orchestration remains unimplemented.
+The current normal service does not authorize detector-driven blocking for ordinary applications, including suspicious/canary cases. Audit mode stays non-blocking; Enforce mode in 0.8.2 remains unavailable until production lifecycle activation exists. The existing containment primitive is LAB-only and can bind one explicitly authorized process to a referenced kernel process object. Production detector-to-containment orchestration remains unimplemented.
 
 Before production containment is enabled, the authorization chain must prove at least:
 
@@ -211,7 +212,7 @@ These results are regression/qualification evidence for the tested build and env
 
 0.7.32 introduced the protocol-v16 disconnect fail-safe state and is now backed by exact-head disposable-VM evidence: PR #45 head `9efa20727408a1a09c730149649822bc642ab4d0`, runtime run #49 (`36019325665`). That run proved abrupt GateClient-loss denial with hash preservation, read-only access while degraded, out-of-root availability, wrong-root rejection, same-root preflight recovery, clean Maintenance release, containment regressions, NTFS filesystem-matrix coverage and bounded cleanup.
 
-0.7.33 introduces protocol v17 protected-volume scope classification. Source invariants and hosted compile/build are necessary but are not runtime evidence for the new ambiguity boundary. Before merge, an exact-head disposable-VM campaign must prove that an outside-to-inside RENAME cannot bypass the root and must use a deterministic LAB-only ambiguity probe to show destructive same-volume ambiguity fails closed without extending that denial to another volume.
+0.7.33 protocol-v17 protected-volume scope classification is backed by exact-head disposable-VM evidence: PR #46 head `58b870349d6a645c73f84f2d1add15b783eb0936`, runtime run #50 (`36030318084`). The run proved destructive same-volume ambiguity is denied with hash preservation, outside-to-inside RENAME is denied with source preserved/destination absent, and forced ambiguity on a separately attached NTFS volume remains outside/allowed. Existing disconnect/reconnect/containment/mapping scenarios and cleanup also passed; ReFS creation remained unsupported on that VM.
 
 ## Required production qualification
 
@@ -219,7 +220,7 @@ The project must remain non-production until, at minimum:
 
 - Microsoft assigns the production minifilter altitude and the release driver uses the production signing path;
 - target Windows/Server and security-feature compatibility is qualified; NTFS has disposable-VM runtime evidence, while the current runner reported ReFS creation unsupported, so ReFS remains unqualified rather than implicitly passed;
-- protocol-v17 ambiguous-scope policy is adversarially tested across source/destination rename boundaries, namespace aliases and supported local filesystem behavior;
+- protocol-v18 retained ambiguous-scope policy is adversarially tested across source/destination rename boundaries, namespace aliases and supported local filesystem behavior;
 - the existing completion-loss, low-disk and reboot campaigns are extended into a broader fault matrix that includes GateClient/service death, timeout, torn-journal/power-loss conditions and repeated campaign recovery;
 - sustained pressure/queueing, rename/mapped-write storms and large/sparse/compressed/encrypted file cases pass; any concurrency claim distinguishes kernel admission from the serialized single-handle reply-required path;
 - the existing exact-head Driver Verifier qualification is repeated across the supported Windows/Server/filesystem matrix, and native static-analysis/SDV-style findings are reviewed to an explicit release threshold;

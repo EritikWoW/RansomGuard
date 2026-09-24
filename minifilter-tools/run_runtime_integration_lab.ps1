@@ -595,7 +595,7 @@ try{
     }
     $summary.gracefulReleaseSucceeded=$true
 
-    # Scenario 4: protocol-v17 scope ambiguity must fail closed on the protected volume,
+    # Scenario 4: protocol-v18 retained scope ambiguity must fail closed on the protected volume,
     # and a rename entering the root from a proven outside source must not bypass destination scope.
     Prepare-GateRoot $gateExe $scopeRoot
     $scopeTarget=Join-Path $scopeRoot 'ambiguity-target.bin'
@@ -678,7 +678,7 @@ try{
     }
     $summary.crossBoundaryRenameDestinationAbsent=$true
 
-    Stop-GateGracefully $gateScope $scopeShutdown $scopeOut $scopeErr 'protocol-v17 scope gate'
+    Stop-GateGracefully $gateScope $scopeShutdown $scopeOut $scopeErr 'protocol-v18 scope gate'
     $gateScope=$null
 
     # Scenario 5: activation-bound containment is scoped to one kernel process identity.

@@ -255,7 +255,7 @@ These source checks are not sufficient runtime evidence. Before 0.7.32 is merged
 
 ## 0.7.33 protected-volume scope qualification
 
-Protocol v17 keeps the fixed connect-context size but binds the negotiated LAB root to the exact local Filter Manager volume object. Source gates require the connection to resolve that volume through `FltGetVolumeFromName`, retain the rundown reference through Protected/DegradedProtected, and release it on authorized disconnect or unload.
+Protocol v18 keeps the fixed connect-context size, retains the exact protected-volume binding from v17, and adds distinct LAB/ProductionGate profiles with retained-profile degraded reconnect. Source gates require the connection to resolve that volume through `FltGetVolumeFromName`, retain the rundown reference through Protected/DegradedProtected, and release it on authorized disconnect or unload.
 
 Runtime qualification for this milestone must add two security-focused cases before merge:
 

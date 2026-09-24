@@ -3,6 +3,7 @@ $root=Split-Path -Parent $PSScriptRoot
 
 $workflowPath=Join-Path $root '.github\workflows\minifilter-runtime-vm.yml'
 $runtimeScript=Join-Path $root 'minifilter-tools\run_runtime_integration_lab.ps1'
+$productionGateScript=Join-Path $root 'minifilter-tools\run_production_gate_profile_lab.ps1'
 $packageScript=Join-Path $root 'minifilter-tools\prepare_runtime_driver_package.ps1'
 $readinessScript=Join-Path $root 'minifilter-tools\verify_runtime_runner_readiness.ps1'
 $installScript=Join-Path $root 'minifilter-tools\install_minifilter_lab.ps1'
@@ -13,13 +14,13 @@ $build=Join-Path $root 'build_windows.ps1'
 $buildWrapper=Join-Path $root 'build_windows.cmd'
 $automationAudit=Join-Path $root 'tools\verify_powershell_automation.ps1'
 
-foreach($path in @($workflowPath,$runtimeScript,$packageScript,$readinessScript,$installScript,$unloadScript,$helperSource,$helperProject,$build,$buildWrapper,$automationAudit)){
+foreach($path in @($workflowPath,$runtimeScript,$productionGateScript,$packageScript,$readinessScript,$installScript,$unloadScript,$helperSource,$helperProject,$build,$buildWrapper,$automationAudit)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Runtime VM harness required file missing: $path"}
 }
 
 & $automationAudit -RepositoryRoot $root
 
-foreach($scriptPath in @($runtimeScript,$packageScript,$readinessScript,$installScript,$unloadScript)){
+foreach($scriptPath in @($runtimeScript,$productionGateScript,$packageScript,$readinessScript,$installScript,$unloadScript)){
     $tokens=$null
     $parseErrors=$null
     [void][System.Management.Automation.Language.Parser]::ParseFile($scriptPath,[ref]$tokens,[ref]$parseErrors)
@@ -40,6 +41,9 @@ foreach($required in @(
     'prepare_runtime_driver_package.ps1',
     'verify_runtime_runner_readiness.ps1',
     'run_runtime_integration_lab.ps1',
+    'run_production_gate_profile_lab.ps1',
+    'production-gate-result.json',
+    'ransomguard-production-gate-evidence',
     'unload_minifilter_lab.ps1',
     'Clear stale LAB minifilter from prior failed run',
     'runtime-package.json',
@@ -89,6 +93,46 @@ foreach($forbiddenForcedGate in @('$gatePost','$gateContain','$gateTransition'))
     if($runtime.Contains("Stop-LabProcess $forbiddenForcedGate")){
         throw "Successful active GateClient session must not be force-stopped: $forbiddenForcedGate"
     }
+}
+
+$productionGate=Get-Content -LiteralPath $productionGateScript -Raw
+foreach($required in @(
+    '--production',
+    'RansomGuard PRODUCTION pre-write gate',
+    'Production containment: disabled by profile',
+    'productionCliRejectedLabOption',
+    'productionActivated',
+    'productionMutationAllowed',
+    'degradedReadAllowed',
+    'degradedDeniedMutation',
+    'degradedPreservedHash',
+    'labProfileReconnectRejected',
+    'productionReconnectActivated',
+    'productionReconnectMutationAllowed',
+    'ProductionGate forbids LAB prepare/fault/reconciliation/shutdown/containment options',
+    '.ransomguard-gate-lab-root',
+    'RANSOMGUARD-LAB-GATE-V1',
+    'Stop-ProcessHard $gate',
+    'LabGate unexpectedly replaced retained ProductionGate state.',
+    'FilterConnectCommunicationPort failed',
+    'profile-mismatch probe failed before proving the kernel rejected the connection.',
+    'production-gate-result.json',
+    'cleanupPassed=$false',
+    '$installed=$true',
+    '& $installScript',
+    '& $unloadScript'
+)){
+    if($productionGate -notmatch [regex]::Escape($required)){
+        throw "ProductionGate VM qualification script missing invariant: $required"
+    }
+}
+$prodCleanupArm=$productionGate.IndexOf('$installed=$true')
+$prodInstall=$productionGate.IndexOf('& $installScript')
+if($prodCleanupArm -lt 0 -or $prodInstall -lt 0 -or $prodCleanupArm -gt $prodInstall){
+    throw 'ProductionGate qualification must arm cleanup before invoking the LAB VM installer.'
+}
+if($productionGate -match '(?i)Set-MpPreference|Add-MpPreference|Remove-MpPreference|bcdedit(?:\.exe)?\s+/(?:set|deletevalue|create|copy|delete|import)'){
+    throw 'ProductionGate qualification must not modify Defender or boot policy.'
 }
 
 foreach($required in @(
@@ -224,7 +268,7 @@ $forbidden=@(
     'Set-SecureBootUEFI',
     'Disable-WindowsOptionalFeature'
 )
-foreach($path in @($runtimeScript,$packageScript,$readinessScript,$workflowPath)){
+foreach($path in @($runtimeScript,$productionGateScript,$packageScript,$readinessScript,$workflowPath)){
     $text=Get-Content -LiteralPath $path -Raw
     foreach($token in $forbidden){
         if($text -match [regex]::Escape($token)){throw "Runtime VM harness must not modify boot/security/trust policy: $token in $path"}
@@ -388,4 +432,4 @@ foreach($required in @('where.exe pwsh.exe','set "PS_EXE=pwsh.exe"','powershell.
     if($buildWrapperText -notmatch [regex]::Escape($required)){throw "Windows build wrapper missing PowerShell host invariant: $required"}
 }
 
-Write-Host 'Runtime VM harness source gate PASSED: manual self-hosted VM only, exact-commit signed driver provenance, protocol-v17 protected-volume scope plus GateClient-loss fail-safe/reconnect/release coverage, mapping and containment coverage, no boot/trust/Defender mutation.' -ForegroundColor Green
+Write-Host 'Runtime VM harness source gate PASSED: manual self-hosted VM only, exact-commit signed driver provenance, protocol-v18 LAB regression plus dedicated ProductionGate activation/degraded/profile-mismatch/reconnect evidence, no boot/trust/Defender mutation.' -ForegroundColor Green

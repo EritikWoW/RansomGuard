@@ -38,6 +38,7 @@ foreach($required in @(
     'LAB/unassigned placeholder altitude is forbidden for production admission.',
     'Protection package version does not match the service.',
     'Protection package protocol does not match the service.',
+    'public const int ProtocolVersion = 18;',
     'Protection package contains an invalid SHA-256 digest.'
 )){
     if($core -notmatch [regex]::Escape($required)){throw "Protection package policy invariant missing: $required"}

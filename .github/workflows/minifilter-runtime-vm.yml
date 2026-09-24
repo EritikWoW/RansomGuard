@@ -180,6 +180,42 @@ jobs:
           }
           "RG_FS_MATRIX_RESULTS=$matrixResults" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Run ProductionGate profile qualification
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $productionResults=Join-Path $env:RUNNER_TEMP 'ransomguard-production-gate-results'
+          if(Test-Path -LiteralPath $productionResults){
+            Remove-Item -LiteralPath $productionResults -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $productionResults -Force | Out-Null
+          $productionRoot=$env:RG_RUNTIME_ROOT_BASE + '-ProductionGate'
+          .\minifilter-tools\run_production_gate_profile_lab.ps1 -LabReleaseDirectory $env:RG_LAB_RELEASE -DriverPackageDirectory $env:RG_DRIVER_PACKAGE -RootBase $productionRoot -ResultsDirectory $productionResults
+          $summary=Get-Content -LiteralPath (Join-Path $productionResults 'production-gate-result.json') -Raw | ConvertFrom-Json
+          if([int]$summary.schema -ne 1){throw "ProductionGate result schema must be 1. Found '$($summary.schema)'."}
+          foreach($name in @(
+            'productionCliRejectedLabOption',
+            'productionActivated',
+            'productionMutationAllowed',
+            'degradedReadAllowed',
+            'degradedDeniedMutation',
+            'degradedPreservedHash',
+            'labProfileReconnectRejected',
+            'productionReconnectActivated',
+            'productionReconnectMutationAllowed',
+            'cleanupPassed',
+            'passed'
+          )){
+            if($summary.$name -ne $true){throw "ProductionGate result invariant '$name' was not true."}
+          }
+          if([string]$summary.driverCommit -ne $env:RG_WORKFLOW_SHA){
+            throw "ProductionGate evidence commit '$($summary.driverCommit)' does not match workflow commit '$env:RG_WORKFLOW_SHA'."
+          }
+          if(-not [string]::IsNullOrWhiteSpace([string]$summary.cleanupError)){
+            throw "ProductionGate cleanup reported an error: $($summary.cleanupError)"
+          }
+          "RG_PRODUCTION_GATE_RESULTS=$productionResults" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Ensure LAB minifilter is unloaded after run
         if: always()
         shell: pwsh
@@ -195,6 +231,14 @@ jobs:
             $matrix=Get-Content -LiteralPath $matrixSummary -Raw | ConvertFrom-Json
             if($matrix.cleanupPassed -ne $true){
               throw 'STALE MATRIX KERNEL STATE: the filesystem matrix already failed its bounded cleanup and RansomGuardMinifilter is still loaded. Do not retry unload; revert the disposable VM checkpoint.'
+            }
+          }
+          $productionSummary=Join-Path $env:RUNNER_TEMP 'ransomguard-production-gate-results\production-gate-result.json'
+          if((Test-Path -LiteralPath $productionSummary) -and
+             $filters -match '(?m)^\s*RansomGuardMinifilter\b'){
+            $production=Get-Content -LiteralPath $productionSummary -Raw | ConvertFrom-Json
+            if($production.cleanupPassed -ne $true){
+              throw 'STALE PRODUCTIONGATE KERNEL STATE: ProductionGate qualification failed cleanup and the filter is still loaded. Revert the disposable VM checkpoint.'
             }
           }
           if($filters -match '(?m)^\s*RansomGuardMinifilter\b'){
@@ -216,6 +260,15 @@ jobs:
         with:
           name: ransomguard-filesystem-matrix-evidence
           path: ${{ runner.temp }}/ransomguard-filesystem-matrix-results/**
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload ProductionGate evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 node24 pinned # v4 pinned
+        with:
+          name: ransomguard-production-gate-evidence
+          path: ${{ runner.temp }}/ransomguard-production-gate-results/**
           if-no-files-found: warn
           retention-days: 14
 

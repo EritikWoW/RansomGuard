@@ -263,6 +263,8 @@ $transitionRoot=Join-Path $RootBase "containment-transition-$stamp"
 $disconnectRoot=Join-Path $RootBase "disconnect-$stamp"
 $disconnectWrongRoot=Join-Path $RootBase "disconnect-wrong-$stamp"
 $disconnectOutside=Join-Path $RootBase "disconnect-outside-$stamp.bin"
+$scopeRoot=Join-Path $RootBase "scope-$stamp"
+$scopeOutsideSource=Join-Path $RootBase "scope-outside-$stamp.bin"
 $dirStore=Join-Path $ResultsDirectory 'predirectory-store'
 $preStore=Join-Path $ResultsDirectory 'preexisting-store'
 $postStore=Join-Path $ResultsDirectory 'postactivation-store'
@@ -270,6 +272,7 @@ $containStore=Join-Path $ResultsDirectory 'containment-store'
 $transitionStore=Join-Path $ResultsDirectory 'containment-transition-store'
 $disconnectStore=Join-Path $ResultsDirectory 'disconnect-store'
 $disconnectWrongStore=Join-Path $ResultsDirectory 'disconnect-wrong-store'
+$scopeStore=Join-Path $ResultsDirectory 'scope-store'
 $volume=[IO.Path]::GetPathRoot($RootBase).TrimEnd('\')
 $installScript=Join-Path $PSScriptRoot 'install_minifilter_lab.ps1'
 $unloadScript=Join-Path $PSScriptRoot 'unload_minifilter_lab.ps1'
@@ -304,6 +307,11 @@ $summary=[ordered]@{
     sameRootReconnectActivated=$false
     sameRootMutationAllowed=$false
     gracefulReleaseSucceeded=$false
+    scopeAmbiguityDeniedMutation=$false
+    scopeAmbiguityPreservedTargetHash=$false
+    crossBoundaryRenameDenied=$false
+    crossBoundaryRenameSourcePreserved=$false
+    crossBoundaryRenameDestinationAbsent=$false
     cleanupPassed=$false
     cleanupError=$null
     passed=$false
@@ -320,12 +328,15 @@ $gateTransition=$null
 $gateDisconnect=$null
 $gateWrong=$null
 $gateReconnect=$null
+$gateScope=$null
 $containProbe=$null
 $transitionProbe=$null
+$scopeProbe=$null
 $dirRelease=$null
 $release=$null
 $containGo=$null
 $transitionGo=$null
+$scopeGo=$null
 $postShutdown=$null
 $containShutdown=$null
 $transitionShutdown=$null
@@ -584,7 +595,93 @@ try{
     }
     $summary.gracefulReleaseSucceeded=$true
 
-    # Scenario 4: activation-bound containment is scoped to one kernel process identity.
+    # Scenario 4: protocol-v17 scope ambiguity must fail closed on the protected volume,
+    # and a rename entering the root from a proven outside source must not bypass destination scope.
+    Prepare-GateRoot $gateExe $scopeRoot
+    $scopeTarget=Join-Path $scopeRoot 'ambiguity-target.bin'
+    New-TestFile $scopeTarget
+    $scopeOriginalHash=(Get-FileHash -LiteralPath $scopeTarget -Algorithm SHA256).Hash
+
+    $scopeReady=Join-Path $ResultsDirectory 'scope-ambiguity.ready'
+    $scopeGo=Join-Path $ResultsDirectory 'scope-ambiguity.go'
+    $scopeResult=Join-Path $ResultsDirectory 'scope-ambiguity.result'
+    $scopeProbeOut=Join-Path $ResultsDirectory 'scope-ambiguity-probe.out.log'
+    $scopeProbeErr=Join-Path $ResultsDirectory 'scope-ambiguity-probe.err.log'
+    $scopeProbe=Start-LoggedProcess $helperExe @(
+        'containment-probe',
+        '--file',(Quote-Arg $scopeTarget),
+        '--ready',(Quote-Arg $scopeReady),
+        '--go',(Quote-Arg $scopeGo),
+        '--result',(Quote-Arg $scopeResult)
+    ) $scopeProbeOut $scopeProbeErr
+    Wait-Path $scopeReady 15 'scope ambiguity probe readiness'
+
+    $scopeOut=Join-Path $ResultsDirectory 'scope-gate.out.log'
+    $scopeErr=$scopeOut + '.err'
+    $scopeShutdown=Join-Path $ResultsDirectory 'scope.shutdown'
+    $gateScope=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $scopeRoot),
+        '--store',(Quote-Arg $scopeStore),
+        '--session','scope-v17',
+        '--scope-ambiguity-pid',([string]$scopeProbe.Id),
+        '--shutdown-file',(Quote-Arg $scopeShutdown)
+    ) $scopeOut $scopeErr
+    Wait-LogPattern $scopeOut 'LAB scope ambiguity\s+: ARMED' $gateScope 45
+    Wait-LogPattern $scopeOut 'kernel gate ACTIVE' $gateScope 45
+
+    New-Item -ItemType File -Path $scopeGo -Force | Out-Null
+    Wait-Path $scopeResult 15 'scope ambiguity probe result'
+    if(-not $scopeProbe.WaitForExit(15000)){
+        Stop-Process -Id $scopeProbe.Id -Force -ErrorAction SilentlyContinue
+        throw 'Scope ambiguity runtime probe did not exit.'
+    }
+    $scopeOutcome=(Get-Content -LiteralPath $scopeResult -Raw).Trim()
+    if($scopeOutcome -ne 'denied'){
+        throw "Protected-volume ambiguity probe was not denied. outcome=$scopeOutcome exit=$($scopeProbe.ExitCode)"
+    }
+    if($scopeProbe.ExitCode -ne 0){
+        throw "Scope ambiguity runtime probe returned unexpected exit=$($scopeProbe.ExitCode), outcome=$scopeOutcome"
+    }
+    $summary.scopeAmbiguityDeniedMutation=$true
+    $scopeAfterHash=(Get-FileHash -LiteralPath $scopeTarget -Algorithm SHA256).Hash
+    if(-not [string]::Equals($scopeAfterHash,$scopeOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'Scope ambiguity probe changed the protected target despite fail-safe denial.'
+    }
+    $summary.scopeAmbiguityPreservedTargetHash=$true
+    $scopeProbe=$null
+
+    New-TestFile $scopeOutsideSource
+    $scopeOutsideHash=(Get-FileHash -LiteralPath $scopeOutsideSource -Algorithm SHA256).Hash
+    $scopeInsideDestination=Join-Path $scopeRoot 'outside-to-inside.bin'
+    $renameDenied=$false
+    try{
+        [IO.File]::Move($scopeOutsideSource,$scopeInsideDestination)
+    }
+    catch{
+        if(Test-AccessDeniedException $_.Exception){$renameDenied=$true}
+        else{throw}
+    }
+    if(-not $renameDenied){
+        throw 'Outside-to-inside RENAME unexpectedly bypassed protected destination scope.'
+    }
+    $summary.crossBoundaryRenameDenied=$true
+    if(-not (Test-Path -LiteralPath $scopeOutsideSource -PathType Leaf)){
+        throw 'Denied outside-to-inside RENAME did not preserve the source pathname.'
+    }
+    $scopeOutsideAfterHash=(Get-FileHash -LiteralPath $scopeOutsideSource -Algorithm SHA256).Hash
+    if(-not [string]::Equals($scopeOutsideAfterHash,$scopeOutsideHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'Denied outside-to-inside RENAME changed the source file.'
+    }
+    $summary.crossBoundaryRenameSourcePreserved=$true
+    if(Test-Path -LiteralPath $scopeInsideDestination){
+        throw 'Denied outside-to-inside RENAME created the protected destination pathname.'
+    }
+    $summary.crossBoundaryRenameDestinationAbsent=$true
+
+    Stop-GateGracefully $gateScope $scopeShutdown $scopeOut $scopeErr 'protocol-v17 scope gate'
+    $gateScope=$null
+
+    # Scenario 5: activation-bound containment is scoped to one kernel process identity.
     Prepare-GateRoot $gateExe $containRoot
     $containedFile=Join-Path $containRoot 'contained-target.bin'
     $peerFile=Join-Path $containRoot 'ordinary-peer.bin'
@@ -650,7 +747,7 @@ try{
     Stop-GateGracefully $gateContain $containShutdown $containOut $containErr 'pre-armed containment gate'
     $gateContain=$null
 
-    # Scenario 5: a preserved gate reply can atomically transition the exact requestor into containment.
+    # Scenario 6: a preserved gate reply can atomically transition the exact requestor into containment.
     Prepare-GateRoot $gateExe $transitionRoot
     $transitionFileA=Join-Path $transitionRoot 'transition-a.bin'
     $transitionFileB=Join-Path $transitionRoot 'transition-b.bin'
@@ -750,7 +847,11 @@ finally{
         if($transitionGo){New-Item -ItemType File -Path $transitionGo -Force -ErrorAction SilentlyContinue | Out-Null}
         Stop-Process -Id $transitionProbe.Id -Force -ErrorAction SilentlyContinue
     }
-    foreach($p in @($gateDir,$gatePre,$gatePost,$gateContain,$gateTransition,$gateDisconnect,$gateWrong,$gateReconnect)){
+    if($scopeProbe -and -not $scopeProbe.HasExited){
+        if($scopeGo){New-Item -ItemType File -Path $scopeGo -Force -ErrorAction SilentlyContinue | Out-Null}
+        Stop-Process -Id $scopeProbe.Id -Force -ErrorAction SilentlyContinue
+    }
+    foreach($p in @($gateDir,$gatePre,$gatePost,$gateScope,$gateContain,$gateTransition,$gateDisconnect,$gateWrong,$gateReconnect)){
         if($p -and -not $p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}
     }
 

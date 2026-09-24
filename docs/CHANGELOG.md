@@ -8,6 +8,7 @@
 - A successful runtime phase executes `verifier /reset`, verifies persistent settings are cleared for the next boot, and persists a reset-bound campaign state.
 - CLEAR requires a second real reboot, proves both scheduled and current verifier activity no longer names the RansomGuard driver, proves the minifilter is unloaded, and archives the completed campaign.
 - A later ARM may archive a prior `runtime-failed-reset` campaign only after validating its SHA-256-bound state, proving `verifier /reset` had been scheduled, observing a newer boot, and confirming verifier persistent/querysettings state is clear; every other pre-existing `Active` state remains fail-closed.
+- Driver Verifier handoff timestamps are now read from the SHA-bound raw JSON with `System.Text.Json` and parsed as offset-bearing `DateTimeOffset` values. This prevents `ConvertFrom-Json` date coercion from stripping the original `Z`/offset and weakening real-reboot proofs on non-UTC runners.
 - Added a dedicated source gate that forbids `/all`, wildcard driver selection, volatile/persistent verifier modes, direct VerifyDrivers/VerifyDriverLevel registry mutation, automatic reboot/shutdown and BCD mutation.
 - Added `.github/workflows/minifilter-verifier-vm.yml` with explicit `arm`, `runtime` and `clear` phases. The workflow never reboots the VM itself.
 - Bumped userspace/LAB and driver package version to 0.7.30.0.

@@ -47,6 +47,7 @@ foreach($required in @(
     '_phase is not (ProtectionPhase.Protected or ProtectionPhase.DegradedProtected)',
     'EnforceUnavailable is a startup/pre-activation state and cannot replace an active protection state.',
     'KernelEnforcementActive does not match the protection phase.',
+    'Automatic containment cannot be published by the 0.8.0 foundation state contract.',
     'Enforce mode cannot silently downgrade to AuditOnly.',
     'KernelConnected requires rollback readiness and a live kernel channel.',
     'Pre-activation Enforce states cannot claim a connected kernel channel.',

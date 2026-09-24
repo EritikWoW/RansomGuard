@@ -51,9 +51,8 @@ try
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),"Downloads")}
                 .Where(Directory.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         }
-        // Initialize and verify the durable rollback store before monitoring starts.
-        // No pre-image is captured yet in the normal 0.7.1.0 bundle because the production minifilter
-        // write gate is intentionally not enabled until Windows VM validation is complete.
+        // Initialize and verify the durable rollback store before any production kernel lifecycle action.
+        // Audit remains the default; Enforce may proceed only through an admitted production package.
         var rollbackRepository=new RollbackRepository(store.Rollback);
         rollbackRepository.VerifyAll();
 
@@ -63,7 +62,8 @@ try
         if(string.Equals(settings.Mode,"Enforce",StringComparison.Ordinal))
         {
             protectionPackage=ProtectionPackageVerifier.Inspect(AppContext.BaseDirectory,ProductInfo.Version);
-            protection.MarkUnavailable("Protection package admission: "+protectionPackage.Reason);
+            if(!protectionPackage.ReadyForLifecycle)
+                protection.MarkUnavailable("Protection package admission: "+protectionPackage.Reason);
         }
         store.Audit(new{
             Type="RollbackStoreReady",Utc=DateTime.UtcNow,Root=store.Rollback,
@@ -88,6 +88,13 @@ try
         builder.Services.AddWindowsService(o=>o.ServiceName="RansomGuardV03");
         var runtime=new RuntimeState(protection.Snapshot());
         builder.Services.AddSingleton(runtime);
+        if(string.Equals(settings.Mode,"Enforce",StringComparison.Ordinal) && protectionPackage?.ReadyForLifecycle==true)
+        {
+            var admittedPackage=protectionPackage;
+            builder.Services.AddHostedService(sp=>new ProductionProtectionLifecycle(
+                sp.GetRequiredService<ILogger<ProductionProtectionLifecycle>>(),
+                settings,store,admittedPackage,protection,runtime,AppContext.BaseDirectory));
+        }
         var scopedTrust=new ScopedTrustCoordinator(store,runtime);
         builder.Services.AddHostedService(sp=>new ScopedTrustPublisher(scopedTrust));
         builder.Services.AddHostedService(sp=>new GuardWorker(sp.GetRequiredService<ILogger<GuardWorker>>(),

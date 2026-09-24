@@ -94,7 +94,7 @@ enforceProtection.MarkRollbackReady();
 enforceProtection.BeginKernelStartup();
 enforceProtection.MarkKernelConnected();
 Check(!enforceProtection.Snapshot().KernelEnforcementActive,"connected kernel channel alone is not protection");
-enforceProtection.MarkProtected(false);
+enforceProtection.MarkProtected();
 Check(enforceProtection.Snapshot().KernelEnforcementActive&&enforceProtection.Snapshot().State=="Protected",
     "only activated protection state claims kernel enforcement");
 enforceProtection.MarkDegraded("GateClient unavailable; kernel fail-safe remains active.");
@@ -121,6 +121,10 @@ rejected=false;try{
     ProtectionStateMachine.ValidateSnapshot(new ProtectionStatusDto("Enforce","AuditOnly",true,false,false,false,"invalid downgrade",now));
 }catch(InvalidOperationException){rejected=true;}
 Check(rejected,"Enforce request cannot silently downgrade to AuditOnly");
+rejected=false;try{
+    ProtectionStateMachine.ValidateSnapshot(new ProtectionStatusDto("Enforce","Protected",true,true,true,true,"invalid containment claim",now));
+}catch(InvalidOperationException){rejected=true;}
+Check(rejected,"foundation cannot publish automatic containment even in Protected state");
 var root=@"C:\Data";var canary=@"C:\Data\canary.txt";
 RiskEngine NewEngine()=>new(s,new[]{root},new[]{canary});
 FileSignal E(string p,FileKind kind,int ms=0,ProcessKey? pk=null)=>new(now.AddMilliseconds(ms),now.AddMilliseconds(ms),pk??key,"anything.exe",path,p,kind);

@@ -68,6 +68,12 @@ if($runtime -match [regex]::Escape("version='0.7.21.0'")){
     throw 'Runtime evidence must not hard-code the product version.'
 }
 
+if($runtime -match [regex]::Escape('Stop-LabProcess $gatePost') -or
+   $runtime -match [regex]::Escape('Stop-LabProcess $gateContain') -or
+   $runtime -match [regex]::Escape('Stop-LabProcess $gateTransition')){
+    throw 'Successful active multi-root runtime scenarios must use orderly GateClient shutdown; force-stop would intentionally latch the 0.7.32 fail-safe root.'
+}
+
 foreach($required in @(
     'RANSOMGUARD_LAB_VM',
     'I_UNDERSTAND',
@@ -95,8 +101,11 @@ foreach($required in @(
     'transitionKernelActive',
     'transitionDeniedNextWrite',
     'containment-journal.jsonl',
-    'Stop-LabProcess $gatePost',
-    'Stop-LabProcess $gateContain',
+    'Stop-GateClientClean $gatePost',
+    'Stop-GateClientClean $gateContain',
+    'Stop-GateClientClean $gateTransition',
+    '--shutdown-marker',
+    'Kernel disconnect authorization:',
     '.VersionInfo.FileVersion',
     'version=$gateVersion',
     'cleanupPassed=$false',
@@ -342,4 +351,4 @@ foreach($required in @('where.exe pwsh.exe','set "PS_EXE=pwsh.exe"','powershell.
     if($buildWrapperText -notmatch [regex]::Escape($required)){throw "Windows build wrapper missing PowerShell host invariant: $required"}
 }
 
-Write-Host 'Runtime VM harness source gate PASSED: manual self-hosted VM only, exact-commit signed driver provenance, mapping coverage, pre-armed containment and event-bound containment transition, no boot/trust/Defender mutation.' -ForegroundColor Green
+Write-Host 'Runtime VM harness source gate PASSED: manual self-hosted VM only, exact-commit signed driver provenance, orderly multi-root GateClient shutdown, mapping coverage, pre-armed containment and event-bound containment transition, no boot/trust/Defender mutation.' -ForegroundColor Green

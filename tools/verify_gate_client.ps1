@@ -117,6 +117,9 @@ foreach($required in @(
   'Native.Control',
   'RgControlCommand.ActivateGate',
   'RgControlCommand.ActivateAndContainProcess',
+  'RgControlCommand.AuthorizeDisconnect',
+  'Kernel disconnect authorization: GRANTED after clean durable shutdown state.',
+  'Kernel disconnect authorization: NOT REQUESTED.',
   '--contain-pid',
   '--drop-first-create-completion',
   '--drop-first-rename-completion',
@@ -496,6 +499,21 @@ foreach($required in @(
   if($triggerBlock -notmatch [regex]::Escape($required)){throw "Event-bound containment trigger invariant missing: $required"}
 }
 
+$cleanShutdown=$text.IndexOf('var cleanShutdown = workerFailureCount == 0')
+$lifecycleTerminal=$text.IndexOf('lifecycleStore.MarkCompletedAsync',$cleanShutdown)
+$authorizeGuard=$text.IndexOf('if (cleanShutdown)',$lifecycleTerminal)
+$authorizeCommand=$text.IndexOf('RgControlCommand.AuthorizeDisconnect',$authorizeGuard)
+$authorizeControl=$text.IndexOf('Native.Control(port, new RgControlRequest',$authorizeGuard)
+if($cleanShutdown -lt 0 -or $lifecycleTerminal -lt 0 -or $authorizeGuard -lt 0 -or
+   $authorizeCommand -lt 0 -or $authorizeControl -lt 0 -or
+   $cleanShutdown -gt $lifecycleTerminal -or $lifecycleTerminal -gt $authorizeGuard -or
+   $authorizeGuard -gt $authorizeControl -or $authorizeControl -gt $authorizeCommand){
+  throw 'GateClient must authorize disconnect only after durable clean-shutdown eligibility and lifecycle completion.'
+}
+if($text.IndexOf('RgControlCommand.AuthorizeDisconnect') -ne $authorizeCommand){
+  throw 'Orderly disconnect authorization must have one explicit call site.'
+}
+
 $processStart=$text.IndexOf('async Task ProcessMessageAsync')
 $processEnd=$text.IndexOf('repository.VerifyAll()',$processStart)
 if($processStart -lt 0 -or $processEnd -lt 0){throw 'ProcessMessageAsync source block missing.'}
@@ -578,4 +596,4 @@ if($restartBlock -notmatch [regex]::Escape('PathPolicy.Under(intent.OriginalPath
   throw 'Restart reconciliation must remain scoped to the explicitly selected LAB root.'
 }
 
-Write-Host 'LAB gate client source check PASSED: protocol-v15 DELETE lifecycle plus TRUNCATE reconciliation, event-bound containment, bounded workers, durable identity/restart evidence, no destructive/process-control APIs.'
+Write-Host 'LAB gate client source check PASSED: protocol-v15 DELETE lifecycle plus TRUNCATE reconciliation, event-bound containment, clean-shutdown disconnect authorization, bounded workers, durable identity/restart evidence, no destructive/process-control APIs.'

@@ -2155,8 +2155,8 @@ static class ProductionRootPolicy
 {
     public static void Validate(string root)
     {
-        var full = Path.GetFullPath(root).TrimEnd('\');
-        var drive = Path.GetPathRoot(full)?.TrimEnd('\');
+        var full = Path.GetFullPath(root).TrimEnd('\\');
+        var drive = Path.GetPathRoot(full)?.TrimEnd('\\');
         if (string.IsNullOrWhiteSpace(drive) || drive.Length != 2 || drive[1] != ':' ||
             full.Equals(drive, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("ProductionGate root must be an explicit directory on a local drive.");
@@ -2167,7 +2167,7 @@ static class ProductionRootPolicy
         {
             if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
                 throw new InvalidOperationException("ProductionGate root/ancestor cannot be a reparse point: " + current);
-            if (PathPolicy.Equal(current, drive))
+            if (current.TrimEnd('\\').Equals(drive, StringComparison.OrdinalIgnoreCase))
                 break;
         }
 
@@ -2189,8 +2189,8 @@ static class ProductionRootPolicy
 static class PathPolicy
 {
     public static bool Equal(string left, string right) =>
-        Path.GetFullPath(left).TrimEnd('\').Equals(
-            Path.GetFullPath(right).TrimEnd('\'),
+        Path.GetFullPath(left).TrimEnd('\\').Equals(
+            Path.GetFullPath(right).TrimEnd('\\'),
             StringComparison.OrdinalIgnoreCase);
 
     public static bool Under(string? path, string root)

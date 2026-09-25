@@ -85,6 +85,8 @@ public sealed class ProtectionStateMachine
             throw new InvalidOperationException("Protected state requires a connected kernel channel.");
         if (phase == ProtectionPhase.DegradedProtected && value.KernelChannelConnected)
             throw new InvalidOperationException("DegradedProtected represents loss of the user-mode kernel channel.");
+        if (phase == ProtectionPhase.Maintenance && value.KernelChannelConnected)
+            throw new InvalidOperationException("Maintenance requires the ProductionGate kernel channel to be closed.");
     }
 
     public void MarkRollbackReady()
@@ -179,6 +181,7 @@ public sealed class ProtectionStateMachine
                 string.IsNullOrWhiteSpace(reason))
                 throw new InvalidOperationException("Maintenance requires an active/degraded protected session and an explicit reason.");
             _phase = ProtectionPhase.Maintenance;
+            _kernelConnected = false;
             _automaticContainmentActive = false;
             _reason = reason;
             _observedUtc = DateTime.UtcNow;

@@ -229,7 +229,8 @@ $summary=[ordered]@{
     degradedDeniedMutation=$false
     degradedPreservedHash=$false
     reconnectProtected=$false
-    reconnectUsedDifferentPid=$false
+    reconnectReplacementObserved=$false
+    reconnectPidReused=$false
     reconnectMutationAllowed=$false
     maintenanceStopObserved=$false
     driverUnloadedAfterMaintenance=$false
@@ -270,7 +271,15 @@ try{
     $summary.productionMutationAllowed=$true
     $protectedHash=(Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
 
-    Stop-Process -Id ([int]$firstActivation.GateClientPid) -Force -ErrorAction Stop
+    $firstGatePid=[int]$firstActivation.GateClientPid
+    Stop-Process -Id $firstGatePid -Force -ErrorAction Stop
+    for($i=0;$i -lt 50 -and (Get-Process -Id $firstGatePid -ErrorAction SilentlyContinue);$i++){
+        Start-Sleep -Milliseconds 100
+    }
+    if(Get-Process -Id $firstGatePid -ErrorAction SilentlyContinue){
+        throw "Original ProductionGate pid=$firstGatePid did not exit after the forced-loss probe."
+    }
+    $summary.reconnectReplacementObserved=$true
     $lost=Wait-AuditType 'ProductionGateLost' $startedUtc 30
     if([string]$lost.Session -ne [string]$firstActivation.Session){throw 'GateClient-loss audit session does not match the first activation.'}
     if([string]$lost.Protection.State -ne 'DegradedProtected' -or $lost.Protection.KernelEnforcementActive -ne $true){
@@ -303,11 +312,9 @@ try{
         throw 'Reconnect did not return to Protected with a connected kernel channel.'
     }
     $summary.reconnectProtected=$true
-    if([int]$secondActivation.GateClientPid -ne [int]$firstActivation.GateClientPid){
-        $summary.reconnectUsedDifferentPid=$true
-    }else{
-        throw 'Reconnect qualification reused the original GateClient PID; process replacement was not proved.'
-    }
+    $summary.reconnectPidReused=([int]$secondActivation.GateClientPid -eq $firstGatePid)
+    # PID reuse is explicitly allowed here: the security boundary is the new kernel PEPROCESS
+    # plus a new ProductionGate session after the original process has been proved exited.
 
     [IO.File]::WriteAllText($target,'production-lifecycle-after-reconnect',[Text.UTF8Encoding]::new($false))
     if((Get-Content -LiteralPath $target -Raw) -ne 'production-lifecycle-after-reconnect'){

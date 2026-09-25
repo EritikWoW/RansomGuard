@@ -271,7 +271,7 @@ jobs:
             'degradedDeniedMutation',
             'degradedPreservedHash',
             'reconnectProtected',
-            'reconnectUsedDifferentPid',
+            'reconnectReplacementObserved',
             'reconnectMutationAllowed',
             'maintenanceStopObserved',
             'driverUnloadedAfterMaintenance',

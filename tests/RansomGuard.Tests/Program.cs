@@ -111,8 +111,10 @@ Check(enforceProtection.Snapshot().State=="Protected"&&enforceProtection.Snapsho
     "qualified ProductionGate reconnect returns DegradedProtected to Protected");
 enforceProtection.MarkDegraded("Second GateClient loss for maintenance transition test.");
 enforceProtection.BeginMaintenance("Authorized maintenance transition.");
-Check(!enforceProtection.Snapshot().KernelEnforcementActive&&enforceProtection.Snapshot().State=="Maintenance",
-    "maintenance does not claim active kernel enforcement");
+Check(!enforceProtection.Snapshot().KernelEnforcementActive&&
+      !enforceProtection.Snapshot().KernelChannelConnected&&
+      enforceProtection.Snapshot().State=="Maintenance",
+    "maintenance closes the kernel channel and does not claim active kernel enforcement");
 var invalidReconnect=new ProtectionStateMachine("Enforce");
 invalidReconnect.MarkRollbackReady();
 rejected=false;try{invalidReconnect.MarkReconnectedProtected("invalid");}catch(InvalidOperationException){rejected=true;}

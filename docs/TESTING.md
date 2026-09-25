@@ -78,7 +78,7 @@ The lifecycle harness then installs the normal service as LocalSystem and requir
 2. an ordinary protected-root mutation succeeds while protected;
 3. forcibly terminating the supervised GateClient produces a durable `ProductionGateLost` audit record with `DegradedProtected` and kernel enforcement still active;
 4. a destructive in-root mutation is access-denied during the reconnect window and the protected file SHA-256 stays unchanged;
-5. a replacement ProductionGate uses a different process ID, reruns preflight and returns the service to `Protected`;
+5. the original GateClient process is proved exited; a replacement ProductionGate starts a new session, reruns preflight and returns the service to `Protected`. PID reuse is allowed and recorded because the kernel trust identity is the new referenced `PEPROCESS`, not the numeric PID;
 6. protected mutation resumes after reconnect;
 7. SCM service stop causes the private production shutdown handshake, durable terminal evidence and kernel `Maintenance`, followed by successful detach/unload;
 8. final cleanup removes only the qualification service and RansomGuard driver-store package, and the minifilter is no longer loaded.

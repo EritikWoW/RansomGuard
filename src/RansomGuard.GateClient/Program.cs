@@ -652,24 +652,15 @@ if (resumableProductionInterruption)
     Console.Error.WriteLine(
         $"Rollback session lifecycle: Active (ProductionGate supervisor lost; resume required; session={sessionId}).");
 }
-else
+else if (!cleanShutdown)
 {
     await using var lifecycleReservation = await storageBudget.ReserveAsync(
         RollbackStorageBudget.MetadataReservationBytes,
-        "session-lifecycle-terminal",
+        "session-lifecycle-fault",
         CancellationToken.None).ConfigureAwait(false);
-    if (cleanShutdown)
-    {
-        _ = await lifecycleStore.MarkCompletedAsync(lifecycleReason, CancellationToken.None)
-            .ConfigureAwait(false);
-        Console.WriteLine("Rollback session lifecycle: Completed.");
-    }
-    else
-    {
-        _ = await lifecycleStore.MarkFaultedAsync(lifecycleReason, CancellationToken.None)
-            .ConfigureAwait(false);
-        Console.Error.WriteLine($"Rollback session lifecycle: Faulted ({lifecycleReason}).");
-    }
+    _ = await lifecycleStore.MarkFaultedAsync(lifecycleReason, CancellationToken.None)
+        .ConfigureAwait(false);
+    Console.Error.WriteLine($"Rollback session lifecycle: Faulted ({lifecycleReason}).");
 }
 
 if (cleanShutdown)
@@ -709,6 +700,19 @@ if (cleanShutdown)
         deactivationReply.ProtectionState != (uint)RgProtectionState.Maintenance)
         throw new InvalidOperationException(
             $"Kernel refused clean gate deactivation. NTSTATUS=0x{deactivationReply.Status:X8}, state={(RgProtectionState)deactivationReply.ProtectionState}.");
+
+    // Completed is terminal evidence that the protection epoch was actually released.
+    // If DeactivateGate or this durable commit fails, the session stays Active and the
+    // service must not detach/unload the driver on an unconfirmed maintenance outcome.
+    await using (var lifecycleReservation = await storageBudget.ReserveAsync(
+                     RollbackStorageBudget.MetadataReservationBytes,
+                     "session-lifecycle-completed",
+                     CancellationToken.None).ConfigureAwait(false))
+    {
+        _ = await lifecycleStore.MarkCompletedAsync(lifecycleReason, CancellationToken.None)
+            .ConfigureAwait(false);
+    }
+    Console.WriteLine("Rollback session lifecycle: Completed after kernel Maintenance.");
 
     Console.WriteLine("Kernel gate graceful deactivation: MAINTENANCE authorized; port close may release the retained LAB root.");
     if (options.Profile == GateProfile.Production && options.ServiceControlStdin)

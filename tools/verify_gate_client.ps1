@@ -90,6 +90,8 @@ foreach($required in @(
   'ProductionGate service lifecycle may resume only an Active rollback session.',
   'Production rollback session: RESUME Active session=',
   'Rollback session lifecycle: Active (ProductionGate supervisor lost; resume required;',
+  'Rollback session lifecycle: Completed after kernel Maintenance.',
+  'session-lifecycle-completed',
   'DevicePathResolver.ToNtScope(options.Root)',
   'GateVolumeLengthBytes = checked((uint)(ntVolume.Length * 2))',
   'public uint GateRootLengthBytes, GateVolumeLengthBytes;',
@@ -505,15 +507,19 @@ if($preflightBlock -notmatch [regex]::Escape('activationReply.ProtectionState !=
 }
 
 $cleanShutdown=$text.IndexOf('var cleanShutdown =')
-$lifecycleCompleted=$text.IndexOf('lifecycleStore.MarkCompletedAsync',$cleanShutdown)
-$deactivateRequest=$text.IndexOf('RgControlCommand.DeactivateGate',$lifecycleCompleted)
-$maintenanceCheck=$text.IndexOf('RgProtectionState.Maintenance',$deactivateRequest)
-$faultedBranch=$text.IndexOf('Kernel gate graceful deactivation NOT authorized',$maintenanceCheck)
-if($cleanShutdown -lt 0 -or $lifecycleCompleted -lt 0 -or $deactivateRequest -lt 0 -or
-   $maintenanceCheck -lt 0 -or $faultedBranch -lt 0 -or
-   $cleanShutdown -gt $lifecycleCompleted -or $lifecycleCompleted -gt $deactivateRequest -or
-   $deactivateRequest -gt $maintenanceCheck -or $maintenanceCheck -gt $faultedBranch){
-  throw 'Clean GateClient shutdown must durably complete the session before requesting whole-gate deactivation, while faulted shutdown must not authorize release.'
+$faultedLifecycle=$text.IndexOf('lifecycleStore.MarkFaultedAsync',$cleanShutdown)
+$deactivateRequest=$text.IndexOf('RgControlCommand.DeactivateGate',$faultedLifecycle)
+$maintenanceCheck=$text.IndexOf('deactivationReply.ProtectionState != (uint)RgProtectionState.Maintenance',$deactivateRequest)
+$lifecycleCompleted=$text.IndexOf('lifecycleStore.MarkCompletedAsync',$maintenanceCheck)
+$cleanStopAfterCompleted=$text.IndexOf('RG-LIFECYCLE STOPPED schema=1',$lifecycleCompleted)
+$faultedBranch=$text.IndexOf('Kernel gate graceful deactivation NOT authorized',$cleanStopAfterCompleted)
+if($cleanShutdown -lt 0 -or $faultedLifecycle -lt 0 -or $deactivateRequest -lt 0 -or
+   $maintenanceCheck -lt 0 -or $lifecycleCompleted -lt 0 -or $cleanStopAfterCompleted -lt 0 -or
+   $faultedBranch -lt 0 -or
+   $cleanShutdown -gt $faultedLifecycle -or $faultedLifecycle -gt $deactivateRequest -or
+   $deactivateRequest -gt $maintenanceCheck -or $maintenanceCheck -gt $lifecycleCompleted -or
+   $lifecycleCompleted -gt $cleanStopAfterCompleted -or $cleanStopAfterCompleted -gt $faultedBranch){
+  throw 'Clean GateClient shutdown must prove kernel Maintenance, then durably mark Completed, then emit clean STOPPED; faulted shutdown must never authorize release.'
 }
 foreach($required in @(
   'deactivationReply.GateActivated != 1',

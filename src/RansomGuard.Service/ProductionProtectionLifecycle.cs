@@ -260,6 +260,7 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
             SHA256.HashData(Encoding.UTF8.GetBytes(normalizedRoot)))[..16];
         var expectedPrefix = "production-" + rootHash + "-";
         var active = new List<string>();
+        var blocked = new List<string>();
 
         foreach (var id in repository.SessionIds())
         {
@@ -269,9 +270,18 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
             var session = repository.OpenSession(id);
             var lifecycle = new RollbackSessionLifecycleStore(session.Root);
             lifecycle.VerifyAll();
-            if (lifecycle.Snapshot.State == RollbackSessionLifecycleState.Active)
+            var lifecycleState = lifecycle.Snapshot.State;
+            if (lifecycleState == RollbackSessionLifecycleState.Active)
                 active.Add(id);
+            else if (lifecycleState is RollbackSessionLifecycleState.Faulted
+                     or RollbackSessionLifecycleState.LegacyUnmanaged)
+                blocked.Add(id + ":" + lifecycleState);
         }
+
+        if (blocked.Count != 0)
+            throw new InvalidOperationException(
+                "Faulted or unmanaged production rollback evidence requires explicit recovery before Enforce can start: " +
+                string.Join(", ", blocked.Order(StringComparer.Ordinal)));
 
         var foreign = active
             .Where(id => !id.StartsWith(expectedPrefix, StringComparison.Ordinal))

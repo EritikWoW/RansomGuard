@@ -92,6 +92,7 @@ foreach($required in @(
     "Wait-AuditType 'ProductionGateLost'",
     'RecentAudit=',
     'Get-ServiceFailureDiagnostics',
+    'Format-ServiceFailureDiagnostics',
     'Get-WinEvent -FilterHashtable',
     'sc.exe queryex RansomGuardV03',
     'RequireRunningService',

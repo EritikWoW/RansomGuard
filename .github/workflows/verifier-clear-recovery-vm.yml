@@ -19,6 +19,7 @@ jobs:
     env:
       RANSOMGUARD_LAB_VM: I_UNDERSTAND
       RG_EXPECTED_SHA: ${{ inputs.expected_sha }}
+      RG_WORKFLOW_SHA: ${{ inputs.expected_sha }}
       RG_VERIFIER_ROOT_BASE: C:\RansomGuard-VM-Verifier
 
     steps:
@@ -82,7 +83,6 @@ jobs:
           $results=Join-Path $env:RUNNER_TEMP 'ransomguard-driver-verifier-clear-recovery-results'
           if(Test-Path -LiteralPath $results){Remove-Item -LiteralPath $results -Recurse -Force}
           New-Item -ItemType Directory -Path $results -Force | Out-Null
-
           .\minifilter-tools\verify_driver_verifier_clear_lab.ps1 -RootBase $env:RG_VERIFIER_ROOT_BASE -ResultsDirectory $results
 
           $summary=Get-Content -LiteralPath (Join-Path $results 'driver-verifier-clear-result.json') -Raw | ConvertFrom-Json

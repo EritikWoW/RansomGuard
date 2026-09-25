@@ -39,6 +39,7 @@ jobs:
           .\tools\verify_powershell_automation.ps1
           .\tools\verify_supply_chain.ps1
           .\tools\verify_threat_model.ps1
+          .\tools\verify_production_lifecycle_vm_harness.ps1
 
       - name: Verify runtime VM runner readiness
         shell: pwsh

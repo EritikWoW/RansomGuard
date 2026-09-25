@@ -67,8 +67,10 @@ jobs:
       - name: Generate release artifact inventory and SPDX SBOM
         if: success()
         shell: pwsh
+        env:
+          SOURCE_SHA: ${{ github.sha }}
         run: |
-          .\tools\generate_release_governance.ps1 -SourceSha "${{ github.sha }}"
+          .\tools\generate_release_governance.ps1 -SourceSha $env:SOURCE_SHA
 
       - name: Upload release governance evidence
         if: success()

@@ -1,0 +1,109 @@
+name: RansomGuard Driver Verifier reboot handoff
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_phase:
+        description: Persisted Driver Verifier campaign phase that authorizes this reboot.
+        required: true
+        type: choice
+        options:
+          - armed
+          - runtime-reset
+      expected_sha:
+        description: Exact frozen candidate SHA bound into the persisted verifier state.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ransomguard-driver-verifier-vm
+  cancel-in-progress: false
+
+jobs:
+  reboot-handoff:
+    environment: ransomguard-lab-vm
+    runs-on: [self-hosted, Windows, X64, ransomguard-lab-vm]
+    timeout-minutes: 5
+    env:
+      RANSOMGUARD_LAB_VM: I_UNDERSTAND
+      RG_EXPECTED_PHASE: ${{ inputs.expected_phase }}
+      RG_EXPECTED_SHA: ${{ inputs.expected_sha }}
+
+    steps:
+      - name: Checkout policy source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Verify threat-model policy
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          .\tools\verify_threat_model.ps1
+
+      - name: Validate exact persisted Driver Verifier handoff
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          Set-StrictMode -Version Latest
+
+          if($env:RG_EXPECTED_SHA -notmatch '^[0-9a-fA-F]{40}$'){
+            throw "Expected SHA must be exactly 40 hexadecimal characters."
+          }
+          if($env:RG_EXPECTED_PHASE -notin @('armed','runtime-reset')){
+            throw "Unexpected verifier handoff phase '$env:RG_EXPECTED_PHASE'."
+          }
+
+          $cs=Get-CimInstance Win32_ComputerSystem
+          $vmText="$($cs.Manufacturer) $($cs.Model)"
+          if($vmText -notmatch '(?i)virtual|vmware|virtualbox|kvm|qemu|hyper-v|parallels|xen'){
+            throw "REFUSED: verifier reboot handoff requires an obvious disposable VM. Detected: $vmText"
+          }
+          if($env:RANSOMGUARD_LAB_VM -cne 'I_UNDERSTAND'){
+            throw 'REFUSED: RANSOMGUARD_LAB_VM=I_UNDERSTAND is required.'
+          }
+
+          $statePath='C:\RansomGuard-VM-Verifier\Active\driver-verifier-state.json'
+          $hashPath=$statePath+'.sha256'
+          if(-not(Test-Path -LiteralPath $statePath -PathType Leaf)){
+            throw "Driver Verifier handoff state is missing: $statePath"
+          }
+          if(-not(Test-Path -LiteralPath $hashPath -PathType Leaf)){
+            throw "Driver Verifier handoff state hash is missing: $hashPath"
+          }
+
+          $expectedHash=(Get-Content -LiteralPath $hashPath -Raw).Trim()
+          $actualHash=(Get-FileHash -LiteralPath $statePath -Algorithm SHA256).Hash
+          if(-not [string]::Equals($expectedHash,$actualHash,[StringComparison]::OrdinalIgnoreCase)){
+            throw "Driver Verifier handoff state hash mismatch. expected=$expectedHash actual=$actualHash"
+          }
+
+          $state=Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json -Depth 30
+          if([int]$state.schema -ne 1){
+            throw "Driver Verifier handoff state schema must be 1. Found '$($state.schema)'."
+          }
+          if(-not [string]::Equals([string]$state.phase,$env:RG_EXPECTED_PHASE,[StringComparison]::Ordinal)){
+            throw "Driver Verifier handoff phase '$($state.phase)' does not match expected '$env:RG_EXPECTED_PHASE'."
+          }
+          if(-not [string]::Equals([string]$state.workflowSha,$env:RG_EXPECTED_SHA,[StringComparison]::OrdinalIgnoreCase)){
+            throw "Driver Verifier handoff SHA '$($state.workflowSha)' does not match frozen candidate '$env:RG_EXPECTED_SHA'."
+          }
+          if(-not [string]::Equals([string]$state.targetDriver,'RansomGuardMinifilter.sys',[StringComparison]::OrdinalIgnoreCase)){
+            throw "Driver Verifier handoff target '$($state.targetDriver)' is not RansomGuardMinifilter.sys."
+          }
+
+          Write-Host "Validated Driver Verifier handoff phase '$env:RG_EXPECTED_PHASE' for exact SHA '$env:RG_EXPECTED_SHA'."
+
+      - name: Schedule disposable VM reboot
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          & "$env:SystemRoot\System32\shutdown.exe" /r /t 60 /f /d p:4:1 /c "RansomGuard Driver Verifier qualification handoff"
+          if($LASTEXITCODE -ne 0){
+            throw "Unable to schedule verifier VM reboot. shutdown.exe exit=$LASTEXITCODE"
+          }
+          Write-Warning 'Disposable verifier VM reboot is scheduled in 60 seconds. The GitHub job should finish before restart.'

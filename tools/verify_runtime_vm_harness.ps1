@@ -121,6 +121,10 @@ foreach($required in @(
     'productionReconnectActivated',
     'productionReconnectMutationAllowed',
     'ProductionGate forbids LAB prepare/fault/reconciliation/shutdown/containment options',
+    'Reset-QualificationStateRoot',
+    "CommonApplicationData)) 'RansomGuardV03'",
+    'Remove-Item -LiteralPath $full -Recurse -Force',
+    'Reset-QualificationStateRoot $stateRoot',
     '.ransomguard-gate-lab-root',
     'RANSOMGUARD-LAB-GATE-V1',
     'Stop-ProcessHard $gate',
@@ -137,6 +141,14 @@ foreach($required in @(
         throw "ProductionGate VM qualification script missing invariant: $required"
     }
 }
+$prodStateReset=$productionGate.IndexOf('Reset-QualificationStateRoot $stateRoot')
+$prodFixedStore=$productionGate.IndexOf("$fixedStore=[IO.Path]::GetFullPath((Join-Path $stateRoot 'Rollback'))",$prodStateReset)
+$prodCleanupReset=$productionGate.LastIndexOf('Reset-QualificationStateRoot $stateRoot')
+if($prodStateReset -lt 0 -or $prodFixedStore -lt 0 -or $prodCleanupReset -lt 0 -or
+   $prodStateReset -gt $prodFixedStore -or $prodCleanupReset -le $prodFixedStore){
+    throw 'ProductionGate qualification must isolate the fixed ProgramData state root before use and remove it again during cleanup.'
+}
+
 $prodCleanupArm=$productionGate.IndexOf('$installed=$true')
 $prodInstall=$productionGate.IndexOf('& $installScript')
 if($prodCleanupArm -lt 0 -or $prodInstall -lt 0 -or $prodCleanupArm -gt $prodInstall){

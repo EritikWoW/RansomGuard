@@ -29,6 +29,22 @@ function Assert-DisposableVm {
     return $vmText
 }
 
+function Reset-QualificationStateRoot([string]$StateRoot){
+    $expected=[IO.Path]::GetFullPath((Join-Path ([Environment]::GetFolderPath(
+        [Environment+SpecialFolder]::CommonApplicationData)) 'RansomGuardV03'))
+    $full=[IO.Path]::GetFullPath($StateRoot)
+    if(-not [string]::Equals($full,$expected,[StringComparison]::OrdinalIgnoreCase)){
+        throw "REFUSED: qualification state reset escaped the exact RansomGuardV03 ProgramData root: $full"
+    }
+    if(Test-Path -LiteralPath $full){
+        Assert-NoReparsePath $full 'QualificationStateRoot'
+        Remove-Item -LiteralPath $full -Recurse -Force
+    }
+    if(Test-Path -LiteralPath $full){
+        throw "Qualification state root remained after bounded reset: $full"
+    }
+}
+
 function Assert-NoReparsePath([string]$Path,[string]$Label){
     $full=[IO.Path]::GetFullPath($Path)
     $root=[IO.Path]::GetPathRoot($full)
@@ -142,7 +158,10 @@ Assert-NoReparsePath $root 'ProductionRoot'
 $target=Join-Path $root 'production-target.bin'
 [IO.File]::WriteAllText($target,'production-initial')
 
-$fixedStore=[IO.Path]::GetFullPath((Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)) 'RansomGuardV03\Rollback'))
+$stateRoot=[IO.Path]::GetFullPath((Join-Path ([Environment]::GetFolderPath(
+    [Environment+SpecialFolder]::CommonApplicationData)) 'RansomGuardV03'))
+Reset-QualificationStateRoot $stateRoot
+$fixedStore=[IO.Path]::GetFullPath((Join-Path $stateRoot 'Rollback'))
 New-Item -ItemType Directory -Path $fixedStore -Force | Out-Null
 Assert-NoReparsePath $fixedStore 'ProductionRollbackStore'
 
@@ -308,6 +327,11 @@ finally{
         if($LASTEXITCODE -ne 0 -or $filters -match '(?m)^\s*RansomGuardMinifilter\b'){
             throw 'RansomGuardMinifilter remained loaded after ProductionGate qualification.'
         }
+
+        # This qualification owns the fixed ProgramData rollback namespace only inside the
+        # disposable VM. Remove it so the following normal-Service lifecycle must initialize
+        # its own trusted marker/ACL through SecureStore instead of inheriting harness state.
+        Reset-QualificationStateRoot $stateRoot
         $summary.cleanupPassed=$true
     }catch{
         if($null -eq $cleanupFailure){$cleanupFailure=$_}

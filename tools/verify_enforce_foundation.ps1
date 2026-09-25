@@ -142,12 +142,13 @@ foreach($required in @(
     'RG-LIFECYCLE STOPPED',
     'ProductionDriverLifecycle.StopAfterMaintenanceAsync',
     '_protection.BeginMaintenance(',
-    'pnputil.exe',
     'rundll32.exe',
     'setupapi.dll,InstallHinfSection',
+    'DefaultInstall.NTamd64',
+    'primitive-driver installation path (DiInstallDriver)',
     'WaitForServiceRegistrationAsync',
     'TimeSpan.FromSeconds(5)',
-    'RansomGuardMinifilter service registration did not become visible after successful DefaultInstall.',
+    'RansomGuardMinifilter service registration did not become visible after primitive-driver DefaultInstall.NTamd64.',
     'fltmc.exe',
     'new[] { "load", ServiceName }',
     'new[] { "attach", ServiceName, volume }',
@@ -189,6 +190,15 @@ foreach($required in @(
     'Production driver maintenance cleanup exceeded its total shutdown budget.'
 )){
     if($lifecycle -notmatch [regex]::Escape($required)){throw "Production lifecycle invariant missing: $required"}
+}
+
+foreach($forbidden in @(
+    'new[] { "/add-driver", inf }',
+    '"DefaultInstall", "132", inf'
+)){
+    if($lifecycle -match [regex]::Escape($forbidden)){
+        throw "Production lifecycle must use the architecture-decorated primitive-driver install path, not legacy/pre-staged registration: $forbidden"
+    }
 }
 
 $terminateStart=$lifecycle.IndexOf('private static async Task TerminateUnreadyChildAsync(Process gate)')

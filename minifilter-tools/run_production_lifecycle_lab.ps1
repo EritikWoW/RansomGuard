@@ -135,6 +135,23 @@ function Test-AccessDeniedException([Exception]$Exception){
     return $false
 }
 
+function Convert-AuditUtc($Value){
+    if($Value -is [DateTimeOffset]){
+        return [DateTimeOffset]$Value
+    }
+    if($Value -is [DateTime]){
+        $date=[DateTime]$Value
+        if($date.Kind -eq [DateTimeKind]::Unspecified){
+            $date=[DateTime]::SpecifyKind($date,[DateTimeKind]::Utc)
+        }
+        return [DateTimeOffset]$date
+    }
+    return [DateTimeOffset]::Parse(
+        [string]$Value,
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::RoundtripKind)
+}
+
 function Get-AuditEntries([DateTimeOffset]$SinceUtc){
     $audit=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)) 'RansomGuardV03\audit.jsonl'
     if(-not(Test-Path -LiteralPath $audit -PathType Leaf)){return @()}
@@ -148,7 +165,7 @@ function Get-AuditEntries([DateTimeOffset]$SinceUtc){
         try{
             $item=$line | ConvertFrom-Json
             if($null -eq $item.Utc){continue}
-            $utc=[DateTimeOffset]::Parse([string]$item.Utc,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::RoundtripKind)
+            $utc=Convert-AuditUtc $item.Utc
             if($utc -ge $SinceUtc){$entries += $item}
         }catch{}
     }

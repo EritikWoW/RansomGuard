@@ -155,7 +155,7 @@ foreach($required in @(
     'fltmc.exe',
     'new[] { "load", ServiceName }',
     'new[] { "attach", ServiceName, volume }',
-    'AttachedVolumes(instances.Stdout)',
+    'AttachedVolumes(instances.Stdout, admission.Altitude)',
     'attachedVolumes.Length != 1',
     'Production minifilter must have exactly one instance on the configured protected-root volume.',
     'new[] { "detach", ServiceName, volume }',

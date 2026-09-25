@@ -68,7 +68,7 @@ jobs:
         if: success()
         shell: pwsh
         env:
-          SOURCE_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           .\tools\generate_release_governance.ps1 -SourceSha $env:SOURCE_SHA
 

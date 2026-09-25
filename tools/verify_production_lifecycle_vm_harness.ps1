@@ -18,8 +18,8 @@ foreach($path in @($preparePath,$runPath,$workflowPath,$lifecyclePath)){
 $prepare=Get-Content -LiteralPath $preparePath -Raw
 $run=Get-Content -LiteralPath $runPath -Raw
 
-if($prepare -match [regex]::Escape("-match '(?i)\x64\'") -or
-   $prepare -match [regex]::Escape("-match '(?i)\x86\'")){
+if($prepare.Contains("-match '(?i)\x64\'",[StringComparison]::Ordinal) -or
+   $prepare.Contains("-match '(?i)\x86\'",[StringComparison]::Ordinal)){
     throw 'Qualification package tool discovery must not use malformed trailing-backslash x64/x86 regexes.'
 }
 $workflow=Get-Content -LiteralPath $workflowPath -Raw
@@ -45,13 +45,13 @@ foreach($required in @(
     'Get-AuthenticodeSignature',
     'Inf2Cat',
     'Test-PathSegment',
-    "Where-Object {Test-PathSegment $_.FullName 'x64'}",
-    "Where-Object {Test-PathSegment $_.FullName 'x86'}",
+    'Where-Object {Test-PathSegment $_.FullName ''x64''}',
+    'Where-Object {Test-PathSegment $_.FullName ''x86''}',
     '[StringComparison]::OrdinalIgnoreCase',
     'git -C $repoRoot rev-parse HEAD',
     'This package must never be distributed or reused outside the disposable VM'
 )){
-    if($prepare -notmatch [regex]::Escape($required) -and $prepare -notmatch $required){
+    if($prepare.IndexOf($required,[StringComparison]::Ordinal) -lt 0){
         throw "Production lifecycle qualification package invariant missing: $required"
     }
 }

@@ -1,0 +1,189 @@
+name: RansomGuard frozen ProductionGate mutation matrix
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact frozen candidate SHA to qualify.
+        required: true
+        type: string
+      root_base:
+        description: Disposable VM-only root for production mutation qualification.
+        required: true
+        default: C:\RansomGuard-VM-ProductionMutation
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ransomguard-production-mutation-vm
+  cancel-in-progress: false
+
+jobs:
+  production-mutation:
+    environment: ransomguard-lab-vm
+    runs-on: [self-hosted, Windows, X64, ransomguard-lab-vm]
+    timeout-minutes: 45
+    env:
+      RANSOMGUARD_LAB_VM: I_UNDERSTAND
+      RANSOMGUARD_LAB_CERT_THUMBPRINT: ${{ secrets.RANSOMGUARD_LAB_CERT_THUMBPRINT }}
+      RG_EXPECTED_SHA: ${{ inputs.expected_sha }}
+      RG_MUTATION_ROOT_BASE: ${{ inputs.root_base }}
+
+    steps:
+      - name: Checkout orchestration policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
+        with:
+          ref: main
+          path: orchestrator
+          fetch-depth: 1
+
+      - name: Verify orchestration policy
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          Push-Location .\orchestrator
+          try{
+            .\tools\verify_powershell_automation.ps1
+            .\tools\verify_supply_chain.ps1
+            .\tools\verify_threat_model.ps1
+          }finally{Pop-Location}
+
+      - name: Validate exact candidate request
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          if($env:RG_EXPECTED_SHA -notmatch '^[0-9a-fA-F]{40}$'){
+            throw 'expected_sha must be exactly 40 hexadecimal characters.'
+          }
+          $root=[IO.Path]::GetFullPath($env:RG_MUTATION_ROOT_BASE)
+          if($root -notmatch '(?i)RansomGuard'){throw 'root_base must contain RansomGuard.'}
+          if($root -eq [IO.Path]::GetPathRoot($root).TrimEnd('\')){throw 'root_base cannot be an entire drive.'}
+
+      - name: Checkout exact frozen candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
+        with:
+          ref: ${{ inputs.expected_sha }}
+          path: candidate
+          fetch-depth: 1
+
+      - name: Verify exact candidate checkout and VM readiness
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          Push-Location .\candidate
+          try{
+            $actual=(git rev-parse HEAD).Trim()
+            if(-not [string]::Equals($actual,$env:RG_EXPECTED_SHA,[StringComparison]::OrdinalIgnoreCase)){
+              throw "Exact checkout mismatch. expected=$env:RG_EXPECTED_SHA actual=$actual"
+            }
+            if([string]::IsNullOrWhiteSpace($env:RANSOMGUARD_LAB_CERT_THUMBPRINT)){
+              throw 'Environment secret RANSOMGUARD_LAB_CERT_THUMBPRINT is required.'
+            }
+            .\minifilter-tools\verify_runtime_runner_readiness.ps1 -CertificateThumbprint $env:RANSOMGUARD_LAB_CERT_THUMBPRINT
+          }finally{Pop-Location}
+
+      - name: Refuse stale loaded minifilter
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $filters=(& fltmc filters 2>$null | Out-String)
+          if($LASTEXITCODE -ne 0){throw "Unable to query Filter Manager, exit=$LASTEXITCODE"}
+          if($filters -match '(?m)^\s*RansomGuardMinifilter\b'){
+            throw 'REFUSED: RansomGuardMinifilter is already loaded before frozen ProductionGate mutation qualification.'
+          }
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0 node24 pinned
+        with:
+          dotnet-version: 10.0.401
+
+      - name: Build exact candidate Engineering LAB bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          Push-Location .\candidate
+          try{
+            .\build_lab.cmd
+            if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+            $lab=Get-ChildItem .\release -Directory -Filter 'RansomGuard-Lab-v*' | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+            if(-not $lab){throw 'Engineering LAB release directory not found.'}
+            "RG_LAB_RELEASE=$($lab.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }finally{Pop-Location}
+
+      - name: Build and sign exact candidate runtime driver package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $package=Join-Path $env:RUNNER_TEMP 'ransomguard-production-mutation-driver'
+          if(Test-Path -LiteralPath $package){Remove-Item -LiteralPath $package -Recurse -Force}
+          Push-Location .\candidate
+          try{
+            .\minifilter-tools\prepare_runtime_driver_package.ps1 -CertificateThumbprint $env:RANSOMGUARD_LAB_CERT_THUMBPRINT -OutputDirectory $package
+            $provenance=Get-Content -LiteralPath (Join-Path $package 'runtime-package.json') -Raw | ConvertFrom-Json
+            if([int]$provenance.schema -ne 2){throw 'Runtime package provenance schema must be 2.'}
+            if(-not [string]::Equals([string]$provenance.commit,$env:RG_EXPECTED_SHA,[StringComparison]::OrdinalIgnoreCase)){
+              throw "Runtime package provenance commit '$($provenance.commit)' does not match '$env:RG_EXPECTED_SHA'."
+            }
+          }finally{Pop-Location}
+          "RG_MUTATION_DRIVER_PACKAGE=$package" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run frozen ProductionGate mutation matrix
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $results=Join-Path $env:RUNNER_TEMP 'ransomguard-production-mutation-results'
+          if(Test-Path -LiteralPath $results){Remove-Item -LiteralPath $results -Recurse -Force}
+          New-Item -ItemType Directory -Path $results -Force | Out-Null
+          "RG_MUTATION_RESULTS=$results" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          .\orchestrator\qualification\run_frozen_production_mutation_matrix.ps1 `
+            -CandidateRoot (Resolve-Path .\candidate).Path `
+            -LabReleaseDirectory $env:RG_LAB_RELEASE `
+            -DriverPackageDirectory $env:RG_MUTATION_DRIVER_PACKAGE `
+            -ExpectedSha $env:RG_EXPECTED_SHA `
+            -RootBase $env:RG_MUTATION_ROOT_BASE `
+            -ResultsDirectory $results
+
+          $summary=Get-Content -LiteralPath (Join-Path $results 'production-mutation-matrix-result.json') -Raw | ConvertFrom-Json
+          foreach($name in @(
+            'dormantWritableHandleRejected',
+            'preexistingWritableMappingRejected',
+            'preexistingHardLinkRejected',
+            'hardLinkInsideToOutsideDenied',
+            'hardLinkOutsideToInsideDenied',
+            'hardLinkOutsideToOutsideAllowed',
+            'hardLinkExInsideToOutsideDenied',
+            'hardLinkExOutsideToInsideDenied',
+            'hardLinkExOutsideToOutsideAllowed',
+            'fsctlZeroAllowedWithBaseline',
+            'fsctlZeroMutatedTarget',
+            'fsctlZeroPreimageHashMatched',
+            'postActivationMappedWriteMutatedTarget',
+            'postActivationMappedWritePreimageHashMatched',
+            'cleanupPassed',
+            'passed'
+          )){
+            if($summary.$name -ne $true){throw "Production mutation invariant '$name' was not true."}
+          }
+          if(-not [string]::Equals([string]$summary.frozenCandidateSha,$env:RG_EXPECTED_SHA,[StringComparison]::OrdinalIgnoreCase)){
+            throw 'Production mutation evidence is not bound to the requested frozen candidate SHA.'
+          }
+
+      - name: Upload frozen ProductionGate mutation evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 node24 pinned
+        with:
+          name: ransomguard-frozen-production-mutation-${{ inputs.expected_sha }}
+          path: ${{ env.RG_MUTATION_RESULTS }}/**
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Remove signed LAB package
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          if($env:RG_MUTATION_DRIVER_PACKAGE -and (Test-Path -LiteralPath $env:RG_MUTATION_DRIVER_PACKAGE)){
+            Remove-Item -LiteralPath $env:RG_MUTATION_DRIVER_PACKAGE -Recurse -Force -ErrorAction SilentlyContinue
+          }

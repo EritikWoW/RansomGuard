@@ -112,7 +112,12 @@ foreach($required in @(
     'Kernel Maintenance is confirmed, but driver detach/unload cleanup failed',
     'KillLifecycleTool(process)',
     'catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)',
-    'line.Length == ServiceName.Length || char.IsWhiteSpace(line[ServiceName.Length])'
+    'line.Length == ServiceName.Length || char.IsWhiteSpace(line[ServiceName.Length])',
+    'GateShutdownSignalTimeout = TimeSpan.FromSeconds(10)',
+    'GateExitTimeout = TimeSpan.FromSeconds(3)',
+    'DriverMaintenanceCleanupTimeout = TimeSpan.FromSeconds(10)',
+    'var cleanupClock = Stopwatch.StartNew()',
+    'Production driver maintenance cleanup exceeded its total shutdown budget.'
 )){
     if($lifecycle -notmatch [regex]::Escape($required)){throw "Production lifecycle invariant missing: $required"}
 }

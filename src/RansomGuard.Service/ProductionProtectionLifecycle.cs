@@ -15,6 +15,9 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
     private readonly RuntimeState _runtime;
     private readonly IHostApplicationLifetime _lifetime;
     private readonly string _applicationBase;
+    private static readonly TimeSpan GateShutdownSignalTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan GateExitTimeout = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan DriverMaintenanceCleanupTimeout = TimeSpan.FromSeconds(10);
 
     public ProductionProtectionLifecycle(
         ILogger<ProductionProtectionLifecycle> log,
@@ -337,8 +340,8 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
             await gate.StandardInput.WriteLineAsync("shutdown").ConfigureAwait(false);
             await gate.StandardInput.FlushAsync().ConfigureAwait(false);
 
-            var clean = await signals.CleanStop.Task.WaitAsync(TimeSpan.FromSeconds(15)).ConfigureAwait(false);
-            await gate.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            var clean = await signals.CleanStop.Task.WaitAsync(GateShutdownSignalTimeout).ConfigureAwait(false);
+            await gate.WaitForExitAsync().WaitAsync(GateExitTimeout).ConfigureAwait(false);
             if (!clean || gate.ExitCode != 0)
                 throw new InvalidOperationException($"ProductionGate did not confirm clean deactivation (exit={gate.ExitCode}).");
         }
@@ -373,7 +376,7 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
 
         try
         {
-            await ProductionDriverLifecycle.StopAfterMaintenanceAsync(root, TimeSpan.FromSeconds(15)).ConfigureAwait(false);
+            await ProductionDriverLifecycle.StopAfterMaintenanceAsync(root, DriverMaintenanceCleanupTimeout).ConfigureAwait(false);
             _runtime.RefreshDriverStatus();
             _store.Audit(new
             {
@@ -567,11 +570,20 @@ internal static class ProductionDriverLifecycle
         var fltmc = Path.Combine(Environment.SystemDirectory, "fltmc.exe");
         var volume = Path.GetPathRoot(protectedRoot)?.TrimEnd('\\')
             ?? throw new InvalidOperationException("Protected root has no local volume.");
+        var cleanupClock = Stopwatch.StartNew();
+
+        TimeSpan Remaining()
+        {
+            var remaining = timeout - cleanupClock.Elapsed;
+            if (remaining <= TimeSpan.Zero)
+                throw new TimeoutException("Production driver maintenance cleanup exceeded its total shutdown budget.");
+            return remaining;
+        }
 
         var instances = await RunToolAsync(
             fltmc,
             new[] { "instances", "-f", ServiceName },
-            timeout,
+            Remaining(),
             CancellationToken.None,
             allowNonZero: true).ConfigureAwait(false);
         if (instances.Stdout.Contains(volume, StringComparison.OrdinalIgnoreCase))
@@ -582,7 +594,7 @@ internal static class ProductionDriverLifecycle
                 last = await RunToolAsync(
                     fltmc,
                     new[] { "detach", ServiceName, volume },
-                    timeout,
+                    Remaining(),
                     CancellationToken.None,
                     allowNonZero: true).ConfigureAwait(false);
                 if (last.ExitCode == 0)
@@ -597,14 +609,14 @@ internal static class ProductionDriverLifecycle
         var filters = await RunToolAsync(
             fltmc,
             new[] { "filters" },
-            timeout,
+            Remaining(),
             CancellationToken.None).ConfigureAwait(false);
         if (ContainsFilter(filters.Stdout))
         {
             var unload = await RunToolAsync(
                 fltmc,
                 new[] { "unload", ServiceName },
-                timeout,
+                Remaining(),
                 CancellationToken.None,
                 allowNonZero: true).ConfigureAwait(false);
             if (unload.ExitCode != 0)

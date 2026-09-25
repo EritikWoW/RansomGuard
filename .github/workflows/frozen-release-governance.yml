@@ -1,0 +1,83 @@
+name: Frozen release governance
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full 40-character frozen candidate source SHA
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frozen-release-governance-${{ inputs.source_sha }}
+  cancel-in-progress: false
+
+jobs:
+  governance:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout governance tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
+        with:
+          path: governance
+
+      - name: Checkout exact frozen candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
+        with:
+          ref: ${{ inputs.source_sha }}
+          path: candidate
+
+      - name: Verify exact candidate checkout
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:SOURCE_SHA -notmatch '^[0-9a-fA-F]{40}$') {
+              throw 'source_sha must be a full 40-character Git SHA.'
+          }
+          $actual = (& git -C .\candidate rev-parse HEAD).Trim().ToLowerInvariant()
+          if ($actual -ne $env:SOURCE_SHA.ToLowerInvariant()) {
+              throw "Candidate checkout mismatch: expected $env:SOURCE_SHA actual $actual"
+          }
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0 node24 pinned
+        with:
+          dotnet-version: 10.0.401
+
+      - name: Build exact-source normal release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Push-Location .\candidate
+          try {
+              .\build_windows.ps1
+          }
+          finally {
+              Pop-Location
+          }
+
+      - name: Generate frozen release inventory and SPDX SBOM
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\governance\tools\generate_release_governance.ps1 `
+              -ReleaseRoot (Join-Path $PWD 'candidate\release') `
+              -OutputDir (Join-Path $PWD 'governance\build-logs\frozen-release-governance') `
+              -SourceSha $env:SOURCE_SHA
+
+      - name: Upload frozen release governance evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 node24 pinned
+        with:
+          name: ransomguard-frozen-release-governance-${{ inputs.source_sha }}
+          path: governance/build-logs/frozen-release-governance/**
+          if-no-files-found: error
+          retention-days: 90

@@ -90,6 +90,65 @@ function Stop-LabProcess([System.Diagnostics.Process]$Process,[string]$Descripti
     }
 }
 
+function Read-LabLog([string]$Path){
+    if(Test-Path -LiteralPath $Path -PathType Leaf){
+        return [string](Get-Content -LiteralPath $Path -Raw -ErrorAction SilentlyContinue)
+    }
+    return ''
+}
+
+function Wait-ExpectedGateRejection(
+    [System.Diagnostics.Process]$Process,
+    [string]$StdOut,
+    [string]$StdErr,
+    [string]$ExpectedPattern,
+    [string]$Description,
+    [int]$Seconds=30
+){
+    $deadline=(Get-Date).AddSeconds($Seconds)
+    while((Get-Date) -lt $deadline){
+        $out=Read-LabLog $StdOut
+        $err=Read-LabLog $StdErr
+        $combined=$out+[Environment]::NewLine+$err
+
+        if($combined -match '(?i)Activation preflight: .*kernel gate ACTIVE'){
+            if(-not $Process.HasExited){
+                Stop-LabProcess $Process "$Description unexpectedly activated gate"
+            }
+            throw "Activation unexpectedly reached kernel gate ACTIVE during $($Description). $combined"
+        }
+
+        if($combined -match $ExpectedPattern){
+            if(-not $Process.HasExited){
+                # A rejected .NET process can linger while crash/WER handling drains redirected
+                # streams. The security proof is the expected pre-activation failure plus absence
+                # of the ACTIVE marker; terminate only after that proof has been observed.
+                Stop-LabProcess $Process "$Description rejected gate"
+            }elseif($Process.ExitCode -eq 0){
+                throw "Activation returned exit=0 despite rejection evidence during $($Description). $combined"
+            }
+            return $combined
+        }
+
+        if($Process.HasExited){
+            if($Process.ExitCode -eq 0){
+                throw "Activation unexpectedly succeeded during $($Description). $combined"
+            }
+            throw "Activation failed for an unexpected reason during $($Description). $combined"
+        }
+
+        Start-Sleep -Milliseconds 100
+    }
+
+    $out=Read-LabLog $StdOut
+    $err=Read-LabLog $StdErr
+    $combined=$out+[Environment]::NewLine+$err
+    if(-not $Process.HasExited){
+        Stop-LabProcess $Process "$Description timeout cleanup"
+    }
+    throw "Timed out waiting for expected activation rejection during $($Description). $combined"
+}
+
 function Stop-GateGracefully(
     [System.Diagnostics.Process]$Process,
     [string]$ShutdownFile,
@@ -429,16 +488,7 @@ try{
         '--root',(Quote-Arg $dirRoot),'--store',(Quote-Arg $dirStore),'--session','predirectory'
     ) $dirOut $dirErr
 
-    if(-not $gateDir.WaitForExit(30000)){
-        Stop-Process -Id $gateDir.Id -Force -ErrorAction SilentlyContinue
-        throw 'Activation unexpectedly stayed alive with a pre-existing DELETE directory handle.'
-    }
-    if($gateDir.ExitCode -eq 0){throw 'Activation unexpectedly succeeded with a pre-existing DELETE directory handle.'}
-    $dirFailure=((Get-Content -LiteralPath $dirOut -Raw -ErrorAction SilentlyContinue)+[Environment]::NewLine+
-        (Get-Content -LiteralPath $dirErr -Raw -ErrorAction SilentlyContinue))
-    if($dirFailure -notmatch '(?i)Activation topology preflight|sharing|used by another process|could not hold directory'){
-        throw "Directory-handle activation failed for an unexpected reason: $dirFailure"
-    }
+    $dirFailure=Wait-ExpectedGateRejection $gateDir $dirOut $dirErr '(?i)Activation topology preflight|sharing|used by another process|could not hold directory' 'pre-existing DELETE directory handle'
     $summary.preexistingDirectoryHandleRejected=$true
 
     New-Item -ItemType File -Path $dirRelease -Force | Out-Null
@@ -471,18 +521,7 @@ try{
         '--root',(Quote-Arg $dormantRoot),'--store',(Quote-Arg $dormantStore),'--session','prewritehandle'
     ) $dormantOut $dormantErr
 
-    if(-not $gateDormant.WaitForExit(30000)){
-        Stop-Process -Id $gateDormant.Id -Force -ErrorAction SilentlyContinue
-        throw 'Activation unexpectedly stayed alive with a dormant pre-existing writable handle.'
-    }
-    if($gateDormant.ExitCode -eq 0){
-        throw 'Activation unexpectedly succeeded with a dormant pre-existing writable handle.'
-    }
-    $dormantFailure=((Get-Content -LiteralPath $dormantOut -Raw -ErrorAction SilentlyContinue)+[Environment]::NewLine+
-        (Get-Content -LiteralPath $dormantErr -Raw -ErrorAction SilentlyContinue))
-    if($dormantFailure -notmatch '(?i)Activation topology preflight|sharing|used by another process|could not hold file'){
-        throw "Dormant writable-handle activation failed for an unexpected reason: $dormantFailure"
-    }
+    $dormantFailure=Wait-ExpectedGateRejection $gateDormant $dormantOut $dormantErr '(?i)Activation topology preflight|sharing|used by another process|could not hold file' 'dormant pre-existing writable handle'
     if($dormantFailure -match 'already has a user-writable mapped view'){
         throw 'Dormant writable-handle proof accidentally used the existing-mapping rejection path.'
     }
@@ -515,16 +554,7 @@ try{
     $gateHardPre=Start-LoggedProcess $gateExe @(
         '--root',(Quote-Arg $hardPreRoot),'--store',(Quote-Arg $hardPreStore),'--session','prehardlink'
     ) $hardPreOut $hardPreErr
-    if(-not $gateHardPre.WaitForExit(30000)){
-        Stop-Process -Id $gateHardPre.Id -Force -ErrorAction SilentlyContinue
-        throw 'Activation unexpectedly stayed alive with a pre-existing hard-link alias.'
-    }
-    if($gateHardPre.ExitCode -eq 0){throw 'Activation unexpectedly succeeded with a pre-existing hard-link alias.'}
-    $hardPreFailure=((Get-Content -LiteralPath $hardPreOut -Raw -ErrorAction SilentlyContinue)+[Environment]::NewLine+
-        (Get-Content -LiteralPath $hardPreErr -Raw -ErrorAction SilentlyContinue))
-    if($hardPreFailure -notmatch 'NumberOfLinks=2'){
-        throw "Pre-existing hard-link activation failed for an unexpected reason: $hardPreFailure"
-    }
+    $hardPreFailure=Wait-ExpectedGateRejection $gateHardPre $hardPreOut $hardPreErr 'NumberOfLinks=2' 'pre-existing hard-link alias'
     $summary.preexistingHardLinkRejected=$true
     Remove-Item -LiteralPath $hardPreAlias -Force -ErrorAction Stop
     $gateHardPre=$null
@@ -683,11 +713,7 @@ try{
         '--root',(Quote-Arg $preRoot),'--store',(Quote-Arg $preStore),'--session','preexisting'
     ) $preOut $preErr
 
-    if(-not $gatePre.WaitForExit(30000)){
-        Stop-Process -Id $gatePre.Id -Force -ErrorAction SilentlyContinue
-        throw 'Activation unexpectedly stayed alive with a pre-existing writable mapped view.'
-    }
-    if($gatePre.ExitCode -eq 0){throw 'Activation unexpectedly succeeded with a pre-existing writable mapped view.'}
+    $null=Wait-ExpectedGateRejection $gatePre $preOut $preErr '(?i)already has a user-writable mapped view' 'pre-existing writable mapped view'
 
     $preJournal=Join-Path $preStore 'Sessions\preexisting\activation-state\activation-preflight-journal.jsonl'
     $null=Wait-JournalMatch $preJournal {

@@ -146,6 +146,13 @@ if($productionGate -match '(?i)Set-MpPreference|Add-MpPreference|Remove-MpPrefer
     throw 'ProductionGate qualification must not modify Defender or boot policy.'
 }
 
+if($runtime -match [regex]::Escape('WaitForExit(30000)')){
+    throw 'Pre-activation rejection scenarios must use explicit failure evidence, not crash-process exit timing.'
+}
+if($runtime -notmatch [regex]::Escape('Stop-LabProcess $Process "$Description rejected gate"')){
+    throw 'Expected activation rejection evidence must bounded-clean any lingering rejected GateClient process.'
+}
+
 foreach($required in @(
     'RANSOMGUARD_LAB_VM',
     'I_UNDERSTAND',
@@ -158,6 +165,8 @@ foreach($required in @(
     'forged GateClient PID',
     '^rejected:0x[0-9A-F]{8}$',
     'predirectory',
+    'Wait-ExpectedGateRejection',
+    'Activation preflight: .*kernel gate ACTIVE',
     'preexistingDirectoryHandleRejected',
     'prewritehandle',
     'dormantWritableHandleRejected',

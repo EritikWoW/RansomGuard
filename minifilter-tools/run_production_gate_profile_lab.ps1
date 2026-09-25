@@ -94,6 +94,54 @@ function Stop-ProcessHard([System.Diagnostics.Process]$Process,[string]$Descript
     if(-not $Process.WaitForExit(10000)){throw "Timed out stopping $Description pid=$($Process.Id)."}
 }
 
+function Read-ProfileLog([string]$Path){
+    if(Test-Path -LiteralPath $Path -PathType Leaf){
+        return [string](Get-Content -LiteralPath $Path -Raw -ErrorAction SilentlyContinue)
+    }
+    return ''
+}
+
+function Wait-ExpectedProfileRejection(
+    [System.Diagnostics.Process]$Process,
+    [string]$StdOut,
+    [string]$StdErr,
+    [string]$ExpectedPattern,
+    [string]$Description,
+    [int]$Seconds=30
+){
+    $deadline=(Get-Date).AddSeconds($Seconds)
+    while((Get-Date) -lt $deadline){
+        $combined=(Read-ProfileLog $StdOut)+[Environment]::NewLine+(Read-ProfileLog $StdErr)
+
+        if($combined -match '(?i)kernel gate ACTIVE'){
+            if(-not $Process.HasExited){Stop-ProcessHard $Process "$Description unexpectedly activated gate"}
+            throw "Kernel gate unexpectedly became ACTIVE during $Description. $combined"
+        }
+
+        if($combined -match $ExpectedPattern){
+            if(-not $Process.HasExited){
+                Stop-ProcessHard $Process "$Description rejected gate"
+            }elseif($Process.ExitCode -eq 0){
+                throw "Gate process returned exit=0 despite rejection evidence during $Description. $combined"
+            }
+            return $combined
+        }
+
+        if($Process.HasExited){
+            if($Process.ExitCode -eq 0){
+                throw "Gate process unexpectedly succeeded during $Description. $combined"
+            }
+            throw "Gate process failed for an unexpected reason during $Description. $combined"
+        }
+
+        Start-Sleep -Milliseconds 100
+    }
+
+    $combined=(Read-ProfileLog $StdOut)+[Environment]::NewLine+(Read-ProfileLog $StdErr)
+    if(-not $Process.HasExited){Stop-ProcessHard $Process "$Description timeout cleanup"}
+    throw "Timed out waiting for expected rejection during $Description. $combined"
+}
+
 function Test-AccessDeniedException([Exception]$Exception){
     $cursor=$Exception
     while($null -ne $cursor){
@@ -274,19 +322,7 @@ try{
     $labWrong=Start-LoggedProcess $gateExe @(
         '--root',(Quote-Arg $root),'--store',(Quote-Arg $labMismatchStore),'--session',"lab-mismatch-$stamp"
     ) $labOut $labErr
-    if(-not $labWrong.WaitForExit(15000)){
-        Stop-Process -Id $labWrong.Id -Force -ErrorAction SilentlyContinue
-        throw 'LabGate unexpectedly stayed connected to retained ProductionGate state.'
-    }
-    $labOutText=if(Test-Path -LiteralPath $labOut){Get-Content -LiteralPath $labOut -Raw}else{''}
-    $labErrText=if(Test-Path -LiteralPath $labErr){Get-Content -LiteralPath $labErr -Raw}else{''}
-    $labText=$labOutText+$labErrText
-    if($labWrong.ExitCode -eq 0 -or $labText -match 'kernel gate ACTIVE'){
-        throw 'LabGate unexpectedly replaced retained ProductionGate state.'
-    }
-    if($labText -notmatch 'FilterConnectCommunicationPort failed'){
-        throw 'LabGate profile-mismatch probe failed before proving the kernel rejected the connection.'
-    }
+    [void](Wait-ExpectedProfileRejection $labWrong $labOut $labErr 'FilterConnectCommunicationPort failed' 'LabGate retained-ProductionGate profile mismatch' 30)
     $labWrong=$null
     $summary.labProfileReconnectRejected=$true
 

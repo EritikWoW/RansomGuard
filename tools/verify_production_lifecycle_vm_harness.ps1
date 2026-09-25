@@ -90,7 +90,7 @@ foreach($required in @(
     "'gateClientLossObserved'",
     "'degradedDeniedMutation'",
     "'reconnectProtected'",
-    "'reconnectUsedDifferentPid'",
+    "'reconnectReplacementObserved'",
     "'maintenanceStopObserved'",
     "'driverUnloadedAfterMaintenance'",
     "'cleanupPassed'",

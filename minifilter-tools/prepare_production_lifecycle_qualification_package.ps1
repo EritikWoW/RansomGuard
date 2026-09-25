@@ -134,12 +134,12 @@ $infText=$infText -replace '(?im)^; RansomGuard read-only minifilter LAB prototy
 $infText=$infText -replace '(?im)^; IMPORTANT: 370099\.4242 is an UNASSIGNED LAB PLACEHOLDER altitude\.\s*\r?\n',''
 $infText=$infText -replace '(?im)^; Do not distribute/deploy this driver outside an isolated test VM\.\s*\r?\n',''
 $infText=$infText -replace '(?im)^; Request a Microsoft-assigned altitude before any real deployment\.\s*\r?\n',''
-$infText=$infText -replace '(?im)^ProviderString\s*=\s*"[^"]*"[ \t]*\r?
-$infText=$infText -replace '(?im)^ServiceDescription\s*=\s*"[^"]*"[ \t]*\r?
-$infText=$infText -replace '(?im)^DiskId1\s*=\s*"[^"]*"[ \t]*\r?
-$infText=$infText -replace '(?im)^DefaultInstance\s*=\s*"[^"]*"[ \t]*\r?
-$infText=$infText -replace '(?im)^Instance1\.Name\s*=\s*"[^"]*"[ \t]*\r?
-$infText=$infText -replace '(?im)^Instance1\.Altitude\s*=\s*"[^"]*"[ \t]*\r?
+$infText=$infText -replace '(?im)^ProviderString\s*=\s*"[^"]*"[ \t]*[\r]?
+$infText=$infText -replace '(?im)^ServiceDescription\s*=\s*"[^"]*"[ \t]*[\r]?
+$infText=$infText -replace '(?im)^DiskId1\s*=\s*"[^"]*"[ \t]*[\r]?
+$infText=$infText -replace '(?im)^DefaultInstance\s*=\s*"[^"]*"[ \t]*[\r]?
+$infText=$infText -replace '(?im)^Instance1\.Name\s*=\s*"[^"]*"[ \t]*[\r]?
+$infText=$infText -replace '(?im)^Instance1\.Altitude\s*=\s*"[^"]*"[ \t]*[\r]?
 foreach($expected in @(
     'ProviderString      = "RansomGuard"',
     'ServiceDescription = "RansomGuard production lifecycle qualification minifilter"',
@@ -148,7 +148,7 @@ foreach($expected in @(
     'Instance1.Name     = "RansomGuard Production Qualification Instance"',
     ('Instance1.Altitude = "{0}"' -f $QualificationAltitude)
 )){
-    if($infText -notmatch ('(?m)^' + [regex]::Escape($expected) + '[ \t]*\r?
+    if($infText -notmatch ('(?m)^' + [regex]::Escape($expected) + '[ \t]*[\r]?
 Set-Content -LiteralPath $inf -Value $infText -Encoding ascii -NoNewline
 
 $thumb=$CertificateThumbprint.Replace(' ','').ToUpperInvariant()

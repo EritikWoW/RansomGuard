@@ -151,6 +151,7 @@ jobs:
             'dormantWritableHandleRejected',
             'preexistingWritableMappingRejected',
             'preexistingHardLinkRejected',
+            'descendantReparseRejected',
             'hardLinkInsideToOutsideDenied',
             'hardLinkOutsideToInsideDenied',
             'hardLinkOutsideToOutsideAllowed',

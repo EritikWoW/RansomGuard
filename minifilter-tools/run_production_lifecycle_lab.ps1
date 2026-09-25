@@ -250,8 +250,15 @@ function Wait-AuditType([string]$Type,[DateTimeOffset]$SinceUtc,[int]$Seconds,[s
     $deadline=(Get-Date).AddSeconds($Seconds)
     while((Get-Date) -lt $deadline){
         $matches=@(Get-AuditEntries $SinceUtc | Where-Object {
-            [string]$_.Type -eq $Type -and
-            ([string]::IsNullOrWhiteSpace($ExpectedSession) -or [string]$_.Session -eq $ExpectedSession)
+            $typeProperty=$_.PSObject.Properties['Type']
+            if($null -eq $typeProperty -or [string]$typeProperty.Value -ne $Type){
+                return $false
+            }
+            if([string]::IsNullOrWhiteSpace($ExpectedSession)){
+                return $true
+            }
+            $sessionProperty=$_.PSObject.Properties['Session']
+            return $null -ne $sessionProperty -and [string]$sessionProperty.Value -eq $ExpectedSession
         })
         if($matches.Count -gt 0){return $matches[-1]}
         if($RequireRunningService){
@@ -266,8 +273,18 @@ function Wait-AuditType([string]$Type,[DateTimeOffset]$SinceUtc,[int]$Seconds,[s
         Start-Sleep -Milliseconds 200
     }
     $recent=@(Get-AuditEntries $SinceUtc | Select-Object -Last 12 | ForEach-Object {
-        $session=if($null -ne $_.Session){" session=$($_.Session)"}else{''}
-        "$($_.Type)$session"
+        $typeProperty=$_.PSObject.Properties['Type']
+        $eventProperty=$_.PSObject.Properties['Event']
+        $label=if($null -ne $typeProperty){
+            [string]$typeProperty.Value
+        }elseif($null -ne $eventProperty){
+            'Event:'+[string]$eventProperty.Value
+        }else{
+            '<untyped>'
+        }
+        $sessionProperty=$_.PSObject.Properties['Session']
+        $session=if($null -ne $sessionProperty){" session=$($sessionProperty.Value)"}else{''}
+        "$label$session"
     })
     $svc=Get-Service -Name 'RansomGuardV03' -ErrorAction SilentlyContinue
     $state=if($svc){[string]$svc.Status}else{'missing'}

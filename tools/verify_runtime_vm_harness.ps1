@@ -245,6 +245,7 @@ foreach($required in @(
     'disconnectReadAllowed',
     'disconnectOutOfRootAllowed',
     'wrongRootReconnectRejected',
+    "Wait-ExpectedGateRejection $gateWrong $wrongOut $wrongErr 'FilterConnectCommunicationPort failed HRESULT=0x80070005' 'wrong-root retained-scope reconnect' 30",
     'sameRootReconnectActivated',
     'sameRootMutationAllowed',
     'gracefulReleaseSucceeded',

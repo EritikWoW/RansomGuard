@@ -84,12 +84,26 @@ foreach ($lockFile in $lockFiles) {
         $tfm = $tfmProp.Name
         foreach ($depProp in $tfmProp.Value.PSObject.Properties) {
             $dep = $depProp.Value
-            $resolved = [string]$dep.resolved
-            if ([string]::IsNullOrWhiteSpace($resolved)) { continue }
+            $typeProperty = $dep.PSObject.Properties['type']
+            $resolvedProperty = $dep.PSObject.Properties['resolved']
+            $dependencyType = if ($typeProperty) { [string]$typeProperty.Value } else { '' }
+
+            # Project-reference nodes intentionally have no resolved NuGet version.
+            # They are source components, not package-manager dependencies.
+            if (-not $resolvedProperty) {
+                if ($dependencyType -eq 'Project') { continue }
+                throw "Lock entry '$($depProp.Name)' in '$lockRelative' ($tfm) has no resolved version."
+            }
+
+            $resolved = [string]$resolvedProperty.Value
+            if ([string]::IsNullOrWhiteSpace($resolved)) {
+                throw "Lock entry '$($depProp.Name)' in '$lockRelative' ($tfm) has an empty resolved version."
+            }
+
             $nuget.Add([pscustomobject]@{
                 name = $depProp.Name
                 version = $resolved
-                type = [string]$dep.type
+                type = $dependencyType
                 targetFramework = $tfm
                 lockFile = $lockRelative
             })

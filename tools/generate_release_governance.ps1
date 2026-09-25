@@ -1,6 +1,7 @@
 param(
-    [string]$ReleaseRoot = (Join-Path $PSScriptRoot "..\release"),
-    [string]$OutputDir = (Join-Path $PSScriptRoot "..\build-logs\release-governance"),
+    [string]$RepositoryRoot = "",
+    [string]$ReleaseRoot = "",
+    [string]$OutputDir = "",
     [string]$SourceSha = ""
 )
 
@@ -17,7 +18,18 @@ function Get-SpdxSafeId([string]$Value) {
     return $safe.Trim('-')
 }
 
-$repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
+    $RepositoryRoot = Join-Path $PSScriptRoot '..'
+}
+$repoRoot = [IO.Path]::GetFullPath($RepositoryRoot)
+
+if ([string]::IsNullOrWhiteSpace($ReleaseRoot)) {
+    $ReleaseRoot = Join-Path $repoRoot 'release'
+}
+if ([string]::IsNullOrWhiteSpace($OutputDir)) {
+    $OutputDir = Join-Path $repoRoot 'build-logs\release-governance'
+}
+
 $releasePath = [IO.Path]::GetFullPath($ReleaseRoot)
 $outPath = [IO.Path]::GetFullPath($OutputDir)
 New-Item -ItemType Directory -Force -Path $outPath | Out-Null

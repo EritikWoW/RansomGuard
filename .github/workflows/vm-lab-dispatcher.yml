@@ -276,7 +276,8 @@ jobs:
           $run=$runJson | ConvertFrom-Json
           $allowed=@(
             'Minifilter Driver Verifier VM lab',
-            'RansomGuard Driver Verifier CLEAR recovery'
+            'RansomGuard Driver Verifier CLEAR recovery',
+            'RansomGuard frozen immutable-package Driver Verifier'
           )
           if([string]$run.name -notin $allowed){
             throw "Run $env:TARGET_RUN_ID is not an allowed Driver Verifier workflow."

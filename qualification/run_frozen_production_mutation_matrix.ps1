@@ -436,17 +436,27 @@ try{
     }
 
     if(-not $reparseDenied){throw 'Post-activation reparse mutation denial was not observed.'}
+    $junctionResidue=$false
     if(Test-Path -LiteralPath $junction){
         $createdItem=Get-Item -LiteralPath $junction -Force
         if(($createdItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){
             & $env:ComSpec /d /c rmdir "$junction"
             throw 'Post-activation reparse mutation returned an error but still created a reparse point.'
         }
-        Remove-Item -LiteralPath $junction -Recurse -Force
+
+        # New-Item may leave the ordinary directory it created before the reparse FSCTL
+        # is denied. While ProductionGate is active that residue is itself protected, so
+        # deleting it here would test another protected mutation and can correctly return
+        # ACCESS_DENIED. Record the residue and remove it only after GateClient is stopped
+        # and the minifilter has been unloaded.
+        $junctionResidue=$true
     }
     $summary.postActivationReparseMutationDenied=$true
     Stop-ProcessHard $gate.Process 'ProductionGate post-activation reparse scenario'
     Cleanup-Scenario 'post-activation reparse mutation'
+    if($junctionResidue -and (Test-Path -LiteralPath $junction)){
+        Remove-Item -LiteralPath $junction -Recurse -Force -ErrorAction Stop
+    }
 
     # Scenario 5: pre-existing alias of an in-root file must fail ProductionGate activation.
     Ensure-CleanStart

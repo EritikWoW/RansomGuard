@@ -28,9 +28,18 @@ if(Test-Path -LiteralPath $output){
 }
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 
-$metaJson=gh api "repos/$Repository/actions/artifacts/$ArtifactId"
-if($LASTEXITCODE -ne 0){throw "Unable to query artifact $ArtifactId from $Repository."}
-$meta=$metaJson | ConvertFrom-Json -Depth 20
+$apiHeaders=@{
+    Authorization="Bearer $env:GH_TOKEN"
+    Accept='application/vnd.github+json'
+    'X-GitHub-Api-Version'='2022-11-28'
+    'User-Agent'='RansomGuard-Qualification'
+}
+$metaUri="https://api.github.com/repos/$Repository/actions/artifacts/$ArtifactId"
+try{
+    $meta=Invoke-RestMethod -Method Get -Uri $metaUri -Headers $apiHeaders
+}catch{
+    throw "Unable to query artifact $ArtifactId from $Repository via GitHub REST: $($_.Exception.Message)"
+}
 
 if([long]$meta.id -ne $ArtifactId){throw "Artifact id mismatch. expected=$ArtifactId actual=$($meta.id)"}
 if([bool]$meta.expired){throw "Artifact $ArtifactId is expired."}
@@ -47,20 +56,12 @@ if([string]$meta.digest -notmatch '^sha256:[0-9a-fA-F]{64}$'){
 $zip=Join-Path $env:RUNNER_TEMP "ransomguard-frozen-package-$ArtifactId.zip"
 Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
 
-$curlArgs=@(
-    '-fL',
-    '-H',
-    "Authorization: Bearer $env:GH_TOKEN",
-    '-H',
-    'Accept: application/vnd.github+json',
-    '-H',
-    'X-GitHub-Api-Version: 2022-11-28',
-    '-o',
-    $zip,
-    [string]$meta.archive_download_url
-)
-& curl.exe @curlArgs
-if($LASTEXITCODE -ne 0){throw "Unable to download frozen package artifact $ArtifactId."}
+$archiveUri="https://api.github.com/repos/$Repository/actions/artifacts/$ArtifactId/zip"
+try{
+    Invoke-WebRequest -Method Get -Uri $archiveUri -Headers $apiHeaders -OutFile $zip
+}catch{
+    throw "Unable to download frozen package artifact $ArtifactId via GitHub REST: $($_.Exception.Message)"
+}
 Require-Leaf $zip 'Downloaded artifact ZIP'
 
 Expand-Archive -LiteralPath $zip -DestinationPath $output -Force

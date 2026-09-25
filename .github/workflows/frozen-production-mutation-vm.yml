@@ -7,6 +7,10 @@ on:
         description: Exact frozen candidate SHA to qualify.
         required: true
         type: string
+      package_artifact_id:
+        description: Artifact id of ransomguard-frozen-candidate-package-<expected_sha>.
+        required: true
+        type: string
       root_base:
         description: Disposable VM-only root for production mutation qualification.
         required: true
@@ -14,6 +18,7 @@ on:
         type: string
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -29,6 +34,7 @@ jobs:
       RANSOMGUARD_LAB_VM: I_UNDERSTAND
       RANSOMGUARD_LAB_CERT_THUMBPRINT: ${{ secrets.RANSOMGUARD_LAB_CERT_THUMBPRINT }}
       RG_EXPECTED_SHA: ${{ inputs.expected_sha }}
+      RG_FROZEN_PACKAGE_ARTIFACT_ID: ${{ inputs.package_artifact_id }}
       RG_MUTATION_ROOT_BASE: ${{ inputs.root_base }}
 
     steps:
@@ -112,22 +118,21 @@ jobs:
             "RG_LAB_RELEASE=$($lab.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           }finally{Pop-Location}
 
-      - name: Build and sign exact candidate runtime driver package
+      - name: Import immutable frozen candidate driver package
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           $ErrorActionPreference='Stop'
-          $package=Join-Path $env:RUNNER_TEMP 'ransomguard-production-mutation-driver'
-          if(Test-Path -LiteralPath $package){Remove-Item -LiteralPath $package -Recurse -Force}
-          Push-Location .\candidate
-          try{
-            .\minifilter-tools\prepare_runtime_driver_package.ps1 -CertificateThumbprint $env:RANSOMGUARD_LAB_CERT_THUMBPRINT -OutputDirectory $package
-            $provenance=Get-Content -LiteralPath (Join-Path $package 'runtime-package.json') -Raw | ConvertFrom-Json
-            if([int]$provenance.schema -ne 2){throw 'Runtime package provenance schema must be 2.'}
-            if(-not [string]::Equals([string]$provenance.commit,$env:RG_EXPECTED_SHA,[StringComparison]::OrdinalIgnoreCase)){
-              throw "Runtime package provenance commit '$($provenance.commit)' does not match '$env:RG_EXPECTED_SHA'."
-            }
-          }finally{Pop-Location}
+          $artifactId=0L
+          if(-not [long]::TryParse($env:RG_FROZEN_PACKAGE_ARTIFACT_ID,[ref]$artifactId) -or $artifactId -le 0){
+            throw "package_artifact_id must be a positive integer. Found '$env:RG_FROZEN_PACKAGE_ARTIFACT_ID'."
+          }
+          $package=Join-Path $env:RUNNER_TEMP 'ransomguard-production-mutation-frozen-driver'
+          .\orchestrator\qualification\import_frozen_candidate_package.ps1 -ArtifactId $artifactId -ExpectedSha $env:RG_EXPECTED_SHA -Repository $env:GH_REPO -OutputDirectory $package | Write-Host
           "RG_MUTATION_DRIVER_PACKAGE=$package" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RG_FROZEN_PACKAGE_IMPORT_RESULT=$(Join-Path $package 'frozen-package-import-result.json')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Run frozen ProductionGate mutation matrix
         shell: pwsh
@@ -170,6 +175,19 @@ jobs:
           }
           if(-not [string]::Equals([string]$summary.frozenCandidateSha,$env:RG_EXPECTED_SHA,[StringComparison]::OrdinalIgnoreCase)){
             throw 'Production mutation evidence is not bound to the requested frozen candidate SHA.'
+          }
+
+          $import=Get-Content -LiteralPath $env:RG_FROZEN_PACKAGE_IMPORT_RESULT -Raw | ConvertFrom-Json -Depth 20
+          foreach($pair in @(
+            @('driverSysSha256','RansomGuardMinifilter.sys'),
+            @('driverInfSha256','RansomGuardMinifilter.inf'),
+            @('driverCatSha256','RansomGuardMinifilter.cat')
+          )){
+            $actual=[string]$summary.($pair[0])
+            $expected=[string]$import.artifacts.($pair[1]).sha256
+            if(-not [string]::Equals($actual,$expected,[StringComparison]::OrdinalIgnoreCase)){
+              throw "Production mutation matrix used a different $($pair[1]) than the immutable frozen package. expected=$expected actual=$actual"
+            }
           }
 
       - name: Upload frozen ProductionGate mutation evidence

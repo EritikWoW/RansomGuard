@@ -142,7 +142,7 @@ foreach($required in @(
     }
 }
 $prodStateReset=$productionGate.IndexOf('Reset-QualificationStateRoot $stateRoot')
-$prodFixedStore=$productionGate.IndexOf("$fixedStore=[IO.Path]::GetFullPath((Join-Path $stateRoot 'Rollback'))",$prodStateReset)
+$prodFixedStore=$productionGate.IndexOf('$fixedStore=[IO.Path]::GetFullPath((Join-Path $stateRoot ''Rollback''))',$prodStateReset)
 $prodCleanupReset=$productionGate.LastIndexOf('Reset-QualificationStateRoot $stateRoot')
 if($prodStateReset -lt 0 -or $prodFixedStore -lt 0 -or $prodCleanupReset -lt 0 -or
    $prodStateReset -gt $prodFixedStore -or $prodCleanupReset -le $prodFixedStore){

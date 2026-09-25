@@ -263,7 +263,7 @@ $frozenSuite=Get-Content -LiteralPath $frozenRuntimeSuite -Raw
 foreach($required in @(
     'orchestrationCommit',
     'runtimeIntegrationScript',
-    "Join-Path $orchestrationRoot 'minifilter-tools\run_runtime_integration_lab.ps1'",
+    'Join-Path $orchestrationRoot ''minifilter-tools\run_runtime_integration_lab.ps1''',
     '& $runtimeIntegrationScript',
     'mappedThenDisconnectBaselineVerified',
     'mappedThenDisconnectPagingObserved',

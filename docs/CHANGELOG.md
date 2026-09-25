@@ -1,6 +1,7 @@
 # RansomGuard 0.8.6.0
 
 - Added the first normal-service Production Enforce lifecycle above `ReadyForLifecycle` package admission while keeping the default package/configuration Audit.
+- Windows Service startup now uses an SCM-first outer host: `WindowsServiceLifetime` is established before SecureStore, rollback verification, package admission or driver lifecycle work; a hosted bootstrap then starts the normal inner runtime. This prevents SCM 1053 startup failure while retaining the main-thread global instance mutex.
 - Enforce now validates rollback readiness before any kernel-start transition, verifies/registers the admitted demand-start minifilter, validates registered altitude/flags and installed SYS hash, then loads and attaches only the protected-root volume.
 - The service spawns the exact admitted ProductionGate client and publishes `Protected` only after a bounded structured readiness signal emitted after activation preflight/kernel `ActivateGate`.
 - Added production-only redirected-stdin lifecycle control; GateClient emits structured READY/STOPPED signals and clean shutdown still requires durable terminal evidence before `DeactivateGate`.

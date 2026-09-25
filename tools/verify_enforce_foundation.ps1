@@ -11,10 +11,11 @@ $settingsPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\Settings.cs'
 $runtimePath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\ProtectionRuntime.cs'
 $serviceRuntimePath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\RuntimeState.cs'
 $programPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\Program.cs'
+$bootstrapPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\WindowsServiceBootstrap.cs'
 $lifecyclePath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\ProductionProtectionLifecycle.cs'
 $appSettingsPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\appsettings.json'
 $buildPath=Join-Path $RepositoryRoot 'build_windows.ps1'
-foreach($path in @($settingsPath,$runtimePath,$serviceRuntimePath,$programPath,$lifecyclePath,$appSettingsPath,$buildPath)){
+foreach($path in @($settingsPath,$runtimePath,$serviceRuntimePath,$programPath,$bootstrapPath,$lifecyclePath,$appSettingsPath,$buildPath)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Production Enforce lifecycle file missing: $path"}
 }
 
@@ -22,6 +23,7 @@ $settings=Get-Content -LiteralPath $settingsPath -Raw
 $runtime=Get-Content -LiteralPath $runtimePath -Raw
 $serviceRuntime=Get-Content -LiteralPath $serviceRuntimePath -Raw
 $program=Get-Content -LiteralPath $programPath -Raw
+$bootstrap=Get-Content -LiteralPath $bootstrapPath -Raw
 $lifecycle=Get-Content -LiteralPath $lifecyclePath -Raw
 $appSettings=Get-Content -LiteralPath $appSettingsPath -Raw
 $build=Get-Content -LiteralPath $buildPath -Raw
@@ -57,6 +59,46 @@ foreach($required in @(
     'var kernelEnforcement = _phase is ProtectionPhase.Protected or ProtectionPhase.DegradedProtected'
 )){
     if($runtime -notmatch [regex]::Escape($required)){throw "Protection state invariant missing: $required"}
+}
+
+$serviceMode=$program.IndexOf('if(WindowsServiceHelpers.IsWindowsService())')
+$outerWindowsService=$program.IndexOf('serviceBuilder.Services.AddWindowsService',$serviceMode)
+$outerBootstrap=$program.IndexOf('serviceBuilder.Services.AddHostedService<WindowsServiceBootstrap>()',$outerWindowsService)
+$outerRun=$program.IndexOf('serviceHost.Run()',$outerBootstrap)
+$legacyHeavyStart=$program.IndexOf('var store=new SecureStore()',$outerRun)
+if($serviceMode -lt 0 -or $outerWindowsService -lt 0 -or $outerBootstrap -lt 0 -or $outerRun -lt 0 -or
+   $serviceMode -gt $outerWindowsService -or $outerWindowsService -gt $outerBootstrap -or $outerBootstrap -gt $outerRun){
+    throw 'Windows Service mode must establish the SCM WindowsServiceLifetime before heavy runtime bootstrap.'
+}
+if($legacyHeavyStart -ge 0 -and $legacyHeavyStart -lt $outerRun){
+    throw 'SecureStore/package/rollback startup work must not run before the SCM service host enters Run.'
+}
+
+foreach($required in @(
+    'internal sealed class WindowsServiceBootstrap : BackgroundService',
+    'Windows Service bootstrap failed after SCM startup; stopping the outer service host.',
+    'using (StateMaintenanceGate.Acquire())',
+    'var rollbackRepository = new RollbackRepository(store.Rollback)',
+    'protection.MarkRollbackReady()',
+    'ProtectionPackageVerifier.Inspect(',
+    'Type = "RollbackStoreReady"',
+    'var runtime = new RuntimeState(protection.Snapshot())',
+    'new ProductionProtectionLifecycle(',
+    'using var innerHost = builder.Build()',
+    'await innerHost.RunAsync(stoppingToken)'
+)){
+    if($bootstrap -notmatch [regex]::Escape($required)){
+        throw "SCM-first Windows Service bootstrap invariant missing: $required"
+    }
+}
+
+$bootstrapRollback=$bootstrap.IndexOf('protection.MarkRollbackReady()')
+$bootstrapInspect=$bootstrap.IndexOf('ProtectionPackageVerifier.Inspect(',$bootstrapRollback)
+$bootstrapRuntime=$bootstrap.IndexOf('var runtime = new RuntimeState(protection.Snapshot())',$bootstrapInspect)
+$bootstrapLifecycle=$bootstrap.IndexOf('new ProductionProtectionLifecycle(',$bootstrapRuntime)
+if($bootstrapRollback -lt 0 -or $bootstrapInspect -lt 0 -or $bootstrapRuntime -lt 0 -or $bootstrapLifecycle -lt 0 -or
+   $bootstrapRollback -gt $bootstrapInspect -or $bootstrapInspect -gt $bootstrapRuntime -or $bootstrapRuntime -gt $bootstrapLifecycle){
+    throw 'SCM-first bootstrap must preserve rollback -> admission -> runtime -> lifecycle ordering.'
 }
 
 $rollbackReady=$program.IndexOf('protection.MarkRollbackReady()')

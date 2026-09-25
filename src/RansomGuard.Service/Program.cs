@@ -8,6 +8,31 @@ if(!OperatingSystem.IsWindows()){Console.Error.WriteLine("Windows 10/11 x64 is r
 using(var me=WindowsIdentity.GetCurrent())
     if(!new WindowsPrincipal(me).IsInRole(WindowsBuiltInRole.Administrator)&&!me.IsSystem)
     {Console.Error.WriteLine("Run elevated. No process will be monitored or suspended without the required rights.");return 3;}
+
+if(WindowsServiceHelpers.IsWindowsService())
+{
+    if(args.Length!=0){Console.Error.WriteLine("Windows Service mode does not accept command-line arguments.");return 5;}
+    using var serviceMutex=new Mutex(false,@"Global\RansomGuardV03-Instance");
+    bool serviceLocked;
+    try{serviceLocked=serviceMutex.WaitOne(0);}catch(AbandonedMutexException){serviceLocked=true;}
+    if(!serviceLocked)throw new InvalidOperationException("Another v0.3 instance is active. Stop its audit console/service before starting the Windows Service.");
+
+    try
+    {
+        // SCM handshake must happen before package admission, rollback verification or driver lifecycle work.
+        // The outer host owns WindowsServiceLifetime; WindowsServiceBootstrap performs the heavy startup
+        // only after SCM has accepted the service process.
+        var serviceBuilder=Host.CreateApplicationBuilder(new HostApplicationBuilderSettings{
+            Args=Array.Empty<string>(),ContentRootPath=AppContext.BaseDirectory});
+        serviceBuilder.Services.AddWindowsService(o=>o.ServiceName="RansomGuardV03");
+        serviceBuilder.Services.AddHostedService<WindowsServiceBootstrap>();
+        using var serviceHost=serviceBuilder.Build();
+        serviceHost.Run();
+        return Environment.ExitCode;
+    }
+    finally{serviceMutex.ReleaseMutex();}
+}
+
 try
 {
     // Cooperating UI recovery may not replace state between startup validation and instance ownership.

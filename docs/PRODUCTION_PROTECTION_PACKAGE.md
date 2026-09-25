@@ -34,7 +34,11 @@ Admission is fail-closed. The service verifies the fixed non-reparse paths and f
 
 The running `RansomGuard.Service.exe`, GateClient and driver catalog must all have a cache-verifiable Authenticode signature. GateClient and CAT must be signed by the same signing certificate as the running service. The driver SYS and INF must each verify as members of the supplied signed CAT through the Windows catalog APIs (`CryptCATAdminAcquireContext2`, `CryptCATAdminCalcHashFromFileHandle2` and catalog-mode `WinVerifyTrust`).
 
-A successful admission produces **ReadyForLifecycle**. That result is still not a `Protected` claim. The 0.8.6 lifecycle then performs the following ordered transition:
+A successful admission produces **ReadyForLifecycle**. That result is still not a `Protected` claim.
+
+When launched by Windows SCM, the executable first establishes a minimal outer `WindowsServiceLifetime` host and reports service startup before performing SecureStore access, rollback verification, package admission or driver/GateClient lifecycle work. Those operations run inside a hosted bootstrap after the SCM handshake; the normal runtime itself is an inner Generic Host. This keeps startup fail-closed without making SCM startup depend on potentially expensive security/package validation.
+
+The 0.8.6 lifecycle then performs the following ordered transition:
 
 1. The service verifies the private rollback repository before any kernel-start transition.
 2. The admitted driver package is staged/registered only when the `RansomGuardMinifilter` service is absent. Existing registration is never silently replaced.

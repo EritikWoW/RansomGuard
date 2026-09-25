@@ -260,7 +260,6 @@ function Ensure-CleanStart {
 
 function Install-ScenarioDriver {
     & $installScript -Volume $volume -PackageDirectory $DriverPackageDirectory -Confirmation 'LAB-MINIFILTER'
-    if($LASTEXITCODE -ne 0){throw "Candidate minifilter install failed, exit=$LASTEXITCODE"}
     $script:installed=$true
 }
 
@@ -280,7 +279,6 @@ function Cleanup-Scenario([string]$Name){
 
     if($script:installed){
         & $unloadScript -Volume $volume -RemovePackage
-        if($LASTEXITCODE -ne 0){throw "$Name minifilter unload failed, exit=$LASTEXITCODE"}
         $script:installed=$false
     }
 

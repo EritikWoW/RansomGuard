@@ -225,6 +225,7 @@ $summary=[ordered]@{
     dormantWritableHandleRejected=$false
     preexistingWritableMappingRejected=$false
     preexistingHardLinkRejected=$false
+    descendantReparseRejected=$false
     hardLinkInsideToOutsideDenied=$false
     hardLinkOutsideToInsideDenied=$false
     hardLinkOutsideToOutsideAllowed=$false
@@ -341,7 +342,37 @@ try{
     if(-not $holder.WaitForExit(15000)){throw 'Pre-existing mapping holder did not exit.'}
     Cleanup-Scenario 'pre-existing mapping'
 
-    # Scenario 3: pre-existing alias of an in-root file must fail ProductionGate activation.
+    # Scenario 3: a descendant junction/reparse point must make ProductionGate activation fail closed.
+    # Protecting a pathname root while silently skipping a namespace escape would let an attacker
+    # route I/O through an in-root name to an out-of-root target.
+    Ensure-CleanStart
+    $root=Join-Path $RootBase "descendant-reparse-$stamp"
+    $outsideDir=Join-Path $RootBase "descendant-reparse-target-$stamp"
+    $junction=Join-Path $root 'escape'
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    New-Item -ItemType Directory -Path $outsideDir -Force | Out-Null
+    New-TestFile (Join-Path $outsideDir 'outside.bin')
+    $created=New-Item -ItemType Junction -Path $junction -Target $outsideDir -Force
+    if($null -eq $created -or -not(Test-Path -LiteralPath $junction)){
+        throw 'Unable to create descendant junction required for ProductionGate qualification.'
+    }
+    if(((Get-Item -LiteralPath $junction -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0){
+        throw 'Qualification junction was not reported as a reparse point.'
+    }
+    try{
+        Install-ScenarioDriver
+        $gate=Start-ProductionGate $root "prod-mut-reparse-$stamp" 'descendant-reparse-production-gate'
+        [void](Wait-ExpectedGateRejection $gate.Process $gate.StdOut $gate.StdErr '(?i)reparse' 'ProductionGate descendant reparse point')
+        $summary.descendantReparseRejected=$true
+        Cleanup-Scenario 'descendant reparse point'
+    }
+    finally{
+        if(Test-Path -LiteralPath $junction){
+            [IO.Directory]::Delete($junction)
+        }
+    }
+
+    # Scenario 4: pre-existing alias of an in-root file must fail ProductionGate activation.
     Ensure-CleanStart
     $root=Join-Path $RootBase "preexisting-hardlink-$stamp"
     New-Item -ItemType Directory -Path $root -Force | Out-Null
@@ -360,7 +391,7 @@ try{
     Remove-Item -LiteralPath $alias -Force
     Cleanup-Scenario 'pre-existing hard-link'
 
-    # Scenario 4: active ProductionGate must enforce hard-link topology for both Win32 and FileLinkInformationEx.
+    # Scenario 5: active ProductionGate must enforce hard-link topology for both Win32 and FileLinkInformationEx.
     Ensure-CleanStart
     $root=Join-Path $RootBase "active-hardlink-$stamp"
     New-Item -ItemType Directory -Path $root -Force | Out-Null
@@ -413,7 +444,7 @@ try{
     Stop-ProcessHard $gate.Process 'ProductionGate hard-link scenario'
     Cleanup-Scenario 'active hard-link topology'
 
-    # Scenario 5: FSCTL_SET_ZERO_DATA may mutate only after a durable full pre-image exists.
+    # Scenario 6: FSCTL_SET_ZERO_DATA may mutate only after a durable full pre-image exists.
     Ensure-CleanStart
     $root=Join-Path $RootBase "fsctl-zero-$stamp"
     New-Item -ItemType Directory -Path $root -Force | Out-Null
@@ -444,7 +475,7 @@ try{
     Stop-ProcessHard $gate.Process 'ProductionGate FSCTL scenario'
     Cleanup-Scenario 'FSCTL_SET_ZERO_DATA'
 
-    # Scenario 6: post-activation mapped write must retain the original full pre-image.
+    # Scenario 7: post-activation mapped write must retain the original full pre-image.
     Ensure-CleanStart
     $root=Join-Path $RootBase "mapped-write-$stamp"
     New-Item -ItemType Directory -Path $root -Force | Out-Null

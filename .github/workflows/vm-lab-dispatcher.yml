@@ -72,5 +72,7 @@ jobs:
 
       - name: Record dispatch
         shell: pwsh
+        env:
+          TARGET_REF: ${{ steps.request.outputs.ref }}
         run: |
-          Write-Host "Dispatched minifilter-runtime-vm.yml for ref '${{ steps.request.outputs.ref }}'."
+          Write-Host "Dispatched minifilter-runtime-vm.yml for ref '$env:TARGET_REF'."

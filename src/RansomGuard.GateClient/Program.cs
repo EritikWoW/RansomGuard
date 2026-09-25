@@ -108,6 +108,7 @@ var context = new RgConnectContext
 
 using var port = Native.Connect(PortName, context);
 using var cts = new CancellationTokenSource();
+var productionServiceShutdownAuthorized = 0;
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); Native.Cancel(port); };
 
 async Task MonitorServiceControlAsync()
@@ -121,13 +122,22 @@ async Task MonitorServiceControlAsync()
         {
             var line = await Console.In.ReadLineAsync().WaitAsync(cts.Token).ConfigureAwait(false);
             if (line is null)
+            {
+                // The supervising service disappeared or closed its private control pipe.
+                // Never translate that failure into an authorized whole-gate deactivation.
+                cts.Cancel();
+                Native.Cancel(port);
+                try { Console.Error.WriteLine("Production service control channel closed unexpectedly; disconnect will remain fail-safe."); }
+                catch (IOException) { }
                 return;
+            }
             if (!string.Equals(line, "shutdown", StringComparison.Ordinal))
             {
                 Console.Error.WriteLine("Production service control ignored an unknown command.");
                 continue;
             }
 
+            Interlocked.Exchange(ref productionServiceShutdownAuthorized, 1);
             Console.WriteLine($"RG-LIFECYCLE STOPPING schema=1 pid={Environment.ProcessId} session={sessionId}");
             cts.Cancel();
             Native.Cancel(port);
@@ -595,15 +605,22 @@ var pendingContainmentAckCount = containmentRecords.Count(x =>
         y.Phase == ContainmentEvidencePhase.KernelActive &&
         y.KernelSequence == x.KernelSequence));
 var workerFailureCount = Volatile.Read(ref gateWorkerFailures);
-var cleanShutdown = workerFailureCount == 0 &&
+var productionShutdownAuthorized =
+    options.Profile != GateProfile.Production ||
+    !options.ServiceControlStdin ||
+    Volatile.Read(ref productionServiceShutdownAuthorized) == 1;
+var cleanShutdown = productionShutdownAuthorized &&
+                    workerFailureCount == 0 &&
                     pendingCreateCount == 0 &&
                     pendingRenameCount == 0 &&
                     pendingTruncateCount == 0 &&
                     unsettledDeleteCount == 0 &&
                     pendingContainmentAckCount == 0;
-var lifecycleReason = cleanShutdown
-    ? "clean-gate-shutdown"
-    : $"gate-shutdown-faulted:workers={workerFailureCount};pending-create={pendingCreateCount};pending-rename={pendingRenameCount};pending-truncate={pendingTruncateCount};unsettled-delete={unsettledDeleteCount};pending-containment-ack={pendingContainmentAckCount}";
+var lifecycleReason = !productionShutdownAuthorized
+    ? "gate-shutdown-faulted:production-service-shutdown-not-authorized"
+    : cleanShutdown
+        ? "clean-gate-shutdown"
+        : $"gate-shutdown-faulted:workers={workerFailureCount};pending-create={pendingCreateCount};pending-rename={pendingRenameCount};pending-truncate={pendingTruncateCount};unsettled-delete={unsettledDeleteCount};pending-containment-ack={pendingContainmentAckCount}";
 
 await using (var lifecycleReservation = await storageBudget.ReserveAsync(
                  RollbackStorageBudget.MetadataReservationBytes,

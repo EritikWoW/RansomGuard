@@ -111,8 +111,10 @@ jobs:
           $ErrorActionPreference='Stop'
           $out=Join-Path $env:RUNNER_TEMP 'ransomguard-fsctl-qualification-probe'
           if(Test-Path -LiteralPath $out){Remove-Item -LiteralPath $out -Recurse -Force}
-          dotnet publish .\orchestrator\qualification\RansomGuard.FsctlQualificationProbe\RansomGuard.FsctlQualificationProbe.csproj `
-            -c Release -r win-x64 --self-contained true --locked-mode -o $out
+          $project='.\orchestrator\qualification\RansomGuard.FsctlQualificationProbe\RansomGuard.FsctlQualificationProbe.csproj'
+          dotnet restore $project --locked-mode -r win-x64 -p:SelfContained=true
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          dotnet publish $project -c Release -r win-x64 --self-contained true --no-restore -o $out
           if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
           $exe=Join-Path $out 'RansomGuard.FsctlQualificationProbe.exe'
           if(-not(Test-Path -LiteralPath $exe -PathType Leaf)){throw "FSCTL qualification probe missing: $exe"}

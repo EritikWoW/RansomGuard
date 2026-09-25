@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory=$true)][string]$CandidateRoot,
     [Parameter(Mandatory=$true)][string]$LabReleaseDirectory,
     [Parameter(Mandatory=$true)][string]$DriverPackageDirectory,
+    [Parameter(Mandatory=$true)][string]$FsctlHelperExe,
     [Parameter(Mandatory=$true)][string]$ExpectedSha,
     [string]$RootBase='C:\RansomGuard-VM-ProductionMutation',
     [string]$ResultsDirectory=''
@@ -157,12 +158,84 @@ function Wait-JournalMatch([string]$Path,[scriptblock]$Predicate,[int]$Seconds,[
     throw "Timed out waiting for $Description in $Path"
 }
 
-function New-TestFile([string]$Path){
+function New-TestFile([string]$Path,[int]$Salt=41){
     $parent=Split-Path -Parent $Path
     if($parent){New-Item -ItemType Directory -Path $parent -Force | Out-Null}
     $bytes=New-Object byte[] 65536
-    for($i=0;$i -lt $bytes.Length;$i++){$bytes[$i]=[byte](($i*17+41) -band 0xFF)}
+    for($i=0;$i -lt $bytes.Length;$i++){$bytes[$i]=[byte](($i*17+$Salt) -band 0xFF)}
     [IO.File]::WriteAllBytes($Path,$bytes)
+}
+
+function Invoke-FsctlQualificationProbe(
+    [string[]]$Arguments,
+    [string]$ResultPath,
+    [string]$Description
+){
+    Remove-Item -LiteralPath $ResultPath -Force -ErrorAction SilentlyContinue
+    $invokeArgs=@($Arguments)+@('--result',$ResultPath)
+    & $FsctlHelperExe @invokeArgs
+    if($LASTEXITCODE -ne 0){
+        throw "$Description helper failed with exit=$LASTEXITCODE."
+    }
+    if(-not(Test-Path -LiteralPath $ResultPath -PathType Leaf)){
+        throw "$Description helper produced no result marker."
+    }
+    $value=(Get-Content -LiteralPath $ResultPath -Raw).Trim()
+    if([string]::IsNullOrWhiteSpace($value)){
+        throw "$Description helper produced an empty result marker."
+    }
+    return $value
+}
+
+function Test-FsctlAllowedResult([string]$Result){
+    return $Result -match '^allowed(?:$|:)'
+}
+
+function Assert-FsctlCapabilityConsistency(
+    [string]$CapabilityResult,
+    [string]$ProtectedResult,
+    [string]$Description
+){
+    if($CapabilityResult -match '^open-error:'){
+        throw "$Description capability preflight could not open its file: $CapabilityResult"
+    }
+    if($ProtectedResult -match '^open-error:'){
+        throw "$Description could not open the protected target after ProductionGate activation: $ProtectedResult"
+    }
+
+    if(Test-FsctlAllowedResult $CapabilityResult){
+        if(-not(Test-FsctlAllowedResult $ProtectedResult)){
+            throw "$Description is supported outside protection but did not reach the filesystem under ProductionGate. capability=$CapabilityResult protected=$ProtectedResult"
+        }
+        return
+    }
+
+    if(-not [string]::Equals($CapabilityResult,$ProtectedResult,[StringComparison]::OrdinalIgnoreCase)){
+        throw "$Description changed the filesystem result under ProductionGate. capability=$CapabilityResult protected=$ProtectedResult"
+    }
+}
+
+function Assert-DurablePreimage(
+    [string]$Session,
+    [string]$Target,
+    [string]$OriginalHash,
+    [string]$Description
+){
+    $sessionRoot=Join-Path $fixedStore ("Sessions\"+$Session)
+    $capture=Wait-JournalMatch (Join-Path $sessionRoot 'journal.jsonl') {
+        param($x)
+        [string]::Equals([IO.Path]::GetFullPath([string]$x.originalPath),$Target,[StringComparison]::OrdinalIgnoreCase)
+    } 20 "$Description durable full pre-image"
+    if(-not [string]::Equals([string]$capture.originalSha256,$OriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw "$Description pre-image hash mismatch."
+    }
+    $snapshot=Join-Path $sessionRoot ([string]$capture.snapshotRelativePath)
+    if(-not(Test-Path -LiteralPath $snapshot -PathType Leaf)){
+        throw "$Description pre-image snapshot missing."
+    }
+    if(-not [string]::Equals((Get-FileHash -LiteralPath $snapshot -Algorithm SHA256).Hash,$OriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw "$Description snapshot hash mismatch."
+    }
 }
 
 Assert-Administrator
@@ -173,6 +246,7 @@ $ExpectedSha=$ExpectedSha.ToLowerInvariant()
 $CandidateRoot=[IO.Path]::GetFullPath($CandidateRoot)
 $LabReleaseDirectory=[IO.Path]::GetFullPath($LabReleaseDirectory)
 $DriverPackageDirectory=[IO.Path]::GetFullPath($DriverPackageDirectory)
+$FsctlHelperExe=[IO.Path]::GetFullPath($FsctlHelperExe)
 $RootBase=[IO.Path]::GetFullPath($RootBase).TrimEnd('\')
 if($RootBase -notmatch '(?i)RansomGuard'){throw 'RootBase must contain RansomGuard.'}
 $drive=[IO.Path]::GetPathRoot($RootBase).TrimEnd('\')
@@ -194,7 +268,7 @@ $driverSys=Join-Path $DriverPackageDirectory 'RansomGuardMinifilter.sys'
 $driverInf=Join-Path $DriverPackageDirectory 'RansomGuardMinifilter.inf'
 $driverCat=Join-Path $DriverPackageDirectory 'RansomGuardMinifilter.cat'
 $driverProvenancePath=Join-Path $DriverPackageDirectory 'runtime-package.json'
-foreach($required in @($gateExe,$helperExe,$installScript,$unloadScript,$driverSys,$driverInf,$driverCat,$driverProvenancePath)){
+foreach($required in @($gateExe,$helperExe,$FsctlHelperExe,$installScript,$unloadScript,$driverSys,$driverInf,$driverCat,$driverProvenancePath)){
     if(-not(Test-Path -LiteralPath $required -PathType Leaf)){throw "Required candidate artifact missing: $required"}
 }
 
@@ -213,6 +287,14 @@ if(-not [string]::Equals([string]$provenance.catSha256,$actualCat,[StringCompari
 $stateRoot=[IO.Path]::GetFullPath((Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)) 'RansomGuardV03'))
 $fixedStore=[IO.Path]::GetFullPath((Join-Path $stateRoot 'Rollback'))
 $volume=[IO.Path]::GetPathRoot($RootBase).TrimEnd('\')
+$logicalDisk=Get-CimInstance Win32_LogicalDisk -Filter ("DeviceID='{0}'" -f $volume)
+if($null -eq $logicalDisk -or [string]::IsNullOrWhiteSpace([string]$logicalDisk.FileSystem)){
+    throw "Unable to determine filesystem for qualification volume '$volume'."
+}
+$filesystem=([string]$logicalDisk.FileSystem).ToUpperInvariant()
+if($filesystem -ne 'NTFS'){
+    throw "Frozen 0.8.6 production mutation qualification currently declares only NTFS support. Found '$filesystem' on '$volume'."
+}
 
 $summary=[ordered]@{
     schema=1
@@ -221,6 +303,8 @@ $summary=[ordered]@{
     driverInfSha256=$actualInf
     driverCatSha256=$actualCat
     vm=$vm
+    filesystem=$filesystem
+    ntfsQualified=$true
     startedUtc=[DateTimeOffset]::UtcNow.ToString('o')
     dormantWritableHandleRejected=$false
     preexistingWritableMappingRejected=$false
@@ -236,6 +320,21 @@ $summary=[ordered]@{
     fsctlZeroAllowedWithBaseline=$false
     fsctlZeroMutatedTarget=$false
     fsctlZeroPreimageHashMatched=$false
+    fsctlSetSparseCapability=''
+    fsctlSetSparseResult=''
+    fsctlSetSparseQualified=$false
+    fsctlFileLevelTrimCapability=''
+    fsctlFileLevelTrimResult=''
+    fsctlFileLevelTrimQualified=$false
+    fsctlDuplicateExtentsCapability=''
+    fsctlDuplicateExtentsResult=''
+    fsctlDuplicateExtentsQualified=$false
+    fsctlDuplicateExtentsExCapability=''
+    fsctlDuplicateExtentsExResult=''
+    fsctlDuplicateExtentsExQualified=$false
+    fsctlOffloadWriteCapability=''
+    fsctlOffloadWriteResult=''
+    fsctlOffloadWriteQualified=$false
     postActivationMappedWriteMutatedTarget=$false
     postActivationMappedWritePreimageHashMatched=$false
     cleanupPassed=$false
@@ -561,7 +660,293 @@ try{
     Stop-ProcessHard $gate.Process 'ProductionGate FSCTL scenario'
     Cleanup-Scenario 'FSCTL_SET_ZERO_DATA'
 
-    # Scenario 7: post-activation mapped write must retain the original full pre-image.
+    # Scenario 7: FSCTL_SET_SPARSE must retain a durable full pre-image before changing sparse metadata.
+    Ensure-CleanStart
+    $capTarget=Join-Path $RootBase "cap-set-sparse-$stamp.bin"
+    New-TestFile $capTarget 53
+    $capResultPath=Join-Path $ResultsDirectory 'fsctl-set-sparse-capability.result'
+    $capResult=Invoke-FsctlQualificationProbe @('set-sparse','--file',$capTarget) $capResultPath 'FSCTL_SET_SPARSE capability'
+    $summary.fsctlSetSparseCapability=$capResult
+    if(-not(Test-FsctlAllowedResult $capResult)){
+        throw "NTFS qualification VM does not support FSCTL_SET_SPARSE as expected. result=$capResult"
+    }
+
+    $root=Join-Path $RootBase "fsctl-set-sparse-$stamp"
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    $target=Join-Path $root 'set-sparse.bin'
+    New-TestFile $target 59
+    $originalHash=(Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
+    Install-ScenarioDriver
+    $session="prod-mut-set-sparse-$stamp"
+    $gate=Start-ProductionGate $root $session 'fsctl-set-sparse-production-gate'
+    Wait-LogPattern $gate.StdOut 'kernel gate ACTIVE' $gate.Process 45
+    $resultPath=Join-Path $ResultsDirectory 'fsctl-set-sparse.result'
+    $protectedResult=Invoke-FsctlQualificationProbe @('set-sparse','--file',$target) $resultPath 'ProductionGate FSCTL_SET_SPARSE'
+    $summary.fsctlSetSparseResult=$protectedResult
+    Assert-FsctlCapabilityConsistency $capResult $protectedResult 'FSCTL_SET_SPARSE'
+    $attributes=(Get-Item -LiteralPath $target -Force).Attributes
+    if(($attributes -band [IO.FileAttributes]::SparseFile) -eq 0){
+        throw 'ProductionGate FSCTL_SET_SPARSE returned success but the sparse attribute was not set.'
+    }
+    Assert-DurablePreimage $session $target $originalHash 'ProductionGate FSCTL_SET_SPARSE'
+    $summary.fsctlSetSparseQualified=$true
+    Stop-ProcessHard $gate.Process 'ProductionGate FSCTL_SET_SPARSE scenario'
+    Cleanup-Scenario 'FSCTL_SET_SPARSE'
+    Remove-Item -LiteralPath $capTarget -Force -ErrorAction SilentlyContinue
+
+    # Scenario 8: FSCTL_FILE_LEVEL_TRIM must preserve the original content before any supported storage trim.
+    Ensure-CleanStart
+    $capTarget=Join-Path $RootBase "cap-file-trim-$stamp.bin"
+    New-TestFile $capTarget 61
+    $capResultPath=Join-Path $ResultsDirectory 'fsctl-file-trim-capability.result'
+    $capResult=Invoke-FsctlQualificationProbe @('file-trim','--file',$capTarget,'--offset','0','--length','65536') $capResultPath 'FSCTL_FILE_LEVEL_TRIM capability'
+    $summary.fsctlFileLevelTrimCapability=$capResult
+
+    $root=Join-Path $RootBase "fsctl-file-trim-$stamp"
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    $target=Join-Path $root 'file-trim.bin'
+    New-TestFile $target 67
+    $originalHash=(Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
+    Install-ScenarioDriver
+    $session="prod-mut-file-trim-$stamp"
+    $gate=Start-ProductionGate $root $session 'fsctl-file-trim-production-gate'
+    Wait-LogPattern $gate.StdOut 'kernel gate ACTIVE' $gate.Process 45
+    $resultPath=Join-Path $ResultsDirectory 'fsctl-file-trim.result'
+    $protectedResult=Invoke-FsctlQualificationProbe @('file-trim','--file',$target,'--offset','0','--length','65536') $resultPath 'ProductionGate FSCTL_FILE_LEVEL_TRIM'
+    $summary.fsctlFileLevelTrimResult=$protectedResult
+    Assert-FsctlCapabilityConsistency $capResult $protectedResult 'FSCTL_FILE_LEVEL_TRIM'
+    if((Test-FsctlAllowedResult $capResult) -and $protectedResult -notmatch '^allowed:[1-9][0-9]*
+    Ensure-CleanStart
+    $root=Join-Path $RootBase "mapped-write-$stamp"
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    $target=Join-Path $root 'mapped.bin'
+    New-TestFile $target
+    $originalHash=(Get-FileHash $target -Algorithm SHA256).Hash
+    Install-ScenarioDriver
+    $session="prod-mut-map-$stamp"
+    $gate=Start-ProductionGate $root $session 'mapped-write-production-gate'
+    Wait-LogPattern $gate.StdOut 'kernel gate ACTIVE' $gate.Process 45
+    & $helperExe map-write --file $target
+    if($LASTEXITCODE -ne 0){throw "ProductionGate mapped-write helper failed, exit=$LASTEXITCODE"}
+    $afterHash=(Get-FileHash $target -Algorithm SHA256).Hash
+    if([string]::Equals($afterHash,$originalHash,[StringComparison]::OrdinalIgnoreCase)){throw 'ProductionGate mapped write did not mutate target.'}
+    $summary.postActivationMappedWriteMutatedTarget=$true
+    $sessionRoot=Join-Path $fixedStore ("Sessions\"+$session)
+    [void](Wait-JournalMatch (Join-Path $sessionRoot 'section-state\writable-section-journal.jsonl') {
+        param($x)
+        [int]$x.state -eq 1 -and [string]::Equals([IO.Path]::GetFullPath([string]$x.trackedPath),$target,[StringComparison]::OrdinalIgnoreCase)
+    } 30 'ProductionGate writable-section baseline evidence')
+    $capture=Wait-JournalMatch (Join-Path $sessionRoot 'journal.jsonl') {
+        param($x)
+        [string]::Equals([IO.Path]::GetFullPath([string]$x.originalPath),$target,[StringComparison]::OrdinalIgnoreCase)
+    } 20 'ProductionGate mapped-write full pre-image'
+    if(-not [string]::Equals([string]$capture.originalSha256,$originalHash,[StringComparison]::OrdinalIgnoreCase)){throw 'ProductionGate mapped-write pre-image hash mismatch.'}
+    $snapshot=Join-Path $sessionRoot ([string]$capture.snapshotRelativePath)
+    if(-not(Test-Path $snapshot -PathType Leaf)){throw 'ProductionGate mapped-write snapshot missing.'}
+    if(-not [string]::Equals((Get-FileHash $snapshot -Algorithm SHA256).Hash,$originalHash,[StringComparison]::OrdinalIgnoreCase)){throw 'ProductionGate mapped-write snapshot hash mismatch.'}
+    $summary.postActivationMappedWritePreimageHashMatched=$true
+    Stop-ProcessHard $gate.Process 'ProductionGate mapped-write scenario'
+    Cleanup-Scenario 'post-activation mapped write'
+
+    $summary.cleanupPassed=$true
+    $summary.passed=$true
+}
+catch{
+    $runtimeFailure=$_
+}
+finally{
+    try{
+        foreach($p in @($activeProcesses)){
+            if($p -and -not $p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}
+        }
+        foreach($p in @($holderProcesses)){
+            if($p -and -not $p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}
+        }
+        if($installed){
+            & $unloadScript -Volume $volume -RemovePackage
+            $script:installed=$false
+        }
+        $filters=(& fltmc filters 2>$null | Out-String)
+        if($LASTEXITCODE -ne 0 -or $filters -match '(?m)^\s*RansomGuardMinifilter\b'){
+            throw 'RansomGuardMinifilter remained loaded after production mutation qualification.'
+        }
+        Reset-QualificationStateRoot $stateRoot
+    }catch{
+        $cleanupFailure=$_
+        $summary.cleanupPassed=$false
+        $summary.cleanupError=$_.Exception.Message
+        $summary.passed=$false
+    }
+
+    $summary.completedUtc=[DateTimeOffset]::UtcNow.ToString('o')
+    $summary | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'production-mutation-matrix-result.json') -Encoding utf8
+}
+
+if($runtimeFailure){
+    if($cleanupFailure){throw "Production mutation scenario failed: $($runtimeFailure.Exception.Message) Cleanup also failed: $($cleanupFailure.Exception.Message)"}
+    throw $runtimeFailure
+}
+if($cleanupFailure){throw $cleanupFailure}
+if(-not $summary.passed){throw 'Production mutation qualification did not pass.'}
+
+Write-Host "FROZEN PRODUCTION MUTATION MATRIX PASSED: $ResultsDirectory" -ForegroundColor Green
+){
+        throw "FSCTL_FILE_LEVEL_TRIM reported success without a processed range. result=$protectedResult"
+    }
+    Assert-DurablePreimage $session $target $originalHash 'ProductionGate FSCTL_FILE_LEVEL_TRIM'
+    $summary.fsctlFileLevelTrimQualified=$true
+    Stop-ProcessHard $gate.Process 'ProductionGate FSCTL_FILE_LEVEL_TRIM scenario'
+    Cleanup-Scenario 'FSCTL_FILE_LEVEL_TRIM'
+    Remove-Item -LiteralPath $capTarget -Force -ErrorAction SilentlyContinue
+
+    # Scenario 9: FSCTL_DUPLICATE_EXTENTS_TO_FILE is either qualified with preservation or recorded as unavailable on this NTFS target.
+    Ensure-CleanStart
+    $capSource=Join-Path $RootBase "cap-dup-source-$stamp.bin"
+    $capTarget=Join-Path $RootBase "cap-dup-target-$stamp.bin"
+    New-TestFile $capSource 71
+    New-TestFile $capTarget 79
+    $capSourceHash=(Get-FileHash -LiteralPath $capSource -Algorithm SHA256).Hash
+    $capTargetBefore=(Get-FileHash -LiteralPath $capTarget -Algorithm SHA256).Hash
+    $capResultPath=Join-Path $ResultsDirectory 'fsctl-duplicate-extents-capability.result'
+    $capResult=Invoke-FsctlQualificationProbe @('duplicate-extents','--source',$capSource,'--target',$capTarget,'--length','65536') $capResultPath 'FSCTL_DUPLICATE_EXTENTS_TO_FILE capability'
+    $summary.fsctlDuplicateExtentsCapability=$capResult
+    if(Test-FsctlAllowedResult $capResult){
+        $capTargetAfter=(Get-FileHash -LiteralPath $capTarget -Algorithm SHA256).Hash
+        if(-not [string]::Equals($capTargetAfter,$capSourceHash,[StringComparison]::OrdinalIgnoreCase)){
+            throw 'FSCTL_DUPLICATE_EXTENTS_TO_FILE capability probe returned success without cloning the requested bytes.'
+        }
+    }elseif(-not [string]::Equals((Get-FileHash -LiteralPath $capTarget -Algorithm SHA256).Hash,$capTargetBefore,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'FSCTL_DUPLICATE_EXTENTS_TO_FILE capability probe failed but still changed the target.'
+    }
+
+    $root=Join-Path $RootBase "fsctl-duplicate-extents-$stamp"
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    $source=Join-Path $RootBase "dup-source-$stamp.bin"
+    $target=Join-Path $root 'dup-target.bin'
+    New-TestFile $source 83
+    New-TestFile $target 89
+    $sourceHash=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
+    $originalHash=(Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
+    Install-ScenarioDriver
+    $session="prod-mut-dup-$stamp"
+    $gate=Start-ProductionGate $root $session 'fsctl-duplicate-extents-production-gate'
+    Wait-LogPattern $gate.StdOut 'kernel gate ACTIVE' $gate.Process 45
+    $resultPath=Join-Path $ResultsDirectory 'fsctl-duplicate-extents.result'
+    $protectedResult=Invoke-FsctlQualificationProbe @('duplicate-extents','--source',$source,'--target',$target,'--length','65536') $resultPath 'ProductionGate FSCTL_DUPLICATE_EXTENTS_TO_FILE'
+    $summary.fsctlDuplicateExtentsResult=$protectedResult
+    Assert-FsctlCapabilityConsistency $capResult $protectedResult 'FSCTL_DUPLICATE_EXTENTS_TO_FILE'
+    if(Test-FsctlAllowedResult $capResult){
+        if(-not [string]::Equals((Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash,$sourceHash,[StringComparison]::OrdinalIgnoreCase)){
+            throw 'ProductionGate FSCTL_DUPLICATE_EXTENTS_TO_FILE returned success without mutating the target to source content.'
+        }
+    }elseif(-not [string]::Equals((Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash,$originalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'Unsupported FSCTL_DUPLICATE_EXTENTS_TO_FILE changed protected target content.'
+    }
+    Assert-DurablePreimage $session $target $originalHash 'ProductionGate FSCTL_DUPLICATE_EXTENTS_TO_FILE'
+    $summary.fsctlDuplicateExtentsQualified=$true
+    Stop-ProcessHard $gate.Process 'ProductionGate FSCTL_DUPLICATE_EXTENTS_TO_FILE scenario'
+    Cleanup-Scenario 'FSCTL_DUPLICATE_EXTENTS_TO_FILE'
+    Remove-Item -LiteralPath $capSource,$capTarget,$source -Force -ErrorAction SilentlyContinue
+
+    # Scenario 10: FSCTL_DUPLICATE_EXTENTS_TO_FILE_EX follows the same preservation/capability contract.
+    Ensure-CleanStart
+    $capSource=Join-Path $RootBase "cap-dup-ex-source-$stamp.bin"
+    $capTarget=Join-Path $RootBase "cap-dup-ex-target-$stamp.bin"
+    New-TestFile $capSource 97
+    New-TestFile $capTarget 101
+    $capSourceHash=(Get-FileHash -LiteralPath $capSource -Algorithm SHA256).Hash
+    $capTargetBefore=(Get-FileHash -LiteralPath $capTarget -Algorithm SHA256).Hash
+    $capResultPath=Join-Path $ResultsDirectory 'fsctl-duplicate-extents-ex-capability.result'
+    $capResult=Invoke-FsctlQualificationProbe @('duplicate-extents-ex','--source',$capSource,'--target',$capTarget,'--length','65536') $capResultPath 'FSCTL_DUPLICATE_EXTENTS_TO_FILE_EX capability'
+    $summary.fsctlDuplicateExtentsExCapability=$capResult
+    if(Test-FsctlAllowedResult $capResult){
+        $capTargetAfter=(Get-FileHash -LiteralPath $capTarget -Algorithm SHA256).Hash
+        if(-not [string]::Equals($capTargetAfter,$capSourceHash,[StringComparison]::OrdinalIgnoreCase)){
+            throw 'FSCTL_DUPLICATE_EXTENTS_TO_FILE_EX capability probe returned success without cloning the requested bytes.'
+        }
+    }elseif(-not [string]::Equals((Get-FileHash -LiteralPath $capTarget -Algorithm SHA256).Hash,$capTargetBefore,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'FSCTL_DUPLICATE_EXTENTS_TO_FILE_EX capability probe failed but still changed the target.'
+    }
+
+    $root=Join-Path $RootBase "fsctl-duplicate-extents-ex-$stamp"
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    $source=Join-Path $RootBase "dup-ex-source-$stamp.bin"
+    $target=Join-Path $root 'dup-ex-target.bin'
+    New-TestFile $source 103
+    New-TestFile $target 107
+    $sourceHash=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
+    $originalHash=(Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
+    Install-ScenarioDriver
+    $session="prod-mut-dup-ex-$stamp"
+    $gate=Start-ProductionGate $root $session 'fsctl-duplicate-extents-ex-production-gate'
+    Wait-LogPattern $gate.StdOut 'kernel gate ACTIVE' $gate.Process 45
+    $resultPath=Join-Path $ResultsDirectory 'fsctl-duplicate-extents-ex.result'
+    $protectedResult=Invoke-FsctlQualificationProbe @('duplicate-extents-ex','--source',$source,'--target',$target,'--length','65536') $resultPath 'ProductionGate FSCTL_DUPLICATE_EXTENTS_TO_FILE_EX'
+    $summary.fsctlDuplicateExtentsExResult=$protectedResult
+    Assert-FsctlCapabilityConsistency $capResult $protectedResult 'FSCTL_DUPLICATE_EXTENTS_TO_FILE_EX'
+    if(Test-FsctlAllowedResult $capResult){
+        if(-not [string]::Equals((Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash,$sourceHash,[StringComparison]::OrdinalIgnoreCase)){
+            throw 'ProductionGate FSCTL_DUPLICATE_EXTENTS_TO_FILE_EX returned success without mutating the target to source content.'
+        }
+    }elseif(-not [string]::Equals((Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash,$originalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'Unsupported FSCTL_DUPLICATE_EXTENTS_TO_FILE_EX changed protected target content.'
+    }
+    Assert-DurablePreimage $session $target $originalHash 'ProductionGate FSCTL_DUPLICATE_EXTENTS_TO_FILE_EX'
+    $summary.fsctlDuplicateExtentsExQualified=$true
+    Stop-ProcessHard $gate.Process 'ProductionGate FSCTL_DUPLICATE_EXTENTS_TO_FILE_EX scenario'
+    Cleanup-Scenario 'FSCTL_DUPLICATE_EXTENTS_TO_FILE_EX'
+    Remove-Item -LiteralPath $capSource,$capTarget,$source -Force -ErrorAction SilentlyContinue
+
+    # Scenario 11: FSCTL_OFFLOAD_WRITE is capability-bound to the current NTFS/storage stack and still requires target preservation.
+    Ensure-CleanStart
+    $capSource=Join-Path $RootBase "cap-offload-source-$stamp.bin"
+    $capTarget=Join-Path $RootBase "cap-offload-target-$stamp.bin"
+    New-TestFile $capSource 109
+    New-TestFile $capTarget 113
+    $capSourceHash=(Get-FileHash -LiteralPath $capSource -Algorithm SHA256).Hash
+    $capTargetBefore=(Get-FileHash -LiteralPath $capTarget -Algorithm SHA256).Hash
+    $capResultPath=Join-Path $ResultsDirectory 'fsctl-offload-write-capability.result'
+    $capResult=Invoke-FsctlQualificationProbe @('offload-copy','--source',$capSource,'--target',$capTarget,'--length','65536') $capResultPath 'FSCTL_OFFLOAD_WRITE capability'
+    $summary.fsctlOffloadWriteCapability=$capResult
+    if(Test-FsctlAllowedResult $capResult){
+        $capTargetAfter=(Get-FileHash -LiteralPath $capTarget -Algorithm SHA256).Hash
+        if(-not [string]::Equals($capTargetAfter,$capSourceHash,[StringComparison]::OrdinalIgnoreCase)){
+            throw 'FSCTL_OFFLOAD_WRITE capability probe returned success without copying the requested bytes.'
+        }
+    }elseif(-not [string]::Equals((Get-FileHash -LiteralPath $capTarget -Algorithm SHA256).Hash,$capTargetBefore,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'FSCTL_OFFLOAD_WRITE capability probe failed but still changed the target.'
+    }
+
+    $root=Join-Path $RootBase "fsctl-offload-write-$stamp"
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    $source=Join-Path $RootBase "offload-source-$stamp.bin"
+    $target=Join-Path $root 'offload-target.bin'
+    New-TestFile $source 127
+    New-TestFile $target 131
+    $sourceHash=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
+    $originalHash=(Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
+    Install-ScenarioDriver
+    $session="prod-mut-offload-$stamp"
+    $gate=Start-ProductionGate $root $session 'fsctl-offload-write-production-gate'
+    Wait-LogPattern $gate.StdOut 'kernel gate ACTIVE' $gate.Process 45
+    $resultPath=Join-Path $ResultsDirectory 'fsctl-offload-write.result'
+    $protectedResult=Invoke-FsctlQualificationProbe @('offload-copy','--source',$source,'--target',$target,'--length','65536') $resultPath 'ProductionGate FSCTL_OFFLOAD_WRITE'
+    $summary.fsctlOffloadWriteResult=$protectedResult
+    Assert-FsctlCapabilityConsistency $capResult $protectedResult 'FSCTL_OFFLOAD_WRITE'
+    if(Test-FsctlAllowedResult $capResult){
+        if(-not [string]::Equals((Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash,$sourceHash,[StringComparison]::OrdinalIgnoreCase)){
+            throw 'ProductionGate FSCTL_OFFLOAD_WRITE returned success without mutating the target to source content.'
+        }
+    }elseif(-not [string]::Equals((Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash,$originalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'Unavailable FSCTL_OFFLOAD_WRITE changed protected target content.'
+    }
+    Assert-DurablePreimage $session $target $originalHash 'ProductionGate FSCTL_OFFLOAD_WRITE'
+    $summary.fsctlOffloadWriteQualified=$true
+    Stop-ProcessHard $gate.Process 'ProductionGate FSCTL_OFFLOAD_WRITE scenario'
+    Cleanup-Scenario 'FSCTL_OFFLOAD_WRITE'
+    Remove-Item -LiteralPath $capSource,$capTarget,$source -Force -ErrorAction SilentlyContinue
+
+    # Scenario 12: post-activation mapped write must retain the original full pre-image.
     Ensure-CleanStart
     $root=Join-Path $RootBase "mapped-write-$stamp"
     New-Item -ItemType Directory -Path $root -Force | Out-Null

@@ -1,8 +1,6 @@
-# Production protection package admission
+# Production protection package admission and lifecycle
 
-Version 0.8.5 retains the trust/admission boundary for the future Production Enforce driver lifecycle and requires the protocol-v18 ProductionGate wire contract. It does **not** install, start, load, attach or unload the minifilter.
-
-The normal package remains Audit by default and still excludes the protection package. When `Mode=Enforce` is requested, the service inspects only this fixed layout beside its own executable:
+Version 0.8.6 retains the cryptographically bound ProductionProtection package and adds the first normal-service Production Enforce driver/GateClient lifecycle above protocol v18. The default normal package remains Audit and still excludes the protection package. Kernel activation occurs only when an operator explicitly requests `Mode=Enforce`, configures exactly one explicit local protected root, and provisions this fixed package beside the running service:
 
 ```text
 Protection/
@@ -21,7 +19,7 @@ The descriptor schema is:
 {
   "Schema": 1,
   "Profile": "ProductionProtection",
-  "Version": "0.8.5.0",
+  "Version": "0.8.6.0",
   "Protocol": 18,
   "Provider": "RansomGuard",
   "Altitude": "<Microsoft-assigned-production-altitude>",
@@ -36,6 +34,34 @@ Admission is fail-closed. The service verifies the fixed non-reparse paths and f
 
 The running `RansomGuard.Service.exe`, GateClient and driver catalog must all have a cache-verifiable Authenticode signature. GateClient and CAT must be signed by the same signing certificate as the running service. The driver SYS and INF must each verify as members of the supplied signed CAT through the Windows catalog APIs (`CryptCATAdminAcquireContext2`, `CryptCATAdminCalcHashFromFileHandle2` and catalog-mode `WinVerifyTrust`).
 
-A successful result is only **ReadyForLifecycle**. It is not a Protected claim and does not perform any SCM, Filter Manager or process lifecycle action. Version 0.8.5 still reports `EnforceUnavailable` after package admission because production install/load/attach/GateClient supervision is the next separately qualified milestone.
+A successful admission produces **ReadyForLifecycle**. That result is still not a `Protected` claim. The 0.8.6 lifecycle then performs the following ordered transition:
 
-This source-level admission boundary does not prove that an altitude was actually assigned by Microsoft merely because a numeric value is present in the package. Release governance must bind the shipped altitude to the external Microsoft assignment before distribution. Likewise, local Administrator/SYSTEM tamper resistance remains a later self-protection milestone.
+1. The service verifies the private rollback repository before any kernel-start transition.
+2. The admitted driver package is staged/registered only when the `RansomGuardMinifilter` service is absent. Existing registration is never silently replaced.
+3. The registered service must remain filesystem-driver type / demand-start, its default instance altitude must equal the admitted descriptor, automatic attachment must remain suppressed, and the installed SYS bytes must hash-match the admitted SYS.
+4. Filter Manager loads the minifilter and attaches it only to the local volume containing the configured protected root.
+5. The exact admitted `RansomGuard.GateClient.exe` is spawned with the ProductionGate profile and the fixed ProgramData rollback store.
+6. The service waits for a bounded lifecycle readiness signal emitted only after ProductionGate activation preflight and kernel `ActivateGate` succeed.
+7. Only then does the service publish `Protected` / `KernelEnforcementActive=true`.
+
+A loaded driver, SCM Running service, spawned GateClient or connected filter port is not sufficient to publish protection.
+
+## GateClient loss and reconnect
+
+Unexpected ProductionGate termination after activation does not authorize driver unload or fail open. The kernel retains the exact protected root, volume and ProductionGate profile in `DegradedProtected` and denies covered destructive ordinary user-mode mutations according to the existing fail-safe policy. The service publishes the same degraded state and retries the admitted ProductionGate after a bounded delay. A reconnect returns to `Protected` only after a fresh activation preflight completes for the retained root/profile.
+
+Initial activation failure is different: if ProductionGate never reaches readiness, the service publishes `Failed` and never claims that kernel enforcement became active.
+
+## Authorized maintenance shutdown
+
+The service uses a private redirected-stdin control channel to request ProductionGate shutdown; ProductionGate does not expose a public mutation API for this transition. It first drains its work, commits terminal rollback-session evidence, requests whole-gate `DeactivateGate`, and requires the kernel to confirm `Maintenance`. Only after the service receives the matching clean lifecycle stop signal may it publish `Maintenance` and attempt Filter Manager detach/unload.
+
+If clean deactivation cannot be proved, the service does not unload the driver. An active session stays fail-safe rather than trading recoverability for a convenient shutdown.
+
+## Deliberate remaining boundaries
+
+Automatic detector-to-containment authorization remains disabled in 0.8.6; `AutomaticContainment=true` is rejected. Production recovery orchestration, local Administrator/SYSTEM self-protection, controlled release signing, installer/update/uninstall orchestration and a Microsoft-assigned production altitude remain separate release work.
+
+The admission check can validate syntax and cryptographic package binding, but a numeric altitude in a local descriptor is not proof that Microsoft assigned it. Release governance must bind the shipped INF/descriptor to the external Microsoft assignment and controlled production signing identity.
+
+The 0.8.6 lifecycle implementation must be exact-head qualified on the disposable Windows VM before it is treated as a release gate. Source/hosted CI alone is not proof of Filter Manager lifecycle behavior.

@@ -399,9 +399,25 @@ try{
         if($_.Exception.Message -eq 'ProductionGate unexpectedly allowed post-activation descendant junction creation.'){
             throw
         }
-        $win32=([int]$_.Exception.HResult) -band 0xFFFF
-        if($_.Exception -isnot [UnauthorizedAccessException] -and $win32 -ne 5){
-            throw "Post-activation junction creation failed for an unexpected reason. HResult=0x$('{0:X8}' -f ([uint32]$_.Exception.HResult)); $($_.Exception.Message)"
+
+        $permissionDenied=([string]$_.CategoryInfo.Category -eq 'PermissionDenied')
+        $exceptionChain=New-Object System.Collections.Generic.List[string]
+        $cursor=$_.Exception
+        while($null -ne $cursor){
+            $hr=([int64]$cursor.HResult) -band 0xFFFFFFFFL
+            $low=[int]($hr -band 0xFFFFL)
+            $exceptionChain.Add("$($cursor.GetType().FullName):HResult=0x$('{0:X8}' -f $hr):$($cursor.Message)")
+            if($cursor -is [System.ComponentModel.Win32Exception] -and $cursor.NativeErrorCode -eq 5){
+                $permissionDenied=$true
+            }
+            if($low -eq 5){
+                $permissionDenied=$true
+            }
+            $cursor=$cursor.InnerException
+        }
+
+        if(-not $permissionDenied){
+            throw "Post-activation junction creation failed for an unexpected reason. Category=$($_.CategoryInfo.Category); FullyQualifiedErrorId=$($_.FullyQualifiedErrorId); ExceptionChain=$($exceptionChain -join ' -> ')"
         }
         $reparseDenied=$true
     }

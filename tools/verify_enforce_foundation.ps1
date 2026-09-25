@@ -162,7 +162,11 @@ foreach($required in @(
     'attachedVolumes.Length != 1',
     'Production minifilter must have exactly one instance on the configured protected-root volume.',
     'new[] { "detach", ServiceName, volume }',
+    'CommandResult? detach = null',
     'new[] { "unload", ServiceName }',
+    'CommandResult? unload = null',
+    'var finalFilters = await RunToolAsync(',
+    'Production driver maintenance cleanup left RansomGuardMinifilter loaded after bounded detach/unload attempts.',
     'Registry.LocalMachine.OpenSubKey',
     'FileSafety.NoReparse',
     'DecisionPolicy.HashEqual(packageHash, installedHash)',
@@ -232,6 +236,21 @@ $startupThrow=$lifecycle.IndexOf('throw new InvalidOperationException(startupDia
 if($notReady -lt 0 -or $stopCheck -lt 0 -or $terminateOnStop -lt 0 -or $startupThrow -lt 0 -or
    $notReady -gt $stopCheck -or $stopCheck -gt $terminateOnStop -or $terminateOnStop -gt $startupThrow){
     throw 'Unready initial/reconnect children must never receive maintenance authorization; initial uncertainty must terminate Enforce supervision.'
+}
+
+$cleanupStart=$lifecycle.IndexOf('public static async Task StopAfterMaintenanceAsync')
+$cleanupDetach=$lifecycle.IndexOf('new[] { "detach", ServiceName, volume }',$cleanupStart)
+$cleanupUnload=$lifecycle.IndexOf('new[] { "unload", ServiceName }',$cleanupDetach)
+$cleanupFinal=$lifecycle.IndexOf('var finalFilters = await RunToolAsync(',$cleanupUnload)
+$cleanupLoaded=$lifecycle.IndexOf('if (ContainsFilter(finalFilters.Stdout))',$cleanupFinal)
+if($cleanupStart -lt 0 -or $cleanupDetach -lt 0 -or $cleanupUnload -lt 0 -or $cleanupFinal -lt 0 -or $cleanupLoaded -lt 0 -or
+   $cleanupStart -gt $cleanupDetach -or $cleanupDetach -gt $cleanupUnload -or $cleanupUnload -gt $cleanupFinal -or $cleanupFinal -gt $cleanupLoaded){
+    throw 'Production maintenance cleanup must treat detach as best-effort, attempt unload, and fail only from verified final Filter Manager state.'
+}
+
+$legacyDetachFailure=$lifecycle.IndexOf('Filter Manager refused production detach after clean maintenance:',$cleanupStart)
+if($legacyDetachFailure -ge 0){
+    throw 'Production maintenance cleanup must not fail solely because explicit detach was refused.'
 }
 
 $shutdownWrite=$lifecycle.IndexOf('StandardInput.WriteLineAsync("shutdown")')

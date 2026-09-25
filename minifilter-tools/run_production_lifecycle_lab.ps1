@@ -155,7 +155,81 @@ function Get-AuditEntries([DateTimeOffset]$SinceUtc){
     return $entries
 }
 
-function Wait-AuditType([string]$Type,[DateTimeOffset]$SinceUtc,[int]$Seconds,[string]$ExpectedSession=''){
+function Get-ServiceFailureDiagnostics([DateTimeOffset]$SinceUtc){
+    $snapshot=[ordered]@{
+        capturedUtc=[DateTimeOffset]::UtcNow.ToString('o')
+        service=$null
+        scQueryEx=$null
+        events=@()
+    }
+
+    try{
+        $svc=Get-CimInstance Win32_Service -Filter "Name='RansomGuardV03'" -ErrorAction Stop
+        if($null -ne $svc){
+            $snapshot.service=[ordered]@{
+                name=[string]$svc.Name
+                state=[string]$svc.State
+                status=[string]$svc.Status
+                processId=[int]$svc.ProcessId
+                exitCode=[uint32]$svc.ExitCode
+                serviceSpecificExitCode=[uint32]$svc.ServiceSpecificExitCode
+                startMode=[string]$svc.StartMode
+                pathName=[string]$svc.PathName
+            }
+        }
+    }catch{
+        $snapshot.service=[ordered]@{error=$_.Exception.Message}
+    }
+
+    try{
+        $query=(& sc.exe queryex RansomGuardV03 2>&1 | Out-String).Trim()
+        $snapshot.scQueryEx=$query
+    }catch{
+        $snapshot.scQueryEx='query failed: '+$_.Exception.Message
+    }
+
+    foreach($logName in @('Application','System')){
+        try{
+            $cutoff=$SinceUtc.UtcDateTime.AddSeconds(-5)
+            $events=@(
+                Get-WinEvent -FilterHashtable @{LogName=$logName;StartTime=$cutoff} -ErrorAction Stop |
+                    Where-Object {
+                        $message=[string]$_.Message
+                        $message -match '(?i)RansomGuardV03|RansomGuard\.Service|RansomGuard'
+                    } |
+                    Select-Object -First 8 |
+                    ForEach-Object {
+                        $message=(([string]$_.Message) -replace '\s+',' ').Trim()
+                        if($message.Length -gt 1200){$message=$message.Substring(0,1200)}
+                        [ordered]@{
+                            log=$logName
+                            utc=$_.TimeCreated.ToUniversalTime().ToString('o')
+                            provider=[string]$_.ProviderName
+                            id=[int]$_.Id
+                            level=[string]$_.LevelDisplayName
+                            message=$message
+                        }
+                    }
+            )
+            $snapshot.events += $events
+        }catch{
+            $snapshot.events += [ordered]@{
+                log=$logName
+                error=$_.Exception.Message
+            }
+        }
+    }
+
+    return [pscustomobject]$snapshot
+}
+
+function Format-ServiceFailureDiagnostics($Diagnostics){
+    $json=$Diagnostics | ConvertTo-Json -Depth 8 -Compress
+    if($json.Length -gt 6000){return $json.Substring(0,6000)+'...'}
+    return $json
+}
+
+function Wait-AuditType([string]$Type,[DateTimeOffset]$SinceUtc,[int]$Seconds,[string]$ExpectedSession='',[switch]$RequireRunningService){
     $deadline=(Get-Date).AddSeconds($Seconds)
     while((Get-Date) -lt $deadline){
         $matches=@(Get-AuditEntries $SinceUtc | Where-Object {
@@ -163,6 +237,15 @@ function Wait-AuditType([string]$Type,[DateTimeOffset]$SinceUtc,[int]$Seconds,[s
             ([string]::IsNullOrWhiteSpace($ExpectedSession) -or [string]$_.Session -eq $ExpectedSession)
         })
         if($matches.Count -gt 0){return $matches[-1]}
+        if($RequireRunningService){
+            $svc=Get-Service -Name 'RansomGuardV03' -ErrorAction SilentlyContinue
+            if($null -eq $svc -or [string]$svc.Status -ne 'Running'){
+                $script:lastServiceFailureDiagnostics=Get-ServiceFailureDiagnostics $SinceUtc
+                $detail=Format-ServiceFailureDiagnostics $script:lastServiceFailureDiagnostics
+                $state=if($svc){[string]$svc.Status}else{'missing'}
+                throw "Service left Running state while waiting for audit event Type='$Type' expectedSession='$ExpectedSession'. Service=$state. Diagnostics=$detail"
+            }
+        }
         Start-Sleep -Milliseconds 200
     }
     $recent=@(Get-AuditEntries $SinceUtc | Select-Object -Last 12 | ForEach-Object {
@@ -171,7 +254,13 @@ function Wait-AuditType([string]$Type,[DateTimeOffset]$SinceUtc,[int]$Seconds,[s
     })
     $svc=Get-Service -Name 'RansomGuardV03' -ErrorAction SilentlyContinue
     $state=if($svc){[string]$svc.Status}else{'missing'}
-    throw "Timed out waiting for audit event Type='$Type' expectedSession='$ExpectedSession'. Service=$state. RecentAudit=$($recent -join ' -> ')"
+    if($RequireRunningService -and ($null -eq $svc -or [string]$svc.Status -ne 'Running')){
+        $script:lastServiceFailureDiagnostics=Get-ServiceFailureDiagnostics $SinceUtc
+    }
+    $detail=if($null -ne $script:lastServiceFailureDiagnostics){
+        '; Diagnostics='+(Format-ServiceFailureDiagnostics $script:lastServiceFailureDiagnostics)
+    }else{''}
+    throw "Timed out waiting for audit event Type='$Type' expectedSession='$ExpectedSession'. Service=$state. RecentAudit=$($recent -join ' -> ')$detail"
 
 }
 
@@ -242,6 +331,7 @@ $summary=[ordered]@{
     serviceRestartGatePid=0
     finalTargetSha256=$null
     auditEvidenceCount=0
+    serviceFailureDiagnosticsCaptured=$false
     serviceStarted=$false
     admittedAndProtected=$false
     productionMutationAllowed=$false
@@ -271,6 +361,7 @@ $firstActivation=$null
 $secondActivation=$null
 $thirdActivation=$null
 $serviceCreated=$false
+$script:lastServiceFailureDiagnostics=$null
 
 try{
     Remove-QualificationServiceIfOwned
@@ -283,7 +374,7 @@ try{
     Wait-ServiceState $serviceName 'Running' 30
     $summary.serviceStarted=$true
 
-    $rollbackReady=Wait-AuditType 'RollbackStoreReady' $startedUtc 75
+    $rollbackReady=Wait-AuditType 'RollbackStoreReady' $startedUtc 75 -RequireRunningService
     if([string]$rollbackReady.RequestedMode -ne 'Enforce'){
         throw "RollbackStoreReady published unexpected RequestedMode='$($rollbackReady.RequestedMode)'."
     }
@@ -291,7 +382,7 @@ try{
         throw "Production package was not admitted before lifecycle startup. State='$($rollbackReady.ProtectionPackage.State)' Reason='$($rollbackReady.ProtectionPackage.Reason)'"
     }
 
-    $firstActivation=Wait-AuditType 'ProductionProtectionActivated' $startedUtc 75
+    $firstActivation=Wait-AuditType 'ProductionProtectionActivated' $startedUtc 75 -RequireRunningService
     if([string]$firstActivation.Root -ne $root){throw "First activation root mismatch: $($firstActivation.Root)"}
     if([int]$firstActivation.GateClientPid -le 0){throw 'First activation did not record a GateClient PID.'}
     if([string]$firstActivation.Protection.State -ne 'Protected' -or $firstActivation.Protection.KernelEnforcementActive -ne $true){
@@ -317,7 +408,7 @@ try{
         throw "Original ProductionGate pid=$firstGatePid did not exit after the forced-loss probe."
     }
     $summary.reconnectReplacementObserved=$true
-    $lost=Wait-AuditType 'ProductionGateLost' $startedUtc 30
+    $lost=Wait-AuditType 'ProductionGateLost' $startedUtc 30 -RequireRunningService
     if([string]$lost.Session -ne [string]$firstActivation.Session){throw 'GateClient-loss audit session does not match the first activation.'}
     if([string]$lost.Protection.State -ne 'DegradedProtected' -or $lost.Protection.KernelEnforcementActive -ne $true){
         throw 'Unexpected GateClient loss did not publish DegradedProtected with kernel enforcement retained.'
@@ -341,7 +432,7 @@ try{
     }
     $summary.degradedPreservedHash=$true
 
-    $secondActivation=Wait-AuditType 'ProductionProtectionActivated' $lost.Utc 75 ([string]$firstActivation.Session)
+    $secondActivation=Wait-AuditType 'ProductionProtectionActivated' $lost.Utc 75 ([string]$firstActivation.Session) -RequireRunningService
     if([string]$secondActivation.Session -ne [string]$firstActivation.Session){
         throw 'Reconnect must preserve the same production rollback session.'
     }
@@ -404,7 +495,7 @@ try{
     $restartUtc=[DateTimeOffset]::UtcNow
     Invoke-Sc @('start',$serviceName) | Out-Null
     Wait-ServiceState $serviceName 'Running' 30
-    $thirdActivation=Wait-AuditType 'ProductionProtectionActivated' $restartUtc 75 ([string]$secondActivation.Session)
+    $thirdActivation=Wait-AuditType 'ProductionProtectionActivated' $restartUtc 75 ([string]$secondActivation.Session) -RequireRunningService
     if([string]$thirdActivation.Session -ne [string]$secondActivation.Session){
         throw 'Service restart must preserve the same production rollback session.'
     }
@@ -488,6 +579,13 @@ try{
         $summary.cleanupPassed=$false
         $summary.cleanupError=$_.Exception.Message
         $summary.passed=$false
+    }
+
+    if($null -ne $script:lastServiceFailureDiagnostics){
+        $summary.serviceFailureDiagnosticsCaptured=$true
+        $script:lastServiceFailureDiagnostics |
+            ConvertTo-Json -Depth 8 |
+            Set-Content -LiteralPath (Join-Path $ResultsDirectory 'production-lifecycle-service-diagnostics.json') -Encoding utf8
     }
 
     $auditEvidence=@(Get-AuditEntries $startedUtc)

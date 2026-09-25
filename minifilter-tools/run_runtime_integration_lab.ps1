@@ -874,7 +874,7 @@ try{
     # corrupting either the already-mutated file or its original rollback snapshot.
     Prepare-GateRoot $gateExe $mappedDisconnectRoot
     $mappedDisconnectTarget=Join-Path $mappedDisconnectRoot 'mapped-then-disconnect.bin'
-    New-TestFile $mappedDisconnectTarget 73
+    New-TestFile $mappedDisconnectTarget
     $mappedDisconnectOriginalHash=(Get-FileHash -LiteralPath $mappedDisconnectTarget -Algorithm SHA256).Hash
 
     $mappedDisconnectOut=Join-Path $ResultsDirectory 'mapped-disconnect-gate.out.log'

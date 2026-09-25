@@ -587,6 +587,11 @@ internal static class ProductionDriverLifecycle
                 new[] { "setupapi.dll,InstallHinfSection", "DefaultInstall", "132", inf },
                 timeout,
                 cancellationToken).ConfigureAwait(false);
+
+            var registrationTimeout = timeout < TimeSpan.FromSeconds(5)
+                ? timeout
+                : TimeSpan.FromSeconds(5);
+            await WaitForServiceRegistrationAsync(registrationTimeout, cancellationToken).ConfigureAwait(false);
         }
 
         ValidateRegisteredContract(sys, admission);
@@ -698,6 +703,33 @@ internal static class ProductionDriverLifecycle
     {
         using var key = Registry.LocalMachine.OpenSubKey(ServiceKeyPath, writable: false);
         return key is not null;
+    }
+
+    private static async Task WaitForServiceRegistrationAsync(
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        if (timeout <= TimeSpan.Zero)
+            throw new TimeoutException("Production minifilter registration timeout is not positive.");
+
+        var clock = Stopwatch.StartNew();
+        while (clock.Elapsed < timeout)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (ServiceExists())
+                return;
+
+            var remaining = timeout - clock.Elapsed;
+            var delay = remaining < TimeSpan.FromMilliseconds(100)
+                ? remaining
+                : TimeSpan.FromMilliseconds(100);
+            if (delay > TimeSpan.Zero)
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (!ServiceExists())
+            throw new InvalidOperationException(
+                "RansomGuardMinifilter service registration did not become visible after successful DefaultInstall.");
     }
 
     private static void ValidateRegisteredContract(string packageSysPath, ProtectionPackageAdmission admission)

@@ -766,7 +766,7 @@ $truncatePost=$src.IndexOf('context->PostEventType == RgEventTruncateResult')
 $truncatePassive=$src.IndexOf('KeGetCurrentIrql() == PASSIVE_LEVEL',$truncatePost)
 $truncateApc=$src.IndexOf('!KeAreAllApcsDisabled()',$truncatePost)
 $truncateQuery=$src.IndexOf('FltQueryInformationFile(',$truncatePost)
-$truncateQueue=$src.IndexOf('RgQueueRawEvent(&event, RgCurrentProtectedClientMode())',$truncatePost)
+$truncateQueue=$src.IndexOf('RgQueueRawEventGeneration(',$truncatePost)
 if($truncatePost -lt 0 -or $truncatePassive -lt 0 -or $truncateApc -lt 0 -or $truncateQuery -lt 0 -or $truncateQueue -lt 0 -or
    $truncatePost -gt $truncatePassive -or $truncatePassive -gt $truncateQuery -or $truncateApc -gt $truncateQuery -or $truncateQuery -gt $truncateQueue){
     throw 'TRUNCATE post-operation FILE_STANDARD_INFO query must remain PASSIVE/APC-safe and precede no-reply result delivery.'
@@ -794,7 +794,7 @@ $deletePost=$src.IndexOf('context->PostEventType == RgEventDeleteDispositionResu
 $deleteIdentity=$src.IndexOf('RgPopulatePostOperationIdentity(&event, FltObjects)',$deletePost)
 $deleteStateQuery=$src.IndexOf('FileStandardInformation',$deleteIdentity)
 $deleteAttach=$src.IndexOf('RgAttachDeleteHandleContext(',$deleteStateQuery)
-$deleteQueue=$src.IndexOf('RgQueueRawEvent(&event, RgCurrentProtectedClientMode())',$deleteAttach)
+$deleteQueue=$src.IndexOf('RgQueueRawEventGeneration(',$deleteAttach)
 if($deletePost -lt 0 -or $deleteIdentity -lt 0 -or $deleteStateQuery -lt 0 -or
    $deleteAttach -lt 0 -or $deleteQueue -lt 0 -or
    $deletePost -gt $deleteIdentity -or $deleteIdentity -gt $deleteStateQuery -or

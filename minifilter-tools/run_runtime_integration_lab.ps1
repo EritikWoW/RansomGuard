@@ -847,11 +847,7 @@ try{
         '--store',(Quote-Arg $disconnectWrongStore),
         '--session','disconnect-wrong'
     ) $wrongOut $wrongErr
-    if(-not $gateWrong.WaitForExit(15000)){
-        Stop-Process -Id $gateWrong.Id -Force -ErrorAction SilentlyContinue
-        throw 'Wrong-root GateClient unexpectedly stayed connected while a degraded root was retained.'
-    }
-    if($gateWrong.ExitCode -eq 0){throw 'Wrong-root GateClient unexpectedly connected while a degraded root was retained.'}
+    [void](Wait-ExpectedGateRejection $gateWrong $wrongOut $wrongErr 'FilterConnectCommunicationPort failed HRESULT=0x80070005' 'wrong-root retained-scope reconnect' 30)
     $gateWrong=$null
     $summary.wrongRootReconnectRejected=$true
 

@@ -68,7 +68,7 @@ foreach($required in @(
     "Wait-AuditType 'ProductionProtectionMaintenanceStop'",
     "'Maintenance'",
     'reconnectReplacementObserved',
-    "Get-CimInstance Win32_Service -Filter \"Name='$serviceName'\"",
+    'Get-CimInstance Win32_Service -Filter "Name=''$serviceName''"',
     'Stop-Process -Id $servicePid -Force',
     'serviceCrashObserved',
     'serviceCrashGateExited',

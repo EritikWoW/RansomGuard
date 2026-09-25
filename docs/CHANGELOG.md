@@ -1,3 +1,14 @@
+# RansomGuard 0.8.6.0
+
+- Added the first normal-service Production Enforce lifecycle above `ReadyForLifecycle` package admission while keeping the default package/configuration Audit.
+- Enforce now validates rollback readiness before any kernel-start transition, verifies/registers the admitted demand-start minifilter, validates registered altitude/flags and installed SYS hash, then loads and attaches only the protected-root volume.
+- The service spawns the exact admitted ProductionGate client and publishes `Protected` only after a bounded structured readiness signal emitted after activation preflight/kernel `ActivateGate`.
+- Added production-only redirected-stdin lifecycle control; GateClient emits structured READY/STOPPED signals and clean shutdown still requires durable terminal evidence before `DeactivateGate`.
+- Unexpected ProductionGate loss publishes `DegradedProtected`; the service retries the same ProductionGate/root profile and returns to `Protected` only after a fresh activation preflight.
+- Clean service shutdown may detach/unload the driver only after the kernel confirms `Maintenance`; failure to prove graceful deactivation does not unload the fail-safe driver.
+- Added bounded Enforce settings for GateClient workers, rollback quota/free-space reserve and reconnect delay. Automatic detector-to-containment remains disabled.
+- Added source/state tests for lifecycle ordering, admitted-package binding, reconnect semantics and maintenance shutdown. Exact-head disposable-VM lifecycle qualification remains a merge/release gate.
+
 # RansomGuard 0.8.5.0
 
 - Removed trust in the user-mode `ClientProcessId` field as a security identity while retaining protocol v18.

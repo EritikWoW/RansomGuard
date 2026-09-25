@@ -416,10 +416,24 @@ try{
             $cursor=$cursor.InnerException
         }
 
-        if(-not $permissionDenied -and
-           [string]::Equals([string]$_.FullyQualifiedErrorId,'System.IO.IOException,Microsoft.PowerShell.Commands.NewItemCommand',[StringComparison]::Ordinal) -and
-           $_.Exception -is [System.IO.IOException] -and
-           $_.Exception.Message -match '(?i)access to the path .+ is denied\.?    }
+        $wrappedAccessDenied=(
+            [string]::Equals([string]$_.FullyQualifiedErrorId,'System.IO.IOException,Microsoft.PowerShell.Commands.NewItemCommand',[StringComparison]::Ordinal) -and
+            $_.Exception -is [System.IO.IOException] -and
+            $_.Exception.Message -like 'Access to the path * is denied.'
+        )
+        if($wrappedAccessDenied){
+            # New-Item -ItemType Junction wraps ERROR_ACCESS_DENIED from the underlying
+            # reparse FSCTL in a generic IOException (0x80131620) and discards Win32=5.
+            # The pre-activation scenario proves junction creation is supported on this
+            # VM; the postcondition below still requires that no reparse point appeared.
+            $permissionDenied=$true
+        }
+
+        if(-not $permissionDenied){
+            throw "Post-activation junction creation failed for an unexpected reason. Category=$($_.CategoryInfo.Category); FullyQualifiedErrorId=$($_.FullyQualifiedErrorId); ExceptionChain=$($exceptionChain -join ' -> ')"
+        }
+        $reparseDenied=$true
+    }
 
     if(-not $reparseDenied){throw 'Post-activation reparse mutation denial was not observed.'}
     if(Test-Path -LiteralPath $junction){

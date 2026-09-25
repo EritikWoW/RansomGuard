@@ -23,14 +23,19 @@ jobs:
     steps:
       - name: Checkout governance tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
-        with:
-          path: governance
 
       - name: Checkout exact frozen candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
         with:
           ref: ${{ inputs.source_sha }}
           path: candidate
+
+      - name: Audit repository security gates
+        shell: pwsh
+        run: |
+          .\tools\verify_powershell_automation.ps1
+          .\tools\verify_supply_chain.ps1
+          .\tools\verify_threat_model.ps1
 
       - name: Verify exact candidate checkout
         shell: pwsh
@@ -69,16 +74,16 @@ jobs:
           SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
           $ErrorActionPreference = 'Stop'
-          .\governance\tools\generate_release_governance.ps1 `
+          .\tools\generate_release_governance.ps1 `
               -RepositoryRoot (Join-Path $PWD 'candidate') `
               -ReleaseRoot (Join-Path $PWD 'candidate\release') `
-              -OutputDir (Join-Path $PWD 'governance\build-logs\frozen-release-governance') `
+              -OutputDir (Join-Path $PWD 'build-logs\frozen-release-governance') `
               -SourceSha $env:SOURCE_SHA
 
       - name: Upload frozen release governance evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 node24 pinned
         with:
           name: ransomguard-frozen-release-governance-${{ inputs.source_sha }}
-          path: governance/build-logs/frozen-release-governance/**
+          path: build-logs/frozen-release-governance/**
           if-no-files-found: error
           retention-days: 90

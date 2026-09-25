@@ -61,7 +61,9 @@ if(-not(Test-Path -LiteralPath $runtimeIntegrationScript -PathType Leaf)){
     throw "Runtime integration qualification harness is missing: $runtimeIntegrationScript"
 }
 $orchestrationCommit=(& git -C $orchestrationRoot rev-parse HEAD).Trim().ToLowerInvariant()
-if($orchestrationCommit -notmatch '^[0-9a-f]{40}
+if($orchestrationCommit -notmatch '^[0-9a-f]{40}$'){
+    throw "Unable to bind qualification evidence to an exact orchestration commit. Found '$orchestrationCommit'."
+}
 foreach($path in @($candidate,$lab,$normal,$driver)){
     if(-not(Test-Path -LiteralPath $path -PathType Container)){throw "Required directory is missing: $path"}
 }

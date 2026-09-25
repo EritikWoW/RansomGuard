@@ -80,8 +80,11 @@ The lifecycle harness then installs the normal service as LocalSystem and requir
 4. a destructive in-root mutation is access-denied during the reconnect window and the protected file SHA-256 stays unchanged;
 5. the original GateClient process is proved exited; a replacement ProductionGate starts a new session, reruns preflight and returns the service to `Protected`. PID reuse is allowed and recorded because the kernel trust identity is the new referenced `PEPROCESS`, not the numeric PID;
 6. protected mutation resumes after reconnect;
-7. SCM service stop causes the private production shutdown handshake, durable terminal evidence and kernel `Maintenance`, followed by successful detach/unload;
-8. final cleanup removes only the qualification service and RansomGuard driver-store package, and the minifilter is no longer loaded.
+7. the owned Windows Service process is then force-terminated; loss of its private control channel must make the supervised ProductionGate exit without `DeactivateGate`;
+8. with both Service and GateClient gone, an in-root destructive mutation is still denied and the protected file SHA-256 is unchanged, proving the retained kernel fail-safe state;
+9. restarting the same owned Service must revalidate/reconnect through a fresh ProductionGate preflight, return to `Protected`, and allow protected mutation again;
+10. a subsequent clean SCM service stop must use the explicit production shutdown handshake, commit durable terminal evidence, reach kernel `Maintenance`, detach/unload, and leave no loaded minifilter;
+11. final cleanup removes only the qualification service and RansomGuard driver-store package.
 
 The uploaded `production-lifecycle-result.json` and supporting audit evidence are a merge/release gate for 0.8.6. Source gates explicitly refuse boot-policy, Secure Boot, Defender, disk-formatting or reboot operations in this harness. A successful run still does not prove Administrator/SYSTEM tamper resistance, production signing, Microsoft altitude assignment, broad third-party filter interoperability or detector-driven containment policy.
 

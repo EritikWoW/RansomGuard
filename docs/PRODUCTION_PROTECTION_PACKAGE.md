@@ -50,6 +50,8 @@ A loaded driver, SCM Running service, spawned GateClient or connected filter por
 
 Unexpected ProductionGate termination after activation does not authorize driver unload or fail open. The kernel retains the exact protected root, volume and ProductionGate profile in `DegradedProtected` and denies covered destructive ordinary user-mode mutations according to the existing fail-safe policy. The service publishes the same degraded state and retries the admitted ProductionGate after a bounded delay. A reconnect returns to `Protected` only after a fresh activation preflight completes for the retained root/profile.
 
+Loss/EOF of the private service-control stdin is also **not** maintenance authorization. ProductionGate cancels its work and exits without `DeactivateGate`; closing the filter port therefore leaves the kernel in the retained fail-safe state. After a Service process crash, a later Service start must pass package/rollback validation again and reconnect ProductionGate through a fresh activation preflight before normal protected mutations resume.
+
 Initial activation failure is different: if ProductionGate never reaches readiness, the service publishes `Failed` and never claims that kernel enforcement became active.
 
 ## Authorized maintenance shutdown

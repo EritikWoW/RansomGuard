@@ -105,6 +105,7 @@ foreach($required in @(
     'IHostApplicationLifetime _lifetime',
     '_lifetime.StopApplication()',
     'Environment.ExitCode = 8',
+    'catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)',
     'Enforce host will stop rather than continue without supervision.',
     'Authorized production maintenance outcome is unconfirmed; no active kernel-enforcement claim is made and the driver remains loaded.'
 )){

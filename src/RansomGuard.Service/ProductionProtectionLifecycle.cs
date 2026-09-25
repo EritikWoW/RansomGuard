@@ -15,7 +15,6 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
     private readonly RuntimeState _runtime;
     private readonly IHostApplicationLifetime _lifetime;
     private readonly string _applicationBase;
-    private Process? _gateClient;
 
     public ProductionProtectionLifecycle(
         ILogger<ProductionProtectionLifecycle> log,
@@ -74,7 +73,6 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
             {
                 var sessionId = "production-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N");
                 using var gate = StartGateClient(gateClientPath, root, sessionId);
-                _gateClient = gate;
                 var signals = new GateLifecycleSignals();
                 var stdoutPump = PumpOutputAsync(gate, sessionId, signals);
                 var stderrPump = PumpErrorAsync(gate, signals);
@@ -87,6 +85,10 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
                         stoppingToken).ConfigureAwait(false);
                 }
                 catch (TimeoutException)
+                {
+                    ready = false;
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                 {
                     ready = false;
                 }
@@ -165,7 +167,6 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
                 }
 
                 await DrainPumpsAsync(stdoutPump, stderrPump).ConfigureAwait(false);
-                _gateClient = null;
 
                 if (signals.CleanStop.Task.IsCompletedSuccessfully && signals.CleanStop.Task.Result)
                 {
@@ -244,7 +245,6 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
         }
         finally
         {
-            _gateClient = null;
         }
     }
 

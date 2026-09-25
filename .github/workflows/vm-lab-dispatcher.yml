@@ -274,8 +274,12 @@ jobs:
           $runJson=gh api "repos/$env:GH_REPO/actions/runs/$env:TARGET_RUN_ID"
           if($LASTEXITCODE -ne 0){throw "Unable to inspect Actions run $env:TARGET_RUN_ID."}
           $run=$runJson | ConvertFrom-Json
-          if(-not [string]::Equals([string]$run.name,'Minifilter Driver Verifier VM lab',[StringComparison]::Ordinal)){
-            throw "Run $env:TARGET_RUN_ID is not the Driver Verifier workflow."
+          $allowed=@(
+            'Minifilter Driver Verifier VM lab',
+            'RansomGuard Driver Verifier CLEAR recovery'
+          )
+          if([string]$run.name -notin $allowed){
+            throw "Run $env:TARGET_RUN_ID is not an allowed Driver Verifier workflow."
           }
           if([string]::Equals([string]$run.status,'completed',[StringComparison]::OrdinalIgnoreCase)){
             throw "Run $env:TARGET_RUN_ID is already completed and must not be cancelled."
@@ -285,7 +289,7 @@ jobs:
           }
           Write-Host "Validated stale Driver Verifier run $env:TARGET_RUN_ID for cancellation."
 
-      - name: Cancel stale verifier run
+      - name: Force-cancel stale verifier run
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -293,9 +297,9 @@ jobs:
           TARGET_RUN_ID: ${{ steps.request.outputs.run_id }}
         run: |
           $ErrorActionPreference='Stop'
-          gh api --method POST "repos/$env:GH_REPO/actions/runs/$env:TARGET_RUN_ID/cancel" --silent
-          if($LASTEXITCODE -ne 0){throw "Unable to cancel Driver Verifier run $env:TARGET_RUN_ID."}
-          Write-Host "Cancelled stale Driver Verifier run $env:TARGET_RUN_ID."
+          gh api --method POST "repos/$env:GH_REPO/actions/runs/$env:TARGET_RUN_ID/force-cancel" --silent
+          if($LASTEXITCODE -ne 0){throw "Unable to force-cancel Driver Verifier run $env:TARGET_RUN_ID."}
+          Write-Host "Force-cancelled stale Driver Verifier run $env:TARGET_RUN_ID."
 
   dispatch-verifier-clear-recovery:
     if: >-

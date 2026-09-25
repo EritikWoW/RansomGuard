@@ -165,7 +165,14 @@ function Wait-AuditType([string]$Type,[DateTimeOffset]$SinceUtc,[int]$Seconds,[s
         if($matches.Count -gt 0){return $matches[-1]}
         Start-Sleep -Milliseconds 200
     }
-    throw "Timed out waiting for audit event Type='$Type' expectedSession='$ExpectedSession'."
+    $recent=@(Get-AuditEntries $SinceUtc | Select-Object -Last 12 | ForEach-Object {
+        $session=if($null -ne $_.Session){" session=$($_.Session)"}else{''}
+        "$($_.Type)$session"
+    })
+    $svc=Get-Service -Name 'RansomGuardV03' -ErrorAction SilentlyContinue
+    $state=if($svc){[string]$svc.Status}else{'missing'}
+    throw "Timed out waiting for audit event Type='$Type' expectedSession='$ExpectedSession'. Service=$state. RecentAudit=$($recent -join ' -> ')"
+
 }
 
 Assert-Administrator
@@ -275,6 +282,14 @@ try{
     Invoke-Sc @('start',$serviceName) | Out-Null
     Wait-ServiceState $serviceName 'Running' 30
     $summary.serviceStarted=$true
+
+    $rollbackReady=Wait-AuditType 'RollbackStoreReady' $startedUtc 75
+    if([string]$rollbackReady.RequestedMode -ne 'Enforce'){
+        throw "RollbackStoreReady published unexpected RequestedMode='$($rollbackReady.RequestedMode)'."
+    }
+    if($rollbackReady.ProtectionPackage.ReadyForLifecycle -ne $true){
+        throw "Production package was not admitted before lifecycle startup. State='$($rollbackReady.ProtectionPackage.State)' Reason='$($rollbackReady.ProtectionPackage.Reason)'"
+    }
 
     $firstActivation=Wait-AuditType 'ProductionProtectionActivated' $startedUtc 75
     if([string]$firstActivation.Root -ne $root){throw "First activation root mismatch: $($firstActivation.Root)"}

@@ -78,6 +78,11 @@ foreach($required in @(
     'internal sealed class WindowsServiceBootstrap : BackgroundService',
     'Windows Service bootstrap failed after SCM startup; stopping the outer service host.',
     'using (StateMaintenanceGate.Acquire())',
+    'Type = "ServiceBootstrapStateStoreReady"',
+    'Type = "ServiceBootstrapSettingsValidated"',
+    'Type = "ServiceBootstrapRollbackVerified"',
+    'Type = "ServiceBootstrapProtectionAdmissionStarting"',
+    'Type = "ServiceBootstrapProtectionAdmissionFinished"',
     'var rollbackRepository = new RollbackRepository(store.Rollback)',
     'protection.MarkRollbackReady()',
     'ProtectionPackageVerifier.Inspect(',
@@ -90,6 +95,17 @@ foreach($required in @(
     if($bootstrap -notmatch [regex]::Escape($required)){
         throw "SCM-first Windows Service bootstrap invariant missing: $required"
     }
+}
+
+$narrowStateBlock=@'
+        using (StateMaintenanceGate.Acquire())
+        {
+            store = new SecureStore();
+        }
+        store.Audit(new
+'@
+if($bootstrap.IndexOf($narrowStateBlock,[StringComparison]::Ordinal) -lt 0){
+    throw 'SCM bootstrap must release StateMaintenanceGate immediately after trusted SecureStore initialization.'
 }
 
 $bootstrapRollback=$bootstrap.IndexOf('protection.MarkRollbackReady()')

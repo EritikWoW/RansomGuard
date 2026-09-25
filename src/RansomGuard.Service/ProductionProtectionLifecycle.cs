@@ -489,11 +489,9 @@ internal static class ProductionDriverLifecycle
             timeout,
             cancellationToken,
             allowNonZero: true).ConfigureAwait(false);
-        if (!instances.Stdout.Contains(volume, StringComparison.OrdinalIgnoreCase))
+        var attachedVolumes = AttachedVolumes(instances.Stdout);
+        if (attachedVolumes.Length == 0)
         {
-            if (instances.Stdout.Contains(ServiceName, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("RansomGuardMinifilter is already attached, but not to the configured protected-root volume.");
-
             await RunToolAsync(
                 fltmc,
                 new[] { "attach", ServiceName, volume },
@@ -504,10 +502,14 @@ internal static class ProductionDriverLifecycle
                 new[] { "instances", "-f", ServiceName },
                 timeout,
                 cancellationToken).ConfigureAwait(false);
+            attachedVolumes = AttachedVolumes(instances.Stdout);
         }
 
-        if (!instances.Stdout.Contains(volume, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Filter Manager did not confirm the configured production volume attachment.");
+        if (attachedVolumes.Length != 1 ||
+            !string.Equals(attachedVolumes[0], volume, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                "Production minifilter must have exactly one instance on the configured protected-root volume. Observed: " +
+                (attachedVolumes.Length == 0 ? "<none>" : string.Join(", ", attachedVolumes)));
     }
 
     public static async Task StopAfterMaintenanceAsync(string protectedRoot, TimeSpan timeout)
@@ -615,6 +617,26 @@ internal static class ProductionDriverLifecycle
         else if (!Path.IsPathRooted(path))
             path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), path);
         return Path.GetFullPath(path);
+    }
+
+    private static string[] AttachedVolumes(string output)
+    {
+        var volumes = new List<string>();
+        foreach (var raw in output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var line = raw.TrimStart();
+            if (!line.StartsWith(ServiceName, StringComparison.OrdinalIgnoreCase) ||
+                line.Length == ServiceName.Length ||
+                !char.IsWhiteSpace(line[ServiceName.Length]))
+                continue;
+
+            var remainder = line[ServiceName.Length..].Trim();
+            var fields = remainder.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            if (fields.Length > 0)
+                volumes.Add(fields[0]);
+        }
+
+        return volumes.ToArray();
     }
 
     private static bool ContainsFilter(string output) =>

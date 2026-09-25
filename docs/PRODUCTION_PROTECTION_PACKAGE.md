@@ -39,7 +39,7 @@ A successful admission produces **ReadyForLifecycle**. That result is still not 
 1. The service verifies the private rollback repository before any kernel-start transition.
 2. The admitted driver package is staged/registered only when the `RansomGuardMinifilter` service is absent. Existing registration is never silently replaced.
 3. The registered service must remain filesystem-driver type / demand-start, its default instance altitude must equal the admitted descriptor, automatic attachment must remain suppressed, and the installed SYS bytes must hash-match the admitted SYS.
-4. Filter Manager loads the minifilter and attaches it only to the local volume containing the configured protected root.
+4. Filter Manager loads the minifilter and requires exactly one active instance, on the local volume containing the configured protected root. A pre-existing attachment on another volume, or multiple instances, is rejected rather than accepted as partially correct.
 5. The exact admitted `RansomGuard.GateClient.exe` is spawned with the ProductionGate profile and the fixed ProgramData rollback store.
 6. The service waits for a bounded lifecycle readiness signal emitted only after ProductionGate activation preflight and kernel `ActivateGate` succeed.
 7. Only then does the service publish `Protected` / `KernelEnforcementActive=true`.

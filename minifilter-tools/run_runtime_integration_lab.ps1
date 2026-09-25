@@ -274,6 +274,7 @@ $transitionRoot=Join-Path $RootBase "containment-transition-$stamp"
 $disconnectRoot=Join-Path $RootBase "disconnect-$stamp"
 $disconnectWrongRoot=Join-Path $RootBase "disconnect-wrong-$stamp"
 $disconnectOutside=Join-Path $RootBase "disconnect-outside-$stamp.bin"
+$mappedDisconnectRoot=Join-Path $RootBase "mapped-disconnect-$stamp"
 $scopeRoot=Join-Path $RootBase "scope-$stamp"
 $scopeOutsideSource=Join-Path $RootBase "scope-outside-$stamp.bin"
 $dirStore=Join-Path $ResultsDirectory 'predirectory-store'
@@ -287,6 +288,7 @@ $containStore=Join-Path $ResultsDirectory 'containment-store'
 $transitionStore=Join-Path $ResultsDirectory 'containment-transition-store'
 $disconnectStore=Join-Path $ResultsDirectory 'disconnect-store'
 $disconnectWrongStore=Join-Path $ResultsDirectory 'disconnect-wrong-store'
+$mappedDisconnectStore=Join-Path $ResultsDirectory 'mapped-disconnect-store'
 $scopeStore=Join-Path $ResultsDirectory 'scope-store'
 $volume=[IO.Path]::GetPathRoot($RootBase).TrimEnd('\')
 $installScript=Join-Path $PSScriptRoot 'install_minifilter_lab.ps1'
@@ -334,6 +336,13 @@ $summary=[ordered]@{
     sameRootReconnectActivated=$false
     sameRootMutationAllowed=$false
     gracefulReleaseSucceeded=$false
+    mappedThenDisconnectBaselineVerified=$false
+    mappedThenDisconnectPagingObserved=$false
+    mappedThenDisconnectPreimageHashMatched=$false
+    mappedThenDisconnectMutationObserved=$false
+    mappedThenDisconnectDeniedMutation=$false
+    mappedThenDisconnectPreservedPostMapHash=$false
+    mappedThenDisconnectReconnectActivated=$false
     scopeAmbiguityDeniedMutation=$false
     scopeAmbiguityPreservedTargetHash=$false
     crossBoundaryRenameDenied=$false
@@ -360,6 +369,7 @@ $gateTransition=$null
 $gateDisconnect=$null
 $gateWrong=$null
 $gateReconnect=$null
+$gateMappedDisconnect=$null
 $gateScope=$null
 $containProbe=$null
 $transitionProbe=$null
@@ -377,6 +387,7 @@ $containShutdown=$null
 $transitionShutdown=$null
 $disconnectShutdown=$null
 $reconnectShutdown=$null
+$mappedDisconnectShutdown=$null
 $runtimeFailure=$null
 $cleanupFailure=$null
 try{
@@ -858,6 +869,110 @@ try{
     }
     $summary.gracefulReleaseSucceeded=$true
 
+    # Scenario 3b: a mapped mutation may complete only after a durable pre-image exists.
+    # If GateClient is then lost abruptly, the retained kernel gate must fail closed without
+    # corrupting either the already-mutated file or its original rollback snapshot.
+    Prepare-GateRoot $gateExe $mappedDisconnectRoot
+    $mappedDisconnectTarget=Join-Path $mappedDisconnectRoot 'mapped-then-disconnect.bin'
+    New-TestFile $mappedDisconnectTarget 73
+    $mappedDisconnectOriginalHash=(Get-FileHash -LiteralPath $mappedDisconnectTarget -Algorithm SHA256).Hash
+
+    $mappedDisconnectOut=Join-Path $ResultsDirectory 'mapped-disconnect-gate.out.log'
+    $mappedDisconnectErr=$mappedDisconnectOut + '.err'
+    $mappedDisconnectShutdown=Join-Path $ResultsDirectory 'mapped-disconnect.shutdown'
+    $gateMappedDisconnect=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $mappedDisconnectRoot),
+        '--store',(Quote-Arg $mappedDisconnectStore),
+        '--session','mapped-disconnect',
+        '--shutdown-file',(Quote-Arg $mappedDisconnectShutdown)
+    ) $mappedDisconnectOut $mappedDisconnectErr
+    Wait-LogPattern $mappedDisconnectOut 'kernel gate ACTIVE' $gateMappedDisconnect 45
+
+    & $helperExe map-write --file $mappedDisconnectTarget
+    if($LASTEXITCODE -ne 0){throw "Mapped-disconnect initial mapped write failed, exit=$LASTEXITCODE"}
+
+    $mappedDisconnectSession=Join-Path $mappedDisconnectStore 'Sessions\mapped-disconnect'
+    $mappedDisconnectSection=Join-Path $mappedDisconnectSession 'section-state\writable-section-journal.jsonl'
+    $mappedDisconnectPaging=Join-Path $mappedDisconnectSession 'paging-state\paging-write-journal.jsonl'
+    $mappedDisconnectJournal=Join-Path $mappedDisconnectSession 'journal.jsonl'
+
+    $mappedSectionRecord=Wait-JournalMatch $mappedDisconnectSection {
+        param($x)
+        [int]$x.state -eq 1 -and
+        [string]::Equals([IO.Path]::GetFullPath([string]$x.trackedPath),$mappedDisconnectTarget,[StringComparison]::OrdinalIgnoreCase)
+    } 30 'mapped-disconnect writable-section evidence'
+    $summary.mappedThenDisconnectBaselineVerified=$true
+
+    $mappedPagingRecord=Wait-JournalMatch $mappedDisconnectPaging {
+        param($x)
+        [uint64]$x.length -gt 0 -and
+        [string]::Equals([IO.Path]::GetFullPath([string]$x.trackedPath),$mappedDisconnectTarget,[StringComparison]::OrdinalIgnoreCase)
+    } 30 'mapped-disconnect paging-write evidence'
+    if(-not [string]::Equals([string]$mappedSectionRecord.volumeSerialHex,[string]$mappedPagingRecord.volumeSerialHex,[StringComparison]::OrdinalIgnoreCase) -or
+       -not [string]::Equals([string]$mappedSectionRecord.fileIdHex,[string]$mappedPagingRecord.fileIdHex,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'Mapped-disconnect section and paging evidence are not bound to the same file identity.'
+    }
+    $summary.mappedThenDisconnectPagingObserved=$true
+
+    $mappedCapture=Wait-JournalMatch $mappedDisconnectJournal {
+        param($x)
+        [string]::Equals([IO.Path]::GetFullPath([string]$x.originalPath),$mappedDisconnectTarget,[StringComparison]::OrdinalIgnoreCase)
+    } 30 'mapped-disconnect full pre-image'
+    if(-not [string]::Equals([string]$mappedCapture.originalSha256,$mappedDisconnectOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'Mapped-disconnect pre-image hash does not match the original file.'
+    }
+    $mappedSnapshot=Join-Path $mappedDisconnectSession ([string]$mappedCapture.snapshotRelativePath)
+    if(-not(Test-Path -LiteralPath $mappedSnapshot -PathType Leaf)){throw 'Mapped-disconnect snapshot object is missing.'}
+    if(-not [string]::Equals((Get-FileHash -LiteralPath $mappedSnapshot -Algorithm SHA256).Hash,$mappedDisconnectOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'Mapped-disconnect snapshot hash does not match the original file.'
+    }
+    $summary.mappedThenDisconnectPreimageHashMatched=$true
+
+    $mappedDisconnectPostMapHash=(Get-FileHash -LiteralPath $mappedDisconnectTarget -Algorithm SHA256).Hash
+    if([string]::Equals($mappedDisconnectPostMapHash,$mappedDisconnectOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'Mapped-disconnect mapped write did not mutate the target.'
+    }
+    $summary.mappedThenDisconnectMutationObserved=$true
+
+    # Abrupt process death must retain the protected root in fail-closed state.
+    Stop-LabProcess $gateMappedDisconnect 'mapped-disconnect abrupt GateClient'
+    $gateMappedDisconnect=$null
+
+    $mappedDisconnectDenied=$false
+    try{
+        $fs=[IO.File]::Open($mappedDisconnectTarget,[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::Read)
+        try{$fs.WriteByte(0xA7);$fs.Flush($true)}finally{$fs.Dispose()}
+    }
+    catch{
+        if(Test-AccessDeniedException $_.Exception){$mappedDisconnectDenied=$true}
+        else{throw}
+    }
+    if(-not $mappedDisconnectDenied){
+        throw 'Mapped-disconnect follow-up mutation unexpectedly succeeded after GateClient loss.'
+    }
+    $summary.mappedThenDisconnectDeniedMutation=$true
+
+    $mappedDisconnectAfterLossHash=(Get-FileHash -LiteralPath $mappedDisconnectTarget -Algorithm SHA256).Hash
+    if(-not [string]::Equals($mappedDisconnectAfterLossHash,$mappedDisconnectPostMapHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'Mapped-disconnect target changed after fail-closed GateClient loss.'
+    }
+    $summary.mappedThenDisconnectPreservedPostMapHash=$true
+
+    # Exact-root reconnect must rerun activation preflight and recover the retained scope.
+    $mappedReconnectOut=Join-Path $ResultsDirectory 'mapped-disconnect-reconnect.out.log'
+    $mappedReconnectErr=$mappedReconnectOut + '.err'
+    $mappedReconnectShutdown=Join-Path $ResultsDirectory 'mapped-disconnect-reconnect.shutdown'
+    $gateMappedDisconnect=Start-LoggedProcess $gateExe @(
+        '--root',(Quote-Arg $mappedDisconnectRoot),
+        '--store',(Quote-Arg $mappedDisconnectStore),
+        '--session','mapped-disconnect-reconnect',
+        '--shutdown-file',(Quote-Arg $mappedReconnectShutdown)
+    ) $mappedReconnectOut $mappedReconnectErr
+    Wait-LogPattern $mappedReconnectOut 'kernel gate ACTIVE' $gateMappedDisconnect 45
+    $summary.mappedThenDisconnectReconnectActivated=$true
+    Stop-GateGracefully $gateMappedDisconnect $mappedReconnectShutdown $mappedReconnectOut $mappedReconnectErr 'mapped-disconnect reconnect gate'
+    $gateMappedDisconnect=$null
+
     # Scenario 4: protocol-v18 retained scope ambiguity must fail closed on the protected volume,
     # and a rename entering the root from a proven outside source must not bypass destination scope.
     Prepare-GateRoot $gateExe $scopeRoot
@@ -1118,7 +1233,7 @@ finally{
         if($scopeGo){New-Item -ItemType File -Path $scopeGo -Force -ErrorAction SilentlyContinue | Out-Null}
         Stop-Process -Id $scopeProbe.Id -Force -ErrorAction SilentlyContinue
     }
-    foreach($p in @($gateDir,$gateDormant,$gateHardPre,$gateHardActive,$gateFsctl,$gatePre,$gatePost,$gateScope,$gateContain,$gateTransition,$gateDisconnect,$gateWrong,$gateReconnect)){
+    foreach($p in @($gateDir,$gateDormant,$gateHardPre,$gateHardActive,$gateFsctl,$gatePre,$gatePost,$gateScope,$gateContain,$gateTransition,$gateDisconnect,$gateWrong,$gateReconnect,$gateMappedDisconnect)){
         if($p -and -not $p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}
     }
 

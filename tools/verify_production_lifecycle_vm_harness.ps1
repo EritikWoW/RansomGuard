@@ -18,6 +18,7 @@ foreach($path in @($preparePath,$runPath,$workflowPath,$lifecyclePath)){
 $prepare=Get-Content -LiteralPath $preparePath -Raw
 $run=Get-Content -LiteralPath $runPath -Raw
 
+# Keep early-service-exit diagnostics source-gated so VM failures remain actionable.
 if($run -match [regex]::Escape('New-Object System.Collections.Generic.List[object]') -or
    $run -match [regex]::Escape('return @($entries)')){
     throw 'Production lifecycle audit reader must use a plain PowerShell array; Generic.List return can fail through the PowerShell 7 dynamic binder.'

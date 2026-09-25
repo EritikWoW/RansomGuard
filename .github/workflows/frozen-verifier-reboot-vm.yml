@@ -1,0 +1,113 @@
+name: RansomGuard frozen Driver Verifier reboot handoff
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_phase:
+        description: Persisted Driver Verifier phase authorizing reboot.
+        required: true
+        type: choice
+        options:
+          - armed
+          - runtime-reset
+      expected_sha:
+        description: Exact frozen candidate SHA.
+        required: true
+        type: string
+      package_artifact_id:
+        description: Frozen package artifact id bound to the campaign.
+        required: true
+        type: string
+      root_base:
+        description: Persistent frozen verifier root.
+        required: true
+        default: C:\RansomGuard-VM-FrozenVerifier
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  reboot:
+    environment: ransomguard-lab-vm
+    runs-on: [self-hosted, Windows, X64, ransomguard-lab-vm]
+    timeout-minutes: 5
+    env:
+      RANSOMGUARD_LAB_VM: I_UNDERSTAND
+      RG_EXPECTED_PHASE: ${{ inputs.expected_phase }}
+      RG_EXPECTED_SHA: ${{ inputs.expected_sha }}
+      RG_PACKAGE_ARTIFACT_ID: ${{ inputs.package_artifact_id }}
+      RG_ROOT_BASE: ${{ inputs.root_base }}
+
+    steps:
+      - name: Checkout policy source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Verify threat-model policy
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          .\tools\verify_threat_model.ps1
+
+      - name: Validate frozen verifier handoff
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          Set-StrictMode -Version Latest
+
+          if($env:RG_EXPECTED_SHA -notmatch '^[0-9a-fA-F]{40}$'){throw 'Expected SHA must be 40 hex characters.'}
+          if($env:RG_EXPECTED_PHASE -notin @('armed','runtime-reset')){throw "Unexpected verifier phase '$env:RG_EXPECTED_PHASE'."}
+          $artifactId=0L
+          if(-not [long]::TryParse($env:RG_PACKAGE_ARTIFACT_ID,[ref]$artifactId) -or $artifactId -le 0){throw 'package_artifact_id must be positive.'}
+
+          $cs=Get-CimInstance Win32_ComputerSystem
+          $vmText="$($cs.Manufacturer) $($cs.Model)"
+          if($vmText -notmatch '(?i)virtual|vmware|virtualbox|kvm|qemu|hyper-v|parallels|xen'){
+            throw "REFUSED: frozen verifier reboot requires an obvious disposable VM. Detected: $vmText"
+          }
+          if($env:RANSOMGUARD_LAB_VM -cne 'I_UNDERSTAND'){throw 'REFUSED: RANSOMGUARD_LAB_VM=I_UNDERSTAND is required.'}
+
+          $root=[IO.Path]::GetFullPath($env:RG_ROOT_BASE)
+          $statePath=Join-Path $root 'Active\driver-verifier-state.json'
+          $stateHashPath=$statePath+'.sha256'
+          $bindingPath=Join-Path $root 'frozen-package-binding.json'
+          $bindingHashPath=$bindingPath+'.sha256'
+
+          foreach($path in @($statePath,$stateHashPath,$bindingPath,$bindingHashPath)){
+            if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Frozen verifier handoff file is missing: $path"}
+          }
+
+          foreach($pair in @(@($statePath,$stateHashPath,'state'),@($bindingPath,$bindingHashPath,'binding'))){
+            $expected=(Get-Content -LiteralPath $pair[1] -Raw).Trim()
+            $actual=(Get-FileHash -LiteralPath $pair[0] -Algorithm SHA256).Hash
+            if(-not [string]::Equals($expected,$actual,[StringComparison]::OrdinalIgnoreCase)){
+              throw "Frozen verifier $($pair[2]) hash mismatch."
+            }
+          }
+
+          $state=Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json -Depth 30
+          if([int]$state.schema -ne 1){throw 'Driver Verifier state schema must be 1.'}
+          if(-not [string]::Equals([string]$state.phase,$env:RG_EXPECTED_PHASE,[StringComparison]::Ordinal)){throw "Verifier state phase '$($state.phase)' does not match '$env:RG_EXPECTED_PHASE'."}
+          if(-not [string]::Equals([string]$state.workflowSha,$env:RG_EXPECTED_SHA,[StringComparison]::OrdinalIgnoreCase)){throw 'Verifier state source SHA mismatch.'}
+          if(-not [string]::Equals([string]$state.targetDriver,'RansomGuardMinifilter.sys',[StringComparison]::OrdinalIgnoreCase)){throw 'Verifier target is not RansomGuardMinifilter.sys.'}
+
+          $binding=Get-Content -LiteralPath $bindingPath -Raw | ConvertFrom-Json -Depth 30
+          if([int]$binding.schema -ne 1){throw 'Frozen package binding schema must be 1.'}
+          if(-not [string]::Equals([string]$binding.frozenCandidateSha,$env:RG_EXPECTED_SHA,[StringComparison]::OrdinalIgnoreCase)){throw 'Frozen package binding source SHA mismatch.'}
+          if([long]$binding.packageArtifactId -ne $artifactId){throw 'Frozen package binding artifact id mismatch.'}
+          foreach($name in @('sysSha256','infSha256','catSha256')){
+            if([string]$binding.$name -notmatch '^[0-9A-Fa-f]{64}$'){throw "Frozen package binding $name is invalid."}
+          }
+
+          Write-Host "Validated frozen verifier reboot: phase=$env:RG_EXPECTED_PHASE sha=$env:RG_EXPECTED_SHA artifact=$artifactId"
+
+      - name: Schedule disposable VM reboot
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          & "$env:SystemRoot\System32\shutdown.exe" /r /t 60 /f /d p:4:1 /c "RansomGuard frozen Driver Verifier handoff"
+          if($LASTEXITCODE -ne 0){throw "Unable to schedule frozen verifier reboot. exit=$LASTEXITCODE"}
+          Write-Warning 'Frozen verifier VM reboot is scheduled in 60 seconds. The workflow should finish before restart.'

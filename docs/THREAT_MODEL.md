@@ -1,8 +1,8 @@
 # RansomGuard threat model
 
-Status: engineering threat model for RansomGuard 0.8.5.x, covering the default Audit product, Production Enforce state/package admission contracts, protocol-v18 LAB/ProductionGate separation, hard-link alias policy, and the Engineering minifilter.
+Status: engineering threat model for RansomGuard 0.8.6.x, covering the default Audit product, admitted Production Enforce lifecycle, protocol-v18 LAB/ProductionGate separation, hard-link/FSCTL policy, and the Engineering minifilter.
 
-This document describes what the current implementation protects, what it deliberately does not protect, and how ambiguous I/O is handled. It is not a claim of production readiness. The default normal package remains Audit. Version 0.8.5 retains the cryptographically bound ProductionProtection package, protocol-v18 ProductionGate separation, hard-link and data-mutating-FSCTL policy, and additionally kernel-binds GateClient identity to the actual connecting process object. It still reports `EnforceUnavailable` until a separately qualified production driver/GateClient lifecycle completes.
+This document describes what the current implementation protects, what it deliberately does not protect, and how ambiguous I/O is handled. It is not a claim of production readiness. The default normal package remains Audit and excludes SYS/CAT/INF/GateClient. Version 0.8.6 retains the cryptographically bound ProductionProtection package, protocol-v18 ProductionGate separation, hard-link/data-mutating-FSCTL policy and kernel-bound GateClient identity, and adds an admitted production driver/GateClient lifecycle for explicit Enforce. Source implementation is not a release claim: exact-head disposable-VM lifecycle qualification, production signing/altitude governance and the remaining product hardening are still required.
 
 ## Security goals
 
@@ -30,11 +30,13 @@ Security-sensitive assets include:
 
 ## Trust boundaries
 
-### Ordinary product / Enforce foundation
+### Ordinary product / Enforce lifecycle
 
-The normal service obtains filesystem telemetry through ETW and publishes bounded read-only status through the local named pipe. Audit is the default mode and remains non-blocking. Schema 4 may explicitly request Enforce. Version 0.8.5 first inspects a fixed ProductionProtection package: the actual running service image anchors the signer identity; GateClient and the driver catalog must use the same signer; SYS/INF must verify as catalog members; LAB provider/placeholder altitude are rejected. Package admission performs no lifecycle mutation, so the request is still published as `EnforceUnavailable`.
+The normal service obtains filesystem telemetry through ETW and publishes bounded read-only status through the local named pipe. Audit is the default mode and remains non-blocking. Schema 4 may explicitly request Enforce. Version 0.8.6 first inspects the fixed ProductionProtection package: the actual running service image anchors the signer identity; GateClient and the driver catalog must use the same signer; SYS/INF must verify as catalog members; LAB provider/placeholder altitude are rejected. A rejected or missing package is published as `EnforceUnavailable` and no production lifecycle mutation is performed.
 
-The protection state machine is the only source of a kernel-enforcement claim. SCM `Running`, driver installation, a live UI, or a connected-but-not-activated kernel channel cannot set `KernelEnforcementActive=true`. Rollback repository validation must complete before any future kernel-start transition.
+A `ReadyForLifecycle` package allows the separate 0.8.6 lifecycle to proceed only after rollback repository validation. The service verifies/registers the demand-start driver, validates registered altitude/flags and installed SYS identity, loads it, attaches only the configured protected-root volume, and starts the exact admitted ProductionGate client. Initial `Protected` is published only after ProductionGate completes activation preflight and emits the bounded readiness handshake. Unexpected GateClient loss publishes `DegradedProtected` while the kernel fail-safe latch remains active; service reconnect must rerun activation preflight before returning to `Protected`. Clean detach/unload is allowed only after ProductionGate commits terminal evidence and the kernel confirms `Maintenance`.
+
+The protection state machine is the only source of a kernel-enforcement claim. SCM `Running`, driver installation, a live UI, a spawned GateClient, or a connected-but-not-activated kernel channel cannot set `KernelEnforcementActive=true`. Rollback repository validation must complete before any kernel-start transition.
 
 A detector result is evidence for review; it is not yet an authorization to block a normal process. The UI does not turn SCM Running into proof that ETW monitoring is healthy. ETW startup/runtime failure enters an explicit diagnostics-only state.
 
@@ -62,7 +64,8 @@ Recovery consumes validated evidence and writes copy-out results to new paths. I
 |---|---|---|
 | Ordinary user-mode process mutating a resolved file inside the activated LAB root | In scope for LAB preservation | Must pass preserve-before-allow or be denied |
 | Explicitly authorized LAB process after durable containment transition | In scope for LAB containment | Future destructive in-root mutations are denied by process-object identity |
-| Ordinary process in the normal installed product | Detection/audit only | No production blocking claim |
+| Ordinary process under the default Audit installation | Detection/audit only | No kernel blocking claim; the default bundle excludes the ProductionProtection package |
+| Ordinary user-mode process inside an explicitly activated 0.8.6 Production Enforce root | In scope for preserve-before-allow / fail-safe gate policy | Protection claim exists only after admitted lifecycle activation; detector-driven containment is still disabled |
 | Process operating outside the negotiated LAB root | Out of preservation scope | Allowed by this gate |
 | Ordinary user-mode destructive request whose pathname cannot be resolved/classified and whose callback is on the bound protected volume | In scope for fail-safe scope handling | Denied in kernel as ambiguous; unknown is not reinterpreted as outside |
 | Kernel-mode requestor / compromised kernel component / BYOVD path | Out of scope | `RequestorMode == KernelMode` is not observed by the ordinary gate path |
@@ -173,7 +176,7 @@ This model does not justify treating an arbitrary pre-existing mapping as safe. 
 
 ETW/RiskEngine is a trigger and evidence source, not the preservation guarantee.
 
-The current normal service does not authorize detector-driven blocking for ordinary applications, including suspicious/canary cases. Audit mode stays non-blocking; Enforce mode in 0.8.2 remains unavailable until production lifecycle activation exists. The existing containment primitive is LAB-only and can bind one explicitly authorized process to a referenced kernel process object. Production detector-to-containment orchestration remains unimplemented.
+The current normal service does not authorize detector-driven containment for ordinary applications, including suspicious/canary cases. Audit mode stays non-blocking. Enforce mode in 0.8.6 can activate the admitted preservation lifecycle, but `AutomaticContainment=true` is still rejected. The existing containment primitive is LAB-only and can bind one explicitly authorized process to a referenced kernel process object. Production detector-to-containment orchestration remains unimplemented.
 
 Before production containment is enabled, the authorization chain must prove at least:
 

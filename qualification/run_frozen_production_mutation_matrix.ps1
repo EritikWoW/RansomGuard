@@ -362,13 +362,16 @@ try{
     try{
         Install-ScenarioDriver
         $gate=Start-ProductionGate $root "prod-mut-reparse-$stamp" 'descendant-reparse-production-gate'
-        [void](Wait-ExpectedGateRejection $gate.Process $gate.StdOut $gate.StdErr '(?i)reparse' 'ProductionGate descendant reparse point')
+        [void](Wait-ExpectedGateRejection $gate.Process $gate.StdOut $gate.StdErr '(?i)Activation preflight refuses descendant reparse point:' 'ProductionGate descendant reparse point')
         $summary.descendantReparseRejected=$true
         Cleanup-Scenario 'descendant reparse point'
     }
     finally{
         if(Test-Path -LiteralPath $junction){
-            [IO.Directory]::Delete($junction)
+            & $env:ComSpec /d /c rmdir "$junction"
+            if($LASTEXITCODE -ne 0 -and (Test-Path -LiteralPath $junction)){
+                throw "Unable to remove qualification junction '$junction' without traversing its target. exit=$LASTEXITCODE"
+            }
         }
     }
 

@@ -266,7 +266,7 @@ try{
     Remove-RansomGuardDriverRegistration
 
     $binPath='"'+$serviceExe+'"'
-    Invoke-Sc @('create',$serviceName,"binPath= $binPath",'start= demand','obj= LocalSystem') | Out-Null
+    Invoke-Sc @('create',$serviceName,'binPath=',$binPath,'start=','demand','obj=','LocalSystem') | Out-Null
     $serviceCreated=$true
     Invoke-Sc @('start',$serviceName) | Out-Null
     Wait-ServiceState $serviceName 'Running' 30

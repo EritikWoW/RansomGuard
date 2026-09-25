@@ -25,6 +25,12 @@ if($prepare.Contains("-match '(?i)\x64\'",[StringComparison]::Ordinal) -or
 $workflow=Get-Content -LiteralPath $workflowPath -Raw
 $lifecycle=Get-Content -LiteralPath $lifecyclePath -Raw
 
+if($run.Contains("'start= demand'",[StringComparison]::Ordinal) -or
+   $run.Contains("'obj= LocalSystem'",[StringComparison]::Ordinal) -or
+   $run.Contains('"binPath= $binPath"',[StringComparison]::Ordinal)){
+    throw 'sc.exe create options must be passed as separate argv tokens: option= followed by value.'
+}
+
 foreach($required in @(
     'Assert-DisposableVm',
     'RANSOMGUARD_LAB_VM',
@@ -66,8 +72,7 @@ foreach($required in @(
     "Mode='Enforce'",
     'AutomaticContainment=$false',
     'ReconnectDelaySeconds=5',
-    'Invoke-Sc @(''create'',$serviceName',
-    "'obj= LocalSystem'",
+    'Invoke-Sc @(''create'',$serviceName,''binPath='',$binPath,''start='',''demand'',''obj='',''LocalSystem'')',
     "Wait-AuditType 'ProductionProtectionActivated'",
     "Wait-AuditType 'ProductionGateLost'",
     "'DegradedProtected'",

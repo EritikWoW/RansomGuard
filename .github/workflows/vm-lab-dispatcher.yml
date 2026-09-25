@@ -20,6 +20,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Checkout policy source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
+        with:
+          ref: main
+
+      - name: Verify threat-model policy
+        shell: pwsh
+        run: |
+          .\tools\verify_threat_model.ps1
+
       - name: Parse and validate requested ref
         id: request
         shell: pwsh

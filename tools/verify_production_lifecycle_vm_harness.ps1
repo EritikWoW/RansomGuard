@@ -57,7 +57,7 @@ foreach($required in @(
     "Mode='Enforce'",
     'AutomaticContainment=$false',
     'ReconnectDelaySeconds=5',
-    "Invoke-Sc @('create',$serviceName",
+    'Invoke-Sc @(''create'',$serviceName',
     "'obj= LocalSystem'",
     "Wait-AuditType 'ProductionProtectionActivated'",
     "Wait-AuditType 'ProductionGateLost'",

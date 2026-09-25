@@ -142,13 +142,16 @@ foreach($required in @(
     'RG-LIFECYCLE STOPPED',
     'ProductionDriverLifecycle.StopAfterMaintenanceAsync',
     '_protection.BeginMaintenance(',
-    'rundll32.exe',
-    'setupapi.dll,InstallHinfSection',
-    'DefaultInstall.NTamd64',
-    'primitive-driver installation path (DiInstallDriver)',
+    'using System.Runtime.InteropServices;',
+    'newdev.dll',
+    'DiInstallDriverW',
+    'InstallPrimitiveDriverPackage(inf)',
+    'Marshal.GetLastWin32Error()',
+    'flags: 0',
+    'production minifilter installation requires a reboot; refusing Enforce startup.',
     'WaitForServiceRegistrationAsync',
     'TimeSpan.FromSeconds(5)',
-    'RansomGuardMinifilter service registration did not become visible after primitive-driver DefaultInstall.NTamd64.',
+    'RansomGuardMinifilter service registration did not become visible after successful DiInstallDriverW.',
     'fltmc.exe',
     'new[] { "load", ServiceName }',
     'new[] { "attach", ServiceName, volume }',
@@ -194,7 +197,8 @@ foreach($required in @(
 
 foreach($forbidden in @(
     'new[] { "/add-driver", inf }',
-    '"DefaultInstall", "132", inf'
+    'setupapi.dll,InstallHinfSection',
+    'rundll32.exe'
 )){
     if($lifecycle -match [regex]::Escape($forbidden)){
         throw "Production lifecycle must use the architecture-decorated primitive-driver install path, not legacy/pre-staged registration: $forbidden"

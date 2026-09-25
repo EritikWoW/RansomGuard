@@ -118,6 +118,7 @@ try {
     & (Join-Path $PSScriptRoot 'tools\verify_crash_vm_harness.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_fault_campaign_vm_harness.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_driver_verifier_vm_harness.ps1')
+    & (Join-Path $PSScriptRoot 'tools\verify_production_lifecycle_vm_harness.ps1')
     & (Join-Path $PSScriptRoot 'tools\verify_version_provenance.ps1')
     Write-Host '[1/6] Restore and execute policy/recovery/rollback tests (no process suspension in these tests).'
     Run-Dotnet -Arguments @('restore',$tests,'--locked-mode','-r','win-x64','-p:SelfContained=true',$auditErrors)

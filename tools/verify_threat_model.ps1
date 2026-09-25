@@ -232,9 +232,9 @@ foreach($required in @(
     '--service-control-stdin',
     'ProductionDriverLifecycle.StopAfterMaintenanceAsync',
     '_protection.BeginMaintenance(',
-    'setupapi.dll,InstallHinfSection',
-    'DefaultInstall.NTamd64',
-    'primitive-driver installation path (DiInstallDriver)',
+    'newdev.dll',
+    'DiInstallDriverW',
+    'InstallPrimitiveDriverPackage(inf)',
     'fltmc.exe',
     'DecisionPolicy.HashEqual(packageHash, installedHash)'
 )){

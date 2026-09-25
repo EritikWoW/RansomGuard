@@ -47,9 +47,20 @@ function Assert-NoReparsePath([string]$Path,[string]$Label){
     }
 }
 
+function Test-PathSegment([string]$Path,[string]$Segment){
+    foreach($part in [IO.Path]::GetFullPath($Path).Split(
+        [IO.Path]::DirectorySeparatorChar,
+        [StringSplitOptions]::RemoveEmptyEntries)){
+        if([string]::Equals($part,$Segment,[StringComparison]::OrdinalIgnoreCase)){
+            return $true
+        }
+    }
+    return $false
+}
+
 function Find-X64Tool([string]$Kits,[string]$Name){
     $match=Get-ChildItem -LiteralPath $Kits -Filter $Name -File -Recurse -ErrorAction SilentlyContinue |
-        Where-Object {$_.FullName -match '(?i)\x64\'} |
+        Where-Object {Test-PathSegment $_.FullName 'x64'} |
         Sort-Object FullName -Descending |
         Select-Object -First 1
     if($match){return $match.FullName}
@@ -60,7 +71,7 @@ function Find-Inf2CatTool([string]$Kits){
     $x64=Find-X64Tool $Kits 'Inf2Cat.exe'
     if($x64){return $x64}
     $match=Get-ChildItem -LiteralPath $Kits -Filter 'Inf2Cat.exe' -File -Recurse -ErrorAction SilentlyContinue |
-        Where-Object {$_.FullName -match '(?i)\x86\'} |
+        Where-Object {Test-PathSegment $_.FullName 'x86'} |
         Sort-Object FullName -Descending |
         Select-Object -First 1
     if($match){return $match.FullName}

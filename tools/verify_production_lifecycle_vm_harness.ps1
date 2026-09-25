@@ -118,7 +118,7 @@ foreach($required in @(
     'ransomguard-production-lifecycle-evidence',
     'RG_PRODUCTION_LIFECYCLE_RESULTS',
     'Remove signed qualification packages',
-    "Join-Path $env:RUNNER_TEMP 'RansomGuard-ProductionLifecycle-Qualification'"
+    'Join-Path $env:RUNNER_TEMP ''RansomGuard-ProductionLifecycle-Qualification'''
 )){
     if($workflow -notmatch [regex]::Escape($required)){
         throw "Runtime workflow is missing the production lifecycle qualification invariant: $required"

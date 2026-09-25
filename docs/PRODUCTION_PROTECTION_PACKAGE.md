@@ -52,13 +52,13 @@ Unexpected ProductionGate termination after activation does not authorize driver
 
 Loss/EOF of the private service-control stdin is also **not** maintenance authorization. ProductionGate cancels its work and exits without `DeactivateGate`; closing the filter port therefore leaves the kernel in the retained fail-safe state. After a Service process crash, a later Service start must pass package/rollback validation again and reconnect ProductionGate through a fresh activation preflight before normal protected mutations resume.
 
-Initial activation failure is different: if ProductionGate never reaches readiness, the service publishes `Failed` and never claims that kernel enforcement became active.
+Initial activation failure is different: if ProductionGate never reaches readiness, the child is terminated without maintenance authorization, the service publishes `Failed`, sets a non-zero process exit status and stops the Enforce host rather than continuing without a supervisor. This intentionally permits an uncertain late kernel activation to remain fail-safe for a later service restart instead of guessing that no gate was armed.
 
 ## Authorized maintenance shutdown
 
 The service uses a private redirected-stdin control channel to request ProductionGate shutdown; ProductionGate does not expose a public mutation API for this transition. It first drains its work, commits terminal rollback-session evidence, requests whole-gate `DeactivateGate`, and requires the kernel to confirm `Maintenance`. Only after the service receives the matching clean lifecycle stop signal may it publish `Maintenance` and attempt Filter Manager detach/unload.
 
-If clean deactivation cannot be proved, the service does not unload the driver. An active session stays fail-safe rather than trading recoverability for a convenient shutdown.
+If the service has already authorized shutdown but clean deactivation cannot be proved, it does not unload the driver and it does not claim that kernel enforcement is still active: the maintenance outcome is explicitly `Failed`/unconfirmed. If shutdown occurs before any ProductionGate has proved `READY`, no maintenance authorization is sent at all; the uncertain child is terminated and any retained kernel gate remains fail-safe for restart.
 
 ## Deliberate remaining boundaries
 

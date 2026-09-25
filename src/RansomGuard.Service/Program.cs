@@ -93,7 +93,8 @@ try
             var admittedPackage=protectionPackage!;
             builder.Services.AddHostedService(sp=>new ProductionProtectionLifecycle(
                 sp.GetRequiredService<ILogger<ProductionProtectionLifecycle>>(),
-                settings,store,admittedPackage,protection,runtime,AppContext.BaseDirectory));
+                settings,store,admittedPackage,protection,runtime,
+                sp.GetRequiredService<IHostApplicationLifetime>(),AppContext.BaseDirectory));
         }
         var scopedTrust=new ScopedTrustCoordinator(store,runtime);
         builder.Services.AddHostedService(sp=>new ScopedTrustPublisher(scopedTrust));

@@ -101,7 +101,12 @@ foreach($required in @(
     'Registered production minifilter altitude/attachment flags do not match the admitted package.',
     'TerminateUnreadyChildAsync(gate)',
     'Never send the maintenance-authorizing "shutdown" command to an uncertain child',
-    'gate.Kill(entireProcessTree: true)'
+    'gate.Kill(entireProcessTree: true)',
+    'IHostApplicationLifetime _lifetime',
+    '_lifetime.StopApplication()',
+    'Environment.ExitCode = 8',
+    'Enforce host will stop rather than continue without supervision.',
+    'Authorized production maintenance outcome is unconfirmed; no active kernel-enforcement claim is made and the driver remains loaded.'
 )){
     if($lifecycle -notmatch [regex]::Escape($required)){throw "Production lifecycle invariant missing: $required"}
 }
@@ -117,6 +122,15 @@ if($terminateBody -match [regex]::Escape('StandardInput.WriteLineAsync("shutdown
 }
 if($terminateBody -notmatch [regex]::Escape('gate.Kill(entireProcessTree: true)')){
     throw 'Unready ProductionGate termination must be abrupt so an uncertain reconnect stays fail-safe.'
+}
+
+$notReady=$lifecycle.IndexOf('if (!ready)')
+$stopCheck=$lifecycle.IndexOf('if (stoppingToken.IsCancellationRequested)',$notReady)
+$terminateOnStop=$lifecycle.IndexOf('await TerminateUnreadyChildAsync(gate).ConfigureAwait(false);',$stopCheck)
+$startupThrow=$lifecycle.IndexOf('throw new InvalidOperationException(startupFailure);',$terminateOnStop)
+if($notReady -lt 0 -or $stopCheck -lt 0 -or $terminateOnStop -lt 0 -or $startupThrow -lt 0 -or
+   $notReady -gt $stopCheck -or $stopCheck -gt $terminateOnStop -or $terminateOnStop -gt $startupThrow){
+    throw 'Unready initial/reconnect children must never receive maintenance authorization; initial uncertainty must terminate Enforce supervision.'
 }
 
 $begin=$lifecycle.IndexOf('_protection.BeginKernelStartup()')

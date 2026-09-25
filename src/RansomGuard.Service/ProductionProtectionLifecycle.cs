@@ -13,6 +13,7 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
     private readonly ProtectionPackageAdmission _admission;
     private readonly ProtectionStateMachine _protection;
     private readonly RuntimeState _runtime;
+    private readonly IHostApplicationLifetime _lifetime;
     private readonly string _applicationBase;
     private Process? _gateClient;
 
@@ -23,6 +24,7 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
         ProtectionPackageAdmission admission,
         ProtectionStateMachine protection,
         RuntimeState runtime,
+        IHostApplicationLifetime lifetime,
         string applicationBase)
     {
         _log = log;
@@ -31,6 +33,7 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
         _admission = admission;
         _protection = protection;
         _runtime = runtime;
+        _lifetime = lifetime;
         _applicationBase = Path.GetFullPath(applicationBase);
     }
 
@@ -92,7 +95,10 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
                 {
                     if (stoppingToken.IsCancellationRequested)
                     {
-                        await StopForServiceShutdownAsync(gate, signals, root).ConfigureAwait(false);
+                        // A child that never proved READY is not eligible for maintenance authorization,
+                        // even during service stop. Abrupt termination preserves any uncertain/retained
+                        // kernel gate fail-safe and intentionally leaves the driver loaded for restart.
+                        await TerminateUnreadyChildAsync(gate).ConfigureAwait(false);
                         await DrainPumpsAsync(stdoutPump, stderrPump).ConfigureAwait(false);
                         return;
                     }
@@ -113,11 +119,7 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
                     await DrainPumpsAsync(stdoutPump, stderrPump).ConfigureAwait(false);
 
                     if (firstActivation)
-                    {
-                        _protection.MarkFailed(startupFailure);
-                        PublishProtection();
-                        return;
-                    }
+                        throw new InvalidOperationException(startupFailure);
 
                     _log.LogError("{Reason} Kernel fail-safe remains DegradedProtected; reconnect will retry.", startupFailure);
                     await Task.Delay(
@@ -202,21 +204,43 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
         catch (Exception ex)
         {
             var snapshot = _protection.Snapshot();
-            if (snapshot.State is not ("Protected" or "DegradedProtected"))
+            try
             {
-                _protection.MarkFailed("Production lifecycle failed: " + ex.GetType().Name + ": " + ex.Message);
-                PublishProtection();
+                if (snapshot.State == "Protected")
+                {
+                    _protection.MarkDegraded("Production lifecycle supervisor failed; the supervised channel is being torn down fail-safe.");
+                    PublishProtection();
+                }
+                else if (snapshot.State != "DegradedProtected")
+                {
+                    _protection.MarkFailed("Production lifecycle failed: " + ex.GetType().Name + ": " + ex.Message);
+                    PublishProtection();
+                }
+            }
+            catch (Exception stateError)
+            {
+                _log.LogError(stateError, "Unable to publish terminal production lifecycle state.");
             }
 
-            _store.Audit(new
+            try
             {
-                Type = "ProductionLifecycleFailure",
-                Utc = DateTime.UtcNow,
-                Error = ex.GetType().Name,
-                ex.Message,
-                Protection = _protection.Snapshot()
-            });
-            _log.LogError(ex, "Production protection lifecycle failed.");
+                _store.Audit(new
+                {
+                    Type = "ProductionLifecycleFailure",
+                    Utc = DateTime.UtcNow,
+                    Error = ex.GetType().Name,
+                    ex.Message,
+                    Protection = _protection.Snapshot()
+                });
+            }
+            catch (Exception auditError) when (auditError is IOException or UnauthorizedAccessException)
+            {
+                _log.LogError(auditError, "Unable to persist production lifecycle failure evidence.");
+            }
+
+            _log.LogCritical(ex, "Production protection lifecycle failed; Enforce host will stop rather than continue without supervision.");
+            Environment.ExitCode = 8;
+            _lifetime.StopApplication();
         }
         finally
         {
@@ -345,9 +369,13 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
                 try { gate.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
             }
 
-            if (_protection.Snapshot().State == "Protected")
+            var failedSnapshot = _protection.Snapshot();
+            if (failedSnapshot.State is "Protected" or "DegradedProtected")
             {
-                _protection.MarkDegraded("Graceful ProductionGate shutdown failed; kernel fail-safe remains active.");
+                // After the service has sent the authorized shutdown command, a lost acknowledgement
+                // cannot prove whether kernel deactivation committed. Never publish a false active
+                // protection claim in this ambiguity. The driver is deliberately left loaded.
+                _protection.MarkFailed("Authorized production maintenance outcome is unconfirmed; no active kernel-enforcement claim is made and the driver remains loaded.");
                 PublishProtection();
             }
 
@@ -359,7 +387,7 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
                 ex.Message,
                 Protection = _protection.Snapshot()
             });
-            _log.LogError(ex, "Production protection could not enter clean maintenance.");
+            _log.LogError(ex, "Production protection maintenance outcome is unconfirmed; driver unload is refused.");
         }
     }
 

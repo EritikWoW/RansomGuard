@@ -222,6 +222,15 @@ $summary=[ordered]@{
     startedUtc=$startedUtc.ToString('o')
     vm=$vm
     qualificationAltitude=[string]$package.qualificationAltitude
+    firstActivationSession=$null
+    firstGatePid=0
+    reconnectSession=$null
+    reconnectGatePid=0
+    serviceCrashServicePid=0
+    serviceRestartSession=$null
+    serviceRestartGatePid=0
+    finalTargetSha256=$null
+    auditEvidenceCount=0
     serviceStarted=$false
     admittedAndProtected=$false
     productionMutationAllowed=$false
@@ -270,6 +279,8 @@ try{
         throw 'First activation audit did not publish Protected/kernel-enforcement truth.'
     }
     $summary.admittedAndProtected=$true
+    $summary.firstActivationSession=[string]$firstActivation.Session
+    $summary.firstGatePid=[int]$firstActivation.GateClientPid
 
     [IO.File]::WriteAllText($target,'production-lifecycle-before-loss',[Text.UTF8Encoding]::new($false))
     if((Get-Content -LiteralPath $target -Raw) -ne 'production-lifecycle-before-loss'){
@@ -319,6 +330,8 @@ try{
         throw 'Reconnect did not return to Protected with a connected kernel channel.'
     }
     $summary.reconnectProtected=$true
+    $summary.reconnectSession=[string]$secondActivation.Session
+    $summary.reconnectGatePid=[int]$secondActivation.GateClientPid
     $summary.reconnectPidReused=([int]$secondActivation.GateClientPid -eq $firstGatePid)
     # PID reuse is explicitly allowed here: the security boundary is the new kernel PEPROCESS
     # plus a new ProductionGate session after the original process has been proved exited.
@@ -336,6 +349,7 @@ try{
     $serviceCim=Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
     if($null -eq $serviceCim){throw "Unable to resolve owned qualification service '$serviceName'."}
     $servicePid=[int]$serviceCim.ProcessId
+    $summary.serviceCrashServicePid=$servicePid
     if($servicePid -le 0 -or $servicePid -eq $secondGatePid){
         throw "Qualification service process identity is invalid. servicePid=$servicePid gatePid=$secondGatePid"
     }
@@ -377,12 +391,15 @@ try{
         throw 'Service restart did not reconnect the retained ProductionGate session into Protected.'
     }
     $summary.serviceRestartProtected=$true
+    $summary.serviceRestartSession=[string]$thirdActivation.Session
+    $summary.serviceRestartGatePid=[int]$thirdActivation.GateClientPid
 
     [IO.File]::WriteAllText($target,'production-lifecycle-after-service-restart',[Text.UTF8Encoding]::new($false))
     if((Get-Content -LiteralPath $target -Raw) -ne 'production-lifecycle-after-service-restart'){
         throw 'Mutation did not resume after service restart and ProductionGate preflight.'
     }
     $summary.serviceRestartMutationAllowed=$true
+    $summary.finalTargetSha256=(Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
 
     Invoke-Sc @('stop',$serviceName) | Out-Null
     Wait-ServiceState $serviceName 'Stopped' 60
@@ -437,6 +454,9 @@ try{
         if($LASTEXITCODE -ne 0 -or $filters -match '(?m)^\s*RansomGuardMinifilter\b'){
             throw 'RansomGuardMinifilter remained loaded after lifecycle qualification cleanup.'
         }
+        if(Test-Path -LiteralPath $root -PathType Container){
+            Remove-Item -LiteralPath $root -Recurse -Force
+        }
         $summary.cleanupPassed=$true
     }catch{
         $cleanupFailure=$_
@@ -445,6 +465,9 @@ try{
         $summary.passed=$false
     }
 
+    $auditEvidence=@(Get-AuditEntries $startedUtc)
+    $summary.auditEvidenceCount=$auditEvidence.Count
+    ConvertTo-Json -InputObject $auditEvidence -Depth 12 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'production-lifecycle-audit.json') -Encoding utf8
     $summary.completedUtc=(Get-Date).ToUniversalTime().ToString('o')
     $summary | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'production-lifecycle-result.json') -Encoding utf8
 }

@@ -284,6 +284,10 @@ jobs:
           if(-not [string]::IsNullOrWhiteSpace([string]$summary.cleanupError)){
             throw "Production lifecycle cleanup reported an error: $($summary.cleanupError)"
           }
+          $auditEvidence=Join-Path $results 'production-lifecycle-audit.json'
+          if(-not(Test-Path -LiteralPath $auditEvidence -PathType Leaf) -or [int]$summary.auditEvidenceCount -le 0){
+            throw 'Production lifecycle qualification must retain filtered service audit evidence.'
+          }
           "RG_PRODUCTION_LIFECYCLE_RESULTS=$results" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Ensure LAB minifilter is unloaded after run
@@ -359,10 +363,14 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Remove signed lab package
+      - name: Remove signed qualification packages
         if: always()
         shell: pwsh
         run: |
           if($env:RG_DRIVER_PACKAGE -and (Test-Path -LiteralPath $env:RG_DRIVER_PACKAGE)){
             Remove-Item -LiteralPath $env:RG_DRIVER_PACKAGE -Recurse -Force -ErrorAction SilentlyContinue
+          }
+          $productionQualification=Join-Path $env:RUNNER_TEMP 'RansomGuard-ProductionLifecycle-Qualification'
+          if(Test-Path -LiteralPath $productionQualification){
+            Remove-Item -LiteralPath $productionQualification -Recurse -Force -ErrorAction SilentlyContinue
           }

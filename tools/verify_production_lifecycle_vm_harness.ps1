@@ -79,6 +79,10 @@ foreach($required in @(
     'driverUnloadedAfterMaintenance',
     'cleanupPassed',
     'production-lifecycle-result.json',
+    'production-lifecycle-audit.json',
+    'auditEvidenceCount',
+    'finalTargetSha256',
+    'Remove-Item -LiteralPath $root -Recurse -Force',
     'pnputil.exe /delete-driver',
     "fltmc filters"
 )){
@@ -94,6 +98,8 @@ foreach($required in @(
     '-ExpectedCommit $env:RG_WORKFLOW_SHA',
     "qualification-package.json",
     "production-lifecycle-result.json",
+    "production-lifecycle-audit.json",
+    'auditEvidenceCount',
     "'admittedAndProtected'",
     "'gateClientLossObserved'",
     "'degradedDeniedMutation'",
@@ -110,7 +116,9 @@ foreach($required in @(
     "'cleanupPassed'",
     "'passed'",
     'ransomguard-production-lifecycle-evidence',
-    'RG_PRODUCTION_LIFECYCLE_RESULTS'
+    'RG_PRODUCTION_LIFECYCLE_RESULTS',
+    'Remove signed qualification packages',
+    "Join-Path $env:RUNNER_TEMP 'RansomGuard-ProductionLifecycle-Qualification'"
 )){
     if($workflow -notmatch [regex]::Escape($required)){
         throw "Runtime workflow is missing the production lifecycle qualification invariant: $required"

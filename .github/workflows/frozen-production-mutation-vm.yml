@@ -157,6 +157,7 @@ jobs:
             'preexistingWritableMappingRejected',
             'preexistingHardLinkRejected',
             'descendantReparseRejected',
+            'postActivationReparseMutationDenied',
             'hardLinkInsideToOutsideDenied',
             'hardLinkOutsideToInsideDenied',
             'hardLinkOutsideToOutsideAllowed',

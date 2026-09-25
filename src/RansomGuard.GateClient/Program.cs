@@ -7,6 +7,15 @@ using System.Text;
 
 const string PortName = @"\RansomGuardMinifilterPort";
 var options = Options.Parse(args);
+
+void LifecycleProgress(string phase)
+{
+    if (options.Profile != GateProfile.Production || !options.ServiceControlStdin)
+        return;
+    Console.WriteLine($"RG-LIFECYCLE PROGRESS schema=1 phase={phase} pid={Environment.ProcessId}");
+    Console.Out.Flush();
+}
+
 if (options.PrepareOnly)
 {
     LabRootPolicy.Prepare(options.Root);
@@ -19,6 +28,7 @@ if (options.Profile == GateProfile.Production)
     ProductionRootPolicy.Validate(options.Root);
 else
     LabRootPolicy.Validate(options.Root);
+LifecycleProgress("root-validated");
 
 if (PathPolicy.Under(options.StoreRoot, options.Root))
     throw new InvalidOperationException("Rollback store must be outside the protected root.");
@@ -33,13 +43,17 @@ else
     Directory.CreateDirectory(options.StoreRoot);
 }
 var repository = new RollbackRepository(options.StoreRoot);
+LifecycleProgress("repository-verify-start");
 repository.VerifyAll(); // Refuse to start a new gate session on top of ambiguous/crash-damaged rollback state.
+LifecycleProgress("repository-verify-complete");
+LifecycleProgress("restart-reconciliation-start");
 var restartSummary = await RestartReconciliation.ObservePendingAsync(
     repository,
     options.Root,
     checked(options.MaxStoreMiB * RollbackStorageBudget.MiB),
     checked(options.MinFreeMiB * RollbackStorageBudget.MiB),
     CancellationToken.None).ConfigureAwait(false);
+LifecycleProgress("restart-reconciliation-complete");
 if (options.ReconcileOnly)
 {
     Console.WriteLine(
@@ -54,9 +68,11 @@ if (existingSession && !serviceControlledProduction)
     throw new InvalidOperationException(
         "Only the service-controlled ProductionGate lifecycle may resume an existing rollback session.");
 
+LifecycleProgress(existingSession ? "session-open-start" : "session-create-start");
 var store = existingSession
     ? repository.OpenSession(sessionId)
     : repository.CreateSession(sessionId);
+LifecycleProgress(existingSession ? "session-open-complete" : "session-create-complete");
 var lifecycleStore = new RollbackSessionLifecycleStore(store.Root);
 if (existingSession)
 {
@@ -123,7 +139,9 @@ var context = new RgConnectContext
     GateRoot = ntRoot
 };
 
+LifecycleProgress("kernel-connect-start");
 using var port = Native.Connect(PortName, context);
+LifecycleProgress("kernel-connect-complete");
 using var cts = new CancellationTokenSource();
 var productionServiceShutdownAuthorized = 0;
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); Native.Cancel(port); };
@@ -201,9 +219,11 @@ if (headerSize != 16 || eventSize != 2168 || replyHeaderSize != 16 || gateReplyS
     throw new InvalidOperationException($"Unexpected protocol sizes: message={headerSize}, event={eventSize}, replyHeader={replyHeaderSize}, gateReply={gateReplySize}");
 
 var resolver = new DevicePathResolver();
+LifecycleProgress("activation-preflight-start");
 var activationSummary = await ActivationPreflight.RunAsync(
     port, options.Root, resolver, activationStore, topologyStore, storageBudget,
     options.Profile == GateProfile.Lab ? options.ContainPid : null, cts.Token).ConfigureAwait(false);
+LifecycleProgress("activation-preflight-complete");
 Console.WriteLine($"Activation preflight: directories={activationSummary.DirectoriesHeld}, files={activationSummary.FilesChecked}, writable-views=0, kernel gate ACTIVE.");
 Console.WriteLine(activationSummary.ContainedProcessId is ulong containedPid
     ? $"LAB containment  : ACTIVE for kernel-bound process pid={containedPid}; abrupt disconnect clears only this PEPROCESS latch while root protection degrades fail-safe."

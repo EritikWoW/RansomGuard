@@ -3,6 +3,7 @@ $root=Split-Path -Parent $PSScriptRoot
 
 $workflowPath=Join-Path $root '.github\workflows\minifilter-runtime-vm.yml'
 $runtimeScript=Join-Path $root 'minifilter-tools\run_runtime_integration_lab.ps1'
+$frozenRuntimeSuite=Join-Path $root 'qualification\run_frozen_runtime_suite.ps1'
 $productionGateScript=Join-Path $root 'minifilter-tools\run_production_gate_profile_lab.ps1'
 $packageScript=Join-Path $root 'minifilter-tools\prepare_runtime_driver_package.ps1'
 $readinessScript=Join-Path $root 'minifilter-tools\verify_runtime_runner_readiness.ps1'
@@ -14,13 +15,13 @@ $build=Join-Path $root 'build_windows.ps1'
 $buildWrapper=Join-Path $root 'build_windows.cmd'
 $automationAudit=Join-Path $root 'tools\verify_powershell_automation.ps1'
 
-foreach($path in @($workflowPath,$runtimeScript,$productionGateScript,$packageScript,$readinessScript,$installScript,$unloadScript,$helperSource,$helperProject,$build,$buildWrapper,$automationAudit)){
+foreach($path in @($workflowPath,$runtimeScript,$frozenRuntimeSuite,$productionGateScript,$packageScript,$readinessScript,$installScript,$unloadScript,$helperSource,$helperProject,$build,$buildWrapper,$automationAudit)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Runtime VM harness required file missing: $path"}
 }
 
 & $automationAudit -RepositoryRoot $root
 
-foreach($scriptPath in @($runtimeScript,$productionGateScript,$packageScript,$readinessScript,$installScript,$unloadScript)){
+foreach($scriptPath in @($runtimeScript,$frozenRuntimeSuite,$productionGateScript,$packageScript,$readinessScript,$installScript,$unloadScript)){
     $tokens=$null
     $parseErrors=$null
     [void][System.Management.Automation.Language.Parser]::ParseFile($scriptPath,[ref]$tokens,[ref]$parseErrors)
@@ -218,6 +219,17 @@ foreach($required in @(
     'sameRootReconnectActivated',
     'sameRootMutationAllowed',
     'gracefulReleaseSucceeded',
+    'mapped-disconnect',
+    'mappedThenDisconnectBaselineVerified',
+    'mappedThenDisconnectPagingObserved',
+    'mappedThenDisconnectPreimageHashMatched',
+    'mappedThenDisconnectMutationObserved',
+    'mappedThenDisconnectDeniedMutation',
+    'mappedThenDisconnectPreservedPostMapHash',
+    'mappedThenDisconnectReconnectActivated',
+    'Stop-LabProcess $gateMappedDisconnect',
+    'mappedSectionRecord.volumeSerialHex',
+    'mappedPagingRecord.fileIdHex',
     '--scope-ambiguity-pid',
     'LAB scope ambiguity\s+: ARMED',
     'scopeAmbiguityDeniedMutation',
@@ -245,6 +257,25 @@ foreach($required in @(
     'driverCatSha256'
 )){
     if($runtime -notmatch [regex]::Escape($required)){throw "Runtime integration script missing invariant: $required"}
+}
+
+$frozenSuite=Get-Content -LiteralPath $frozenRuntimeSuite -Raw
+foreach($required in @(
+    'orchestrationCommit',
+    'runtimeIntegrationScript',
+    "Join-Path $orchestrationRoot 'minifilter-tools\run_runtime_integration_lab.ps1'",
+    '& $runtimeIntegrationScript',
+    'mappedThenDisconnectBaselineVerified',
+    'mappedThenDisconnectPagingObserved',
+    'mappedThenDisconnectPreimageHashMatched',
+    'mappedThenDisconnectMutationObserved',
+    'mappedThenDisconnectDeniedMutation',
+    'mappedThenDisconnectPreservedPostMapHash',
+    'mappedThenDisconnectReconnectActivated'
+)){
+    if($frozenSuite -notmatch [regex]::Escape($required)){
+        throw "Frozen immutable runtime suite missing orchestration/runtime invariant: $required"
+    }
 }
 
 $readiness=Get-Content -LiteralPath $readinessScript -Raw

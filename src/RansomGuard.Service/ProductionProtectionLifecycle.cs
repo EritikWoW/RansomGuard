@@ -583,6 +583,11 @@ internal static class ProductionDriverLifecycle
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
+        if (!admission.ReadyForLifecycle)
+            throw new InvalidOperationException("Production driver lifecycle requires an admitted protection package.");
+        var admittedAltitude = admission.Altitude
+            ?? throw new InvalidOperationException("Admitted production protection package is missing its altitude.");
+
         var driverRoot = Path.GetFullPath(driverDirectory);
         var inf = Path.Combine(driverRoot, "RansomGuardMinifilter.inf");
         var sys = Path.Combine(driverRoot, "RansomGuardMinifilter.sys");
@@ -626,7 +631,7 @@ internal static class ProductionDriverLifecycle
             timeout,
             cancellationToken,
             allowNonZero: true).ConfigureAwait(false);
-        var attachedVolumes = AttachedVolumes(instances.Stdout, admission.Altitude);
+        var attachedVolumes = AttachedVolumes(instances.Stdout, admittedAltitude);
         if (attachedVolumes.Length == 0)
         {
             await RunToolAsync(
@@ -639,7 +644,7 @@ internal static class ProductionDriverLifecycle
                 new[] { "instances", "-f", ServiceName },
                 timeout,
                 cancellationToken).ConfigureAwait(false);
-            attachedVolumes = AttachedVolumes(instances.Stdout, admission.Altitude);
+            attachedVolumes = AttachedVolumes(instances.Stdout, admittedAltitude);
         }
 
         if (attachedVolumes.Length != 1 ||

@@ -1,8 +1,16 @@
-# RansomGuard 0.8.5.0
+# RansomGuard 0.8.6.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
 and recover data through rollback plus adaptive crypto analysis.
+
+## Production Enforce lifecycle
+
+0.8.6.0 adds the first normal-service production lifecycle above the admitted ProductionProtection package. The default bundle and default configuration remain Audit; the normal Audit build still does not ship SYS/CAT/INF/GateClient. When an operator explicitly configures `Mode=Enforce` and provisions the fixed signed `Protection/` package beside the service, lifecycle activation is allowed only after rollback-store validation and `ReadyForLifecycle` admission. The service deterministically verifies/registers the demand-start minifilter, loads it, attaches only the configured protected-root volume, starts the exact admitted ProductionGate client, and waits for an activation-readiness signal produced only after kernel `ActivateGate` succeeds.
+
+A live process or loaded driver is not a protection claim. Initial activation publishes `Protected` only after the ProductionGate readiness handshake. Unexpected GateClient loss leaves the kernel protection latch in `DegradedProtected`; the service retries the same ProductionGate/root profile and returns to `Protected` only after a new activation preflight completes. Service shutdown uses a private redirected-stdin control path; driver detach/unload is attempted only after GateClient durably closes its session and the kernel confirms whole-gate `Maintenance` deactivation. If graceful shutdown fails, the service does not unload the driver and retains the fail-safe protection claim.
+
+Automatic detector-to-containment remains disabled in 0.8.6. Self-protection against local Administrator/SYSTEM tampering, production recovery orchestration, controlled production signing, and a Microsoft-assigned altitude remain separate release requirements. This lifecycle implementation is not by itself a production-certification claim; exact-head disposable-VM qualification remains required before merge/release.
 
 ## GateClient process identity boundary
 
@@ -20,7 +28,7 @@ and recover data through rollback plus adaptive crypto analysis.
 
 0.8.2.0 advances the engineering minifilter/GateClient wire contract to protocol v18 and introduces a distinct `ProductionGate` client mode. LAB and ProductionGate share the already-qualified preserve/preflight/degraded-protection pipeline, but the kernel rejects LAB-only containment reply flags, containment controls and scope-ambiguity fault injection in ProductionGate. A degraded protected session retains its original gate profile as well as the exact root/volume, so it cannot reconnect under a different policy profile. GateClient production profile also rejects LAB prepare/fault/reconciliation/shutdown/containment CLI and uses the fixed service rollback repository under ProgramData.
 
-This is still a protocol/lifecycle boundary milestone, not production activation. The normal service does not yet install/load/attach the driver or spawn/supervise ProductionGate, so `Mode=Enforce` still reports `EnforceUnavailable`.
+At the 0.8.2 milestone this was only a protocol/profile boundary: the normal service did not yet install/load/attach the driver or supervise ProductionGate. The 0.8.6 lifecycle layer now consumes this retained ProductionGate boundary after package admission.
 
 ## Production protection package admission
 
@@ -32,7 +40,7 @@ The default normal bundle still excludes SYS/CAT/INF/GateClient and remains Audi
 
 0.8.0.0 establishes the normal-service protection-mode contract without silently promoting the Engineering LAB driver into production. Configuration schema 4 accepts explicit `Mode=Audit` or `Mode=Enforce`; Enforce requires one explicit non-drive protected root, keeps the signed-driver requirement mandatory, and keeps automatic containment disabled in this foundation milestone. The service publishes an explicit protection state machine (`EnforceStarting`, `EnforceUnavailable`, `KernelConnected`, `Protected`, `DegradedProtected`, `Maintenance`, `Failed`) and never derives `KernelEnforcementActive` from SCM driver state alone. Rollback repository validation is a prerequisite for any future kernel-start transition.
 
-The default normal package remains Audit and still contains no driver/GateClient production lifecycle. Requesting Enforce in this milestone therefore reports `EnforceUnavailable` rather than falling back to a false Protected claim. The previously qualified protocol-v17 preservation behavior is retained by the protocol-v18 engineering core; production service lifecycle activation remains a separate milestone.
+At the 0.8.0 foundation milestone the default package remained Audit and contained no driver/GateClient lifecycle; Enforce therefore reported `EnforceUnavailable` rather than a false Protected claim. The 0.8.6 service lifecycle is layered on that same explicit state contract.
 
 Ordinary WRITE operations still use **range-aware copy-on-write**:
 
@@ -175,7 +183,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.8.5.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.8.6.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 Manual disposable-VM runtime workflows:
 

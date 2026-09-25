@@ -151,7 +151,10 @@ foreach($required in @(
   'ActivationTopologyStore',
   'Native.OpenPreflight',
   'Native.OpenPreflightDirectory',
-  'Directory.EnumerateDirectories',
+  'Directory.EnumerateFileSystemEntries',
+  'RecurseSubdirectories = false',
+  'AttributesToSkip = 0',
+  'Activation preflight refuses descendant reparse point:',
   'FileFlagBackupSemantics',
   'DirectoriesHeld',
   'Native.Control',
@@ -432,9 +435,21 @@ $preflightStart=$text.IndexOf('static class ActivationPreflight')
 $preflightEnd=$text.IndexOf('readonly record struct ActivationPreflightSummary',$preflightStart)
 if($preflightStart -lt 0 -or $preflightEnd -lt 0){throw 'ActivationPreflight implementation missing.'}
 $preflightBlock=$text.Substring($preflightStart,$preflightEnd-$preflightStart)
-foreach($required in @('Directory.EnumerateFiles','Directory.EnumerateDirectories','FileAttributes.ReparsePoint','Native.OpenPreflightProbe','Native.OpenPreflightHold','Native.OpenPreflightDirectory','ActivationPreflightStore','ActivationTopologyStore','FileIdentityStore.QueryHandleIdentity','FileIdentityStore.QueryHandleLinkCount','NumberOfLinks={linkCount}','RgEventType.ActivationPreflight','RgEventType.PagingWrite','RgEventType.WritableSection','heldHandles','RgControlCommand.ArmPreflight','RgControlCommand.ActivateGate','RgControlCommand.ActivateAndContainProcess','TargetProcessId = containPid ?? 0','Native.Control')){
+foreach($required in @('Directory.EnumerateFileSystemEntries','RecurseSubdirectories = false','AttributesToSkip = 0','FileAttributes.ReparsePoint','pendingDirectories','Activation preflight refuses descendant reparse point:','Native.OpenPreflightProbe','Native.OpenPreflightHold','Native.OpenPreflightDirectory','ActivationPreflightStore','ActivationTopologyStore','FileIdentityStore.QueryHandleIdentity','FileIdentityStore.QueryHandleLinkCount','NumberOfLinks={linkCount}','RgEventType.ActivationPreflight','RgEventType.PagingWrite','RgEventType.WritableSection','heldHandles','RgControlCommand.ArmPreflight','RgControlCommand.ActivateGate','RgControlCommand.ActivateAndContainProcess','TargetProcessId = containPid ?? 0','Native.Control')){
   if($preflightBlock -notmatch [regex]::Escape($required)){throw "Activation preflight missing invariant: $required"}
 }
+if($preflightBlock -match 'RecurseSubdirectories\s*=\s*true' -or
+   $preflightBlock -match 'AttributesToSkip\s*=\s*FileAttributes\.ReparsePoint'){
+  throw 'Activation preflight must never recursively skip or traverse descendant reparse points.'
+}
+$enumerateEntries=$preflightBlock.IndexOf('Directory.EnumerateFileSystemEntries')
+$reparseReject=$preflightBlock.IndexOf('Activation preflight refuses descendant reparse point:')
+$enqueueDirectory=$preflightBlock.IndexOf('pendingDirectories.Enqueue(entry)')
+if($enumerateEntries -lt 0 -or $reparseReject -lt 0 -or $enqueueDirectory -lt 0 -or
+   $enumerateEntries -gt $reparseReject -or $reparseReject -gt $enqueueDirectory){
+  throw 'Activation preflight must reject descendant reparse entries before traversing or enqueuing child directories.'
+}
+
 $armInPreflight=$preflightBlock.IndexOf('RgControlCommand.ArmPreflight')
 $probeInPreflight=$preflightBlock.IndexOf('Native.OpenPreflightProbe(path)')
 $receiveInPreflight=$preflightBlock.IndexOf('ReceivePreflightEventAsync(port, path',$probeInPreflight)

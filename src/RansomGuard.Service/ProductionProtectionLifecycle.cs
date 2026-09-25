@@ -109,7 +109,7 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
                         Stderr = signals.ErrorTail()
                     });
 
-                    await StopUnreadyChildAsync(gate).ConfigureAwait(false);
+                    await TerminateUnreadyChildAsync(gate).ConfigureAwait(false);
                     await DrainPumpsAsync(stdoutPump, stderrPump).ConfigureAwait(false);
 
                     if (firstActivation)
@@ -363,22 +363,28 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
         }
     }
 
-    private static async Task StopUnreadyChildAsync(Process gate)
+    private static async Task TerminateUnreadyChildAsync(Process gate)
     {
         if (gate.HasExited)
             return;
+
+        // READY is the only proof that this child completed activation preflight.
+        // Never send the maintenance-authorizing "shutdown" command to an uncertain child:
+        // on a reconnect timeout that could race a late activation and release the retained
+        // fail-safe gate. Abrupt termination is conservative; any connected gate disconnects
+        // into DegradedProtected and a later reconnect must prove readiness again.
         try
         {
-            await gate.StandardInput.WriteLineAsync("shutdown").ConfigureAwait(false);
-            await gate.StandardInput.FlushAsync().ConfigureAwait(false);
+            gate.Kill(entireProcessTree: true);
             await gate.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is IOException or InvalidOperationException or TimeoutException)
+        catch (InvalidOperationException)
         {
-            if (!gate.HasExited)
-            {
-                try { gate.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
-            }
+            // Process exited between the HasExited check and Kill/WaitForExitAsync.
+        }
+        catch (TimeoutException)
+        {
+            throw new InvalidOperationException("Unready ProductionGate did not terminate within the bounded fail-safe timeout.");
         }
     }
 

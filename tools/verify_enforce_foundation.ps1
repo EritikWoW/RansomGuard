@@ -95,9 +95,25 @@ foreach($required in @(
     'Registry.LocalMachine.OpenSubKey',
     'FileSafety.NoReparse',
     'DecisionPolicy.HashEqual(packageHash, installedHash)',
-    'Registered production minifilter altitude/attachment flags do not match the admitted package.'
+    'Registered production minifilter altitude/attachment flags do not match the admitted package.',
+    'TerminateUnreadyChildAsync(gate)',
+    'Never send the maintenance-authorizing "shutdown" command to an uncertain child',
+    'gate.Kill(entireProcessTree: true)'
 )){
     if($lifecycle -notmatch [regex]::Escape($required)){throw "Production lifecycle invariant missing: $required"}
+}
+
+$terminateStart=$lifecycle.IndexOf('private static async Task TerminateUnreadyChildAsync(Process gate)')
+$terminateEnd=$lifecycle.IndexOf('private void PublishProtection()',$terminateStart)
+if($terminateStart -lt 0 -or $terminateEnd -lt 0 -or $terminateStart -gt $terminateEnd){
+    throw 'Production supervisor must retain an explicit bounded unready-child termination path.'
+}
+$terminateBody=$lifecycle.Substring($terminateStart,$terminateEnd-$terminateStart)
+if($terminateBody -match [regex]::Escape('StandardInput.WriteLineAsync("shutdown")')){
+    throw 'Unready ProductionGate termination must never authorize maintenance/deactivation.'
+}
+if($terminateBody -notmatch [regex]::Escape('gate.Kill(entireProcessTree: true)')){
+    throw 'Unready ProductionGate termination must be abrupt so an uncertain reconnect stays fail-safe.'
 }
 
 $begin=$lifecycle.IndexOf('_protection.BeginKernelStartup()')

@@ -151,17 +151,17 @@ function Get-AuditEntries([DateTimeOffset]$SinceUtc){
     return @($entries)
 }
 
-function Wait-AuditType([string]$Type,[DateTimeOffset]$SinceUtc,[int]$Seconds,[string]$DifferentSession=''){
+function Wait-AuditType([string]$Type,[DateTimeOffset]$SinceUtc,[int]$Seconds,[string]$ExpectedSession=''){
     $deadline=(Get-Date).AddSeconds($Seconds)
     while((Get-Date) -lt $deadline){
         $matches=@(Get-AuditEntries $SinceUtc | Where-Object {
             [string]$_.Type -eq $Type -and
-            ([string]::IsNullOrWhiteSpace($DifferentSession) -or [string]$_.Session -ne $DifferentSession)
+            ([string]::IsNullOrWhiteSpace($ExpectedSession) -or [string]$_.Session -eq $ExpectedSession)
         })
         if($matches.Count -gt 0){return $matches[-1]}
         Start-Sleep -Milliseconds 200
     }
-    throw "Timed out waiting for audit event Type='$Type'."
+    throw "Timed out waiting for audit event Type='$Type' expectedSession='$ExpectedSession'."
 }
 
 Assert-Administrator
@@ -323,6 +323,9 @@ try{
     $summary.degradedPreservedHash=$true
 
     $secondActivation=Wait-AuditType 'ProductionProtectionActivated' $lost.Utc 75 ([string]$firstActivation.Session)
+    if([string]$secondActivation.Session -ne [string]$firstActivation.Session){
+        throw 'Reconnect must preserve the same production rollback session.'
+    }
     if([string]$secondActivation.Root -ne $root){throw 'Reconnect activation root mismatch.'}
     if([string]$secondActivation.Protection.State -ne 'Protected' -or
        $secondActivation.Protection.KernelEnforcementActive -ne $true -or
@@ -333,8 +336,8 @@ try{
     $summary.reconnectSession=[string]$secondActivation.Session
     $summary.reconnectGatePid=[int]$secondActivation.GateClientPid
     $summary.reconnectPidReused=([int]$secondActivation.GateClientPid -eq $firstGatePid)
-    # PID reuse is explicitly allowed here: the security boundary is the new kernel PEPROCESS
-    # plus a new ProductionGate session after the original process has been proved exited.
+    # PID reuse is explicitly allowed here: the security boundary is the new kernel PEPROCESS.
+    # The rollback session intentionally remains the same retained production evidence namespace.
 
     [IO.File]::WriteAllText($target,'production-lifecycle-after-reconnect',[Text.UTF8Encoding]::new($false))
     if((Get-Content -LiteralPath $target -Raw) -ne 'production-lifecycle-after-reconnect'){
@@ -383,6 +386,9 @@ try{
     Invoke-Sc @('start',$serviceName) | Out-Null
     Wait-ServiceState $serviceName 'Running' 30
     $thirdActivation=Wait-AuditType 'ProductionProtectionActivated' $restartUtc 75 ([string]$secondActivation.Session)
+    if([string]$thirdActivation.Session -ne [string]$secondActivation.Session){
+        throw 'Service restart must preserve the same production rollback session.'
+    }
     if([string]$thirdActivation.Root -ne $root){throw 'Service-restart activation root mismatch.'}
     if([int]$thirdActivation.GateClientPid -le 0){throw 'Service restart did not record a replacement ProductionGate PID.'}
     if([string]$thirdActivation.Protection.State -ne 'Protected' -or

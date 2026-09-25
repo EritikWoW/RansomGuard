@@ -168,6 +168,10 @@ foreach($required in @(
     'DecisionPolicy.HashEqual(packageHash, installedHash)',
     'Registered production minifilter altitude/attachment flags do not match the admitted package.',
     'TerminateUnreadyChildAsync(gate)',
+    'signals.AddOutput(line)',
+    'public string[] OutputTail()',
+    'var startupDiagnostic = startupFailure +',
+    'StdoutTail=[',
     'Never send the maintenance-authorizing "shutdown" command to an uncertain child',
     'gate.Kill(entireProcessTree: true)',
     'IHostApplicationLifetime _lifetime',
@@ -224,7 +228,7 @@ if($terminateBody -notmatch [regex]::Escape('gate.Kill(entireProcessTree: true)'
 $notReady=$lifecycle.IndexOf('if (!ready)')
 $stopCheck=$lifecycle.IndexOf('if (stoppingToken.IsCancellationRequested)',$notReady)
 $terminateOnStop=$lifecycle.IndexOf('await TerminateUnreadyChildAsync(gate).ConfigureAwait(false);',$stopCheck)
-$startupThrow=$lifecycle.IndexOf('throw new InvalidOperationException(startupFailure);',$terminateOnStop)
+$startupThrow=$lifecycle.IndexOf('throw new InvalidOperationException(startupDiagnostic);',$terminateOnStop)
 if($notReady -lt 0 -or $stopCheck -lt 0 -or $terminateOnStop -lt 0 -or $startupThrow -lt 0 -or
    $notReady -gt $stopCheck -or $stopCheck -gt $terminateOnStop -or $terminateOnStop -gt $startupThrow){
     throw 'Unready initial/reconnect children must never receive maintenance authorization; initial uncertainty must terminate Enforce supervision.'

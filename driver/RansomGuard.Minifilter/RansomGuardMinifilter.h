@@ -13,12 +13,15 @@ typedef struct _RG_WORK_ITEM {
     WORK_QUEUE_ITEM WorkItem;
     RG_EVENT Event;
     LONG ClientMode;
+    LONG ClientGeneration;
 } RG_WORK_ITEM, *PRG_WORK_ITEM;
 
 typedef struct _RG_POST_CONTEXT {
     ULONGLONG RequestSequence;
     ULONG GateDecision;
     ULONG ActivationPreflight;
+    ULONG ProtectionGeneration;
+    LONG ClientGeneration;
     ULONG PostEventType;
     ULONG FileInformationClass;
     ULONG DispositionFlags;
@@ -30,13 +33,15 @@ typedef struct _RG_DELETE_HANDLE_CONTEXT {
     ULONGLONG RequestSequence;
     ULONG FileInformationClass;
     ULONG DispositionFlags;
+    ULONG ProtectionGeneration;
+    LONG ClientGeneration;
 } RG_DELETE_HANDLE_CONTEXT, *PRG_DELETE_HANDLE_CONTEXT;
 
 typedef struct _RG_STREAM_CONTEXT {
     ULONG PathStatus;
     ULONG IdentityStatus;
     ULONG PreservationDecision;
-    ULONG Reserved;
+    ULONG ProtectionGeneration;
     ULONGLONG CreateRequestSequence;
     ULONGLONG VolumeSerialNumber;
     ULONGLONG FileIdLow;

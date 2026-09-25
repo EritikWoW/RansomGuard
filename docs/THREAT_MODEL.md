@@ -99,8 +99,8 @@ The current driver does not mean "driver loaded = protected".
 | Protocol-v18 GateClient reconnects after degraded loss | Accepted only for the exact retained LAB/Production profile, root and referenced protected volume; returns to Preflight before Protected | Prevents profile substitution and re-establishes user-mode preservation only after activation preflight |
 | Clean transaction-complete GateClient requests DeactivateGate | Kernel first enters Maintenance-requested admission closure; only after gate/pending work drains does it authorize release and allow the subsequent port close to clear the retained root | Explicit two-phase release rather than disconnect-as-disable |
 | LAB storage admission/quota/free-space check fails | Denied | Preservation integrity wins over availability |
-| Paging write on tracked stream | Non-blocking evidence only | Relies on pre-preserved CREATE baseline; paging path is not a synchronous policy gate |
-| Writable section creation on tracked stream | Non-blocking attestation | Attests prior baseline; does not itself preserve/block |
+| Paging write on tracked stream | Non-blocking evidence only when the stream context belongs to the current protection generation and current root | Relies on pre-preserved CREATE baseline without leaking stale evidence into a later root/session |
+| Writable section creation on tracked stream | Non-blocking attestation only for the current protection generation/root | Attests prior baseline; stale stream contexts are ignored rather than crossing protection sessions |
 | Kernel-mode requestor | Not observed by ordinary gate path | Explicit threat-model exclusion |
 
 ## Ambiguous-scope analysis
@@ -169,6 +169,8 @@ CREATE/RENAME/TRUNCATE/DELETE completion/restart logic must remain conservative:
 ## Memory-mapped I/O
 
 Writable mappings are handled through a conservative pre-preservation rule: write-capable CREATE of an existing file must commit a full pre-image before the handle returns. Writable-section and paging-write callbacks then provide evidence without turning Memory Manager callbacks into blocking userspace policy gates.
+
+Stream contexts are bound to a kernel protection generation and revalidated against the currently retained root before paging/section evidence or mutating-FSCTL preservation credit is accepted. Every queued asynchronous event is also bound to the exact GateClient connection generation; post-operation and DELETE handle evidence retain the generation that authorized the operation. This prevents delayed paging, section, completion, or cleanup evidence from one LAB/ProductionGate session from being delivered to a later same-mode connection or a different protected root.
 
 This model does not justify treating an arbitrary pre-existing mapping as safe. Activation preflight checks for pre-existing writable references and prevents activation when a hazard is detected.
 

@@ -22,6 +22,18 @@ jobs:
       RG_VERIFIER_ROOT_BASE: C:\RansomGuard-VM-Verifier
 
     steps:
+      - name: Checkout policy source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Verify threat-model policy
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          .\tools\verify_threat_model.ps1
+
       - name: Validate requested exact SHA
         shell: pwsh
         run: |

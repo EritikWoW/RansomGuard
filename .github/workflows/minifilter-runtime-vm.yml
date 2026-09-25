@@ -72,8 +72,11 @@ jobs:
           .\build_lab.cmd
           if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
           $lab=Get-ChildItem .\release -Directory -Filter 'RansomGuard-Lab-v*' | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+          $normal=Get-ChildItem .\release -Directory -Filter 'RansomGuard-v*' | Where-Object { $_.Name -notlike 'RansomGuard-Lab-v*' } | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
           if(-not $lab){throw 'Engineering LAB release directory not found.'}
+          if(-not $normal){throw 'Normal Audit release directory required for production lifecycle qualification was not found.'}
           "RG_LAB_RELEASE=$($lab.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RG_NORMAL_RELEASE=$($normal.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build and sign exact-commit runtime driver package
         shell: pwsh
@@ -228,6 +231,63 @@ jobs:
           }
           "RG_PRODUCTION_GATE_RESULTS=$productionResults" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Run production service lifecycle qualification
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $package=Join-Path $env:RUNNER_TEMP 'RansomGuard-ProductionLifecycle-Qualification'
+          $results=Join-Path $env:RUNNER_TEMP 'ransomguard-production-lifecycle-results'
+          foreach($path in @($package,$results)){
+            if(Test-Path -LiteralPath $path){Remove-Item -LiteralPath $path -Recurse -Force}
+          }
+          New-Item -ItemType Directory -Path $results -Force | Out-Null
+          .\minifilter-tools\prepare_production_lifecycle_qualification_package.ps1 \
+            -NormalReleaseDirectory $env:RG_NORMAL_RELEASE \
+            -LabReleaseDirectory $env:RG_LAB_RELEASE \
+            -DriverPackageDirectory $env:RG_DRIVER_PACKAGE \
+            -CertificateThumbprint $env:RANSOMGUARD_LAB_CERT_THUMBPRINT \
+            -OutputDirectory $package
+          $packageSummary=Get-Content -LiteralPath (Join-Path $package 'qualification-package.json') -Raw | ConvertFrom-Json
+          if([int]$packageSummary.schema -ne 1 -or $packageSummary.qualificationOnly -ne $true){
+            throw 'Production lifecycle qualification package provenance is invalid.'
+          }
+          if([string]$packageSummary.commit -ne $env:RG_WORKFLOW_SHA){
+            throw "Production lifecycle qualification package commit '$($packageSummary.commit)' does not match workflow commit '$env:RG_WORKFLOW_SHA'."
+          }
+          $lifecycleRoot=$env:RG_RUNTIME_ROOT_BASE + '-ProductionLifecycle'
+          .\minifilter-tools\run_production_lifecycle_lab.ps1 \
+            -QualificationDirectory $package \
+            -ExpectedCommit $env:RG_WORKFLOW_SHA \
+            -RootBase $lifecycleRoot \
+            -ResultsDirectory $results
+          $summary=Get-Content -LiteralPath (Join-Path $results 'production-lifecycle-result.json') -Raw | ConvertFrom-Json
+          if([int]$summary.schema -ne 1){throw "Production lifecycle result schema must be 1. Found '$($summary.schema)'."}
+          foreach($name in @(
+            'serviceStarted',
+            'admittedAndProtected',
+            'productionMutationAllowed',
+            'gateClientLossObserved',
+            'degradedDeniedMutation',
+            'degradedPreservedHash',
+            'reconnectProtected',
+            'reconnectUsedDifferentPid',
+            'reconnectMutationAllowed',
+            'maintenanceStopObserved',
+            'driverUnloadedAfterMaintenance',
+            'serviceStopped',
+            'cleanupPassed',
+            'passed'
+          )){
+            if($summary.$name -ne $true){throw "Production lifecycle result invariant '$name' was not true."}
+          }
+          if([string]$summary.commit -ne $env:RG_WORKFLOW_SHA){
+            throw "Production lifecycle evidence commit '$($summary.commit)' does not match workflow commit '$env:RG_WORKFLOW_SHA'."
+          }
+          if(-not [string]::IsNullOrWhiteSpace([string]$summary.cleanupError)){
+            throw "Production lifecycle cleanup reported an error: $($summary.cleanupError)"
+          }
+          "RG_PRODUCTION_LIFECYCLE_RESULTS=$results" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Ensure LAB minifilter is unloaded after run
         if: always()
         shell: pwsh
@@ -251,6 +311,14 @@ jobs:
             $production=Get-Content -LiteralPath $productionSummary -Raw | ConvertFrom-Json
             if($production.cleanupPassed -ne $true){
               throw 'STALE PRODUCTIONGATE KERNEL STATE: ProductionGate qualification failed cleanup and the filter is still loaded. Revert the disposable VM checkpoint.'
+            }
+          }
+          $lifecycleSummary=Join-Path $env:RUNNER_TEMP 'ransomguard-production-lifecycle-results\production-lifecycle-result.json'
+          if((Test-Path -LiteralPath $lifecycleSummary) -and
+             $filters -match '(?m)^\s*RansomGuardMinifilter\b'){
+            $lifecycle=Get-Content -LiteralPath $lifecycleSummary -Raw | ConvertFrom-Json
+            if($lifecycle.cleanupPassed -ne $true){
+              throw 'STALE PRODUCTION LIFECYCLE KERNEL STATE: service lifecycle qualification failed bounded cleanup and the filter is still loaded. Do not retry unload blindly; revert the disposable VM checkpoint.'
             }
           }
           if($filters -match '(?m)^\s*RansomGuardMinifilter\b'){
@@ -281,6 +349,15 @@ jobs:
         with:
           name: ransomguard-production-gate-evidence
           path: ${{ runner.temp }}/ransomguard-production-gate-results/**
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload production lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 node24 pinned # v4 pinned
+        with:
+          name: ransomguard-production-lifecycle-evidence
+          path: ${{ runner.temp }}/ransomguard-production-lifecycle-results/**
           if-no-files-found: warn
           retention-days: 14
 

@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Win32;
 using RansomGuard.Core;
+using RansomGuard.Rollback;
 
 namespace RansomGuard.Service;
 
@@ -71,10 +73,10 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
                 stoppingToken).ConfigureAwait(false);
             _runtime.RefreshDriverStatus();
 
+            var sessionId = ResolveProductionSessionId(root);
             var firstActivation = true;
             while (!stoppingToken.IsCancellationRequested)
             {
-                var sessionId = "production-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N");
                 using var gate = StartGateClient(gateClientPath, root, sessionId);
                 var signals = new GateLifecycleSignals();
                 var stdoutPump = PumpOutputAsync(gate, sessionId, signals);
@@ -246,6 +248,64 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
             Environment.ExitCode = 8;
             _lifetime.StopApplication();
         }
+    }
+
+    private string ResolveProductionSessionId(string root)
+    {
+        var repository = new RollbackRepository(_store.Rollback);
+        repository.VerifyAll();
+
+        var normalizedRoot = Path.GetFullPath(root).TrimEnd('\\').ToUpperInvariant();
+        var rootHash = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(normalizedRoot)))[..16];
+        var expectedPrefix = "production-" + rootHash + "-";
+        var active = new List<string>();
+
+        foreach (var id in repository.SessionIds())
+        {
+            if (!id.StartsWith("production-", StringComparison.Ordinal))
+                continue;
+
+            var session = repository.OpenSession(id);
+            var lifecycle = new RollbackSessionLifecycleStore(session.Root);
+            lifecycle.VerifyAll();
+            if (lifecycle.Snapshot.State == RollbackSessionLifecycleState.Active)
+                active.Add(id);
+        }
+
+        var foreign = active
+            .Where(id => !id.StartsWith(expectedPrefix, StringComparison.Ordinal))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (foreign.Length != 0)
+            throw new InvalidOperationException(
+                "An Active production rollback session is bound to another protected root: " +
+                string.Join(", ", foreign));
+
+        var matching = active
+            .Where(id => id.StartsWith(expectedPrefix, StringComparison.Ordinal))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (matching.Length > 1)
+            throw new InvalidOperationException(
+                "Multiple Active production rollback sessions exist for the configured protected root.");
+
+        if (matching.Length == 1)
+        {
+            _log.LogWarning(
+                "Resuming Active production rollback session {Session} for retained root {Root}.",
+                matching[0], root);
+            return matching[0];
+        }
+
+        var sessionId =
+            expectedPrefix +
+            DateTime.UtcNow.ToString("yyyyMMddHHmmss") + "-" +
+            Guid.NewGuid().ToString("N")[..16];
+        _log.LogInformation(
+            "Selected new production rollback session {Session} for root {Root}.",
+            sessionId, root);
+        return sessionId;
     }
 
     private Process StartGateClient(string gateClientPath, string root, string sessionId)

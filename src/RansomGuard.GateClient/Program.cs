@@ -47,8 +47,25 @@ if (options.ReconcileOnly)
     return;
 }
 var sessionId = options.SessionId ?? $"gate-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}";
-var store = repository.CreateSession(sessionId);
+var existingSession = repository.SessionIds().Contains(sessionId, StringComparer.Ordinal);
+var serviceControlledProduction =
+    options.Profile == GateProfile.Production && options.ServiceControlStdin;
+if (existingSession && !serviceControlledProduction)
+    throw new InvalidOperationException(
+        "Only the service-controlled ProductionGate lifecycle may resume an existing rollback session.");
+
+var store = existingSession
+    ? repository.OpenSession(sessionId)
+    : repository.CreateSession(sessionId);
 var lifecycleStore = new RollbackSessionLifecycleStore(store.Root);
+if (existingSession)
+{
+    lifecycleStore.VerifyAll();
+    if (lifecycleStore.Snapshot.State != RollbackSessionLifecycleState.Active)
+        throw new InvalidOperationException(
+            "ProductionGate service lifecycle may resume only an Active rollback session.");
+    Console.WriteLine($"Production rollback session: RESUME Active session={sessionId}");
+}
 var writeStore = new RangeRollbackStore(Path.Combine(store.Root, "write-cow"));
 var createStore = new CreateRollbackStore(Path.Combine(store.Root, "create-state"));
 var createOperationStore = new CreateOperationStore(Path.Combine(store.Root, "create-state"));
@@ -622,11 +639,25 @@ var lifecycleReason = !productionShutdownAuthorized
         ? "clean-gate-shutdown"
         : $"gate-shutdown-faulted:workers={workerFailureCount};pending-create={pendingCreateCount};pending-rename={pendingRenameCount};pending-truncate={pendingTruncateCount};unsettled-delete={unsettledDeleteCount};pending-containment-ack={pendingContainmentAckCount}";
 
-await using (var lifecycleReservation = await storageBudget.ReserveAsync(
-                 RollbackStorageBudget.MetadataReservationBytes,
-                 "session-lifecycle-terminal",
-                 CancellationToken.None).ConfigureAwait(false))
+var resumableProductionInterruption =
+    serviceControlledProduction &&
+    !productionShutdownAuthorized &&
+    workerFailureCount == 0;
+
+if (resumableProductionInterruption)
 {
+    // The kernel retains the same production root/protection epoch in DegradedProtected.
+    // Keep this rollback session Active so the replacement ProductionGate/Service can
+    // reconcile pending operations and continue the exact same evidence namespace.
+    Console.Error.WriteLine(
+        $"Rollback session lifecycle: Active (ProductionGate supervisor lost; resume required; session={sessionId}).");
+}
+else
+{
+    await using var lifecycleReservation = await storageBudget.ReserveAsync(
+        RollbackStorageBudget.MetadataReservationBytes,
+        "session-lifecycle-terminal",
+        CancellationToken.None).ConfigureAwait(false);
     if (cleanShutdown)
     {
         _ = await lifecycleStore.MarkCompletedAsync(lifecycleReason, CancellationToken.None)

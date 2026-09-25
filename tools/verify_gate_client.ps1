@@ -86,6 +86,10 @@ foreach($required in @(
   'RG-LIFECYCLE READY schema=1',
   'RG-LIFECYCLE STOPPED schema=1',
   '--service-control-stdin is reserved for the ProductionGate service lifecycle.',
+  'Only the service-controlled ProductionGate lifecycle may resume an existing rollback session.',
+  'ProductionGate service lifecycle may resume only an Active rollback session.',
+  'Production rollback session: RESUME Active session=',
+  'Rollback session lifecycle: Active (ProductionGate supervisor lost; resume required;',
   'DevicePathResolver.ToNtScope(options.Root)',
   'GateVolumeLengthBytes = checked((uint)(ntVolume.Length * 2))',
   'public uint GateRootLengthBytes, GateVolumeLengthBytes;',
@@ -465,6 +469,14 @@ if($serviceAuthorization -lt 0 -or $serviceCancel -lt 0 -or $productionShutdownP
    $serviceAuthorization -gt $serviceCancel -or $serviceCancel -gt $productionShutdownPolicy -or $productionShutdownPolicy -gt $cleanShutdownPolicy){
   throw 'ProductionGate clean deactivation must require explicit service shutdown authorization before cancellation and terminal lifecycle evaluation.'
 }
+$resumeInterruption=$text.IndexOf('var resumableProductionInterruption =')
+$resumeActive=$text.IndexOf('Rollback session lifecycle: Active (ProductionGate supervisor lost; resume required;',$resumeInterruption)
+$terminalReservation=$text.IndexOf('await using var lifecycleReservation = await storageBudget.ReserveAsync(',$resumeActive)
+if($resumeInterruption -lt 0 -or $resumeActive -lt 0 -or $terminalReservation -lt 0 -or
+   $resumeInterruption -gt $resumeActive -or $resumeActive -gt $terminalReservation){
+  throw 'Unclean service-control loss must leave the production rollback session Active before any terminal lifecycle path.'
+}
+
 $productionContainEvent=$text.IndexOf('ProductionGate received forbidden containment activation evidence.')
 $serviceControl=$text.IndexOf('case "--service-control-stdin"')
 $serviceControlReject=$text.IndexOf('--service-control-stdin is reserved for the ProductionGate service lifecycle.',$serviceControl)
@@ -668,12 +680,18 @@ $verifyBeforeRestart=$text.IndexOf('repository.VerifyAll()')
 $restartObserve=$text.IndexOf('RestartReconciliation.ObservePendingAsync(',$verifyBeforeRestart)
 $reconcileOnly=$text.IndexOf('if (options.ReconcileOnly)',$restartObserve)
 $reconcileReturn=$text.IndexOf('return;',$reconcileOnly)
-$createSession=$text.IndexOf('repository.CreateSession(',$restartObserve)
+$sessionExists=$text.IndexOf('repository.SessionIds().Contains(sessionId, StringComparer.Ordinal)',$reconcileReturn)
+$openSession=$text.IndexOf('repository.OpenSession(sessionId)',$sessionExists)
+$createSession=$text.IndexOf('repository.CreateSession(sessionId)',$sessionExists)
+$activeResume=$text.IndexOf('lifecycleStore.Snapshot.State != RollbackSessionLifecycleState.Active',$createSession)
 if($verifyBeforeRestart -lt 0 -or $restartObserve -lt 0 -or $reconcileOnly -lt 0 -or
-   $reconcileReturn -lt 0 -or $createSession -lt 0 -or
+   $reconcileReturn -lt 0 -or $sessionExists -lt 0 -or $openSession -lt 0 -or
+   $createSession -lt 0 -or $activeResume -lt 0 -or
    $verifyBeforeRestart -gt $restartObserve -or $restartObserve -gt $reconcileOnly -or
-   $reconcileOnly -gt $reconcileReturn -or $reconcileReturn -gt $createSession){
-  throw 'Pending restart evidence must be observed after repository validation, with reconcile-only exiting before any new session is created.'
+   $reconcileOnly -gt $reconcileReturn -or $reconcileReturn -gt $sessionExists -or
+   $sessionExists -gt $openSession -or $sessionExists -gt $createSession -or
+   $createSession -gt $activeResume){
+  throw 'Pending restart evidence must be reconciled before the service-controlled ProductionGate chooses create-vs-resume, and resumed sessions must remain Active.'
 }
 $restartClassStart=$text.IndexOf('static class RestartReconciliation')
 $restartClassEnd=$text.IndexOf('readonly record struct RestartReconciliationSummary',$restartClassStart)

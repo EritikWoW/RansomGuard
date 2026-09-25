@@ -113,6 +113,11 @@ foreach($required in @(
     'KillLifecycleTool(process)',
     'catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)',
     'line.Length == ServiceName.Length || char.IsWhiteSpace(line[ServiceName.Length])',
+    'ResolveProductionSessionId(root)',
+    'RollbackSessionLifecycleState.Active',
+    'An Active production rollback session is bound to another protected root:',
+    'Multiple Active production rollback sessions exist for the configured protected root.',
+    'Resuming Active production rollback session',
     'GateShutdownSignalTimeout = TimeSpan.FromSeconds(10)',
     'GateExitTimeout = TimeSpan.FromSeconds(3)',
     'DriverMaintenanceCleanupTimeout = TimeSpan.FromSeconds(10)',
@@ -163,6 +168,14 @@ $protected=$lifecycle.IndexOf('_protection.MarkProtected()',$kernelConnected)
 if($begin -lt 0 -or $driver -lt 0 -or $startClient -lt 0 -or $kernelConnected -lt 0 -or $protected -lt 0 -or
    $begin -gt $driver -or $driver -gt $startClient -or $startClient -gt $kernelConnected -or $kernelConnected -gt $protected){
     throw 'Production activation ordering must be rollback/startup state -> exact driver lifecycle -> ProductionGate -> kernel-connected -> Protected.'
+}
+
+$sessionSelection=$lifecycle.IndexOf('var sessionId = ResolveProductionSessionId(root);')
+$supervisorLoop=$lifecycle.IndexOf('while (!stoppingToken.IsCancellationRequested)',$sessionSelection)
+$gateWithStableSession=$lifecycle.IndexOf('StartGateClient(gateClientPath, root, sessionId)',$supervisorLoop)
+if($sessionSelection -lt 0 -or $supervisorLoop -lt 0 -or $gateWithStableSession -lt 0 -or
+   $sessionSelection -gt $supervisorLoop -or $supervisorLoop -gt $gateWithStableSession){
+    throw 'Production reconnect must select one root-bound rollback session before the supervisor loop and reuse it for every GateClient attempt.'
 }
 
 $readyBranch=$lifecycle.IndexOf('if (firstActivation)')

@@ -231,3 +231,69 @@ jobs:
         run: |
           Write-Host "Dispatched verifier reboot handoff for phase '$env:EXPECTED_PHASE' and SHA '$env:EXPECTED_SHA'."
 
+  cancel-verifier-run:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 59 &&
+      github.event.comment.user.login == github.repository_owner &&
+      startsWith(github.event.comment.body, '/cancel-verifier-run ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout policy source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
+        with:
+          ref: main
+
+      - name: Verify threat-model policy
+        shell: pwsh
+        run: |
+          .\tools\verify_threat_model.ps1
+
+      - name: Parse verifier run id
+        id: request
+        shell: pwsh
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          $ErrorActionPreference='Stop'
+          $body=[string]$env:COMMENT_BODY
+          if($body -notmatch '^/cancel-verifier-run\s+([0-9]+)\s*$'){
+            throw 'Expected exactly: /cancel-verifier-run <run-id>'
+          }
+          "run_id=$($Matches[1])" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Validate target verifier run
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TARGET_RUN_ID: ${{ steps.request.outputs.run_id }}
+        run: |
+          $ErrorActionPreference='Stop'
+          $runJson=gh api "repos/$env:GH_REPO/actions/runs/$env:TARGET_RUN_ID"
+          if($LASTEXITCODE -ne 0){throw "Unable to inspect Actions run $env:TARGET_RUN_ID."}
+          $run=$runJson | ConvertFrom-Json
+          if(-not [string]::Equals([string]$run.name,'Minifilter Driver Verifier VM lab',[StringComparison]::Ordinal)){
+            throw "Run $env:TARGET_RUN_ID is not the Driver Verifier workflow."
+          }
+          if([string]::Equals([string]$run.status,'completed',[StringComparison]::OrdinalIgnoreCase)){
+            throw "Run $env:TARGET_RUN_ID is already completed and must not be cancelled."
+          }
+          if(-not [string]::Equals([string]$run.repository.full_name,$env:GH_REPO,[StringComparison]::OrdinalIgnoreCase)){
+            throw "Run $env:TARGET_RUN_ID does not belong to $env:GH_REPO."
+          }
+          Write-Host "Validated stale Driver Verifier run $env:TARGET_RUN_ID for cancellation."
+
+      - name: Cancel stale verifier run
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TARGET_RUN_ID: ${{ steps.request.outputs.run_id }}
+        run: |
+          $ErrorActionPreference='Stop'
+          gh api --method POST "repos/$env:GH_REPO/actions/runs/$env:TARGET_RUN_ID/cancel" --silent
+          if($LASTEXITCODE -ne 0){throw "Unable to cancel Driver Verifier run $env:TARGET_RUN_ID."}
+          Write-Host "Cancelled stale Driver Verifier run $env:TARGET_RUN_ID."
+

@@ -626,7 +626,7 @@ internal static class ProductionDriverLifecycle
             timeout,
             cancellationToken,
             allowNonZero: true).ConfigureAwait(false);
-        var attachedVolumes = AttachedVolumes(instances.Stdout);
+        var attachedVolumes = AttachedVolumes(instances.Stdout, admission.Altitude);
         if (attachedVolumes.Length == 0)
         {
             await RunToolAsync(
@@ -639,14 +639,15 @@ internal static class ProductionDriverLifecycle
                 new[] { "instances", "-f", ServiceName },
                 timeout,
                 cancellationToken).ConfigureAwait(false);
-            attachedVolumes = AttachedVolumes(instances.Stdout);
+            attachedVolumes = AttachedVolumes(instances.Stdout, admission.Altitude);
         }
 
         if (attachedVolumes.Length != 1 ||
             !string.Equals(attachedVolumes[0], volume, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException(
                 "Production minifilter must have exactly one instance on the configured protected-root volume. Observed: " +
-                (attachedVolumes.Length == 0 ? "<none>" : string.Join(", ", attachedVolumes)));
+                (attachedVolumes.Length == 0 ? "<none>" : string.Join(", ", attachedVolumes)) +
+                ". fltmc=" + instances.Combined);
     }
 
     public static async Task StopAfterMaintenanceAsync(string protectedRoot, TimeSpan timeout)
@@ -813,21 +814,34 @@ internal static class ProductionDriverLifecycle
         return Path.GetFullPath(path);
     }
 
-    private static string[] AttachedVolumes(string output)
+    private static string[] AttachedVolumes(string output, string altitude)
     {
         var volumes = new List<string>();
         foreach (var raw in output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
         {
-            var line = raw.TrimStart();
-            if (!line.StartsWith(ServiceName, StringComparison.OrdinalIgnoreCase) ||
-                line.Length == ServiceName.Length ||
-                !char.IsWhiteSpace(line[ServiceName.Length]))
-                continue;
+            var line = raw.TrimEnd();
+            var searchFrom = 0;
+            while (searchFrom < line.Length)
+            {
+                var altitudeIndex = line.IndexOf(altitude, searchFrom, StringComparison.Ordinal);
+                if (altitudeIndex < 0)
+                    break;
 
-            var remainder = line[ServiceName.Length..].Trim();
-            var fields = remainder.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
-            if (fields.Length > 0)
-                volumes.Add(fields[0]);
+                var afterAltitude = altitudeIndex + altitude.Length;
+                var leftBoundary = altitudeIndex == 0 || char.IsWhiteSpace(line[altitudeIndex - 1]);
+                var rightBoundary = afterAltitude == line.Length || char.IsWhiteSpace(line[afterAltitude]);
+                if (leftBoundary && rightBoundary)
+                {
+                    // Filtered fltmc instance output omits the filter name from each data row and
+                    // reports Volume Name first. Match the admitted invariant altitude token so
+                    // parsing does not depend on localized column headers.
+                    var volume = line[..altitudeIndex].Trim();
+                    volumes.Add(volume.Length == 0 ? "<unnamed>" : volume);
+                    break;
+                }
+
+                searchFrom = altitudeIndex + altitude.Length;
+            }
         }
 
         return volumes.ToArray();

@@ -226,6 +226,7 @@ $summary=[ordered]@{
     preexistingWritableMappingRejected=$false
     preexistingHardLinkRejected=$false
     descendantReparseRejected=$false
+    postActivationReparseMutationDenied=$false
     hardLinkInsideToOutsideDenied=$false
     hardLinkOutsideToInsideDenied=$false
     hardLinkOutsideToOutsideAllowed=$false
@@ -375,7 +376,50 @@ try{
         }
     }
 
-    # Scenario 4: pre-existing alias of an in-root file must fail ProductionGate activation.
+    # Scenario 4: once ProductionGate is ACTIVE, an attacker must not be able to
+    # create a junction/reparse point inside the protected root and invalidate the
+    # namespace topology that activation preflight proved.
+    Ensure-CleanStart
+    $root=Join-Path $RootBase "postactivation-reparse-$stamp"
+    $outsideDir=Join-Path $RootBase "postactivation-reparse-target-$stamp"
+    $junction=Join-Path $root 'escape'
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    New-Item -ItemType Directory -Path $outsideDir -Force | Out-Null
+    New-TestFile (Join-Path $outsideDir 'outside.bin')
+    Install-ScenarioDriver
+    $gate=Start-ProductionGate $root "prod-mut-postreparse-$stamp" 'postactivation-reparse-production-gate'
+    Wait-LogPattern $gate.StdOut 'kernel gate ACTIVE' $gate.Process 45
+
+    $reparseDenied=$false
+    try{
+        $null=New-Item -ItemType Junction -Path $junction -Target $outsideDir -Force -ErrorAction Stop
+        throw 'ProductionGate unexpectedly allowed post-activation descendant junction creation.'
+    }
+    catch{
+        if($_.Exception.Message -eq 'ProductionGate unexpectedly allowed post-activation descendant junction creation.'){
+            throw
+        }
+        $win32=([int]$_.Exception.HResult) -band 0xFFFF
+        if($_.Exception -isnot [UnauthorizedAccessException] -and $win32 -ne 5){
+            throw "Post-activation junction creation failed for an unexpected reason. HResult=0x$('{0:X8}' -f ([uint32]$_.Exception.HResult)); $($_.Exception.Message)"
+        }
+        $reparseDenied=$true
+    }
+
+    if(-not $reparseDenied){throw 'Post-activation reparse mutation denial was not observed.'}
+    if(Test-Path -LiteralPath $junction){
+        $createdItem=Get-Item -LiteralPath $junction -Force
+        if(($createdItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){
+            & $env:ComSpec /d /c rmdir "$junction"
+            throw 'Post-activation reparse mutation returned an error but still created a reparse point.'
+        }
+        Remove-Item -LiteralPath $junction -Recurse -Force
+    }
+    $summary.postActivationReparseMutationDenied=$true
+    Stop-ProcessHard $gate.Process 'ProductionGate post-activation reparse scenario'
+    Cleanup-Scenario 'post-activation reparse mutation'
+
+    # Scenario 5: pre-existing alias of an in-root file must fail ProductionGate activation.
     Ensure-CleanStart
     $root=Join-Path $RootBase "preexisting-hardlink-$stamp"
     New-Item -ItemType Directory -Path $root -Force | Out-Null

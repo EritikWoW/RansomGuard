@@ -579,12 +579,14 @@ internal static class ProductionDriverLifecycle
 
         if (!ServiceExists())
         {
-            var pnputil = Path.Combine(Environment.SystemDirectory, "pnputil.exe");
+            // RansomGuardMinifilter is a primitive file-system minifilter package. On Windows 10
+            // 1903+ an architecture-decorated DefaultInstall section passed to InstallHInfSection
+            // is routed through the primitive-driver installation path (DiInstallDriver). Keep the
+            // operation in a bounded child process so Enforce startup can still time out fail-closed.
             var rundll32 = Path.Combine(Environment.SystemDirectory, "rundll32.exe");
-            await RunToolAsync(pnputil, new[] { "/add-driver", inf }, timeout, cancellationToken).ConfigureAwait(false);
             await RunToolAsync(
                 rundll32,
-                new[] { "setupapi.dll,InstallHinfSection", "DefaultInstall", "132", inf },
+                new[] { "setupapi.dll,InstallHinfSection", "DefaultInstall.NTamd64", "132", inf },
                 timeout,
                 cancellationToken).ConfigureAwait(false);
 
@@ -729,7 +731,7 @@ internal static class ProductionDriverLifecycle
 
         if (!ServiceExists())
             throw new InvalidOperationException(
-                "RansomGuardMinifilter service registration did not become visible after successful DefaultInstall.");
+                "RansomGuardMinifilter service registration did not become visible after primitive-driver DefaultInstall.NTamd64.");
     }
 
     private static void ValidateRegisteredContract(string packageSysPath, ProtectionPackageAdmission admission)

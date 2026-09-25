@@ -107,7 +107,12 @@ foreach($required in @(
     'Environment.ExitCode = 8',
     'catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)',
     'Enforce host will stop rather than continue without supervision.',
-    'Authorized production maintenance outcome is unconfirmed; no active kernel-enforcement claim is made and the driver remains loaded.'
+    'Authorized production maintenance outcome is unconfirmed; no active kernel-enforcement claim is made and the driver remains loaded.',
+    'ProductionDriverMaintenanceCleanupFailed',
+    'Kernel Maintenance is confirmed, but driver detach/unload cleanup failed',
+    'KillLifecycleTool(process)',
+    'catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)',
+    'line.Length == ServiceName.Length || char.IsWhiteSpace(line[ServiceName.Length])'
 )){
     if($lifecycle -notmatch [regex]::Escape($required)){throw "Production lifecycle invariant missing: $required"}
 }
@@ -132,6 +137,17 @@ $startupThrow=$lifecycle.IndexOf('throw new InvalidOperationException(startupFai
 if($notReady -lt 0 -or $stopCheck -lt 0 -or $terminateOnStop -lt 0 -or $startupThrow -lt 0 -or
    $notReady -gt $stopCheck -or $stopCheck -gt $terminateOnStop -or $terminateOnStop -gt $startupThrow){
     throw 'Unready initial/reconnect children must never receive maintenance authorization; initial uncertainty must terminate Enforce supervision.'
+}
+
+$shutdownWrite=$lifecycle.IndexOf('StandardInput.WriteLineAsync("shutdown")')
+$maintenanceFailed=$lifecycle.IndexOf('ProductionProtectionMaintenanceStopFailed',$shutdownWrite)
+$maintenanceBegin=$lifecycle.IndexOf('_protection.BeginMaintenance(',$maintenanceFailed)
+$driverStop=$lifecycle.IndexOf('ProductionDriverLifecycle.StopAfterMaintenanceAsync',$maintenanceBegin)
+$cleanupFailed=$lifecycle.IndexOf('ProductionDriverMaintenanceCleanupFailed',$driverStop)
+if($shutdownWrite -lt 0 -or $maintenanceFailed -lt 0 -or $maintenanceBegin -lt 0 -or $driverStop -lt 0 -or $cleanupFailed -lt 0 -or
+   $shutdownWrite -gt $maintenanceFailed -or $maintenanceFailed -gt $maintenanceBegin -or
+   $maintenanceBegin -gt $driverStop -or $driverStop -gt $cleanupFailed){
+    throw 'Maintenance acknowledgement ambiguity and post-Maintenance driver cleanup failure must remain distinct lifecycle states.'
 }
 
 $begin=$lifecycle.IndexOf('_protection.BeginKernelStartup()')

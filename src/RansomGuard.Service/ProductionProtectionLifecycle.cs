@@ -243,9 +243,6 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
             Environment.ExitCode = 8;
             _lifetime.StopApplication();
         }
-        finally
-        {
-        }
     }
 
     private Process StartGateClient(string gateClientPath, string root, string sessionId)
@@ -344,23 +341,6 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
             await gate.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
             if (!clean || gate.ExitCode != 0)
                 throw new InvalidOperationException($"ProductionGate did not confirm clean deactivation (exit={gate.ExitCode}).");
-
-            var snapshot = _protection.Snapshot();
-            if (snapshot.State is "Protected" or "DegradedProtected")
-            {
-                _protection.BeginMaintenance("ProductionGate committed terminal evidence and kernel confirmed whole-gate deactivation.");
-                PublishProtection();
-            }
-
-            await ProductionDriverLifecycle.StopAfterMaintenanceAsync(root, TimeSpan.FromSeconds(15)).ConfigureAwait(false);
-            _runtime.RefreshDriverStatus();
-            _store.Audit(new
-            {
-                Type = "ProductionProtectionMaintenanceStop",
-                Utc = DateTime.UtcNow,
-                Root = root,
-                Protection = _protection.Snapshot()
-            });
         }
         catch (Exception ex) when (ex is IOException or InvalidOperationException or TimeoutException)
         {
@@ -379,15 +359,57 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
                 PublishProtection();
             }
 
+            TryAuditMaintenanceFailure("ProductionProtectionMaintenanceStopFailed", ex, root);
+            _log.LogError(ex, "Production protection maintenance outcome is unconfirmed; driver unload is refused.");
+            return;
+        }
+
+        var snapshot = _protection.Snapshot();
+        if (snapshot.State is "Protected" or "DegradedProtected")
+        {
+            _protection.BeginMaintenance("ProductionGate committed terminal evidence and kernel confirmed whole-gate deactivation.");
+            PublishProtection();
+        }
+
+        try
+        {
+            await ProductionDriverLifecycle.StopAfterMaintenanceAsync(root, TimeSpan.FromSeconds(15)).ConfigureAwait(false);
+            _runtime.RefreshDriverStatus();
             _store.Audit(new
             {
-                Type = "ProductionProtectionMaintenanceStopFailed",
+                Type = "ProductionProtectionMaintenanceStop",
                 Utc = DateTime.UtcNow,
-                Error = ex.GetType().Name,
-                ex.Message,
+                Root = root,
                 Protection = _protection.Snapshot()
             });
-            _log.LogError(ex, "Production protection maintenance outcome is unconfirmed; driver unload is refused.");
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or TimeoutException)
+        {
+            // Kernel Maintenance was already confirmed. A driver detach/unload problem is cleanup
+            // failure, not an unknown enforcement state. Keep the truthful Maintenance snapshot.
+            _runtime.RefreshDriverStatus();
+            TryAuditMaintenanceFailure("ProductionDriverMaintenanceCleanupFailed", ex, root);
+            _log.LogError(ex, "Kernel Maintenance is confirmed, but driver detach/unload cleanup failed; no active enforcement claim is made.");
+        }
+    }
+
+    private void TryAuditMaintenanceFailure(string type, Exception error, string root)
+    {
+        try
+        {
+            _store.Audit(new
+            {
+                Type = type,
+                Utc = DateTime.UtcNow,
+                Root = root,
+                Error = error.GetType().Name,
+                error.Message,
+                Protection = _protection.Snapshot()
+            });
+        }
+        catch (Exception auditError) when (auditError is IOException or UnauthorizedAccessException)
+        {
+            _log.LogError(auditError, "Unable to persist production maintenance failure evidence.");
         }
     }
 
@@ -667,9 +689,18 @@ internal static class ProductionDriverLifecycle
         return volumes.ToArray();
     }
 
-    private static bool ContainsFilter(string output) =>
-        output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
-            .Any(line => line.TrimStart().StartsWith(ServiceName, StringComparison.OrdinalIgnoreCase));
+    private static bool ContainsFilter(string output)
+    {
+        foreach (var raw in output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var line = raw.TrimStart();
+            if (line.StartsWith(ServiceName, StringComparison.OrdinalIgnoreCase) &&
+                (line.Length == ServiceName.Length || char.IsWhiteSpace(line[ServiceName.Length])))
+                return true;
+        }
+
+        return false;
+    }
 
     private static async Task<CommandResult> RunToolAsync(
         string executable,
@@ -702,9 +733,14 @@ internal static class ProductionDriverLifecycle
         {
             await process.WaitForExitAsync(deadline.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+            KillLifecycleTool(process);
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            KillLifecycleTool(process);
             throw new TimeoutException("Windows lifecycle tool timed out: " + Path.GetFileName(executable));
         }
 
@@ -716,6 +752,15 @@ internal static class ProductionDriverLifecycle
             throw new InvalidOperationException(
                 $"{Path.GetFileName(executable)} failed with exit={result.ExitCode}: {result.Combined}");
         return result;
+    }
+
+    private static void KillLifecycleTool(Process process)
+    {
+        if (process.HasExited)
+            return;
+
+        try { process.Kill(entireProcessTree: true); }
+        catch (InvalidOperationException) { }
     }
 
     private sealed record CommandResult(int ExitCode, string Stdout, string Stderr)

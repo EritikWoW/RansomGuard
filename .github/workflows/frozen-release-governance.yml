@@ -70,6 +70,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           .\governance\tools\generate_release_governance.ps1 `
+              -RepositoryRoot (Join-Path $PWD 'candidate') `
               -ReleaseRoot (Join-Path $PWD 'candidate\release') `
               -OutputDir (Join-Path $PWD 'governance\build-logs\frozen-release-governance') `
               -SourceSha $env:SOURCE_SHA

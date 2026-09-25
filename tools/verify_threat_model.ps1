@@ -193,6 +193,9 @@ foreach($required in @(
     'ProductionGate rollback store is fixed to',
     'options.Profile == GateProfile.Lab ? options.ContainPid : null',
     '--service-control-stdin',
+    'productionServiceShutdownAuthorized',
+    'Production service control channel closed unexpectedly; disconnect will remain fail-safe.',
+    'gate-shutdown-faulted:production-service-shutdown-not-authorized',
     'RG-LIFECYCLE READY schema=1',
     'RG-LIFECYCLE STOPPED schema=1'
 )){

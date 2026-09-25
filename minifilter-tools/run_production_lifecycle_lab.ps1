@@ -232,6 +232,12 @@ $summary=[ordered]@{
     reconnectReplacementObserved=$false
     reconnectPidReused=$false
     reconnectMutationAllowed=$false
+    serviceCrashObserved=$false
+    serviceCrashGateExited=$false
+    serviceCrashDeniedMutation=$false
+    serviceCrashPreservedHash=$false
+    serviceRestartProtected=$false
+    serviceRestartMutationAllowed=$false
     maintenanceStopObserved=$false
     driverUnloadedAfterMaintenance=$false
     serviceStopped=$false
@@ -243,6 +249,7 @@ $runtimeFailure=$null
 $cleanupFailure=$null
 $firstActivation=$null
 $secondActivation=$null
+$thirdActivation=$null
 $serviceCreated=$false
 
 try{
@@ -322,11 +329,66 @@ try{
     }
     $summary.reconnectMutationAllowed=$true
 
+    # Crash the supervising service itself. Control-pipe loss must never authorize
+    # DeactivateGate; the ProductionGate must exit and leave the kernel fail-safe latch active.
+    $secondGatePid=[int]$secondActivation.GateClientPid
+    $secondGateProcess=Get-Process -Id $secondGatePid -ErrorAction Stop
+    $serviceCim=Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
+    if($null -eq $serviceCim){throw "Unable to resolve owned qualification service '$serviceName'."}
+    $servicePid=[int]$serviceCim.ProcessId
+    if($servicePid -le 0 -or $servicePid -eq $secondGatePid){
+        throw "Qualification service process identity is invalid. servicePid=$servicePid gatePid=$secondGatePid"
+    }
+    $serviceCrashHash=(Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
+    Stop-Process -Id $servicePid -Force -ErrorAction Stop
+    Wait-ServiceState $serviceName 'Stopped' 30
+    $summary.serviceCrashObserved=$true
+
+    if(-not $secondGateProcess.WaitForExit(15000)){
+        throw "ProductionGate pid=$secondGatePid did not exit after supervising service control-channel loss."
+    }
+    $summary.serviceCrashGateExited=$true
+    Start-Sleep -Milliseconds 250
+
+    $serviceCrashDenied=$false
+    try{[IO.File]::WriteAllText($target,'must-be-denied-after-service-crash',[Text.UTF8Encoding]::new($false))}
+    catch{
+        if(Test-AccessDeniedException $_.Exception){$serviceCrashDenied=$true}else{throw}
+    }
+    if(-not $serviceCrashDenied){
+        throw 'Protected-root mutation was not denied after service crash and ProductionGate fail-safe disconnect.'
+    }
+    $summary.serviceCrashDeniedMutation=$true
+    $afterServiceCrash=(Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
+    if(-not [string]::Equals($serviceCrashHash,$afterServiceCrash,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'Protected target changed after service crash while the kernel should remain fail-safe.'
+    }
+    $summary.serviceCrashPreservedHash=$true
+
+    $restartUtc=[DateTimeOffset]::UtcNow
+    Invoke-Sc @('start',$serviceName) | Out-Null
+    Wait-ServiceState $serviceName 'Running' 30
+    $thirdActivation=Wait-AuditType 'ProductionProtectionActivated' $restartUtc 75 ([string]$secondActivation.Session)
+    if([string]$thirdActivation.Root -ne $root){throw 'Service-restart activation root mismatch.'}
+    if([int]$thirdActivation.GateClientPid -le 0){throw 'Service restart did not record a replacement ProductionGate PID.'}
+    if([string]$thirdActivation.Protection.State -ne 'Protected' -or
+       $thirdActivation.Protection.KernelEnforcementActive -ne $true -or
+       $thirdActivation.Protection.KernelChannelConnected -ne $true){
+        throw 'Service restart did not reconnect the retained ProductionGate session into Protected.'
+    }
+    $summary.serviceRestartProtected=$true
+
+    [IO.File]::WriteAllText($target,'production-lifecycle-after-service-restart',[Text.UTF8Encoding]::new($false))
+    if((Get-Content -LiteralPath $target -Raw) -ne 'production-lifecycle-after-service-restart'){
+        throw 'Mutation did not resume after service restart and ProductionGate preflight.'
+    }
+    $summary.serviceRestartMutationAllowed=$true
+
     Invoke-Sc @('stop',$serviceName) | Out-Null
     Wait-ServiceState $serviceName 'Stopped' 60
     $summary.serviceStopped=$true
 
-    $maintenance=Wait-AuditType 'ProductionProtectionMaintenanceStop' $startedUtc 15
+    $maintenance=Wait-AuditType 'ProductionProtectionMaintenanceStop' $restartUtc 15
     if([string]$maintenance.Root -ne $root -or [string]$maintenance.Protection.State -ne 'Maintenance'){
         throw 'Clean service stop did not publish the expected Maintenance audit state.'
     }

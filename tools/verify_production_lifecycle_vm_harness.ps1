@@ -68,6 +68,14 @@ foreach($required in @(
     "Wait-AuditType 'ProductionProtectionMaintenanceStop'",
     "'Maintenance'",
     'reconnectReplacementObserved',
+    "Get-CimInstance Win32_Service -Filter \"Name='$serviceName'\"",
+    'Stop-Process -Id $servicePid -Force',
+    'serviceCrashObserved',
+    'serviceCrashGateExited',
+    'serviceCrashDeniedMutation',
+    'serviceCrashPreservedHash',
+    'serviceRestartProtected',
+    'serviceRestartMutationAllowed',
     'driverUnloadedAfterMaintenance',
     'cleanupPassed',
     'production-lifecycle-result.json',
@@ -91,6 +99,12 @@ foreach($required in @(
     "'degradedDeniedMutation'",
     "'reconnectProtected'",
     "'reconnectReplacementObserved'",
+    "'serviceCrashObserved'",
+    "'serviceCrashGateExited'",
+    "'serviceCrashDeniedMutation'",
+    "'serviceCrashPreservedHash'",
+    "'serviceRestartProtected'",
+    "'serviceRestartMutationAllowed'",
     "'maintenanceStopObserved'",
     "'driverUnloadedAfterMaintenance'",
     "'cleanupPassed'",
@@ -129,7 +143,9 @@ foreach($forbidden in @(
     '(?i)Format-Volume',
     '(?i)Initialize-Disk',
     '(?i)select\s+disk',
-    '(?i)clean\s+all'
+    '(?i)clean\s+all',
+    '(?i)taskkill',
+    '(?i)Stop-Process\s+-Name'
 )){
     if($prepare -match $forbidden -or $run -match $forbidden){
         throw "Production lifecycle qualification harness contains a forbidden host/security mutation: $forbidden"

@@ -78,6 +78,11 @@ foreach($required in @(
   'ServiceControlStdin',
   'MonitorServiceControlAsync',
   'Console.In.ReadLineAsync()',
+  'productionServiceShutdownAuthorized',
+  'Interlocked.Exchange(ref productionServiceShutdownAuthorized, 1)',
+  'Production service control channel closed unexpectedly; disconnect will remain fail-safe.',
+  'productionShutdownAuthorized',
+  'gate-shutdown-faulted:production-service-shutdown-not-authorized',
   'RG-LIFECYCLE READY schema=1',
   'RG-LIFECYCLE STOPPED schema=1',
   '--service-control-stdin is reserved for the ProductionGate service lifecycle.',
@@ -452,6 +457,14 @@ $productionMode=$text.IndexOf('RgClientMode.ProductionGate')
 $productionPreflight=$text.IndexOf('options.Profile == GateProfile.Lab ? options.ContainPid : null')
 $productionScope=$text.IndexOf('options.Profile == GateProfile.Lab && options.ScopeAmbiguityPid')
 $productionTrigger=$text.IndexOf('options.Profile == GateProfile.Lab && options.ContainAfterPid')
+$serviceAuthorization=$text.IndexOf('Interlocked.Exchange(ref productionServiceShutdownAuthorized, 1)')
+$serviceCancel=$text.IndexOf('cts.Cancel();',$serviceAuthorization)
+$productionShutdownPolicy=$text.IndexOf('var productionShutdownAuthorized =',$serviceCancel)
+$cleanShutdownPolicy=$text.IndexOf('var cleanShutdown = productionShutdownAuthorized',$productionShutdownPolicy)
+if($serviceAuthorization -lt 0 -or $serviceCancel -lt 0 -or $productionShutdownPolicy -lt 0 -or $cleanShutdownPolicy -lt 0 -or
+   $serviceAuthorization -gt $serviceCancel -or $serviceCancel -gt $productionShutdownPolicy -or $productionShutdownPolicy -gt $cleanShutdownPolicy){
+  throw 'ProductionGate clean deactivation must require explicit service shutdown authorization before cancellation and terminal lifecycle evaluation.'
+}
 $productionContainEvent=$text.IndexOf('ProductionGate received forbidden containment activation evidence.')
 $serviceControl=$text.IndexOf('case "--service-control-stdin"')
 $serviceControlReject=$text.IndexOf('--service-control-stdin is reserved for the ProductionGate service lifecycle.',$serviceControl)

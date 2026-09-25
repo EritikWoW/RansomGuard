@@ -70,6 +70,21 @@ Before registering or dispatching that runner, follow `docs/RUNTIME_VM_RUNNER.md
 
 Runtime evidence from that workflow is required before treating minifilter preservation or containment semantics as experimentally validated.
 
+For 0.8.6 the same manual workflow additionally contains a dedicated **normal-service Production Enforce lifecycle** qualification. It builds a qualification-only production-shaped package from the exact checkout: the normal single-file Service and Engineering GateClient are signed with the disposable VM certificate, the already signed exact-commit SYS is paired with a regenerated signed catalog, the INF is rewritten to the production provider plus a synthetic non-placeholder qualification altitude, and every package hash is bound to the workflow SHA. This synthetic package is evidence infrastructure only and must never be distributed or treated as a Microsoft altitude/signing claim.
+
+The lifecycle harness then installs the normal service as LocalSystem and requires the service itself—not the harness—to perform package admission, demand-start driver registration, Filter Manager load/attach and ProductionGate activation. Evidence is accepted only when all of the following are proved on the exact workflow SHA:
+
+1. the service reaches `Protected` only after an admitted package and ProductionGate activation handshake;
+2. an ordinary protected-root mutation succeeds while protected;
+3. forcibly terminating the supervised GateClient produces a durable `ProductionGateLost` audit record with `DegradedProtected` and kernel enforcement still active;
+4. a destructive in-root mutation is access-denied during the reconnect window and the protected file SHA-256 stays unchanged;
+5. a replacement ProductionGate uses a different process ID, reruns preflight and returns the service to `Protected`;
+6. protected mutation resumes after reconnect;
+7. SCM service stop causes the private production shutdown handshake, durable terminal evidence and kernel `Maintenance`, followed by successful detach/unload;
+8. final cleanup removes only the qualification service and RansomGuard driver-store package, and the minifilter is no longer loaded.
+
+The uploaded `production-lifecycle-result.json` and supporting audit evidence are a merge/release gate for 0.8.6. Source gates explicitly refuse boot-policy, Secure Boot, Defender, disk-formatting or reboot operations in this harness. A successful run still does not prove Administrator/SYSTEM tamper resistance, production signing, Microsoft altitude assignment, broad third-party filter interoperability or detector-driven containment policy.
+
 For 0.8.3 the runtime contract also qualifies hard-link alias handling. It must prove that activation refuses a protected file with a pre-existing outside hard-link alias (`NumberOfLinks=2`), that active inside-to-outside and outside-to-inside hard-link creation are denied, and that an outside-to-outside hard link on the same attached volume remains allowed. These checks are required in `runtime-result.json` and are not inferred from helper exit codes alone.
 
 ## Automated x64 minifilter compile gate

@@ -90,7 +90,7 @@ try
         builder.Services.AddSingleton(runtime);
         if(string.Equals(settings.Mode,"Enforce",StringComparison.Ordinal) && protectionPackage?.ReadyForLifecycle==true)
         {
-            var admittedPackage=protectionPackage;
+            var admittedPackage=protectionPackage!;
             builder.Services.AddHostedService(sp=>new ProductionProtectionLifecycle(
                 sp.GetRequiredService<ILogger<ProductionProtectionLifecycle>>(),
                 settings,store,admittedPackage,protection,runtime,AppContext.BaseDirectory));

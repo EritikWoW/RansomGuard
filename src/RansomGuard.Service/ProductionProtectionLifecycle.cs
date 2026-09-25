@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Win32;
@@ -564,6 +565,17 @@ internal static class ProductionDriverLifecycle
     private const string ServiceName = "RansomGuardMinifilter";
     private const string ServiceKeyPath = @"SYSTEM\CurrentControlSet\Services\RansomGuardMinifilter";
 
+    private static class NativeMethods
+    {
+        [DllImport("newdev.dll", EntryPoint = "DiInstallDriverW", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool DiInstallDriver(
+            IntPtr hwndParent,
+            string infPath,
+            uint flags,
+            [MarshalAs(UnmanagedType.Bool)] out bool needReboot);
+    }
+
     public static async Task EnsureReadyAsync(
         string driverDirectory,
         ProtectionPackageAdmission admission,
@@ -579,16 +591,11 @@ internal static class ProductionDriverLifecycle
 
         if (!ServiceExists())
         {
-            // RansomGuardMinifilter is a primitive file-system minifilter package. On Windows 10
-            // 1903+ an architecture-decorated DefaultInstall section passed to InstallHInfSection
-            // is routed through the primitive-driver installation path (DiInstallDriver). Keep the
-            // operation in a bounded child process so Enforce startup can still time out fail-closed.
-            var rundll32 = Path.Combine(Environment.SystemDirectory, "rundll32.exe");
-            await RunToolAsync(
-                rundll32,
-                new[] { "setupapi.dll,InstallHinfSection", "DefaultInstall.NTamd64", "132", inf },
-                timeout,
-                cancellationToken).ConfigureAwait(false);
+            // File-system minifilters are primitive drivers. Use the Windows primitive-driver
+            // installation API directly instead of the legacy InstallHInfSection compatibility
+            // wrapper, which can report process success without publishing the service registration.
+            cancellationToken.ThrowIfCancellationRequested();
+            InstallPrimitiveDriverPackage(inf);
 
             var registrationTimeout = timeout < TimeSpan.FromSeconds(5)
                 ? timeout
@@ -701,6 +708,27 @@ internal static class ProductionDriverLifecycle
         }
     }
 
+    private static void InstallPrimitiveDriverPackage(string infPath)
+    {
+        var fullInfPath = Path.GetFullPath(infPath);
+        FileSafety.NoReparse(fullInfPath);
+
+        if (!NativeMethods.DiInstallDriver(
+                IntPtr.Zero,
+                fullInfPath,
+                flags: 0,
+                out var needReboot))
+        {
+            var error = Marshal.GetLastWin32Error();
+            throw new InvalidOperationException(
+                $"DiInstallDriverW failed for the admitted production minifilter package. Win32Error={error}.");
+        }
+
+        if (needReboot)
+            throw new InvalidOperationException(
+                "DiInstallDriverW reported that production minifilter installation requires a reboot; refusing Enforce startup.");
+    }
+
     private static bool ServiceExists()
     {
         using var key = Registry.LocalMachine.OpenSubKey(ServiceKeyPath, writable: false);
@@ -731,7 +759,7 @@ internal static class ProductionDriverLifecycle
 
         if (!ServiceExists())
             throw new InvalidOperationException(
-                "RansomGuardMinifilter service registration did not become visible after primitive-driver DefaultInstall.NTamd64.");
+                "RansomGuardMinifilter service registration did not become visible after successful DiInstallDriverW.");
     }
 
     private static void ValidateRegisteredContract(string packageSysPath, ProtectionPackageAdmission admission)

@@ -704,24 +704,22 @@ internal static class ProductionDriverLifecycle
             Remaining(),
             CancellationToken.None,
             allowNonZero: true).ConfigureAwait(false);
+
+        CommandResult? detach = null;
         if (instances.Stdout.Contains(volume, StringComparison.OrdinalIgnoreCase))
         {
-            CommandResult? last = null;
             for (var attempt = 0; attempt < 20; attempt++)
             {
-                last = await RunToolAsync(
+                detach = await RunToolAsync(
                     fltmc,
                     new[] { "detach", ServiceName, volume },
                     Remaining(),
                     CancellationToken.None,
                     allowNonZero: true).ConfigureAwait(false);
-                if (last.ExitCode == 0)
+                if (detach.ExitCode == 0)
                     break;
                 await Task.Delay(100).ConfigureAwait(false);
             }
-
-            if (last is not null && last.ExitCode != 0)
-                throw new InvalidOperationException("Filter Manager refused production detach after clean maintenance: " + last.Combined);
         }
 
         var filters = await RunToolAsync(
@@ -729,16 +727,35 @@ internal static class ProductionDriverLifecycle
             new[] { "filters" },
             Remaining(),
             CancellationToken.None).ConfigureAwait(false);
+
+        CommandResult? unload = null;
         if (ContainsFilter(filters.Stdout))
         {
-            var unload = await RunToolAsync(
+            unload = await RunToolAsync(
                 fltmc,
                 new[] { "unload", ServiceName },
                 Remaining(),
                 CancellationToken.None,
                 allowNonZero: true).ConfigureAwait(false);
-            if (unload.ExitCode != 0)
-                throw new InvalidOperationException("Filter Manager refused production unload after clean maintenance: " + unload.Combined);
+        }
+
+        var finalFilters = await RunToolAsync(
+            fltmc,
+            new[] { "filters" },
+            Remaining(),
+            CancellationToken.None).ConfigureAwait(false);
+
+        if (ContainsFilter(finalFilters.Stdout))
+        {
+            var detachEvidence = detach is null
+                ? "<not-attempted>"
+                : $"exit={detach.ExitCode}; output={detach.Combined}";
+            var unloadEvidence = unload is null
+                ? "<not-attempted>"
+                : $"exit={unload.ExitCode}; output={unload.Combined}";
+            throw new InvalidOperationException(
+                "Production driver maintenance cleanup left RansomGuardMinifilter loaded after bounded detach/unload attempts. " +
+                $"detach=[{detachEvidence}] unload=[{unloadEvidence}] finalFilters=[{finalFilters.Combined}]");
         }
     }
 

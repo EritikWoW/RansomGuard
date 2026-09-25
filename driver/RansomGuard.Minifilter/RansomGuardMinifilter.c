@@ -106,6 +106,7 @@ static RG_SCOPE_CLASSIFICATION RgClassifyHardLinkScope(
     _In_ const RG_EVENT *Event,
     _In_ PCFLT_RELATED_OBJECTS FltObjects);
 static BOOLEAN RgIsDataMutatingFsctl(_In_ ULONG FsControlCode);
+static BOOLEAN RgIsNamespaceMutatingFsctl(_In_ ULONG FsControlCode);
 static BOOLEAN RgStreamHasDurablePreservation(_In_ PCFLT_RELATED_OBJECTS FltObjects);
 static BOOLEAN RgPathMatchesGateRoot(_In_ ULONG PathStatus, _In_z_ const WCHAR *Path);
 static BOOLEAN RgEventPathMatchesGateRoot(_In_ const RG_EVENT *Event);
@@ -637,6 +638,20 @@ static BOOLEAN RgIsDataMutatingFsctl(ULONG FsControlCode)
     }
 }
 
+static BOOLEAN RgIsNamespaceMutatingFsctl(ULONG FsControlCode)
+{
+    switch (FsControlCode) {
+    case FSCTL_SET_REPARSE_POINT:
+    case FSCTL_DELETE_REPARSE_POINT:
+#ifdef FSCTL_SET_REPARSE_POINT_EX
+    case FSCTL_SET_REPARSE_POINT_EX:
+#endif
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
 static BOOLEAN RgStreamHasDurablePreservation(PCFLT_RELATED_OBJECTS FltObjects)
 {
     PRG_STREAM_CONTEXT context = NULL;
@@ -681,6 +696,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreFileSystemControl(
     ULONG fsctl;
     LONG mode;
     BOOLEAN degraded;
+    BOOLEAN namespaceMutation;
     RG_SCOPE_CLASSIFICATION scope;
 
     *CompletionContext = NULL;
@@ -690,7 +706,8 @@ FLT_PREOP_CALLBACK_STATUS RgPreFileSystemControl(
     }
 
     fsctl = Data->Iopb->Parameters.FileSystemControl.Common.FsControlCode;
-    if (!RgIsDataMutatingFsctl(fsctl)) {
+    namespaceMutation = RgIsNamespaceMutatingFsctl(fsctl);
+    if (!namespaceMutation && !RgIsDataMutatingFsctl(fsctl)) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
@@ -713,6 +730,14 @@ FLT_PREOP_CALLBACK_STATUS RgPreFileSystemControl(
     scope = RgClassifyMutationScope(&event, FltObjects);
     if (scope == RgScopeOutside) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    // Reparse-point topology is part of the protected-root trust boundary established
+    // during activation preflight. A post-activation set/delete could redirect an
+    // in-root name or invalidate the namespace proof, so protected/ambiguous namespace
+    // mutation is never admitted while Gate protection owns the root.
+    if (namespaceMutation) {
+        return RgCompleteDenied(Data);
     }
 
     // Ambiguous protected-volume scope, disconnected/degraded protection, preflight,

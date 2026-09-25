@@ -111,23 +111,29 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
                         return;
                     }
 
+                    var stdoutTail = signals.OutputTail();
+                    var stderrTail = signals.ErrorTail();
                     var startupFailure = gate.HasExited
                         ? $"ProductionGate exited before activation (exit={gate.ExitCode})."
                         : "ProductionGate activation readiness timed out.";
+                    var startupDiagnostic = startupFailure +
+                        " StdoutTail=[" + string.Join(" | ", stdoutTail) + "]" +
+                        " StderrTail=[" + string.Join(" | ", stderrTail) + "]";
                     _store.Audit(new
                     {
                         Type = "ProductionLifecycleStartupFailed",
                         Utc = DateTime.UtcNow,
                         Session = sessionId,
                         Reason = startupFailure,
-                        Stderr = signals.ErrorTail()
+                        Stdout = stdoutTail,
+                        Stderr = stderrTail
                     });
 
                     await TerminateUnreadyChildAsync(gate).ConfigureAwait(false);
                     await DrainPumpsAsync(stdoutPump, stderrPump).ConfigureAwait(false);
 
                     if (firstActivation)
-                        throw new InvalidOperationException(startupFailure);
+                        throw new InvalidOperationException(startupDiagnostic);
 
                     _log.LogError("{Reason} Kernel fail-safe remains DegradedProtected; reconnect will retry.", startupFailure);
                     await Task.Delay(
@@ -357,6 +363,7 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
         {
             while (await process.StandardOutput.ReadLineAsync().ConfigureAwait(false) is { } line)
             {
+                signals.AddOutput(line);
                 if (string.Equals(line, ready, StringComparison.Ordinal))
                     signals.Ready.TrySetResult(true);
                 else if (string.Equals(line, clean, StringComparison.Ordinal))
@@ -538,9 +545,20 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
     private sealed class GateLifecycleSignals
     {
         private readonly object _gate = new();
+        private readonly Queue<string> _outputs = new();
         private readonly Queue<string> _errors = new();
         public TaskCompletionSource<bool> Ready { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<bool> CleanStop { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void AddOutput(string value)
+        {
+            lock (_gate)
+            {
+                if (_outputs.Count == 24)
+                    _outputs.Dequeue();
+                _outputs.Enqueue(value.Length <= 512 ? value : value[..512]);
+            }
+        }
 
         public void AddError(string value)
         {
@@ -550,6 +568,12 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
                     _errors.Dequeue();
                 _errors.Enqueue(value.Length <= 512 ? value : value[..512]);
             }
+        }
+
+        public string[] OutputTail()
+        {
+            lock (_gate)
+                return _outputs.ToArray();
         }
 
         public string[] ErrorTail()

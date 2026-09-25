@@ -110,10 +110,17 @@ if($begin -lt 0 -or $driver -lt 0 -or $startClient -lt 0 -or $kernelConnected -l
     throw 'Production activation ordering must be rollback/startup state -> exact driver lifecycle -> ProductionGate -> kernel-connected -> Protected.'
 }
 
-$degraded=$lifecycle.IndexOf('_protection.MarkDegraded(')
-$reconnected=$lifecycle.IndexOf('_protection.MarkReconnectedProtected(',$degraded)
-if($degraded -lt 0 -or $reconnected -lt 0 -or $degraded -gt $reconnected){
-    throw 'Unexpected ProductionGate loss must publish DegradedProtected before a successful reconnect can return to Protected.'
+$readyBranch=$lifecycle.IndexOf('if (firstActivation)')
+$reconnectTransition=$lifecycle.IndexOf('_protection.MarkReconnectedProtected(',$readyBranch)
+$exitWait=$lifecycle.IndexOf('await gate.WaitForExitAsync(stoppingToken)',$reconnectTransition)
+$degradedTransition=$lifecycle.IndexOf('_protection.MarkDegraded(',$exitWait)
+$reconnectDelay=$lifecycle.IndexOf('_settings.Enforce.ReconnectDelaySeconds',$degradedTransition)
+$loopEnd=$lifecycle.IndexOf('catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)',$reconnectDelay)
+if($readyBranch -lt 0 -or $reconnectTransition -lt 0 -or $exitWait -lt 0 -or $degradedTransition -lt 0 -or
+   $reconnectDelay -lt 0 -or $loopEnd -lt 0 -or
+   $readyBranch -gt $reconnectTransition -or $reconnectTransition -gt $exitWait -or
+   $exitWait -gt $degradedTransition -or $degradedTransition -gt $reconnectDelay -or $reconnectDelay -gt $loopEnd){
+    throw 'Production supervisor must accept reconnect readiness only in the reconnect branch, then publish DegradedProtected after unexpected child exit and delay before the next loop attempt.'
 }
 
 foreach($required in @(

@@ -138,17 +138,21 @@ function Test-AccessDeniedException([Exception]$Exception){
 function Get-AuditEntries([DateTimeOffset]$SinceUtc){
     $audit=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)) 'RansomGuardV03\audit.jsonl'
     if(-not(Test-Path -LiteralPath $audit -PathType Leaf)){return @()}
-    $entries=New-Object System.Collections.Generic.List[object]
+
+    # Keep this as a plain PowerShell array. Returning @($genericList) can trip the
+    # PowerShell 7 dynamic binder with "Argument types do not match" once audit
+    # entries actually exist.
+    $entries=@()
     foreach($line in Get-Content -LiteralPath $audit -ErrorAction SilentlyContinue){
         if([string]::IsNullOrWhiteSpace($line)){continue}
         try{
             $item=$line | ConvertFrom-Json
             if($null -eq $item.Utc){continue}
             $utc=[DateTimeOffset]::Parse([string]$item.Utc,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::RoundtripKind)
-            if($utc -ge $SinceUtc){$entries.Add($item)}
+            if($utc -ge $SinceUtc){$entries += $item}
         }catch{}
     }
-    return @($entries)
+    return $entries
 }
 
 function Wait-AuditType([string]$Type,[DateTimeOffset]$SinceUtc,[int]$Seconds,[string]$ExpectedSession=''){

@@ -18,6 +18,20 @@ foreach($path in @($preparePath,$runPath,$workflowPath,$lifecyclePath)){
 $prepare=Get-Content -LiteralPath $preparePath -Raw
 $run=Get-Content -LiteralPath $runPath -Raw
 
+if($run -match [regex]::Escape('New-Object System.Collections.Generic.List[object]') -or
+   $run -match [regex]::Escape('return @($entries)')){
+    throw 'Production lifecycle audit reader must use a plain PowerShell array; Generic.List return can fail through the PowerShell 7 dynamic binder.'
+}
+foreach($required in @(
+    '$entries=@()',
+    '$entries += $item',
+    'return $entries'
+)){
+    if($run.IndexOf($required,[StringComparison]::Ordinal) -lt 0){
+        throw "Production lifecycle audit array invariant missing: $required"
+    }
+}
+
 if($prepare.Contains("-match '(?i)\x64\'",[StringComparison]::Ordinal) -or
    $prepare.Contains("-match '(?i)\x86\'",[StringComparison]::Ordinal)){
     throw 'Qualification package tool discovery must not use malformed trailing-backslash x64/x86 regexes.'

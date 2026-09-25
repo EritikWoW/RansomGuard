@@ -116,7 +116,11 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
                     var startupFailure = gate.HasExited
                         ? $"ProductionGate exited before activation (exit={gate.ExitCode})."
                         : "ProductionGate activation readiness timed out.";
+                    var lastStdout = stdoutTail.LastOrDefault() ?? "<none>";
+                    var lastStderr = stderrTail.LastOrDefault() ?? "<none>";
                     var startupDiagnostic = startupFailure +
+                        " LastStdout=[" + lastStdout + "]" +
+                        " LastStderr=[" + lastStderr + "]" +
                         " StdoutTail=[" + string.Join(" | ", stdoutTail) + "]" +
                         " StderrTail=[" + string.Join(" | ", stderrTail) + "]";
                     _store.Audit(new

@@ -13,6 +13,7 @@ $driverPath=Join-Path $RepositoryRoot 'driver\RansomGuard.Minifilter\RansomGuard
 $policyPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\DecisionPolicy.cs'
 $workerPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\GuardWorker.cs'
 $gateClientPath=Join-Path $RepositoryRoot 'src\RansomGuard.GateClient\Program.cs'
+$lifecyclePath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\ProductionProtectionLifecycle.cs'
 $protocolPath=Join-Path $RepositoryRoot 'native\shared\rg_minifilter_protocol.h'
 $verifierGatePath=Join-Path $RepositoryRoot 'tools\verify_driver_verifier_vm_harness.ps1'
 $buildPath=Join-Path $RepositoryRoot 'build_windows.ps1'
@@ -33,7 +34,7 @@ $globalPath=Join-Path $RepositoryRoot 'global.json'
 $supplyGatePath=Join-Path $RepositoryRoot 'tools\verify_supply_chain.ps1'
 $codeOwnersPath=Join-Path $RepositoryRoot '.github\CODEOWNERS'
 
-foreach($path in @($threatPath,$securityPath,$driverPath,$policyPath,$workerPath,$gateClientPath,$protocolPath,$verifierGatePath,$buildPath,$globalPath,$supplyGatePath,$codeOwnersPath)+$workflowPaths){
+foreach($path in @($threatPath,$securityPath,$driverPath,$policyPath,$workerPath,$gateClientPath,$lifecyclePath,$protocolPath,$verifierGatePath,$buildPath,$globalPath,$supplyGatePath,$codeOwnersPath)+$workflowPaths){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){
         throw "Threat-model source missing: $path"
     }
@@ -45,6 +46,7 @@ $driver=Get-Content -LiteralPath $driverPath -Raw
 $policy=Get-Content -LiteralPath $policyPath -Raw
 $worker=Get-Content -LiteralPath $workerPath -Raw
 $gateClient=Get-Content -LiteralPath $gateClientPath -Raw
+$lifecycle=Get-Content -LiteralPath $lifecyclePath -Raw
 $protocol=Get-Content -LiteralPath $protocolPath -Raw
 $verifierGate=Get-Content -LiteralPath $verifierGatePath -Raw
 $global=Get-Content -LiteralPath $globalPath -Raw | ConvertFrom-Json
@@ -53,7 +55,7 @@ $codeOwners=Get-Content -LiteralPath $codeOwnersPath -Raw
 
 foreach($required in @(
     'The default normal package remains Audit',
-    'Version 0.8.5 retains the cryptographically bound ProductionProtection package',
+    'Version 0.8.6 retains the cryptographically bound ProductionProtection package',
     'The connection identity itself is kernel-derived.',
     'references `PsGetCurrentProcess()`',
     'derives its PID with `PsGetProcessId`',
@@ -66,7 +68,7 @@ foreach($required in @(
     'Protected regular file has `NumberOfLinks != 1` during activation',
     '`FileLinkInformation` / `FileLinkInformationEx` touches protected source or destination',
     'proven outside↔outside links remain allowed',
-    'reports `EnforceUnavailable` until a separately qualified production driver/GateClient lifecycle completes',
+    'A `ReadyForLifecycle` package allows the separate 0.8.6 lifecycle to proceed only after rollback repository validation',
     'Ambiguous-scope analysis',
     'Kernel-mode requestor / compromised kernel component / BYOVD path',
     'preserve-before-allow',
@@ -102,10 +104,11 @@ foreach($required in @(
     '0.7.31 sustained mixed-workload qualification does not widen the security boundary',
     '0.7.32 introduced protocol v16 and the GateClient-loss fail-safe foundation',
     '0.7.33 advanced the wire contract to protocol v17 and bound the protected root to an exact referenced Filter Manager volume',
-    'Version 0.8.1 adds fail-closed admission for a future ProductionProtection package',
+    'Version 0.8.6 retains fail-closed ProductionProtection admission',
     '0.8.2 advances the current engineering contract to protocol v18 and separates LAB from ProductionGate',
     'Version 0.8.4 also mediates the reviewed data-mutating FSCTL class',
     'GateClient identity is kernel-bound in 0.8.5',
+    'The 0.8.6 service lifecycle consumes ProductionGate only after admitted package verification',
     'GateClient and the driver catalog must use the same signer',
     'SYS/INF must verify as catalog members',
     'CODEOWNERS',
@@ -188,7 +191,10 @@ foreach($required in @(
     'case "--production"',
     'ProductionGate forbids LAB prepare/fault/reconciliation/shutdown/containment options.',
     'ProductionGate rollback store is fixed to',
-    'options.Profile == GateProfile.Lab ? options.ContainPid : null'
+    'options.Profile == GateProfile.Lab ? options.ContainPid : null',
+    '--service-control-stdin',
+    'RG-LIFECYCLE READY schema=1',
+    'RG-LIFECYCLE STOPPED schema=1'
 )){
     if(-not $gateClient.Contains($required)){
         throw "GateClient protocol-v18 LAB/Production profile boundary changed without threat-model review: $required"
@@ -210,6 +216,37 @@ foreach($required in @(
     }
 }
 
+
+foreach($required in @(
+    '_admission.ReadyForLifecycle',
+    '_protection.BeginKernelStartup()',
+    'ProductionDriverLifecycle.EnsureReadyAsync',
+    '_protection.MarkKernelConnected()',
+    '_protection.MarkProtected()',
+    '_protection.MarkDegraded(',
+    '_protection.MarkReconnectedProtected(',
+    '--production',
+    '--service-control-stdin',
+    'ProductionDriverLifecycle.StopAfterMaintenanceAsync',
+    '_protection.BeginMaintenance(',
+    'pnputil.exe',
+    'setupapi.dll,InstallHinfSection',
+    'fltmc.exe',
+    'DecisionPolicy.HashEqual(packageHash, installedHash)'
+)){
+    if(-not $lifecycle.Contains($required)){
+        throw "Production lifecycle boundary changed without threat-model review: $required"
+    }
+}
+$initialStart=$lifecycle.IndexOf('_protection.BeginKernelStartup()')
+$driverReady=$lifecycle.IndexOf('ProductionDriverLifecycle.EnsureReadyAsync',$initialStart)
+$gateStart=$lifecycle.IndexOf('StartGateClient(',$driverReady)
+$kernelReady=$lifecycle.IndexOf('_protection.MarkKernelConnected()',$gateStart)
+$protected=$lifecycle.IndexOf('_protection.MarkProtected()',$kernelReady)
+if($initialStart -lt 0 -or $driverReady -lt 0 -or $gateStart -lt 0 -or $kernelReady -lt 0 -or $protected -lt 0 -or
+   $initialStart -gt $driverReady -or $driverReady -gt $gateStart -or $gateStart -gt $kernelReady -or $kernelReady -gt $protected){
+    throw 'Threat-model production activation ordering changed without review.'
+}
 
 if(-not $policy.Contains('AuditOnly: automatic action against ordinary applications is disabled in this build.')){
     throw 'DecisionPolicy ordinary-process AuditOnly boundary changed without threat-model review.'
@@ -263,4 +300,4 @@ foreach($workflowPath in $workflowPaths){
     }
 }
 
-Write-Host "Threat-model gate PASSED: docs match AuditOnly/kernel exclusions, protocol v18 LAB/ProductionGate separation, retained-profile protected-volume fail-safe behavior, serialized synchronous gate semantics, current Driver Verifier/fault qualification limits, supply-chain controls, CODEOWNERS routing, build_windows.ps1 and all $($workflowPaths.Count) repository workflows invoke this gate."
+Write-Host "Threat-model gate PASSED: docs match default Audit plus admitted 0.8.6 Enforce lifecycle, protocol v18 LAB/ProductionGate separation, retained-profile fail-safe behavior, serialized synchronous gate semantics, current Driver Verifier/fault qualification limits, supply-chain controls, CODEOWNERS routing, build_windows.ps1 and all $($workflowPaths.Count) repository workflows invoke this gate."

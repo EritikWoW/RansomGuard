@@ -151,6 +151,11 @@ async Task MonitorServiceControlAsync()
     if (!options.ServiceControlStdin)
         return;
 
+    // Console.In is a synchronized reader and may execute the ReadLineAsync prefix
+    // synchronously. Yield first so the private service-control read can never stall
+    // ProductionGate activation on the startup thread.
+    await Task.Yield();
+
     try
     {
         while (!cts.IsCancellationRequested)

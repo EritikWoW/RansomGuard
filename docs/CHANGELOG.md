@@ -13,6 +13,7 @@
 - Added bounded Enforce settings for GateClient workers, rollback quota/free-space reserve and reconnect delay. Automatic detector-to-containment remains disabled.
 - Added source/state tests for lifecycle ordering, admitted-package binding, reconnect semantics and maintenance shutdown. Exact-head disposable-VM lifecycle qualification remains a merge/release gate.
 - ProductionGate profile qualification now isolates and removes its qualification-only fixed ProgramData state root before the normal-Service lifecycle runs; it can no longer leave an unmarked `RansomGuardV03\Rollback` directory that correctly triggers SecureStore's fail-closed trusted-generation check.
+- The same profile-qualification cleanup now removes its LAB `RansomGuardMinifilter` service registration and matching Driver Store package after unload, so the following production lifecycle starts from the required service-absent boundary instead of being forced to reject stale LAB altitude/image registration.
 
 # RansomGuard 0.8.5.0
 

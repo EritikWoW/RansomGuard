@@ -317,7 +317,7 @@ finally{
         }
     }
     if($installed){
-        try{& $unloadScript -Volume $volume}catch{
+        try{& $unloadScript -Volume $volume -RemovePackage}catch{
             if($null -eq $cleanupFailure){$cleanupFailure=$_}
         }
     }

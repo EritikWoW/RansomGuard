@@ -135,7 +135,8 @@ foreach($required in @(
     'cleanupPassed=$false',
     '$installed=$true',
     '& $installScript',
-    '& $unloadScript'
+    '& $unloadScript',
+    '-RemovePackage'
 )){
     if($productionGate -notmatch [regex]::Escape($required)){
         throw "ProductionGate VM qualification script missing invariant: $required"
@@ -147,6 +148,11 @@ $prodCleanupReset=$productionGate.LastIndexOf('Reset-QualificationStateRoot $sta
 if($prodStateReset -lt 0 -or $prodFixedStore -lt 0 -or $prodCleanupReset -lt 0 -or
    $prodStateReset -gt $prodFixedStore -or $prodCleanupReset -le $prodFixedStore){
     throw 'ProductionGate qualification must isolate the fixed ProgramData state root before use and remove it again during cleanup.'
+}
+
+$prodRemovePackage=$productionGate.IndexOf('& $unloadScript -Volume $volume -RemovePackage')
+if($prodRemovePackage -lt 0){
+    throw 'ProductionGate qualification cleanup must remove its LAB service registration and Driver Store package before normal-Service lifecycle qualification.'
 }
 
 $prodCleanupArm=$productionGate.IndexOf('$installed=$true')

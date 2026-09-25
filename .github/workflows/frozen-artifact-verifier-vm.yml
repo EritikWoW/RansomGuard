@@ -122,16 +122,39 @@ jobs:
         with:
           dotnet-version: 10.0.401
 
-      - name: Build frozen candidate LAB userspace bundle
+      - name: Build minimal frozen verifier userspace
         if: ${{ inputs.phase == 'runtime' }}
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
-          .\build_lab.cmd
-          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
-          $lab=Get-ChildItem .\release -Directory -Filter 'RansomGuard-Lab-v*' | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
-          if(-not $lab){throw 'Engineering LAB release directory not found.'}
-          "RG_LAB_RELEASE=$($lab.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $auditErrors='-warnaserror:NU1900,NU1901,NU1902,NU1903,NU1904,NU1801'
+          $lab=Join-Path $env:RUNNER_TEMP ('ransomguard-frozen-verifier-lab-'+$env:RG_EXPECTED_SHA)
+          if(Test-Path -LiteralPath $lab){Remove-Item -LiteralPath $lab -Recurse -Force}
+
+          $projects=@(
+            @{
+              Project='.\src\RansomGuard.GateClient\RansomGuard.GateClient.csproj'
+              Output=(Join-Path $lab 'MinifilterLab\GateClient')
+              Exe='RansomGuard.GateClient.exe'
+            },
+            @{
+              Project='.\tests\RansomGuard.Minifilter.RuntimeHarness\RansomGuard.Minifilter.RuntimeHarness.csproj'
+              Output=(Join-Path $lab 'MinifilterLab\RuntimeHarness')
+              Exe='RansomGuard.Minifilter.RuntimeHarness.exe'
+            }
+          )
+
+          foreach($entry in $projects){
+            New-Item -ItemType Directory -Path $entry.Output -Force | Out-Null
+            & dotnet restore $entry.Project --locked-mode -r win-x64 -p:SelfContained=true $auditErrors
+            if($LASTEXITCODE -ne 0){throw "dotnet restore failed for $($entry.Project). exit=$LASTEXITCODE"}
+            & dotnet publish $entry.Project -c Release -r win-x64 --self-contained true --no-restore -p:CopyOutputSymbolsToPublishDirectory=false -o $entry.Output
+            if($LASTEXITCODE -ne 0){throw "dotnet publish failed for $($entry.Project). exit=$LASTEXITCODE"}
+            $exe=Join-Path $entry.Output $entry.Exe
+            if(-not(Test-Path -LiteralPath $exe -PathType Leaf)){throw "Expected verifier helper is missing: $exe"}
+          }
+
+          "RG_LAB_RELEASE=$lab" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Import immutable frozen package
         if: ${{ inputs.phase == 'arm' || inputs.phase == 'runtime' }}

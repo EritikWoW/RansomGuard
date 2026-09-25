@@ -14,8 +14,9 @@ $programPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\Program.cs'
 $bootstrapPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\WindowsServiceBootstrap.cs'
 $lifecyclePath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\ProductionProtectionLifecycle.cs'
 $appSettingsPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\appsettings.json'
+$driverPath=Join-Path $RepositoryRoot 'driver\RansomGuard.Minifilter\RansomGuardMinifilter.c'
 $buildPath=Join-Path $RepositoryRoot 'build_windows.ps1'
-foreach($path in @($settingsPath,$runtimePath,$serviceRuntimePath,$programPath,$bootstrapPath,$lifecyclePath,$appSettingsPath,$buildPath)){
+foreach($path in @($settingsPath,$runtimePath,$serviceRuntimePath,$programPath,$bootstrapPath,$lifecyclePath,$appSettingsPath,$driverPath,$buildPath)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Production Enforce lifecycle file missing: $path"}
 }
 
@@ -26,6 +27,7 @@ $program=Get-Content -LiteralPath $programPath -Raw
 $bootstrap=Get-Content -LiteralPath $bootstrapPath -Raw
 $lifecycle=Get-Content -LiteralPath $lifecyclePath -Raw
 $appSettings=Get-Content -LiteralPath $appSettingsPath -Raw
+$driverSource=Get-Content -LiteralPath $driverPath -Raw
 $build=Get-Content -LiteralPath $buildPath -Raw
 
 foreach($required in @(
@@ -293,6 +295,32 @@ if($readyBranch -lt 0 -or $reconnectTransition -lt 0 -or $exitWait -lt 0 -or $de
    $readyBranch -gt $reconnectTransition -or $reconnectTransition -gt $exitWait -or
    $exitWait -gt $degradedTransition -or $degradedTransition -gt $reconnectDelay -or $reconnectDelay -gt $loopEnd){
     throw 'Production supervisor must accept reconnect readiness only in the reconnect branch, then publish DegradedProtected after unexpected child exit and delay before the next loop attempt.'
+}
+
+foreach($required in @(
+    'static BOOLEAN RgIsNamespaceMutatingFsctl',
+    'FSCTL_SET_REPARSE_POINT',
+    'FSCTL_DELETE_REPARSE_POINT',
+    'FSCTL_SET_REPARSE_POINT_EX',
+    'namespaceMutation = RgIsNamespaceMutatingFsctl(fsctl);',
+    'if (!namespaceMutation && !RgIsDataMutatingFsctl(fsctl))',
+    'if (namespaceMutation) {',
+    'return RgCompleteDenied(Data);'
+)){
+    if($driverSource -notmatch [regex]::Escape($required)){
+        throw "Kernel namespace-FSCTL invariant missing: $required"
+    }
+}
+
+$fsctlStart=$driverSource.IndexOf('FLT_PREOP_CALLBACK_STATUS RgPreFileSystemControl(')
+$fsctlOutside=$driverSource.IndexOf('if (scope == RgScopeOutside)',$fsctlStart)
+$fsctlNamespace=$driverSource.IndexOf('if (namespaceMutation) {',$fsctlOutside)
+$fsctlDeny=$driverSource.IndexOf('return RgCompleteDenied(Data);',$fsctlNamespace)
+$fsctlPreservation=$driverSource.IndexOf('!RgStreamHasDurablePreservation(FltObjects)',$fsctlDeny)
+if($fsctlStart -lt 0 -or $fsctlOutside -lt 0 -or $fsctlNamespace -lt 0 -or $fsctlDeny -lt 0 -or $fsctlPreservation -lt 0 -or
+   $fsctlStart -gt $fsctlOutside -or $fsctlOutside -gt $fsctlNamespace -or
+   $fsctlNamespace -gt $fsctlDeny -or $fsctlDeny -gt $fsctlPreservation){
+    throw 'Protected namespace-mutating FSCTLs must be classified after outside-scope escape and denied before ordinary data-FSCTL preservation admission.'
 }
 
 foreach($required in @(

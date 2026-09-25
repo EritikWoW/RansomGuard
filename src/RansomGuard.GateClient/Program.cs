@@ -768,10 +768,10 @@ static class ActivationPreflight
     {
         var options = new EnumerationOptions
         {
-            RecurseSubdirectories = true,
+            RecurseSubdirectories = false,
             IgnoreInaccessible = false,
             ReturnSpecialDirectories = false,
-            AttributesToSkip = FileAttributes.ReparsePoint
+            AttributesToSkip = 0
         };
 
         var checkedFiles = 0;
@@ -780,9 +780,18 @@ static class ActivationPreflight
         try
         {
             var rootPath = Path.GetFullPath(root);
+            if ((File.GetAttributes(rootPath) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException($"Activation preflight refuses reparse root: {rootPath}");
+
             progress?.Invoke("root-open-start");
             var rootHandle = Native.OpenPreflightDirectory(rootPath);
             progress?.Invoke("root-open-complete");
+            if ((File.GetAttributes(rootPath) & FileAttributes.ReparsePoint) != 0)
+            {
+                rootHandle.Dispose();
+                throw new InvalidOperationException($"Activation preflight refuses racing reparse root: {rootPath}");
+            }
+
             heldHandles.Add(rootHandle);
             var rootIdentity = FileIdentityStore.QueryHandleIdentity(rootHandle);
             await using (var rootReservation = await storageBudget.ReserveAsync(
@@ -795,36 +804,63 @@ static class ActivationPreflight
             }
             heldDirectories++;
 
-            progress?.Invoke("directory-enumeration-start");
-            var directories = Directory.EnumerateDirectories(rootPath, "*", options)
-                .Select(Path.GetFullPath)
-                .OrderBy(x => x.Count(ch => ch == Path.DirectorySeparatorChar))
-                .ThenBy(x => x, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            progress?.Invoke("directory-enumeration-complete");
+            // Never use recursive enumeration here. Recursive EnumerationOptions that skip
+            // ReparsePoint entries make a junction disappear from the preflight entirely,
+            // while recursive enumeration that includes them can traverse outside the
+            // protected namespace. Walk one already-held directory at a time instead.
+            var pendingDirectories = new Queue<string>();
+            var files = new List<string>();
+            pendingDirectories.Enqueue(rootPath);
 
-            foreach (var directory in directories)
+            progress?.Invoke("directory-enumeration-start");
+            while (pendingDirectories.Count != 0)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
-                    throw new InvalidOperationException($"Activation preflight refuses reparse directory: {directory}");
+                var currentDirectory = pendingDirectories.Dequeue();
+                var entries = Directory.EnumerateFileSystemEntries(currentDirectory, "*", options)
+                    .Select(Path.GetFullPath)
+                    .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
 
-                var directoryHandle = Native.OpenPreflightDirectory(directory);
-                heldHandles.Add(directoryHandle);
-                var directoryIdentity = FileIdentityStore.QueryHandleIdentity(directoryHandle);
-                await using (var directoryReservation = await storageBudget.ReserveAsync(
-                                 RollbackStorageBudget.MetadataReservationBytes,
-                                 "activation-topology-directory",
-                                 cancellationToken).ConfigureAwait(false))
+                foreach (var entry in entries)
                 {
-                    _ = await topologyStore.RecordAsync(directory, directoryIdentity, isRoot: false, cancellationToken)
-                        .ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var attributes = File.GetAttributes(entry);
+                    if ((attributes & FileAttributes.ReparsePoint) != 0)
+                        throw new InvalidOperationException($"Activation preflight refuses descendant reparse point: {entry}");
+
+                    if ((attributes & FileAttributes.Directory) == 0)
+                    {
+                        files.Add(entry);
+                        continue;
+                    }
+
+                    var directoryHandle = Native.OpenPreflightDirectory(entry);
+                    if ((File.GetAttributes(entry) & FileAttributes.ReparsePoint) != 0)
+                    {
+                        directoryHandle.Dispose();
+                        throw new InvalidOperationException($"Activation preflight refuses racing reparse directory: {entry}");
+                    }
+
+                    heldHandles.Add(directoryHandle);
+                    var directoryIdentity = FileIdentityStore.QueryHandleIdentity(directoryHandle);
+                    await using (var directoryReservation = await storageBudget.ReserveAsync(
+                                     RollbackStorageBudget.MetadataReservationBytes,
+                                     "activation-topology-directory",
+                                     cancellationToken).ConfigureAwait(false))
+                    {
+                        _ = await topologyStore.RecordAsync(entry, directoryIdentity, isRoot: false, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+
+                    heldDirectories++;
+                    pendingDirectories.Enqueue(entry);
                 }
-                heldDirectories++;
             }
+            progress?.Invoke("directory-enumeration-complete");
 
             progress?.Invoke("file-enumeration-start");
-            foreach (var rawPath in Directory.EnumerateFiles(rootPath, "*", options))
+            foreach (var rawPath in files.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var fileOrdinal = checkedFiles + 1;

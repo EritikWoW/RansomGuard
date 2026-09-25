@@ -12,6 +12,14 @@ $text=Get-Content -LiteralPath $program -Raw
 $manifestText=Get-Content -LiteralPath $manifest -Raw
 $fileIdentityText=Get-Content -LiteralPath $fileIdentity -Raw
 
+$serviceControlStart=$text.IndexOf('async Task MonitorServiceControlAsync()')
+$serviceControlYield=$text.IndexOf('await Task.Yield();',$serviceControlStart)
+$serviceControlRead=$text.IndexOf('Console.In.ReadLineAsync()',$serviceControlStart)
+if($serviceControlStart -lt 0 -or $serviceControlYield -lt 0 -or $serviceControlRead -lt 0 -or
+   $serviceControlYield -gt $serviceControlRead){
+  throw 'Production service-control monitor must yield before touching synchronized Console.In.'
+}
+
 foreach($required in @(
   'RANSOMGUARD-LAB-GATE-V1',
   'CapturePreimageAsync',
@@ -77,6 +85,7 @@ foreach($required in @(
   '--service-control-stdin',
   'ServiceControlStdin',
   'MonitorServiceControlAsync',
+  'await Task.Yield();',
   'Console.In.ReadLineAsync()',
   'productionServiceShutdownAuthorized',
   'Interlocked.Exchange(ref productionServiceShutdownAuthorized, 1)',

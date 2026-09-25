@@ -222,7 +222,8 @@ var resolver = new DevicePathResolver();
 LifecycleProgress("activation-preflight-start");
 var activationSummary = await ActivationPreflight.RunAsync(
     port, options.Root, resolver, activationStore, topologyStore, storageBudget,
-    options.Profile == GateProfile.Lab ? options.ContainPid : null, cts.Token).ConfigureAwait(false);
+    options.Profile == GateProfile.Lab ? options.ContainPid : null, cts.Token,
+    phase => LifecycleProgress("activation-preflight-" + phase)).ConfigureAwait(false);
 LifecycleProgress("activation-preflight-complete");
 Console.WriteLine($"Activation preflight: directories={activationSummary.DirectoriesHeld}, files={activationSummary.FilesChecked}, writable-views=0, kernel gate ACTIVE.");
 Console.WriteLine(activationSummary.ContainedProcessId is ulong containedPid
@@ -757,7 +758,8 @@ static class ActivationPreflight
         ActivationTopologyStore topologyStore,
         RollbackStorageBudget storageBudget,
         ulong? containPid,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<string>? progress = null)
     {
         var options = new EnumerationOptions
         {
@@ -773,7 +775,9 @@ static class ActivationPreflight
         try
         {
             var rootPath = Path.GetFullPath(root);
+            progress?.Invoke("root-open-start");
             var rootHandle = Native.OpenPreflightDirectory(rootPath);
+            progress?.Invoke("root-open-complete");
             heldHandles.Add(rootHandle);
             var rootIdentity = FileIdentityStore.QueryHandleIdentity(rootHandle);
             await using (var rootReservation = await storageBudget.ReserveAsync(
@@ -786,11 +790,13 @@ static class ActivationPreflight
             }
             heldDirectories++;
 
+            progress?.Invoke("directory-enumeration-start");
             var directories = Directory.EnumerateDirectories(rootPath, "*", options)
                 .Select(Path.GetFullPath)
                 .OrderBy(x => x.Count(ch => ch == Path.DirectorySeparatorChar))
                 .ThenBy(x => x, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
+            progress?.Invoke("directory-enumeration-complete");
 
             foreach (var directory in directories)
             {
@@ -812,18 +818,23 @@ static class ActivationPreflight
                 heldDirectories++;
             }
 
+            progress?.Invoke("file-enumeration-start");
             foreach (var rawPath in Directory.EnumerateFiles(rootPath, "*", options))
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                var fileOrdinal = checkedFiles + 1;
+                progress?.Invoke($"file-{fileOrdinal}-prepare");
                 var path = Path.GetFullPath(rawPath);
                 if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
                     throw new InvalidOperationException($"Activation preflight refuses reparse file: {path}");
 
+                progress?.Invoke($"file-{fileOrdinal}-arm-start");
                 var arm = Native.Control(port, new RgControlRequest
                 {
                     ProtocolVersion = ProtocolContract.Version,
                     Command = (uint)RgControlCommand.ArmPreflight
                 });
+                progress?.Invoke($"file-{fileOrdinal}-arm-complete");
                 if (arm.ProtocolVersion != ProtocolContract.Version ||
                     arm.Command != (uint)RgControlCommand.ArmPreflight ||
                     arm.Status != 0 ||
@@ -835,8 +846,12 @@ static class ActivationPreflight
                 // First issue an attribute-only probe that deliberately shares READ/WRITE/DELETE.
                 // This lets the minifilter inspect the existing section object even when a writable
                 // mapping already keeps a write-capable file object alive.
+                progress?.Invoke($"file-{fileOrdinal}-probe-open-start");
                 using var probe = Native.OpenPreflightProbe(path);
+                progress?.Invoke($"file-{fileOrdinal}-probe-open-complete");
+                progress?.Invoke($"file-{fileOrdinal}-event-wait-start");
                 var ev = await ReceivePreflightEventAsync(port, path, resolver, cancellationToken).ConfigureAwait(false);
+                progress?.Invoke($"file-{fileOrdinal}-event-wait-complete");
 
                 DurableFileIdentity? identity = null;
                 if (ev.IdentityStatus == (uint)RgIdentityStatus.Resolved &&
@@ -870,7 +885,9 @@ static class ActivationPreflight
                 // Only after kernel attestation is clean do we acquire the share-sensitive hold.
                 // Keep the probe open until the hold exists, then verify the held object is the same
                 // FILE_ID_INFO so a rename/replace race cannot silently swap the file between phases.
+                progress?.Invoke($"file-{fileOrdinal}-hold-open-start");
                 var hold = Native.OpenPreflightHold(path);
+                progress?.Invoke($"file-{fileOrdinal}-hold-open-complete");
                 var holdIdentity = FileIdentityStore.QueryHandleIdentity(hold);
                 if (!identity.Equals(holdIdentity))
                 {
@@ -890,17 +907,21 @@ static class ActivationPreflight
                 heldHandles.Add(hold);
 
                 checkedFiles++;
+                progress?.Invoke($"file-{fileOrdinal}-complete");
             }
+            progress?.Invoke("file-enumeration-complete");
 
             var activationCommand = containPid.HasValue
                 ? RgControlCommand.ActivateAndContainProcess
                 : RgControlCommand.ActivateGate;
+            progress?.Invoke("kernel-activate-start");
             var activationReply = Native.Control(port, new RgControlRequest
             {
                 ProtocolVersion = ProtocolContract.Version,
                 Command = (uint)activationCommand,
                 TargetProcessId = containPid ?? 0
             });
+            progress?.Invoke("kernel-activate-complete");
             if (activationReply.ProtocolVersion != ProtocolContract.Version ||
                 activationReply.Command != (uint)activationCommand ||
                 activationReply.Status != 0 ||

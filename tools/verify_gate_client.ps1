@@ -590,11 +590,11 @@ if($directoryOpenBlock -match 'ShareWrite|ShareDelete'){
   throw 'Activation topology directory handles must not share WRITE or DELETE access.'
 }
 $rootOpen=$preflightBlock.IndexOf('Native.OpenPreflightDirectory(rootPath)')
-$directoryEnumeration=$preflightBlock.IndexOf('Directory.EnumerateDirectories(rootPath')
+$directoryEnumeration=$preflightBlock.IndexOf('Directory.EnumerateFileSystemEntries(currentDirectory')
 $activateAfterTopology=$preflightBlock.IndexOf('RgControlCommand.ActivateGate')
 if($rootOpen -lt 0 -or $directoryEnumeration -lt 0 -or $activateAfterTopology -lt 0 -or
    $rootOpen -gt $directoryEnumeration -or $directoryEnumeration -gt $activateAfterTopology){
-  throw 'Protected root must be held before directory enumeration and remain held until kernel activation.'
+  throw 'Protected root must be held before non-recursive directory enumeration and remain held until kernel activation.'
 }
 if($preflightBlock -match 'Native\.Reply\('){throw 'Activation preflight events must remain no-reply evidence.'}
 

@@ -105,6 +105,19 @@ jobs:
         with:
           dotnet-version: 10.0.401
 
+      - name: Build orchestration FSCTL qualification probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $out=Join-Path $env:RUNNER_TEMP 'ransomguard-fsctl-qualification-probe'
+          if(Test-Path -LiteralPath $out){Remove-Item -LiteralPath $out -Recurse -Force}
+          dotnet publish .\orchestrator\qualification\RansomGuard.FsctlQualificationProbe\RansomGuard.FsctlQualificationProbe.csproj `
+            -c Release -r win-x64 --self-contained true --locked-mode -o $out
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          $exe=Join-Path $out 'RansomGuard.FsctlQualificationProbe.exe'
+          if(-not(Test-Path -LiteralPath $exe -PathType Leaf)){throw "FSCTL qualification probe missing: $exe"}
+          "RG_FSCTL_QUALIFICATION_PROBE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Build exact candidate Engineering LAB bundle
         shell: pwsh
         run: |
@@ -147,6 +160,7 @@ jobs:
             -CandidateRoot (Resolve-Path .\candidate).Path `
             -LabReleaseDirectory $env:RG_LAB_RELEASE `
             -DriverPackageDirectory $env:RG_MUTATION_DRIVER_PACKAGE `
+            -FsctlHelperExe $env:RG_FSCTL_QUALIFICATION_PROBE `
             -ExpectedSha $env:RG_EXPECTED_SHA `
             -RootBase $env:RG_MUTATION_ROOT_BASE `
             -ResultsDirectory $results
@@ -167,6 +181,12 @@ jobs:
             'fsctlZeroAllowedWithBaseline',
             'fsctlZeroMutatedTarget',
             'fsctlZeroPreimageHashMatched',
+            'ntfsQualified',
+            'fsctlSetSparseQualified',
+            'fsctlFileLevelTrimQualified',
+            'fsctlDuplicateExtentsQualified',
+            'fsctlDuplicateExtentsExQualified',
+            'fsctlOffloadWriteQualified',
             'postActivationMappedWriteMutatedTarget',
             'postActivationMappedWritePreimageHashMatched',
             'cleanupPassed',

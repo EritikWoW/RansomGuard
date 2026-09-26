@@ -173,19 +173,43 @@ jobs:
             throw "Release inventory source SHA mismatch: $($inventory.sourceSha)"
           }
 
+          $releaseZips=@(Get-ChildItem -LiteralPath $windows -File -Filter '*.zip')
+          if($releaseZips.Count -lt 1){
+            throw 'Downloaded ransomguard-windows artifact contains no release ZIPs.'
+          }
+          foreach($zip in $releaseZips){
+            $bundleName=[IO.Path]::GetFileNameWithoutExtension($zip.Name)
+            $bundleRoot=Join-Path $windows $bundleName
+            if(Test-Path -LiteralPath $bundleRoot){
+              throw "Release bundle extraction target already exists: $bundleRoot"
+            }
+            Expand-Archive -LiteralPath $zip.FullName -DestinationPath $bundleRoot
+          }
+
           $downloaded=@(Get-ChildItem -LiteralPath $windows -Recurse -File)
           if($downloaded.Count -ne @($inventory.files).Count){
-            throw "Downloaded release file count does not match governance inventory. downloaded=$($downloaded.Count) inventory=$(@($inventory.files).Count)"
+            throw "Reconstructed release file count does not match governance inventory. reconstructed=$($downloaded.Count) inventory=$(@($inventory.files).Count)"
+          }
+
+          $byRelative=@{}
+          foreach($file in $downloaded){
+            $relative=[IO.Path]::GetRelativePath($windows,$file.FullName).Replace('\','/')
+            if($byRelative.ContainsKey($relative)){
+              throw "Duplicate reconstructed release path: $relative"
+            }
+            $byRelative[$relative]=$file
           }
 
           foreach($item in @($inventory.files)){
-            $matches=@($downloaded | Where-Object { $_.Name -eq [IO.Path]::GetFileName([string]$item.path) })
-            if($matches.Count -ne 1){throw "Unable to map governed artifact '$($item.path)' to exactly one downloaded file."}
-            $file=$matches[0]
-            if([long]$file.Length -ne [long]$item.length){throw "Length mismatch for $($item.path)."}
+            $relative=([string]$item.path).Replace('\','/')
+            if(-not $byRelative.ContainsKey($relative)){
+              throw "Governed release path is missing from reconstructed release artifact: '$relative'."
+            }
+            $file=$byRelative[$relative]
+            if([long]$file.Length -ne [long]$item.length){throw "Length mismatch for $relative."}
             $sha=(Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash
             if(-not [string]::Equals($sha,[string]$item.sha256,[StringComparison]::OrdinalIgnoreCase)){
-              throw "SHA-256 mismatch for $($item.path)."
+              throw "SHA-256 mismatch for $relative."
             }
           }
 

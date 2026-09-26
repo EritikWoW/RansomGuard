@@ -305,6 +305,61 @@ try
         partialResult.OwnedSuspendCount == 0 &&
         WaitForHeartbeatAdvance(target.Heartbeat, ReadHeartbeat(target.Heartbeat), TimeSpan.FromSeconds(2));
 
+    var restartProtection = ProtectedSnapshot();
+    var restartBinding = Binding(targetKey, targetPath, targetHash, restartProtection, "restart-recovery");
+    var restartRequest = new ContainmentActuationRequest(
+        Guid.NewGuid().ToString("N"),
+        restartBinding,
+        DateTime.UtcNow);
+    var restartLedgerRoot = Path.Combine(results, "ledger-restart-recovery");
+    var restartLedger = new ContainmentActuationLedger(restartLedgerRoot);
+    var restartSuspended = actuator.Suspend(
+        restartRequest,
+        restartLedger,
+        lease => Validate(restartBinding, lease, restartProtection, true, restartLedger),
+        new ContainmentActuatorOptions(256, 6, TimeSpan.FromSeconds(5)));
+    Thread.Sleep(150);
+    var restartBeatA = ReadHeartbeat(target.Heartbeat);
+    Thread.Sleep(350);
+    var restartBeatB = ReadHeartbeat(target.Heartbeat);
+    var restartWasSuspended =
+        restartSuspended.State == ContainmentActuationResultState.Suspended.ToString() &&
+        restartSuspended.OwnedSuspendCount > 0 &&
+        restartBeatA == restartBeatB;
+
+    restartLedger.VerifyAll();
+    var reopenedRestartLedger = new ContainmentActuationLedger(restartLedgerRoot, createIfMissing: false);
+    reopenedRestartLedger.VerifyAll();
+    var restartResumed = new ContainmentActuator(platform).ResumeOwned(restartRequest, reopenedRestartLedger);
+    reopenedRestartLedger.VerifyAll();
+    var restartRecoveryRecovered =
+        restartWasSuspended &&
+        restartResumed.State == ContainmentActuationResultState.Resumed.ToString() &&
+        restartResumed.OwnedSuspendCount == 0 &&
+        WaitForHeartbeatAdvance(target.Heartbeat, restartBeatB, TimeSpan.FromSeconds(3));
+
+    var timeoutProtection = ProtectedSnapshot();
+    var timeoutBinding = Binding(targetKey, targetPath, targetHash, timeoutProtection, "timeout");
+    var timeoutLedger = new ContainmentActuationLedger(Path.Combine(results, "ledger-timeout"));
+    var timeoutPlatform = new WrappedPlatform(
+        platform,
+        failSuspendOrdinal: 0,
+        cancelAfterSuspendOrdinal: 0,
+        cancel: null,
+        delayAfterSuspendOrdinal: 1,
+        delayAfterSuspend: TimeSpan.FromMilliseconds(250));
+    var timeoutActuator = new ContainmentActuator(timeoutPlatform);
+    var timeoutResult = timeoutActuator.Suspend(
+        new ContainmentActuationRequest(Guid.NewGuid().ToString("N"), timeoutBinding, DateTime.UtcNow),
+        timeoutLedger,
+        lease => Validate(timeoutBinding, lease, timeoutProtection, true, timeoutLedger),
+        new ContainmentActuatorOptions(256, 6, TimeSpan.FromMilliseconds(100)));
+    var timeoutRecovered =
+        timeoutResult.State == ContainmentActuationResultState.FailedRecovered.ToString() &&
+        timeoutResult.OwnedSuspendCount == 0 &&
+        timeoutResult.ReasonCodes.Contains("ActuationTimedOut", StringComparer.Ordinal) &&
+        WaitForHeartbeatAdvance(target.Heartbeat, ReadHeartbeat(target.Heartbeat), TimeSpan.FromSeconds(2));
+
     var cancelProtection = ProtectedSnapshot();
     var cancelBinding = Binding(targetKey, targetPath, targetHash, cancelProtection, "cancel");
     var cancelLedger = new ContainmentActuationLedger(Path.Combine(results, "ledger-cancel"));
@@ -341,6 +396,8 @@ try
         selfRejected &&
         protectedServiceRejected &&
         partialRecovered &&
+        restartRecoveryRecovered &&
+        timeoutRecovered &&
         cancellationRecovered;
 
     var summary = new
@@ -368,6 +425,8 @@ try
         selfRejected,
         protectedServiceRejected,
         partialRecovered,
+        restartRecoveryRecovered,
+        timeoutRecovered,
         cancellationRecovered,
         passed
     };
@@ -637,21 +696,33 @@ sealed class WrappedPlatform : IContainmentProcessActuationPlatform
     private readonly int _failSuspendOrdinal;
     private readonly int _cancelAfterSuspendOrdinal;
     private readonly CancellationTokenSource? _cancel;
+    private readonly int _delayAfterSuspendOrdinal;
+    private readonly TimeSpan _delayAfterSuspend;
 
     public WrappedPlatform(
         IContainmentProcessActuationPlatform inner,
         int failSuspendOrdinal,
         int cancelAfterSuspendOrdinal,
-        CancellationTokenSource? cancel)
+        CancellationTokenSource? cancel,
+        int delayAfterSuspendOrdinal = 0,
+        TimeSpan? delayAfterSuspend = null)
     {
         _inner = inner;
         _failSuspendOrdinal = failSuspendOrdinal;
         _cancelAfterSuspendOrdinal = cancelAfterSuspendOrdinal;
         _cancel = cancel;
+        _delayAfterSuspendOrdinal = delayAfterSuspendOrdinal;
+        _delayAfterSuspend = delayAfterSuspend ?? TimeSpan.Zero;
     }
 
     public IContainmentProcessActuationLease Open(ProcessKey expectedProcess) =>
-        new WrappedLease(_inner.Open(expectedProcess), _failSuspendOrdinal, _cancelAfterSuspendOrdinal, _cancel);
+        new WrappedLease(
+            _inner.Open(expectedProcess),
+            _failSuspendOrdinal,
+            _cancelAfterSuspendOrdinal,
+            _cancel,
+            _delayAfterSuspendOrdinal,
+            _delayAfterSuspend);
 }
 
 sealed class WrappedLease : IContainmentProcessActuationLease
@@ -660,18 +731,24 @@ sealed class WrappedLease : IContainmentProcessActuationLease
     private readonly int _failSuspendOrdinal;
     private readonly int _cancelAfterSuspendOrdinal;
     private readonly CancellationTokenSource? _cancel;
+    private readonly int _delayAfterSuspendOrdinal;
+    private readonly TimeSpan _delayAfterSuspend;
     private int _suspendOrdinal;
 
     public WrappedLease(
         IContainmentProcessActuationLease inner,
         int failSuspendOrdinal,
         int cancelAfterSuspendOrdinal,
-        CancellationTokenSource? cancel)
+        CancellationTokenSource? cancel,
+        int delayAfterSuspendOrdinal,
+        TimeSpan delayAfterSuspend)
     {
         _inner = inner;
         _failSuspendOrdinal = failSuspendOrdinal;
         _cancelAfterSuspendOrdinal = cancelAfterSuspendOrdinal;
         _cancel = cancel;
+        _delayAfterSuspendOrdinal = delayAfterSuspendOrdinal;
+        _delayAfterSuspend = delayAfterSuspend;
     }
 
     public ProcessKey Process => _inner.Process;
@@ -693,6 +770,8 @@ sealed class WrappedLease : IContainmentProcessActuationLease
         }
 
         var ok = _inner.TrySuspendThread(thread, out diagnostic);
+        if (ok && _delayAfterSuspendOrdinal > 0 && ordinal == _delayAfterSuspendOrdinal && _delayAfterSuspend > TimeSpan.Zero)
+            Thread.Sleep(_delayAfterSuspend);
         if (ok && _cancelAfterSuspendOrdinal > 0 && ordinal == _cancelAfterSuspendOrdinal)
             _cancel?.Cancel();
         return ok;

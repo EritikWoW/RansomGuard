@@ -89,6 +89,14 @@ foreach($required in @(
  $source=if($required -eq 'recovery-review'){$core}else{$recoveryPane}
  if(-not $source.Contains($required)){throw "Missing elevated recovery review invariant: $required"}
 }
+foreach($required in @(
+ 'if (action == "recovery-review")',
+ 'new RecoveryReviewPane(preview)',
+ 'RecoveryPane = pane',
+ 'return;'
+)) {
+ if(-not $window.Contains($required)){throw "Recovery review must route to a dedicated pane before rule/setup mutation UI: $required"}
+}
 foreach($pattern in @(
  'RollbackRecoveryExecutor',
  'ExecuteReadyAsync',

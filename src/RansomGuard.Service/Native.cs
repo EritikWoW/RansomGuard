@@ -139,6 +139,7 @@ internal sealed class ProcessCatalog
     private readonly System.Collections.Concurrent.ConcurrentDictionary<int,ProcessInfo> _cache=new();
     private readonly object _lifecycleGate=new();
     private readonly Dictionary<int,List<EtwLifetime>> _lifetimes=new();
+    private long _lifecycleOperations;
 
     public void ObserveStart(int pid,ulong uniqueProcessKey,string? imageFileName,DateTime startUtc)
     {
@@ -146,15 +147,17 @@ internal sealed class ProcessCatalog
         _cache.TryRemove(pid,out _);
         lock(_lifecycleGate)
         {
+            var now=DateTime.UtcNow;
             if(!_lifetimes.TryGetValue(pid,out var list))_lifetimes[pid]=list=new();
             list.Add(new EtwLifetime{
                 Pid=pid,
                 UniqueProcessKey=uniqueProcessKey,
                 Name=string.IsNullOrWhiteSpace(imageFileName)?$"pid-{pid}":Path.GetFileName(imageFileName),
                 StartUtc=startUtc,
-                LastTouchedUtc=DateTime.UtcNow
+                LastTouchedUtc=now
             });
-            TrimLifetimes(list,DateTime.UtcNow);
+            TrimLifetimes(list,now);
+            MaybeSweepLifetimes(now);
         }
     }
 
@@ -163,7 +166,12 @@ internal sealed class ProcessCatalog
         if(pid<=4)return;
         lock(_lifecycleGate)
         {
-            if(!_lifetimes.TryGetValue(pid,out var list))return;
+            var now=DateTime.UtcNow;
+            if(!_lifetimes.TryGetValue(pid,out var list))
+            {
+                MaybeSweepLifetimes(now);
+                return;
+            }
             EtwLifetime? lifetime=null;
             if(uniqueProcessKey!=0)
                 lifetime=list.LastOrDefault(x=>x.UniqueProcessKey==uniqueProcessKey && x.StopUtc is null);
@@ -171,9 +179,11 @@ internal sealed class ProcessCatalog
             if(lifetime is not null)
             {
                 lifetime.StopUtc=stopUtc;
-                lifetime.LastTouchedUtc=DateTime.UtcNow;
+                lifetime.LastTouchedUtc=now;
             }
-            TrimLifetimes(list,DateTime.UtcNow);
+            TrimLifetimes(list,now);
+            if(list.Count==0)_lifetimes.Remove(pid);
+            MaybeSweepLifetimes(now);
         }
         // Do not discard a recently resolved exact identity here. File-I/O callbacks can
         // already be queued when ProcessStop is observed. A later ProcessStart for a reused
@@ -274,6 +284,18 @@ internal sealed class ProcessCatalog
             lifetime.ExactKey=key;
             lifetime.ExactPath=path;
             lifetime.LastTouchedUtc=now;
+        }
+    }
+
+    private void MaybeSweepLifetimes(DateTime now)
+    {
+        _lifecycleOperations++;
+        if((_lifecycleOperations & 0xFF)!=0)return;
+        foreach(var pid in _lifetimes.Keys.ToArray())
+        {
+            var list=_lifetimes[pid];
+            TrimLifetimes(list,now);
+            if(list.Count==0)_lifetimes.Remove(pid);
         }
     }
 

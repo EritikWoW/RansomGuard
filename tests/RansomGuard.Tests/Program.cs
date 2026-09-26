@@ -761,6 +761,62 @@ finally
         Directory.Delete(stateChangeJournalRoot,true);
 }
 
+var stateChangeHeadLossRoot=Path.Combine(Path.GetTempPath(),"RansomGuard-StateChangeHeadLoss-"+Guid.NewGuid().ToString("N"));
+try
+{
+    var binding=ActuationBinding(
+        authorizationId:Guid.NewGuid().ToString("N"),
+        caseId:"case-state-change-head-loss",
+        evaluatedUtc:now,
+        expiresUtc:now.AddSeconds(5));
+    var validation=ContainmentActuationPolicy.Evaluate(
+        ActuationInput(binding:binding,nowUtc:now.AddSeconds(1)));
+    var request=new ContainmentActuationRequest(Guid.NewGuid().ToString("N"),binding,now.AddSeconds(1));
+    var journal=new ContainmentStateChangeJournal(stateChangeHeadLossRoot);
+    journal.Prepare(request,validation);
+    File.Delete(Path.Combine(stateChangeHeadLossRoot,"containment-state-change-journal.head.json"));
+
+    rejected=false;try
+    {
+        _=new ContainmentStateChangeJournal(stateChangeHeadLossRoot,createIfMissing:false);
+    }
+    catch(InvalidDataException){rejected=true;}
+    Check(rejected,"state-change journal fails closed when durable head sentinel is missing");
+}
+finally
+{
+    if(Directory.Exists(stateChangeHeadLossRoot))
+        Directory.Delete(stateChangeHeadLossRoot,true);
+}
+
+var stateChangeDataLossRoot=Path.Combine(Path.GetTempPath(),"RansomGuard-StateChangeDataLoss-"+Guid.NewGuid().ToString("N"));
+try
+{
+    var binding=ActuationBinding(
+        authorizationId:Guid.NewGuid().ToString("N"),
+        caseId:"case-state-change-data-loss",
+        evaluatedUtc:now,
+        expiresUtc:now.AddSeconds(5));
+    var validation=ContainmentActuationPolicy.Evaluate(
+        ActuationInput(binding:binding,nowUtc:now.AddSeconds(1)));
+    var request=new ContainmentActuationRequest(Guid.NewGuid().ToString("N"),binding,now.AddSeconds(1));
+    var journal=new ContainmentStateChangeJournal(stateChangeDataLossRoot);
+    journal.Prepare(request,validation);
+    File.Delete(journal.JournalPath);
+
+    rejected=false;try
+    {
+        _=new ContainmentStateChangeJournal(stateChangeDataLossRoot,createIfMissing:false);
+    }
+    catch(InvalidDataException){rejected=true;}
+    Check(rejected,"state-change journal fails closed when journal data disappears but durable head remains");
+}
+finally
+{
+    if(Directory.Exists(stateChangeDataLossRoot))
+        Directory.Delete(stateChangeDataLossRoot,true);
+}
+
 var actuatorRoot=Path.Combine(Path.GetTempPath(),"RansomGuard-Actuator-"+Guid.NewGuid().ToString("N"));
 try
 {

@@ -132,10 +132,19 @@ if($deleteText -match '\b(File\.Delete|Directory\.Delete|File\.Move|Directory\.M
 
 $executorText=Get-Content -LiteralPath $executor -Raw
 foreach($required in @(
-    'RollbackRecoveryPlanner.Build(repositoryFull, requestedPlan.SessionId)',
+    'RollbackRecoveryPlanner.Build(',
+    'createIfMissing: false, verifyRepositoryAll: false',
+    'new RollbackRepository(repositoryFull, createIfMissing: false)',
+    'repository.VerifySession(current.SessionId)',
+    'new RangeRollbackStore(rangeRoot, createIfMissing: false)',
     'ValidateRequestedPlan(requestedPlan, current, repositoryFull)',
     'current.Actions.Where(x => x.State == RecoveryActionState.Ready)',
+    'ComputeExpectedRecoveryAsync',
     'RestoreToNewCopyAsync',
+    'ExpectedLength',
+    'ExpectedSha256',
+    'Recovered copy length mismatch',
+    'Recovered copy SHA-256 does not match the pre-output evidence expectation',
     'Recovery output root already exists',
     'Recovery output root must remain outside the rollback repository',
     'Recovery plan is stale or does not match the currently validated rollback evidence',
@@ -236,7 +245,12 @@ foreach($required in @(
     'authoritative DELETE plus observed pathname absence is topology review, never automatic recreation',
     'lost DELETE disposition completion with restart absence evidence remains review-only',
     'cleanup-only DELETE evidence remains blocked until pathname topology is proven',
-    'stale recovery plan is rejected before any output is created'
+    'stale recovery plan is rejected before any output is created',
+    'existing recovery output root refuses overwrite',
+    'reparse recovery destination is refused',
+    'copy-out executor leaves damaged live sources untouched',
+    'recovery output length and SHA-256 match evidence expectations',
+    'partial recovery failure is reported without undoing completed copies'
 )){
     if($testText -notmatch [regex]::Escape($required)){throw "Crash reconciliation recovery test invariant missing: $required"}
 }

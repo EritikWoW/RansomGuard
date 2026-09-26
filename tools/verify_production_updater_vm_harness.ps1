@@ -85,6 +85,7 @@ foreach($required in @(
     'rollbackTransactionId',
     'Expected exactly one new terminal RolledBack transaction',
     'forward-completed-transaction.json',
+    'forward-completed-audit.json',
     'previousImageRestored',
     'cleanupPassed',
     'PRODUCTION-UPDATER-ROLLBACK-EVIDENCE PASS'
@@ -100,6 +101,12 @@ foreach($required in @(
     'Assert-NoReparsePath $path'
 )){
     if($harness -notmatch [regex]::Escape($required)){throw "Updater rollback audit-rotation evidence invariant missing: $required"}
+}
+
+$forwardAuditCapture=$harness.IndexOf("'forward-completed-audit.json'",[StringComparison]::Ordinal)
+$firstUninstall=$harness.IndexOf("@('uninstall')",[StringComparison]::Ordinal)
+if($forwardAuditCapture -lt 0 -or $firstUninstall -lt 0 -or $forwardAuditCapture -ge $firstUninstall){
+    throw 'Updater qualification must capture exact ServiceUpdateCompleted audit evidence before the first uninstall removes the product data root.'
 }
 
 foreach($forbidden in @(

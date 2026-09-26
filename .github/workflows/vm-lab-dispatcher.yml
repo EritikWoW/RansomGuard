@@ -1573,7 +1573,7 @@ jobs:
         id: request
         shell: pwsh
         env:
-          COMMENT_BODY: \${{ github.event.comment.body }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           $ErrorActionPreference='Stop'
           $body=[string]$env:COMMENT_BODY
@@ -1586,10 +1586,10 @@ jobs:
       - name: Verify exact sources exist
         shell: pwsh
         env:
-          GH_TOKEN: \${{ github.token }}
-          GH_REPO: \${{ github.repository }}
-          CAMPAIGN_SHA: \${{ steps.request.outputs.campaign_sha }}
-          REPAIR_SHA: \${{ steps.request.outputs.repair_sha }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CAMPAIGN_SHA: ${{ steps.request.outputs.campaign_sha }}
+          REPAIR_SHA: ${{ steps.request.outputs.repair_sha }}
         run: |
           $ErrorActionPreference='Stop'
           foreach($sha in @($env:CAMPAIGN_SHA,$env:REPAIR_SHA)){
@@ -1600,10 +1600,10 @@ jobs:
       - name: Dispatch stale updater recovery quarantine
         shell: pwsh
         env:
-          GH_TOKEN: \${{ github.token }}
-          GH_REPO: \${{ github.repository }}
-          CAMPAIGN_SHA: \${{ steps.request.outputs.campaign_sha }}
-          REPAIR_SHA: \${{ steps.request.outputs.repair_sha }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CAMPAIGN_SHA: ${{ steps.request.outputs.campaign_sha }}
+          REPAIR_SHA: ${{ steps.request.outputs.repair_sha }}
         run: |
           $ErrorActionPreference='Stop'
           $payload=@{
@@ -1619,8 +1619,8 @@ jobs:
       - name: Record stale updater recovery quarantine dispatch
         shell: pwsh
         env:
-          CAMPAIGN_SHA: \${{ steps.request.outputs.campaign_sha }}
-          REPAIR_SHA: \${{ steps.request.outputs.repair_sha }}
+          CAMPAIGN_SHA: ${{ steps.request.outputs.campaign_sha }}
+          REPAIR_SHA: ${{ steps.request.outputs.repair_sha }}
         run: |
           Write-Host "Dispatched stale updater recovery quarantine campaign='$env:CAMPAIGN_SHA' repair='$env:REPAIR_SHA'."
 

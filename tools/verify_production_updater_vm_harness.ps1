@@ -79,6 +79,12 @@ foreach($required in @(
     'RolledBack',
     'ServiceUpdateCompleted',
     'ServiceUpdateRolledBack',
+    'Get-UpdateRecord',
+    'forwardTransactionId',
+    'baselineBeforeRollback',
+    'rollbackTransactionId',
+    'Expected exactly one new terminal RolledBack transaction',
+    'forward-completed-transaction.json',
     'previousImageRestored',
     'cleanupPassed',
     'PRODUCTION-UPDATER-ROLLBACK-EVIDENCE PASS'
@@ -132,6 +138,9 @@ foreach($required in @(
     'Dispatched production updater rollback VM qualification for exact SHA'
 )){
     if($dispatcher -notmatch [regex]::Escape($required)){throw "Updater rollback dispatcher invariant missing: $required"}
+}
+if($harness -match [regex]::Escape('Get-UpdateRecords $startedUtc')){
+    throw 'Updater qualification evidence must bind to exact transaction IDs, not a timestamp-only journal window.'
 }
 if($windowsCi -notmatch [regex]::Escape('verify_production_updater_vm_harness.ps1')){
     throw 'Windows CI must run the updater rollback source gate.'

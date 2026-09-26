@@ -239,8 +239,27 @@ public sealed class RangeRollbackStore
     /// Reconstructs a write-damaged file into a new copy by overlaying captured original blocks
     /// and restoring the original file length. This method never overwrites the damaged source.
     /// </summary>
-    public async Task<string> RestoreToNewCopyAsync(string damagedPath, string outputDirectory,
+    public Task<string> RestoreToNewCopyAsync(
+        string damagedPath,
+        string outputDirectory,
+        CancellationToken cancellationToken = default) =>
+        RestoreToNewCopyCoreAsync(damagedPath, outputDirectory, null, cancellationToken);
+
+    public Task<string> RestoreToNewCopyAsync(
+        string damagedPath,
+        string outputDirectory,
+        RangeRollbackRecoveryExpectation expectation,
         CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(expectation);
+        return RestoreToNewCopyCoreAsync(damagedPath, outputDirectory, expectation, cancellationToken);
+    }
+
+    private async Task<string> RestoreToNewCopyCoreAsync(
+        string damagedPath,
+        string outputDirectory,
+        RangeRollbackRecoveryExpectation? expectation,
+        CancellationToken cancellationToken)
     {
         var full = NormalizeSource(damagedPath);
         if (!_baselines.TryGetValue(full, out var baseline))
@@ -295,6 +314,18 @@ public sealed class RangeRollbackStore
                 output.SetLength(baseline.OriginalLength);
                 await output.FlushAsync(cancellationToken).ConfigureAwait(false);
                 output.Flush(true);
+            }
+
+            if (expectation is not null)
+            {
+                var tempInfo = new FileInfo(temp);
+                if (tempInfo.Length != expectation.ExpectedLength)
+                    throw new InvalidDataException(
+                        $"Recovered range temp length mismatch. expected={expectation.ExpectedLength} actual={tempInfo.Length}");
+                var tempSha = await HashFileAsync(temp, cancellationToken).ConfigureAwait(false);
+                if (!tempSha.Equals(expectation.ExpectedSha256, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException(
+                        "Recovered range temp SHA-256 does not match the pre-output expectation.");
             }
 
             File.Move(temp, destination);
@@ -468,6 +499,28 @@ public sealed class RangeRollbackStore
             throw new InvalidDataException("Range rollback object escapes the store root.");
         RejectReparse(full);
         return full;
+    }
+
+    private static async Task<string> HashFileAsync(
+        string path,
+        CancellationToken cancellationToken)
+    {
+        using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            1024 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[1024 * 1024];
+        while (true)
+        {
+            var read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            if (read == 0) break;
+            hash.AppendData(buffer, 0, read);
+        }
+        return Hex(hash.GetHashAndReset());
     }
 
     private static async Task ReadExactlyAsync(Stream stream, byte[] buffer, CancellationToken cancellationToken)

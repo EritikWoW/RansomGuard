@@ -12,7 +12,7 @@ public static class RollbackRecoveryPlanner
 {
     public const int Schema = 1;
 
-    public static RollbackRecoveryPlan Build(string repositoryRoot, string sessionId, bool createIfMissing = true)
+    public static RollbackRecoveryPlan Build(string repositoryRoot, string sessionId, bool createIfMissing = true, bool verifyRepositoryAll = true)
     {
         if (string.IsNullOrWhiteSpace(repositoryRoot))
             throw new ArgumentException("Rollback repository root is required.", nameof(repositoryRoot));
@@ -20,7 +20,8 @@ public static class RollbackRecoveryPlanner
             throw new ArgumentException("Rollback session id is required.", nameof(sessionId));
 
         var repository = new RollbackRepository(repositoryRoot, createIfMissing);
-        repository.VerifyAll();
+        if (verifyRepositoryAll) repository.VerifyAll();
+        else repository.VerifySession(sessionId);
         var store = repository.OpenSession(sessionId);
         store.VerifyAll();
 

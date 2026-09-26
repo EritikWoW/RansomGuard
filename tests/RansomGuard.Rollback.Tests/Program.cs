@@ -67,6 +67,7 @@ try
     Check(reopened.Captures.Count == 1, "journal rebuilds committed first-capture index");
     reopened.VerifyAll(); Check(true, "validated journal and object lengths");
     repo.VerifyAll(); Check(true, "repository validates all sessions");
+    repo.VerifySession("incident_a"); Check(true, "repository can validate one requested session independently");
 
     var duplicateOutputBlocked = false;
     try { await reopened.RestoreToNewCopyAsync(first, output); }

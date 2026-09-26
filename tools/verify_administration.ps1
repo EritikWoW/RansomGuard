@@ -43,6 +43,8 @@ foreach($required in @(
  'RollbackRepository',
  'RollbackRecoveryPlanner.Build',
  'createIfMissing: false',
+ 'verifyRepositoryAll: false',
+ 'repository.VerifySession',
  'RollbackSessionLifecycleState.Completed',
  'RollbackSessionLifecycleState.Faulted',
  'MaxSessions = 128',

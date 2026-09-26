@@ -60,68 +60,72 @@ public sealed class RollbackRepository
         .Select(Path.GetFileName).Where(x => !string.IsNullOrWhiteSpace(x)).Cast<string>()
         .Order(StringComparer.Ordinal).ToArray();
 
+    public void VerifySession(string sessionId)
+    {
+        ValidateSessionId(sessionId);
+        var store = OpenSession(sessionId);
+        store.VerifyAll();
+
+        var lifecycleRoot = Path.Combine(store.Root, "lifecycle-state");
+        if (Directory.Exists(lifecycleRoot))
+            new RollbackSessionLifecycleStore(store.Root).VerifyAll();
+
+        var rangeRoot = Path.Combine(store.Root, "write-cow");
+        if (Directory.Exists(rangeRoot))
+            new RangeRollbackStore(rangeRoot, createIfMissing: _createIfMissing).VerifyAll();
+
+        var createRoot = Path.Combine(store.Root, "create-state");
+        if (Directory.Exists(createRoot))
+        {
+            new CreateRollbackStore(createRoot, createIfMissing: _createIfMissing).VerifyAll();
+            new CreateOperationStore(createRoot, createIfMissing: _createIfMissing).VerifyAll();
+        }
+
+        var identityRoot = Path.Combine(store.Root, "identity-state");
+        if (Directory.Exists(identityRoot))
+            new FileIdentityStore(identityRoot, createIfMissing: _createIfMissing).VerifyAll();
+
+        var renameRoot = Path.Combine(store.Root, "rename-state");
+        if (Directory.Exists(renameRoot))
+            new RenameRollbackStore(renameRoot, createIfMissing: _createIfMissing).VerifyAll();
+
+        var truncateRoot = Path.Combine(store.Root, "truncate-state");
+        if (Directory.Exists(truncateRoot))
+            new TruncateOperationStore(truncateRoot, createIfMissing: _createIfMissing).VerifyAll();
+
+        var deleteRoot = Path.Combine(store.Root, "delete-state");
+        if (Directory.Exists(deleteRoot))
+            new DeleteOperationStore(deleteRoot, createIfMissing: _createIfMissing).VerifyAll();
+
+        var restartRoot = Path.Combine(store.Root, "restart-state");
+        if (Directory.Exists(restartRoot))
+            new RestartReconciliationStore(restartRoot, createIfMissing: _createIfMissing).VerifyAll();
+
+        var pagingRoot = Path.Combine(store.Root, "paging-state");
+        if (Directory.Exists(pagingRoot))
+            new PagingWriteEvidenceStore(pagingRoot, createIfMissing: _createIfMissing).VerifyAll();
+
+        var sectionRoot = Path.Combine(store.Root, "section-state");
+        if (Directory.Exists(sectionRoot))
+            new WritableSectionEvidenceStore(sectionRoot, createIfMissing: _createIfMissing).VerifyAll();
+
+        var activationRoot = Path.Combine(store.Root, "activation-state");
+        if (Directory.Exists(activationRoot))
+            new ActivationPreflightStore(activationRoot, createIfMissing: _createIfMissing).VerifyAll();
+
+        var topologyRoot = Path.Combine(store.Root, "activation-topology-state");
+        if (Directory.Exists(topologyRoot))
+            new ActivationTopologyStore(topologyRoot, createIfMissing: _createIfMissing).VerifyAll();
+
+        var containmentRoot = Path.Combine(store.Root, "containment-state");
+        if (Directory.Exists(containmentRoot))
+            new ContainmentEvidenceStore(containmentRoot, createIfMissing: _createIfMissing).VerifyAll();
+    }
+
     public void VerifyAll()
     {
         foreach (var id in SessionIds())
-        {
-            var store = OpenSession(id);
-            store.VerifyAll();
-
-            var lifecycleRoot = Path.Combine(store.Root, "lifecycle-state");
-            if (Directory.Exists(lifecycleRoot))
-                new RollbackSessionLifecycleStore(store.Root).VerifyAll();
-
-            var rangeRoot = Path.Combine(store.Root, "write-cow");
-            if (Directory.Exists(rangeRoot))
-                new RangeRollbackStore(rangeRoot, createIfMissing: _createIfMissing).VerifyAll();
-
-            var createRoot = Path.Combine(store.Root, "create-state");
-            if (Directory.Exists(createRoot))
-            {
-                new CreateRollbackStore(createRoot, createIfMissing: _createIfMissing).VerifyAll();
-                new CreateOperationStore(createRoot, createIfMissing: _createIfMissing).VerifyAll();
-            }
-
-            var identityRoot = Path.Combine(store.Root, "identity-state");
-            if (Directory.Exists(identityRoot))
-                new FileIdentityStore(identityRoot, createIfMissing: _createIfMissing).VerifyAll();
-
-            var renameRoot = Path.Combine(store.Root, "rename-state");
-            if (Directory.Exists(renameRoot))
-                new RenameRollbackStore(renameRoot, createIfMissing: _createIfMissing).VerifyAll();
-
-            var truncateRoot = Path.Combine(store.Root, "truncate-state");
-            if (Directory.Exists(truncateRoot))
-                new TruncateOperationStore(truncateRoot, createIfMissing: _createIfMissing).VerifyAll();
-
-            var deleteRoot = Path.Combine(store.Root, "delete-state");
-            if (Directory.Exists(deleteRoot))
-                new DeleteOperationStore(deleteRoot, createIfMissing: _createIfMissing).VerifyAll();
-
-            var restartRoot = Path.Combine(store.Root, "restart-state");
-            if (Directory.Exists(restartRoot))
-                new RestartReconciliationStore(restartRoot, createIfMissing: _createIfMissing).VerifyAll();
-
-            var pagingRoot = Path.Combine(store.Root, "paging-state");
-            if (Directory.Exists(pagingRoot))
-                new PagingWriteEvidenceStore(pagingRoot, createIfMissing: _createIfMissing).VerifyAll();
-
-            var sectionRoot = Path.Combine(store.Root, "section-state");
-            if (Directory.Exists(sectionRoot))
-                new WritableSectionEvidenceStore(sectionRoot, createIfMissing: _createIfMissing).VerifyAll();
-
-            var activationRoot = Path.Combine(store.Root, "activation-state");
-            if (Directory.Exists(activationRoot))
-                new ActivationPreflightStore(activationRoot, createIfMissing: _createIfMissing).VerifyAll();
-
-            var topologyRoot = Path.Combine(store.Root, "activation-topology-state");
-            if (Directory.Exists(topologyRoot))
-                new ActivationTopologyStore(topologyRoot, createIfMissing: _createIfMissing).VerifyAll();
-
-            var containmentRoot = Path.Combine(store.Root, "containment-state");
-            if (Directory.Exists(containmentRoot))
-                new ContainmentEvidenceStore(containmentRoot, createIfMissing: _createIfMissing).VerifyAll();
-        }
+            VerifySession(id);
 
         var retentionRoot = Path.Combine(_root, "retention-state");
         if (Directory.Exists(retentionRoot))

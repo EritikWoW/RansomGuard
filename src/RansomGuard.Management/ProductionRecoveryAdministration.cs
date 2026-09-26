@@ -66,7 +66,6 @@ public static class ProductionRecoveryAdministration
             return [];
 
         var repository = new RollbackRepository(rollbackRoot, createIfMissing: false);
-        repository.VerifyAll();
 
         var ids = repository.SessionIds()
             .Where(IsProductionSessionId)
@@ -76,7 +75,11 @@ public static class ProductionRecoveryAdministration
         if (ids.Length > MaxSessions)
             throw new IOException($"Recovery inventory exceeds the bounded session limit ({MaxSessions}). Run reviewed retention/archive maintenance before planning recovery.");
 
-        return ids.Select(id => BuildSessionSummary(repository, id)).ToArray();
+        return ids.Select(id =>
+        {
+            repository.VerifySession(id);
+            return BuildSessionSummary(repository, id);
+        }).ToArray();
     }
 
     public static ProductionRecoveryPlanSummary BuildPlan(string sessionId)
@@ -90,11 +93,11 @@ public static class ProductionRecoveryAdministration
             ?? throw new DirectoryNotFoundException("Rollback repository does not exist.");
 
         var repository = new RollbackRepository(rollbackRoot, createIfMissing: false);
-        repository.VerifyAll();
 
         if (!repository.SessionIds().Contains(sessionId, StringComparer.Ordinal))
             throw new DirectoryNotFoundException("Production rollback session not found: " + sessionId);
 
+        repository.VerifySession(sessionId);
         var session = repository.OpenSession(sessionId);
         var lifecycle = new RollbackSessionLifecycleStore(session.Root);
         lifecycle.VerifyAll();
@@ -104,7 +107,7 @@ public static class ProductionRecoveryAdministration
             throw new InvalidOperationException(
                 $"Recovery planning is refused for lifecycle state '{snapshot.State}'. Resume/resolve the production session before operator recovery planning.");
 
-        var plan = RollbackRecoveryPlanner.Build(rollbackRoot, sessionId, createIfMissing: false);
+        var plan = RollbackRecoveryPlanner.Build(rollbackRoot, sessionId, createIfMissing: false, verifyRepositoryAll: false);
         var actions = plan.Actions
             .Take(MaxActions)
             .Select(x => new ProductionRecoveryActionSummary(

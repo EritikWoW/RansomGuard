@@ -42,8 +42,92 @@ foreach($required in @(
 )){
     if($workflow -notmatch [regex]::Escape($required)){throw "Updater rollback workflow invariant missing: $required"}
 }
-if($workflow -match '(?im)^\s*continue-on-error\s*:\s*true\s*$'){
+if($workflow -match '(?im)^\s*continue-on-error\s*:\s*true\s*
+foreach($required in @(
+    'expect-review-failure',
+    'bytes do not match',
+    'review-update',
+    'update',
+    'replay/downgrade rejected',
+    'expect-update-failure',
+    'rolled back to the previous verified image',
+    'Completed',
+    'RolledBack',
+    'ServiceUpdateCompleted',
+    'ServiceUpdateRolledBack',
+    'previousImageRestored',
+    'cleanupPassed',
+    'PRODUCTION-UPDATER-ROLLBACK-EVIDENCE PASS'
+)){
+    if($harness -notmatch [regex]::Escape($required)){throw "Updater rollback harness invariant missing: $required"}
+}
+
+foreach($forbidden in @(
+    '\bStop-Process\b',
+    '\btaskkill(?:\.exe)?\b',
+    '\bTerminateProcess\b',
+    '\bRestart-Computer\b',
+    '\bshutdown(?:\.exe)?\b'
+)){
+    if($harness -match $forbidden){throw "Updater rollback harness contains forbidden recovery shortcut: $forbidden"}
+}
+
+foreach($required in @(
+    'ServiceAdministration.Install',
+    'ServiceAdministration.ReviewUpdateInput',
+    'ServiceAdministration.Update',
+    'ServiceAdministration.Execute',
+    '"INSTALL"',
+    '"UPDATE"',
+    '"UNINSTALL"'
+)){
+    if($helper -notmatch [regex]::Escape($required)){throw "Updater qualification helper invariant missing: $required"}
+}
+
+if($failure -notmatch 'intentional SCM startup failure'){
+    throw 'Updater failure fixture must remain an explicit intentional startup-failure target.'
+}
+
+foreach($required in @(
+    'EnsureNoIncompleteUpdate',
+    'ServiceUpdatePolicy.IsForwardVersion',
+    'ChangeServiceImage(service, targetImage)',
+    'scmCommitted = true',
+    '"ScmCommitted"',
+    '"RollbackStarting"',
+    '"RollbackScmCommitted"',
+    '"RolledBack"',
+    'VerifyInstalledImage(previousImage)'
+)){
+    if($updater -notmatch [regex]::Escape($required)){throw "Transactional updater invariant missing: $required"}
+}
+
+foreach($required in @(
+    '/run-production-updater-rollback-vm ',
+    'production-updater-rollback-vm.yml',
+    'Dispatched production updater rollback VM qualification for exact SHA'
+)){
+    if($dispatcher -notmatch [regex]::Escape($required)){throw "Updater rollback dispatcher invariant missing: $required"}
+}
+if($windowsCi -notmatch [regex]::Escape('verify_production_updater_vm_harness.ps1')){
+    throw 'Windows CI must run the updater rollback source gate.'
+}
+
+Write-Host 'Production updater rollback VM harness gate PASSED: exact-SHA disposable VM, real ServiceAdministration path, tampered hash/replay rejection, forward update, post-commit failure and deterministic rollback evidence.'
+){
     throw 'Updater rollback workflow must not continue after qualification failure.'
+}
+
+if($workflow -match [regex]::Escape('BaseIntermediateOutputPath=obj-updater-') -or
+   $workflow -match [regex]::Escape('BaseOutputPath=bin-updater-')){
+    throw 'Updater qualification must not place custom obj/bin roots beside SDK default roots; generated AssemblyInfo can be globbed as source.'
+}
+foreach($required in @(
+    'BaseIntermediateOutputPath=obj\updater-old\',
+    'BaseIntermediateOutputPath=obj\updater-current\',
+    'BaseIntermediateOutputPath=obj\updater-failure\'
+)){
+    if($workflow -notmatch [regex]::Escape($required)){throw "Updater build-isolation invariant missing: $required"}
 }
 
 foreach($required in @(

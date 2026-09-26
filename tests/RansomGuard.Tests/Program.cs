@@ -545,6 +545,127 @@ finally
         Directory.Delete(actuationLedgerRoot,true);
 }
 
+
+var suspendCoordinatorRoot=Path.Combine(Path.GetTempPath(),"RansomGuard-SuspendCoordinator-"+Guid.NewGuid().ToString("N"));
+try
+{
+    var suspendNow=DateTime.UtcNow;
+    var suspendProcess=new ProcessKey(5252,suspendNow.AddMinutes(-1).ToFileTimeUtc());
+    var suspendPath=@"C:\Apps\RansomGuard-Containment-Fixture.exe";
+    var suspendHash=new string('D',64);
+    ContainmentActuationBinding SuspendBinding(string authorizationId,string caseId)=>new(
+        authorizationId,
+        caseId,
+        suspendNow,
+        suspendNow.AddSeconds(10),
+        suspendProcess,
+        suspendPath,
+        suspendHash,
+        containmentProtected.ObservedUtc,
+        containmentEligibleDecision);
+
+    var successBinding=SuspendBinding(Guid.NewGuid().ToString("N"),"case-suspend-success");
+    var successRequest=new ContainmentActuationRequest(
+        Guid.NewGuid().ToString("N"),successBinding,suspendNow.AddMilliseconds(10));
+    var successLedger=new ContainmentActuationLedger(Path.Combine(suspendCoordinatorRoot,"success"));
+    var successPlatform=new FakeContainmentSuspendPlatform(
+        new(suspendProcess,suspendPath,suspendHash,true,false,false,false),
+        new uint[][]{new uint[]{101,102}});
+    var successCoordinator=new ContainmentSuspendCoordinator(
+        successLedger,successPlatform,new(16,4,TimeSpan.FromSeconds(2)));
+
+    var suspendedResult=successCoordinator.Suspend(successRequest,containmentProtected,true);
+    Check(suspendedResult.State==ContainmentActuationResultState.Suspended.ToString()&&
+          suspendedResult.OwnedSuspendCount==2&&
+          successPlatform.Suspended.SetEquals(new uint[]{101,102}),
+        "bounded coordinator suspends only the exact fake target threads after durable prepare");
+
+    var suspendCallsAfterSuccess=successPlatform.SuspendCalls;
+    var idempotentSuspend=successCoordinator.Suspend(successRequest,containmentProtected,true);
+    Check(idempotentSuspend.State==ContainmentActuationResultState.Suspended.ToString()&&
+          successPlatform.SuspendCalls==suspendCallsAfterSuccess,
+        "exact suspended request retry does not add another suspend increment");
+
+    var resumedResult=successCoordinator.ResumeOutstanding(successRequest.RequestId);
+    Check(resumedResult.State==ContainmentActuationResultState.Resumed.ToString()&&
+          resumedResult.OwnedSuspendCount==0&&
+          successPlatform.Suspended.Count==0,
+        "resume recovery removes only coordinator-owned fake suspend increments");
+
+    var failureBinding=SuspendBinding(Guid.NewGuid().ToString("N"),"case-suspend-partial-failure");
+    var failureRequest=new ContainmentActuationRequest(
+        Guid.NewGuid().ToString("N"),failureBinding,suspendNow.AddMilliseconds(20));
+    var failureLedger=new ContainmentActuationLedger(Path.Combine(suspendCoordinatorRoot,"partial"));
+    var failurePlatform=new FakeContainmentSuspendPlatform(
+        new(suspendProcess,suspendPath,suspendHash,true,false,false,false),
+        new uint[][]{new uint[]{201,202}});
+    failurePlatform.FailSuspendThread=202;
+    var failureCoordinator=new ContainmentSuspendCoordinator(
+        failureLedger,failurePlatform,new(16,4,TimeSpan.FromSeconds(2)));
+    rejected=false;try{failureCoordinator.Suspend(failureRequest,containmentProtected,true);}
+    catch(ContainmentSuspendException){rejected=true;}
+    Check(rejected&&failurePlatform.Suspended.Count==0&&
+          failureLedger.ResultFor(failureRequest.RequestId).State==ContainmentActuationResultState.FailedRecovered.ToString(),
+        "partial suspend failure rolls back only the successfully owned fake increment");
+
+    var cancelBinding=SuspendBinding(Guid.NewGuid().ToString("N"),"case-suspend-cancel");
+    var cancelRequest=new ContainmentActuationRequest(
+        Guid.NewGuid().ToString("N"),cancelBinding,suspendNow.AddMilliseconds(30));
+    var cancelLedger=new ContainmentActuationLedger(Path.Combine(suspendCoordinatorRoot,"cancel"));
+    using var cancelSource=new CancellationTokenSource();
+    var cancelPlatform=new FakeContainmentSuspendPlatform(
+        new(suspendProcess,suspendPath,suspendHash,true,false,false,false),
+        new uint[][]{new uint[]{301,302}});
+    cancelPlatform.AfterSuccessfulSuspend=threadId=>{if(threadId==301)cancelSource.Cancel();};
+    var cancelCoordinator=new ContainmentSuspendCoordinator(
+        cancelLedger,cancelPlatform,new(16,4,TimeSpan.FromSeconds(2)));
+    rejected=false;try{cancelCoordinator.Suspend(cancelRequest,containmentProtected,true,cancelSource.Token);}
+    catch(OperationCanceledException){rejected=true;}
+    Check(rejected&&cancelPlatform.Suspended.Count==0&&
+          cancelLedger.ResultFor(cancelRequest.RequestId).State==ContainmentActuationResultState.FailedRecovered.ToString(),
+        "cancellation after an owned increment cannot strand the fake target suspension");
+
+    var churnBinding=SuspendBinding(Guid.NewGuid().ToString("N"),"case-suspend-thread-churn");
+    var churnRequest=new ContainmentActuationRequest(
+        Guid.NewGuid().ToString("N"),churnBinding,suspendNow.AddMilliseconds(40));
+    var churnLedger=new ContainmentActuationLedger(Path.Combine(suspendCoordinatorRoot,"churn"));
+    var churnPlatform=new FakeContainmentSuspendPlatform(
+        new(suspendProcess,suspendPath,suspendHash,true,false,false,false),
+        new uint[][]{
+            new uint[]{401},
+            new uint[]{401,402},
+            new uint[]{401,402,403},
+            new uint[]{401,402,403}
+        });
+    var churnCoordinator=new ContainmentSuspendCoordinator(
+        churnLedger,churnPlatform,new(16,2,TimeSpan.FromSeconds(2)));
+    rejected=false;try{churnCoordinator.Suspend(churnRequest,containmentProtected,true);}
+    catch(ContainmentSuspendException ex) when(ex.ReasonCode=="ThreadSetNotStable"){rejected=true;}
+    Check(rejected&&churnPlatform.Suspended.Count==0&&
+          churnLedger.ResultFor(churnRequest.RequestId).State==ContainmentActuationResultState.FailedRecovered.ToString(),
+        "unstable target thread set fails closed and rolls back owned increments");
+
+    var deniedBinding=SuspendBinding(Guid.NewGuid().ToString("N"),"case-suspend-critical");
+    var deniedRequest=new ContainmentActuationRequest(
+        Guid.NewGuid().ToString("N"),deniedBinding,suspendNow.AddMilliseconds(50));
+    var deniedLedger=new ContainmentActuationLedger(Path.Combine(suspendCoordinatorRoot,"denied"));
+    var deniedPlatform=new FakeContainmentSuspendPlatform(
+        new(suspendProcess,suspendPath,suspendHash,true,true,false,false),
+        new uint[][]{new uint[]{501}});
+    var deniedCoordinator=new ContainmentSuspendCoordinator(
+        deniedLedger,deniedPlatform,new(16,4,TimeSpan.FromSeconds(2)));
+    rejected=false;try{deniedCoordinator.Suspend(deniedRequest,containmentProtected,true);}
+    catch(ContainmentSuspendException ex) when(ex.ReasonCode=="ActuationRevalidationDenied"){rejected=true;}
+    Check(rejected&&!deniedLedger.IsAuthorizationConsumed(deniedBinding.AuthorizationId)&&
+          deniedPlatform.SuspendCalls==0,
+        "critical live target is denied before durable prepare or any suspend operation");
+}
+finally
+{
+    if(Directory.Exists(suspendCoordinatorRoot))
+        Directory.Delete(suspendCoordinatorRoot,true);
+}
+
 var productionHash=new string('A',64);
 var productionPackage=new ProtectionPackageDescriptor(
     1,"ProductionProtection","0.8.3.0",18,"RansomGuard","385201",
@@ -633,3 +754,71 @@ var healthRoundTrip = System.Text.Json.JsonSerializer.Deserialize<MonitoringHeal
     System.Text.Json.JsonSerializer.Serialize(etwFailure));
 Check(healthRoundTrip == etwFailure, "ETW failed status round-trips without losing error identity");
 Console.WriteLine($"All {count} policy tests passed. These are not Windows ETW/Authenticode integration tests.");
+
+
+sealed class FakeContainmentSuspendPlatform : IContainmentSuspendPlatform
+{
+    private readonly ContainmentSuspendTargetSnapshot _target;
+    private readonly Queue<uint[]> _snapshots;
+    public HashSet<uint> Suspended { get; } = new();
+    public uint? FailSuspendThread { get; set; }
+    public uint? FailResumeThread { get; set; }
+    public Action<uint>? AfterSuccessfulSuspend { get; set; }
+    public int SuspendCalls { get; private set; }
+    public int ResumeCalls { get; private set; }
+
+    public FakeContainmentSuspendPlatform(
+        ContainmentSuspendTargetSnapshot target,
+        IEnumerable<uint[]> snapshots)
+    {
+        _target=target;
+        _snapshots=new Queue<uint[]>(snapshots.Select(x=>x.ToArray()));
+    }
+
+    public IContainmentSuspendSession OpenExact(ProcessKey expectedProcess)
+    {
+        if(expectedProcess!=_target.Process)
+            throw new ContainmentSuspendException("ProcessIdentityChanged","Fake platform exact process mismatch.");
+        return new Session(this);
+    }
+
+    private sealed class Session : IContainmentSuspendSession
+    {
+        private readonly FakeContainmentSuspendPlatform _owner;
+        public Session(FakeContainmentSuspendPlatform owner)=>_owner=owner;
+        public ContainmentSuspendTargetSnapshot Target=>_owner._target;
+
+        public IReadOnlyList<uint> EnumerateThreadIds(int maxThreads)
+        {
+            var snapshot=_owner._snapshots.Count>0?_owner._snapshots.Dequeue():
+                (_owner.Suspended.Count>0?_owner.Suspended.OrderBy(x=>x).ToArray():new uint[]{1});
+            if(snapshot.Length>maxThreads)
+                throw new ContainmentSuspendException("ThreadLimitExceeded","Fake thread bound exceeded.");
+            return snapshot;
+        }
+
+        public ContainmentThreadOperationResult SuspendOne(uint threadId)
+        {
+            _owner.SuspendCalls++;
+            if(_owner.FailSuspendThread==threadId)
+                return ContainmentThreadOperationResult.Failure("SyntheticSuspendFailure");
+            if(!_owner.Suspended.Add(threadId))
+                return ContainmentThreadOperationResult.Failure("SyntheticDuplicateSuspend");
+            _owner.AfterSuccessfulSuspend?.Invoke(threadId);
+            return ContainmentThreadOperationResult.Success();
+        }
+
+        public ContainmentThreadOperationResult ResumeOne(uint threadId)
+        {
+            _owner.ResumeCalls++;
+            if(_owner.FailResumeThread==threadId)
+                return ContainmentThreadOperationResult.Failure("SyntheticResumeFailure");
+            if(!_owner.Suspended.Remove(threadId))
+                return ContainmentThreadOperationResult.Failure("SyntheticSuspendNotOwned");
+            return ContainmentThreadOperationResult.Success();
+        }
+
+        public void Dispose(){ }
+    }
+}
+

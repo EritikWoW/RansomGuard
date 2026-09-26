@@ -647,8 +647,8 @@ try
         new ContainmentActuatorOptions(8,2,TimeSpan.FromSeconds(2)));
     Check(reuseResult.State==ContainmentActuationResultState.FailedRecovered.ToString()&&
           reuseResult.OwnedSuspendCount==0&&
-          reuseResult.ReasonCodes.Contains("ThreadSetUnstable",StringComparer.Ordinal),
-        "bounded actuator refuses an unstable thread set instead of treating a reused TID as the owned thread");
+          reuseResult.ReasonCodes.Contains("ThreadIdentityChanged",StringComparer.Ordinal),
+        "bounded actuator fails closed and recovers when a TID is reused with a different creation identity");
 
     var deniedAuthorizationId=Guid.NewGuid().ToString("N");
     var deniedRequestId=Guid.NewGuid().ToString("N");

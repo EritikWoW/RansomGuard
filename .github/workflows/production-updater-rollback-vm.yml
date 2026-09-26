@@ -81,6 +81,16 @@ jobs:
           $failure=Join-Path $base 'failure'
           foreach($p in @($old,$current,$failure)){New-Item -ItemType Directory -Path $p -Force | Out-Null}
 
+          function Remove-QualificationBuildFamily([string]$name){
+            $roots=@(
+              Get-ChildItem -LiteralPath '.\src','.\qualification' -Directory -Recurse -Force |
+                Where-Object { $_.Name -eq $name -and $_.Parent -and $_.Parent.Name -in @('obj','bin') }
+            )
+            foreach($root in $roots){
+              Remove-Item -LiteralPath $root.FullName -Recurse -Force
+            }
+          }
+
           $oldServiceProject='.\src\RansomGuard.Service\RansomGuard.Service.csproj'
           dotnet restore $oldServiceProject --locked-mode -r win-x64 -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj\updater-old\
           if($LASTEXITCODE -ne 0){throw 'Old service restore failed.'}
@@ -91,6 +101,7 @@ jobs:
           if($LASTEXITCODE -ne 0){throw 'Old administration helper restore failed.'}
           dotnet publish $helperProject -c Release -r win-x64 --self-contained true --no-restore -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj\updater-old\ -p:BaseOutputPath=bin\updater-old\ -o (Join-Path $old 'helper')
           if($LASTEXITCODE -ne 0){throw 'Old administration helper publish failed.'}
+          Remove-QualificationBuildFamily 'updater-old'
 
           $currentServiceProject='.\src\RansomGuard.Service\RansomGuard.Service.csproj'
           dotnet restore $currentServiceProject --locked-mode -r win-x64 -p:BaseIntermediateOutputPath=obj\updater-current\
@@ -101,6 +112,7 @@ jobs:
           if($LASTEXITCODE -ne 0){throw 'Current administration helper restore failed.'}
           dotnet publish $helperProject -c Release -r win-x64 --self-contained true --no-restore -p:BaseIntermediateOutputPath=obj\updater-current\ -p:BaseOutputPath=bin\updater-current\ -o (Join-Path $current 'helper')
           if($LASTEXITCODE -ne 0){throw 'Current administration helper publish failed.'}
+          Remove-QualificationBuildFamily 'updater-current'
 
           $failureProject='.\qualification\RansomGuard.UpdaterFailureFixture\RansomGuard.UpdaterFailureFixture.csproj'
           dotnet restore $failureProject --locked-mode -r win-x64 -p:BaseIntermediateOutputPath=obj\updater-failure\

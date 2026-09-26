@@ -25,13 +25,29 @@ public sealed class RollbackStore
     public string Root => _root;
     public string JournalPath => _journal;
 
-    public RollbackStore(string root)
+    public RollbackStore(string root, bool createIfMissing = true)
     {
         if (string.IsNullOrWhiteSpace(root)) throw new ArgumentException("Rollback root is required.", nameof(root));
         _root = Path.GetFullPath(root);
         _objects = Path.Combine(_root, "objects");
         _journal = Path.Combine(_root, "journal.jsonl");
-        Directory.CreateDirectory(_objects);
+        if (createIfMissing)
+        {
+            Directory.CreateDirectory(_objects);
+        }
+        else
+        {
+            if (!Directory.Exists(_root))
+            {
+                if (File.Exists(_root)) throw new IOException("Rollback root is not a directory: " + _root);
+                throw new DirectoryNotFoundException("Rollback root does not exist: " + _root);
+            }
+            if (!Directory.Exists(_objects))
+            {
+                if (File.Exists(_objects)) throw new IOException("Rollback objects path is not a directory: " + _objects);
+                throw new DirectoryNotFoundException("Rollback objects directory does not exist: " + _objects);
+            }
+        }
         RejectReparse(_root);
         RejectReparse(_objects);
         LoadAndValidateJournal();

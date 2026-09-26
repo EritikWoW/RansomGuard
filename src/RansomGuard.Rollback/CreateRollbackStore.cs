@@ -27,14 +27,22 @@ public sealed class CreateRollbackStore
     public IReadOnlyCollection<CreateRollbackBaseline> Baselines =>
         _baselines.Values.OrderBy(x => x.Sequence).ToArray();
 
-    public CreateRollbackStore(string root)
+    public CreateRollbackStore(string root, bool createIfMissing = true)
     {
         if (string.IsNullOrWhiteSpace(root))
             throw new ArgumentException("Create rollback root is required.", nameof(root));
 
         _root = Path.GetFullPath(root);
         _journal = Path.Combine(_root, "create-journal.jsonl");
-        Directory.CreateDirectory(_root);
+        if (createIfMissing)
+        {
+            Directory.CreateDirectory(_root);
+        }
+        else if (!Directory.Exists(_root))
+        {
+            if (File.Exists(_root)) throw new IOException("CreateRollbackStore root is not a directory: " + _root);
+            throw new DirectoryNotFoundException("CreateRollbackStore root does not exist: " + _root);
+        }
         RejectReparse(_root);
         LoadAndValidateJournal();
     }

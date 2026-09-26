@@ -414,6 +414,137 @@ actuationDecision=ContainmentActuationPolicy.Evaluate(ActuationInput(
 Check(!actuationDecision.Ready&&actuationDecision.Reasons.Contains("AuthorizationNotEligible"),
     "a bare or denied authorization decision cannot become an actuator capability");
 
+
+var actuationLedgerRoot=Path.Combine(Path.GetTempPath(),"RansomGuard-ActuationLedger-"+Guid.NewGuid().ToString("N"));
+try
+{
+    var ledgerAuthorizationId=Guid.NewGuid().ToString("N");
+    var ledgerRequestId=Guid.NewGuid().ToString("N");
+    var ledgerBinding=ActuationBinding(
+        authorizationId:ledgerAuthorizationId,
+        caseId:"case-ledger-001",
+        evaluatedUtc:now,
+        expiresUtc:now.AddSeconds(5));
+    var ledgerValidation=ContainmentActuationPolicy.Evaluate(
+        ActuationInput(binding:ledgerBinding,nowUtc:now.AddSeconds(1)));
+    Check(ledgerValidation.Ready&&
+          DecisionPolicy.HashEqual(ledgerValidation.BindingFingerprint,ContainmentActuationPolicy.ComputeBindingFingerprint(ledgerBinding)),
+        "ledger fixture uses a current Ready validation bound to the exact capability fingerprint");
+
+    var ledger=new ContainmentActuationLedger(actuationLedgerRoot);
+    var ledgerRequest=new ContainmentActuationRequest(
+        ledgerRequestId,
+        ledgerBinding,
+        now.AddSeconds(1));
+    rejected=false;try
+    {
+        ledger.Prepare(
+            ledgerRequest,
+            ledgerValidation with{BindingFingerprint=new string('F',64)});
+    }
+    catch(InvalidOperationException ex) when(ex.Message=="ActuationValidationBindingMismatch"){rejected=true;}
+    Check(rejected,"ledger refuses a Ready decision from a different actuation binding");
+
+    var prepared=ledger.Prepare(ledgerRequest,ledgerValidation);
+    Check(prepared.Phase==ContainmentActuationLedgerPhase.Prepared&&
+          ledger.IsAuthorizationConsumed(ledgerAuthorizationId),
+        "durable actuation prepare consumes the exact authorization id");
+
+    var preparedAgain=ledger.Prepare(ledgerRequest,ledgerValidation);
+    Check(preparedAgain.Sequence==prepared.Sequence,
+        "exact actuation prepare retry is idempotent");
+
+    rejected=false;try
+    {
+        ledger.Prepare(
+            ledgerRequest with{RequestId=Guid.NewGuid().ToString("N")},
+            ledgerValidation);
+    }
+    catch(InvalidOperationException ex) when(ex.Message=="AuthorizationAlreadyConsumed"){rejected=true;}
+    Check(rejected,"one authorization id cannot prepare two actuation requests");
+
+    rejected=false;try{ledger.RecordResumeOwned(ledgerRequestId,9001);}catch(InvalidOperationException){rejected=true;}
+    Check(rejected,"resume cannot claim ownership before suspend completion or failure");
+
+    var owned1=ledger.RecordSuspendOwned(ledgerRequestId,9001);
+    var owned1Again=ledger.RecordSuspendOwned(ledgerRequestId,9001);
+    var owned2=ledger.RecordSuspendOwned(ledgerRequestId,9002);
+    Check(owned1.Sequence==owned1Again.Sequence&&owned2.Sequence>owned1.Sequence,
+        "owned suspend increments are durable and exact retries are idempotent");
+
+    var inProgress=ledger.ResultFor(ledgerRequestId);
+    Check(inProgress.State==ContainmentActuationResultState.InProgress.ToString()&&inProgress.OwnedSuspendCount==2,
+        "actuation result exposes outstanding owned suspend increments");
+
+    var suspendCompletedRecord=ledger.RecordSuspendCompleted(ledgerRequestId);
+    var suspended=ledger.ResultFor(ledgerRequestId);
+    Check(suspended.State==ContainmentActuationResultState.Suspended.ToString()&&suspended.OwnedSuspendCount==2,
+        "suspend completion remains bound to the owned increments");
+    Check(ledger.RecordSuspendOwned(ledgerRequestId,9001).Sequence==owned1.Sequence&&
+          ledger.RecordSuspendCompleted(ledgerRequestId).Sequence==suspendCompletedRecord.Sequence,
+        "suspend records remain idempotent after suspend completion");
+
+    rejected=false;try{ledger.RecordSuspendOwned(ledgerRequestId,9003);}catch(InvalidOperationException){rejected=true;}
+    Check(rejected,"no new suspend increment can be added after suspend completion");
+
+    rejected=false;try{ledger.RecordResumeOwned(ledgerRequestId,9999);}catch(InvalidOperationException){rejected=true;}
+    Check(rejected,"resume cannot decrement an unowned thread suspension");
+
+    ledger.RecordResumeOwned(ledgerRequestId,9001);
+    rejected=false;try{ledger.RecordResumeCompleted(ledgerRequestId);}catch(InvalidOperationException){rejected=true;}
+    Check(rejected,"resume completion refuses stranded owned increments");
+
+    var resumedOwned2=ledger.RecordResumeOwned(ledgerRequestId,9002);
+    ledger.RecordResumeCompleted(ledgerRequestId);
+    var resumed=ledger.ResultFor(ledgerRequestId);
+    Check(resumed.State==ContainmentActuationResultState.Resumed.ToString()&&resumed.OwnedSuspendCount==0,
+        "resume completion proves every owned suspend increment was released");
+    Check(ledger.RecordResumeOwned(ledgerRequestId,9002).Sequence==resumedOwned2.Sequence,
+        "owned resume retry stays idempotent after resume completion");
+
+    var failureAuthorizationId=Guid.NewGuid().ToString("N");
+    var failureRequestId=Guid.NewGuid().ToString("N");
+    var failureBinding=ActuationBinding(
+        authorizationId:failureAuthorizationId,
+        caseId:"case-ledger-failure",
+        evaluatedUtc:now,
+        expiresUtc:now.AddSeconds(5));
+    var failureValidation=ContainmentActuationPolicy.Evaluate(
+        ActuationInput(binding:failureBinding,nowUtc:now.AddSeconds(1)));
+    ledger.Prepare(
+        new ContainmentActuationRequest(failureRequestId,failureBinding,now.AddSeconds(1)),
+        failureValidation);
+    ledger.RecordSuspendOwned(failureRequestId,9101);
+    var failureRecord=ledger.RecordFailed(failureRequestId,"SyntheticPartialFailure");
+    ledger.RecordResumeOwned(failureRequestId,9101);
+    ledger.RecordResumeCompleted(failureRequestId);
+    Check(ledger.RecordFailed(failureRequestId,"SyntheticPartialFailure").Sequence==failureRecord.Sequence,
+        "failure record retry stays idempotent after owned recovery");
+    var recoveredFailure=ledger.ResultFor(failureRequestId);
+    Check(recoveredFailure.State==ContainmentActuationResultState.FailedRecovered.ToString()&&
+          recoveredFailure.OwnedSuspendCount==0&&
+          recoveredFailure.ReasonCodes.SequenceEqual(new[]{"SyntheticPartialFailure"}),
+        "partial actuator failure can durably prove rollback of owned suspension only");
+
+    ledger.VerifyAll();
+    var reopenedLedger=new ContainmentActuationLedger(actuationLedgerRoot,createIfMissing:false);
+    reopenedLedger.VerifyAll();
+    Check(reopenedLedger.IsAuthorizationConsumed(ledgerAuthorizationId)&&
+          reopenedLedger.ResultFor(ledgerRequestId).State==ContainmentActuationResultState.Resumed.ToString()&&
+          reopenedLedger.ResultFor(failureRequestId).State==ContainmentActuationResultState.FailedRecovered.ToString(),
+        "actuation ledger hash-chain and one-shot state survive restart replay");
+
+    var journal=File.ReadAllText(reopenedLedger.JournalPath);
+    File.WriteAllText(reopenedLedger.JournalPath,journal.Replace("ValidationReady","ValidationReadyTampered",StringComparison.Ordinal));
+    rejected=false;try{_ = new ContainmentActuationLedger(actuationLedgerRoot,createIfMissing:false);}catch(InvalidDataException){rejected=true;}
+    Check(rejected,"actuation ledger rejects hash-chain tampering");
+}
+finally
+{
+    if(Directory.Exists(actuationLedgerRoot))
+        Directory.Delete(actuationLedgerRoot,true);
+}
+
 var productionHash=new string('A',64);
 var productionPackage=new ProtectionPackageDescriptor(
     1,"ProductionProtection","0.8.3.0",18,"RansomGuard","385201",

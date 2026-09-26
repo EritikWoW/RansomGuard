@@ -374,8 +374,18 @@ try{
     $summary.automaticContainmentReady=$true
 
     $startup=Wait-Audit 'Event' 'Startup' $startedUtc 30
-    if([string]$startup.Protection.State -notin @('Protected','Preflight')){
-        throw "Unexpected GuardWorker startup protection state '$($startup.Protection.State)'."
+    # GuardWorker owns ETW startup and runs concurrently with ProductionProtectionLifecycle.
+    # Its Startup audit is emitted only after monitor.Start() succeeds and RuntimeState is set
+    # to Running, but the captured protection snapshot may still legitimately be EnforceStarting.
+    # Final kernel/containment readiness is proved separately above by the later lifecycle audits.
+    $startupRoots=@($startup.Roots)
+    if([string]$startup.RequestedMode -ne 'Enforce' -or
+       [string]$startup.Protection.RequestedMode -ne 'Enforce' -or
+       $startup.Lab -ne $false -or
+       [string]::IsNullOrWhiteSpace([string]$startup.SessionName) -or
+       $startupRoots.Count -ne 1 -or
+       -not [string]::Equals([string]$startupRoots[0],$root,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'GuardWorker Startup audit did not prove the expected Enforce ETW session and exact protected root.'
     }
     $summary.monitorRunning=$true
 

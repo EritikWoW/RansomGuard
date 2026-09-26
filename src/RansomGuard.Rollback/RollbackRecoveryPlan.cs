@@ -12,14 +12,14 @@ public static class RollbackRecoveryPlanner
 {
     public const int Schema = 1;
 
-    public static RollbackRecoveryPlan Build(string repositoryRoot, string sessionId)
+    public static RollbackRecoveryPlan Build(string repositoryRoot, string sessionId, bool createIfMissing = true)
     {
         if (string.IsNullOrWhiteSpace(repositoryRoot))
             throw new ArgumentException("Rollback repository root is required.", nameof(repositoryRoot));
         if (string.IsNullOrWhiteSpace(sessionId))
             throw new ArgumentException("Rollback session id is required.", nameof(sessionId));
 
-        var repository = new RollbackRepository(repositoryRoot);
+        var repository = new RollbackRepository(repositoryRoot, createIfMissing);
         repository.VerifyAll();
         var store = repository.OpenSession(sessionId);
         store.VerifyAll();
@@ -47,7 +47,7 @@ public static class RollbackRecoveryPlanner
         var rangeRoot = Path.Combine(sessionRoot, "write-cow");
         if (Directory.Exists(rangeRoot))
         {
-            var range = new RangeRollbackStore(rangeRoot);
+            var range = new RangeRollbackStore(rangeRoot, createIfMissing: createIfMissing);
             range.VerifyAll();
             foreach (var baseline in range.Baselines.OrderBy(x => x.Sequence))
             {
@@ -72,15 +72,15 @@ public static class RollbackRecoveryPlanner
         RestartReconciliationStore? restartEvidence = null;
         if (Directory.Exists(restartRoot))
         {
-            restartEvidence = new RestartReconciliationStore(restartRoot);
+            restartEvidence = new RestartReconciliationStore(restartRoot, createIfMissing: createIfMissing);
             restartEvidence.VerifyAll();
         }
 
         var createRoot = Path.Combine(sessionRoot, "create-state");
         if (Directory.Exists(createRoot))
         {
-            var baselines = new CreateRollbackStore(createRoot);
-            var operations = new CreateOperationStore(createRoot);
+            var baselines = new CreateRollbackStore(createRoot, createIfMissing: createIfMissing);
+            var operations = new CreateOperationStore(createRoot, createIfMissing: createIfMissing);
             baselines.VerifyAll();
             operations.VerifyAll();
 
@@ -172,7 +172,7 @@ public static class RollbackRecoveryPlanner
         var renameRoot = Path.Combine(sessionRoot, "rename-state");
         if (Directory.Exists(renameRoot))
         {
-            var renames = new RenameRollbackStore(renameRoot);
+            var renames = new RenameRollbackStore(renameRoot, createIfMissing: createIfMissing);
             renames.VerifyAll();
 
             foreach (var intent in renames.Intents.OrderBy(x => x.Sequence))
@@ -247,7 +247,7 @@ public static class RollbackRecoveryPlanner
         var truncateRoot = Path.Combine(sessionRoot, "truncate-state");
         if (Directory.Exists(truncateRoot))
         {
-            var truncates = new TruncateOperationStore(truncateRoot);
+            var truncates = new TruncateOperationStore(truncateRoot, createIfMissing: createIfMissing);
             truncates.VerifyAll();
 
             foreach (var intent in truncates.Intents.OrderBy(x => x.Sequence))
@@ -313,7 +313,7 @@ public static class RollbackRecoveryPlanner
         var deleteRoot = Path.Combine(sessionRoot, "delete-state");
         if (Directory.Exists(deleteRoot))
         {
-            var deletes = new DeleteOperationStore(deleteRoot);
+            var deletes = new DeleteOperationStore(deleteRoot, createIfMissing: createIfMissing);
             deletes.VerifyAll();
 
             foreach (var intent in deletes.Intents.OrderBy(x => x.Sequence))

@@ -65,7 +65,7 @@ public static class ProductionRecoveryAdministration
         if (rollbackRoot is null)
             return [];
 
-        var repository = new RollbackRepository(rollbackRoot);
+        var repository = new RollbackRepository(rollbackRoot, createIfMissing: false);
         repository.VerifyAll();
 
         var ids = repository.SessionIds()
@@ -89,7 +89,7 @@ public static class ProductionRecoveryAdministration
         var rollbackRoot = ValidateStateAndGetRollbackRoot(allowMissing: false)
             ?? throw new DirectoryNotFoundException("Rollback repository does not exist.");
 
-        var repository = new RollbackRepository(rollbackRoot);
+        var repository = new RollbackRepository(rollbackRoot, createIfMissing: false);
         repository.VerifyAll();
 
         if (!repository.SessionIds().Contains(sessionId, StringComparer.Ordinal))
@@ -104,7 +104,7 @@ public static class ProductionRecoveryAdministration
             throw new InvalidOperationException(
                 $"Recovery planning is refused for lifecycle state '{snapshot.State}'. Resume/resolve the production session before operator recovery planning.");
 
-        var plan = RollbackRecoveryPlanner.Build(rollbackRoot, sessionId);
+        var plan = RollbackRecoveryPlanner.Build(rollbackRoot, sessionId, createIfMissing: false);
         var actions = plan.Actions
             .Take(MaxActions)
             .Select(x => new ProductionRecoveryActionSummary(

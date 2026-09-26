@@ -11,6 +11,33 @@ void Check(bool condition, string name)
 
 var root = Path.Combine(Path.GetTempPath(), "RansomGuardRollbackTests", Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);
+
+// Recovery-review callers must never create or repair rollback evidence while inspecting it.
+var missingReadOnlyRepo = Path.Combine(root, "readonly-missing");
+var missingReadOnlyRejected = false;
+try { _ = new RollbackRepository(missingReadOnlyRepo, createIfMissing: false); }
+catch (DirectoryNotFoundException) { missingReadOnlyRejected = true; }
+Check(missingReadOnlyRejected && !Directory.Exists(missingReadOnlyRepo),
+    "read-only repository open refuses missing state without creating it");
+
+var readOnlyProbeRoot = Path.Combine(root, "readonly-probe");
+var readOnlyProbeSession = Path.Combine(readOnlyProbeRoot, "Sessions", "empty");
+Directory.CreateDirectory(readOnlyProbeSession);
+var readOnlyProbe = new RollbackRepository(readOnlyProbeRoot, createIfMissing: false);
+var missingObjectsRejected = false;
+try { _ = readOnlyProbe.OpenSession("empty"); }
+catch (DirectoryNotFoundException) { missingObjectsRejected = true; }
+Check(missingObjectsRejected && !Directory.Exists(Path.Combine(readOnlyProbeSession, "objects")),
+    "read-only session open refuses missing object store without repairing evidence");
+
+var readOnlyRangeRoot = Path.Combine(root, "readonly-range");
+Directory.CreateDirectory(readOnlyRangeRoot);
+var missingRangeObjectsRejected = false;
+try { _ = new RangeRollbackStore(readOnlyRangeRoot, createIfMissing: false); }
+catch (DirectoryNotFoundException) { missingRangeObjectsRejected = true; }
+Check(missingRangeObjectsRejected && !Directory.Exists(Path.Combine(readOnlyRangeRoot, "objects")),
+    "read-only range store refuses missing object directory without creating it");
+
 try
 {
     var sourceDir = Path.Combine(root, "source"); Directory.CreateDirectory(sourceDir);

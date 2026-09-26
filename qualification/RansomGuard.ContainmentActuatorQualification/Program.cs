@@ -228,6 +228,20 @@ try
             true,
             stoppedLedger));
 
+    var inactiveProtection = ProtectedSnapshot();
+    var inactiveBinding = Binding(targetKey, targetPath, targetHash, inactiveProtection, "runtime-inactive");
+    var inactiveLedger = new ContainmentActuationLedger(Path.Combine(results, "ledger-runtime-inactive"));
+    var inactiveRejected = RevalidationRejected(
+        actuator,
+        new ContainmentActuationRequest(Guid.NewGuid().ToString("N"), inactiveBinding, DateTime.UtcNow),
+        inactiveLedger,
+        lease => Validate(
+            inactiveBinding,
+            lease,
+            inactiveProtection with { AutomaticContainmentActive = false },
+            true,
+            inactiveLedger));
+
     var telemetryProtection = ProtectedSnapshot();
     var telemetryBinding = Binding(targetKey, targetPath, targetHash, telemetryProtection, "telemetry-loss");
     var telemetryLedger = new ContainmentActuationLedger(Path.Combine(results, "ledger-telemetry-loss"));
@@ -458,6 +472,7 @@ try
         maintenanceRejected &&
         failedRejected &&
         stoppedRejected &&
+        inactiveRejected &&
         telemetryRejected &&
         unknownCriticalRejected &&
         criticalRejected &&
@@ -491,6 +506,7 @@ try
         maintenanceRejected,
         failedRejected,
         stoppedRejected,
+        inactiveRejected,
         telemetryRejected,
         unknownCriticalRejected,
         criticalRejected,
@@ -832,7 +848,7 @@ static ProtectionStatusDto ProtectedSnapshot(DateTime? observedUtc = null) =>
         true,
         true,
         true,
-        false,
+        true,
         "containment actuator qualification",
         observedUtc ?? DateTime.UtcNow);
 

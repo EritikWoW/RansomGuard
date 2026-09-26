@@ -61,6 +61,16 @@ foreach($required in @(
 }
 
 foreach($required in @(
+    'function Remove-QualificationBuildFamily',
+    "Remove-QualificationBuildFamily 'updater-recovery-old-service'",
+    "Remove-QualificationBuildFamily 'updater-recovery-old-helper'",
+    "Remove-QualificationBuildFamily 'updater-recovery-current-service'",
+    "Remove-QualificationBuildFamily 'updater-recovery-current-helper'"
+)){
+    if($workflow -notmatch [regex]::Escape($required)){throw "Updater recovery phase-cleanup invariant missing: $required"}
+}
+
+foreach($required in @(
     "ValidateSet('arm','resume','verify')",
     'Write-InterruptedRecord',
     "'Prepared'",

@@ -30,6 +30,7 @@ internal sealed class WindowsProcessStateChangeLease : IDisposable
     internal ProcessKey Process { get; }
     internal string? ImagePath { get; }
     internal string? ImageSha256 { get; }
+    internal FileIdentityEvidence? ImageFileIdentity { get; }
     internal bool CriticalStateKnown { get; }
     internal bool IsCritical { get; }
     internal bool IsSuspended => _suspended;
@@ -40,6 +41,7 @@ internal sealed class WindowsProcessStateChangeLease : IDisposable
         ProcessKey process,
         string? imagePath,
         string? imageSha256,
+        FileIdentityEvidence? imageFileIdentity,
         bool criticalStateKnown,
         bool isCritical)
     {
@@ -48,6 +50,7 @@ internal sealed class WindowsProcessStateChangeLease : IDisposable
         Process = process;
         ImagePath = imagePath;
         ImageSha256 = imageSha256;
+        ImageFileIdentity = imageFileIdentity;
         CriticalStateKnown = criticalStateKnown;
         IsCritical = isCritical;
     }
@@ -72,9 +75,9 @@ internal sealed class WindowsProcessStateChangeLease : IDisposable
 
     internal static WindowsProcessStateChangeLease Open(
         ProcessKey expectedProcess,
-        Func<string?, string?> freshImageSha256)
+        Func<string?, (string? Sha256, FileIdentityEvidence? FileIdentity)> freshImageIdentity)
     {
-        ArgumentNullException.ThrowIfNull(freshImageSha256);
+        ArgumentNullException.ThrowIfNull(freshImageIdentity);
 
         if (!IsSupported())
             throw new PlatformNotSupportedException(
@@ -101,7 +104,9 @@ internal sealed class WindowsProcessStateChangeLease : IDisposable
                 throw new InvalidOperationException("ProcessIdentityChanged");
 
             var path = Native.ImagePath(process);
-            var imageSha256 = freshImageSha256(path);
+            var imageIdentity = freshImageIdentity(path);
+            var imageSha256 = imageIdentity.Sha256;
+            var imageFileIdentity = imageIdentity.FileIdentity;
             var criticalKnown = Native.IsProcessCritical(process, out var critical);
 
             var createStatus = NtCreateProcessStateChange(
@@ -123,6 +128,7 @@ internal sealed class WindowsProcessStateChangeLease : IDisposable
                 expectedProcess,
                 path,
                 imageSha256,
+                imageFileIdentity,
                 criticalKnown,
                 critical);
         }

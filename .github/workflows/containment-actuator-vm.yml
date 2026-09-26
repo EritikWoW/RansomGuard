@@ -124,6 +124,9 @@ jobs:
             'restartRecoveryRecovered',
             'timeoutRecovered',
             'cancellationRecovered',
+            'stateChangeApiAvailable',
+            'stateChangeExplicitResumeRecovered',
+            'stateChangeCrashReleaseRecovered',
             'passed'
           )){
             if($summary.$name -ne $true){throw "Containment actuator invariant '$name' was not true."}

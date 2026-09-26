@@ -104,11 +104,7 @@ jobs:
           RG_ADMIN_HELPER: ${{ steps.build.outputs.helper }}
         run: |
           $ErrorActionPreference='Stop'
-          .\qualification\quarantine_production_updater_recovery_vm.ps1 \
-            -ExpectedCampaignCommit $env:RG_CAMPAIGN_SHA \
-            -RepairSourceCommit $env:RG_REPAIR_SHA \
-            -AdminHelper $env:RG_ADMIN_HELPER \
-            -RootBase $env:RG_ROOT_BASE
+          .\qualification\quarantine_production_updater_recovery_vm.ps1 -ExpectedCampaignCommit $env:RG_CAMPAIGN_SHA -RepairSourceCommit $env:RG_REPAIR_SHA -AdminHelper $env:RG_ADMIN_HELPER -RootBase $env:RG_ROOT_BASE
 
       - name: Upload quarantine evidence
         if: always()

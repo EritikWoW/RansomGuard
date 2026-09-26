@@ -65,6 +65,19 @@ foreach($required in @(
     'cancellationCompletedAbsent',
     'cancellationHeartbeatRecovered',
     'cancellationAutomaticContainmentReady',
+    'journalIoFaultSuspendApplied',
+    'journalIoFaultLockHeld',
+    'AutomaticContainmentAdmissionTripped',
+    'ExplicitResumeEvidenceFailed',
+    '$faultResponse.ProductionContainment.ExplicitResumeApplied',
+    'journalIoFaultFailedClosed',
+    'journalIoFaultExplicitResumeApplied',
+    'journalIoFaultCompletedAbsent',
+    'journalIoFaultHeartbeatRecovered',
+    'journalIoFaultEvidenceCaptured',
+    'journal-io-fault-pre-reset-audit.json',
+    'JOURNAL-IO-FAULT-EVIDENCE',
+    'journalIoFaultAutomaticContainmentReady',
     'Handled cancellation request fabricated a Completed terminal phase.',
     'Stop-Process -Id $servicePid -Force',
     'kernelFailSafeRetained',
@@ -91,6 +104,26 @@ foreach($required in @(
 )){
     if($harness -notmatch [regex]::Escape($required)){
         throw "Production containment recovery harness invariant missing: $required"
+    }
+}
+
+$journalFaultLockOpen=$harness.IndexOf('$journalLock=[IO.File]::Open(', [StringComparison]::Ordinal)
+$journalFaultResponse=$harness.IndexOf('$faultResponse=Wait-JsonFile', [StringComparison]::Ordinal)
+$journalFaultLockDispose=$harness.IndexOf('$journalLock.Dispose()', [StringComparison]::Ordinal)
+if($journalFaultLockOpen -lt 0 -or $journalFaultResponse -lt 0 -or $journalFaultLockDispose -lt 0 -or
+   $journalFaultLockOpen -ge $journalFaultResponse -or $journalFaultResponse -ge $journalFaultLockDispose){
+    throw 'Journal-I/O fault qualification must keep the writer-denying journal handle alive until the production FailedClosed response exists.'
+}
+
+foreach($required in @(
+    '[IO.FileMode]::Open',
+    '[IO.FileAccess]::Read',
+    '[IO.FileShare]::Read',
+    'Journal-I/O fault unexpectedly persisted post-fault phase',
+    'Fresh post-fault state generation did not restore active production containment.'
+)){
+    if($harness -notmatch [regex]::Escape($required)){
+        throw "Production containment journal-I/O fault invariant missing: $required"
     }
 }
 
@@ -190,4 +223,4 @@ if($windowsCi -notmatch [regex]::Escape('.\tools\verify_production_containment_r
     throw 'Windows required CI does not execute the production containment recovery source gate.'
 }
 
-Write-Host 'Production containment fault/recovery qualification source gate passed: handled cancellation and durable-journal data failures after SuspendApplied preserve exact-process explicit-resume safety, never fabricate Completed, and keep automatic containment fail-closed when recovery evidence cannot be persisted.'
+Write-Host 'Production containment fault/recovery qualification source gate passed: handled cancellation, real writer-denied journal I/O failure after SuspendApplied, hard service crash, restart fail-closed behavior and journal corruption all preserve exact-process recovery safety without fabricating Completed.'

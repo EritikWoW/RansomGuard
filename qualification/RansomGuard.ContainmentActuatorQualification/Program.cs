@@ -381,7 +381,7 @@ try
         cancelResult.OwnedSuspendCount == 0 &&
         WaitForHeartbeatAdvance(target.Heartbeat, ReadHeartbeat(target.Heartbeat), TimeSpan.FromSeconds(2));
 
-    var stateChangeApiAvailable = ProcessStateChangeNative.IsAvailable();
+    var stateChangeApiAvailable = WindowsProcessStateChangeLease.IsSupported();
     var stateChangeExplicitResumeRecovered = false;
     var stateChangeCrashReleaseRecovered = false;
 
@@ -538,57 +538,24 @@ static int RunStateChangeHelper(
         return 31;
     }
 
-    if (!ProcessStateChangeNative.IsAvailable())
+    if (!WindowsProcessStateChangeLease.IsSupported())
     {
         File.WriteAllText(result, "process-state-change-api-unavailable");
         return 32;
     }
 
-    const uint ProcessSetInformation = 0x0200;
-    using var process = Native.OpenProcess(
-        Native.Query | Native.Synchronize | Native.SuspendResume | ProcessSetInformation,
-        false,
-        pid);
-    if (process.IsInvalid)
-    {
-        File.WriteAllText(result, "open-process-failed:" + System.Runtime.InteropServices.Marshal.GetLastWin32Error());
-        return 33;
-    }
-
-    var live = Native.Identity(process, pid);
     var expected = new ProcessKey(pid, creationFileTime);
-    if (live is null || live.Value != expected)
-    {
-        File.WriteAllText(result, "process-identity-changed");
-        return 34;
-    }
-
-    var createStatus = ProcessStateChangeNative.NtCreateProcessStateChange(
-        out var stateChange,
-        ProcessStateChangeNative.ProcessStateAllAccess,
-        IntPtr.Zero,
-        process,
-        0);
-    if (createStatus < 0 || stateChange == IntPtr.Zero)
-    {
-        File.WriteAllText(result, $"create-state-change-failed:0x{unchecked((uint)createStatus):X8}");
-        return 35;
-    }
-
+    WindowsProcessStateChangeLease? lease = null;
     try
     {
-        var suspendStatus = ProcessStateChangeNative.NtChangeProcessState(
-            stateChange,
-            process,
-            ProcessStateChangeNative.ProcessStateChangeSuspend,
-            IntPtr.Zero,
-            UIntPtr.Zero,
-            0);
-        if (suspendStatus < 0)
+        lease = WindowsProcessStateChangeLease.Open(expected, HashFresh);
+        if (lease.Process != expected)
         {
-            File.WriteAllText(result, $"suspend-state-change-failed:0x{unchecked((uint)suspendStatus):X8}");
-            return 36;
+            File.WriteAllText(result, "process-identity-changed");
+            return 34;
         }
+
+        lease.Suspend();
 
         File.WriteAllText(
             ready,
@@ -605,26 +572,28 @@ static int RunStateChangeHelper(
             Thread.Sleep(25);
         }
 
-        var resumeStatus = ProcessStateChangeNative.NtChangeProcessState(
-            stateChange,
-            process,
-            ProcessStateChangeNative.ProcessStateChangeResume,
-            IntPtr.Zero,
-            UIntPtr.Zero,
-            0);
-        if (resumeStatus < 0)
-        {
-            File.WriteAllText(result, $"resume-state-change-failed:0x{unchecked((uint)resumeStatus):X8}");
-            return 38;
-        }
-
+        lease.Resume();
         File.WriteAllText(result, "explicit-resume-success");
         return 0;
     }
+    catch (PlatformNotSupportedException ex)
+    {
+        File.WriteAllText(result, "process-state-change-api-unavailable:" + ex.Message);
+        return 32;
+    }
+    catch (InvalidOperationException ex) when (ex.Message == "ProcessIdentityChanged")
+    {
+        File.WriteAllText(result, "process-identity-changed");
+        return 34;
+    }
+    catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception)
+    {
+        File.WriteAllText(result, "state-change-failed:" + ex.GetType().Name + ":" + ex.Message);
+        return 35;
+    }
     finally
     {
-        if (stateChange != IntPtr.Zero)
-            _ = Native.CloseHandle(stateChange);
+        lease?.Dispose();
     }
 }
 
@@ -930,44 +899,6 @@ static bool RevalidationRejected(
 
 sealed record StateChangeHelper(Process Process, string Ready, string Release, string Result);
 
-static class ProcessStateChangeNative
-{
-    internal const uint ProcessStateAllAccess = 0x001F0001;
-    internal const int ProcessStateChangeSuspend = 0;
-    internal const int ProcessStateChangeResume = 1;
-
-    internal static bool IsAvailable()
-    {
-        if (!NativeLibrary.TryLoad("ntdll.dll", out var library))
-            return false;
-        try
-        {
-            return NativeLibrary.TryGetExport(library, "NtCreateProcessStateChange", out _) &&
-                   NativeLibrary.TryGetExport(library, "NtChangeProcessState", out _);
-        }
-        finally
-        {
-            NativeLibrary.Free(library);
-        }
-    }
-
-    [System.Runtime.InteropServices.DllImport("ntdll.dll")]
-    internal static extern int NtCreateProcessStateChange(
-        out IntPtr processStateChangeHandle,
-        uint desiredAccess,
-        IntPtr objectAttributes,
-        ProcessHandle processHandle,
-        uint reserved);
-
-    [System.Runtime.InteropServices.DllImport("ntdll.dll")]
-    internal static extern int NtChangeProcessState(
-        IntPtr processStateChangeHandle,
-        ProcessHandle processHandle,
-        int stateChangeType,
-        IntPtr extendedInformation,
-        UIntPtr extendedInformationLength,
-        uint reserved);
-}
 
 sealed record Fixture(Process Process, string Ready, string Release, string Heartbeat);
 

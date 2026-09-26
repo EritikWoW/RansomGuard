@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Security.Principal;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using RansomGuard.Core;
 using RansomGuard.Service;

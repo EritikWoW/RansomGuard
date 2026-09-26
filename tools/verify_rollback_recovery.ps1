@@ -141,6 +141,8 @@ foreach($required in @(
     'current.Actions.Where(x => x.State == RecoveryActionState.Ready)',
     'ComputeExpectedRecoveryAsync',
     'RestoreToNewCopyAsync',
+    'RangeRollbackRecoveryExpectation',
+    'Recovered range temp SHA-256 does not match the pre-output expectation',
     'ExpectedLength',
     'ExpectedSha256',
     'Recovered copy length mismatch',

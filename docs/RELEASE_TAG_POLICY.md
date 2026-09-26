@@ -99,6 +99,23 @@ Release tags matching `v*` should be covered by two repository-owner rulesets:
 
 The release actor must not receive bypass rights in the immutable-tag ruleset. This allows controlled creation while preventing an already published release identity from being moved or deleted.
 
+### Repository-owner import path
+
+Two ready-to-import repository ruleset files are committed with this policy:
+
+- `docs/github-rulesets/protect-immutable-release-tags.json`
+- `docs/github-rulesets/control-release-tag-creation.json`
+
+Repository owner procedure:
+
+1. Open **Settings → Rules → Rulesets**.
+2. Choose **New ruleset → Import a ruleset**.
+3. Import `protect-immutable-release-tags.json`; review that it targets tags matching `refs/tags/v*`, is **Active**, has **Restrict updates** + **Restrict deletions**, and has **no bypass actors**.
+4. Import `control-release-tag-creation.json`; review that it targets the same `v*` tag namespace, is **Active**, has **Restrict creations**, and the only bypass actor is user `EritikWoW`.
+5. After both rulesets are active, run the release identity workflow. It reads the live repository rulesets and fails closed if the imported protection differs from this contract.
+
+The creation template binds the bypass actor to GitHub user id `116751610` (EritikWoW). If GitHub's import UI asks to remap that actor, select only the repository owner and do not add an immutable-ruleset bypass.
+
 ## GitHub/Sigstore release identity attestation
 
 The alternative cryptographic identity route is:

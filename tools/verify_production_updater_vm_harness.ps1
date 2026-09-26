@@ -98,9 +98,16 @@ foreach($required in @(
     'audit.1.jsonl',
     'audit.2.jsonl',
     'audit.3.jsonl',
-    'Assert-NoReparsePath $path'
+    'Assert-NoReparsePath $path',
+    'function Get-AuditPaths',
+    'function Get-ExactAuditEvidence',
+    '$line.IndexOf($TransactionId,[StringComparison]::OrdinalIgnoreCase)',
+    '$item.PSObject.Properties[''Utc'']',
+    '$EvidenceLabel+''-raw-lines.json''',
+    'Get-ExactAuditEvidence -Event ''ServiceUpdateCompleted''',
+    'Get-ExactAuditEvidence -Event ''ServiceUpdateRolledBack'''
 )){
-    if($harness -notmatch [regex]::Escape($required)){throw "Updater rollback audit-rotation evidence invariant missing: $required"}
+    if($harness -notmatch [regex]::Escape($required)){throw "Updater rollback exact audit evidence invariant missing: $required"}
 }
 
 $forwardAuditCapture=$harness.IndexOf("'forward-completed-audit.json'",[StringComparison]::Ordinal)
@@ -168,8 +175,11 @@ foreach($forbiddenAuditWindow in @(
         throw "Updater audit evidence must bind to exact transaction IDs without a VM-clock window: $forbiddenAuditWindow"
     }
 }
-if($harness -notmatch [regex]::Escape('function Get-AuditEntries {')){
-    throw 'Updater audit evidence reader must remain transaction-driven and clock-independent.'
+if($harness -match [regex]::Escape('function Get-AuditEntries {')){
+    throw 'Updater audit evidence must not globally parse/sort unrelated audit entries before exact transaction binding.'
+}
+if($harness -match [regex]::Escape('Sort-Object {[DateTimeOffset]::Parse([string]$_.Utc)}')){
+    throw 'Updater audit evidence must not depend on PowerShell DateTimeOffset sorting for exact transaction discovery.'
 }
 if($windowsCi -notmatch [regex]::Escape('verify_production_updater_vm_harness.ps1')){
     throw 'Windows CI must run the updater rollback source gate.'

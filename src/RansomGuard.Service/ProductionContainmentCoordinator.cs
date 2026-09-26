@@ -27,19 +27,23 @@ internal sealed class ProductionContainmentCoordinator
     private readonly SecureStore _store;
     private readonly ImageInspector _images;
     private readonly ContainmentStateChangeJournal _journal;
+    private readonly RuntimeState _runtime;
+    private int _admissionTripped;
 
     internal ProductionContainmentCoordinator(
         ILogger<ProductionContainmentCoordinator> log,
         GuardSettings settings,
         SecureStore store,
         ImageInspector images,
-        ContainmentStateChangeJournal journal)
+        ContainmentStateChangeJournal journal,
+        RuntimeState runtime)
     {
         _log = log;
         _settings = settings;
         _store = store;
         _images = images;
         _journal = journal;
+        _runtime = runtime;
     }
 
     internal async Task<ProductionContainmentAttemptResult> AttemptAsync(
@@ -61,7 +65,9 @@ internal sealed class ProductionContainmentCoordinator
         ArgumentNullException.ThrowIfNull(authorization);
         ArgumentNullException.ThrowIfNull(captureLiveState);
 
-        if (!_settings.Enforce.AutomaticContainment || !authorization.Eligible)
+        if (Volatile.Read(ref _admissionTripped) != 0 ||
+            !_settings.Enforce.AutomaticContainment ||
+            !authorization.Eligible)
         {
             return new(
                 "NotAuthorized",
@@ -69,7 +75,9 @@ internal sealed class ProductionContainmentCoordinator
                 false,
                 false,
                 false,
-                authorization.Eligible ? "DisabledByConfiguration" : "AuthorizationDenied",
+                Volatile.Read(ref _admissionTripped) != 0
+                    ? "RuntimeAdmissionTripped"
+                    : authorization.Eligible ? "DisabledByConfiguration" : "AuthorizationDenied",
                 authorization.Reasons ?? Array.Empty<string>(),
                 null,
                 null);
@@ -129,6 +137,7 @@ internal sealed class ProductionContainmentCoordinator
         try
         {
             token.ThrowIfCancellationRequested();
+            VerifyJournalOrTrip();
 
             lease = WindowsProcessStateChangeLease.Open(
                 binding.Process,
@@ -177,7 +186,7 @@ internal sealed class ProductionContainmentCoordinator
                 binding,
                 DateTime.UtcNow);
 
-            var preparedEntry = _journal.Prepare(request, validation);
+            var preparedEntry = JournalPrepareOrTrip(request, validation);
             prepared = true;
 
             _store.WriteJson(
@@ -198,7 +207,9 @@ internal sealed class ProductionContainmentCoordinator
             token.ThrowIfCancellationRequested();
             lease.Suspend();
             suspendApplied = true;
-            var suspendedEntry = _journal.RecordSuspendApplied(requestId);
+            var suspendedEntry = JournalTransitionOrTrip(
+                () => _journal.RecordSuspendApplied(requestId),
+                "SuspendAppliedEvidenceFailed");
 
             _store.WriteJson(
                 Path.Combine(caseDirectory, "containment-actuation-suspended.json"),
@@ -220,8 +231,12 @@ internal sealed class ProductionContainmentCoordinator
 
             lease.Resume();
             explicitResume = true;
-            var resumedEntry = _journal.RecordExplicitResumeApplied(requestId);
-            var completedEntry = _journal.RecordCompleted(requestId);
+            var resumedEntry = JournalTransitionOrTrip(
+                () => _journal.RecordExplicitResumeApplied(requestId),
+                "ExplicitResumeEvidenceFailed");
+            var completedEntry = JournalTransitionOrTrip(
+                () => _journal.RecordCompleted(requestId),
+                "CompletionEvidenceFailed");
 
             var result = new ProductionContainmentAttemptResult(
                 "StateChangeContained",
@@ -312,6 +327,111 @@ internal sealed class ProductionContainmentCoordinator
         }
     }
 
+    private void VerifyJournalOrTrip()
+    {
+        try
+        {
+            _journal.VerifyAll();
+        }
+        catch (Exception ex) when (
+            ex is IOException or
+            UnauthorizedAccessException or
+            InvalidDataException)
+        {
+            TripAdmission("JournalVerificationFailed", ex);
+            throw;
+        }
+    }
+
+    private ContainmentStateChangeJournalEntry JournalPrepareOrTrip(
+        ContainmentActuationRequest request,
+        ContainmentActuationValidationDecision validation)
+    {
+        try
+        {
+            return _journal.Prepare(request, validation);
+        }
+        catch (Exception ex) when (
+            ex is IOException or
+            UnauthorizedAccessException or
+            InvalidDataException)
+        {
+            TripAdmission("JournalPrepareFailed", ex);
+            throw;
+        }
+    }
+
+    private T JournalTransitionOrTrip<T>(Func<T> action, string reason)
+    {
+        try
+        {
+            return action();
+        }
+        catch (Exception ex) when (
+            ex is IOException or
+            UnauthorizedAccessException or
+            InvalidDataException or
+            InvalidOperationException)
+        {
+            TripAdmission(reason, ex);
+            throw;
+        }
+    }
+
+    private void TripAdmission(string reason, Exception error)
+    {
+        if (Interlocked.Exchange(ref _admissionTripped, 1) != 0)
+            return;
+
+        _settings.Enforce.AutomaticContainment = false;
+
+        try
+        {
+            var protection = _runtime.Protection();
+            if (protection.AutomaticContainmentActive)
+            {
+                _runtime.UpdateProtection(
+                    protection with
+                    {
+                        AutomaticContainmentActive = false,
+                        Reason = "Automatic containment disabled fail-closed: " + reason,
+                        ObservedUtc = DateTime.UtcNow
+                    });
+            }
+        }
+        catch (Exception stateError) when (stateError is InvalidOperationException or ArgumentNullException)
+        {
+            _log.LogCritical(
+                stateError,
+                "Unable to publish fail-closed automatic-containment runtime state after {Reason}.",
+                reason);
+        }
+
+        try
+        {
+            _store.Audit(new
+            {
+                Utc = DateTime.UtcNow,
+                Event = "AutomaticContainmentAdmissionTripped",
+                Reason = reason,
+                Error = error.GetType().Name,
+                error.Message
+            });
+        }
+        catch (Exception auditError) when (auditError is IOException or UnauthorizedAccessException)
+        {
+            _log.LogCritical(
+                auditError,
+                "Unable to persist automatic-containment admission trip evidence after {Reason}.",
+                reason);
+        }
+
+        _log.LogCritical(
+            error,
+            "Automatic containment admission disabled fail-closed for the remainder of this service lifetime: {Reason}.",
+            reason);
+    }
+
     private bool TryExplicitResume(
         WindowsProcessStateChangeLease? lease,
         bool prepared,
@@ -325,7 +445,9 @@ internal sealed class ProductionContainmentCoordinator
         {
             lease.Resume();
             if (prepared)
-                _journal.RecordExplicitResumeApplied(requestId);
+                JournalTransitionOrTrip(
+                    () => _journal.RecordExplicitResumeApplied(requestId),
+                    "RecoveryResumeEvidenceFailed");
             return true;
         }
         catch (Exception ex) when (
@@ -345,7 +467,9 @@ internal sealed class ProductionContainmentCoordinator
     {
         try
         {
-            _journal.RecordAbnormal(requestId, reasonCode);
+            JournalTransitionOrTrip(
+                () => _journal.RecordAbnormal(requestId, reasonCode),
+                "AbnormalEvidenceFailed");
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException)
         {

@@ -250,6 +250,7 @@ foreach($required in @(
     'stale recovery plan is rejected before any output is created',
     'existing recovery output root refuses overwrite',
     'reparse recovery destination is refused',
+    'range recovery source drift is rejected before final copy publication',
     'copy-out executor leaves damaged live sources untouched',
     'recovery output length and SHA-256 match evidence expectations',
     'partial recovery failure is reported without undoing completed copies'

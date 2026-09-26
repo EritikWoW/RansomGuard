@@ -102,7 +102,10 @@ foreach($required in @(
     'journalExactRestoreApplied',
     'restoredJournalFailClosed',
     'containment-state-change-journal.pre-corruption.jsonl',
-    '$journalStream.SetLength($journalStream.Length-1)',
+    '$corruptBytes=[IO.File]::ReadAllBytes($journalPath)',
+    '$lastNonWhitespace=$corruptBytes.Length-1',
+    '$corruptBytes[$lastNonWhitespace] -in @(9,10,13,32)',
+    '$journalStream.SetLength($lastNonWhitespace)',
     'Truncated containment journal allowed production kernel lifecycle activation.',
     'Exact journal restoration did not recover the original incomplete-session fail-closed state.',
     'ProductionProtectionMaintenanceStop',
@@ -111,6 +114,18 @@ foreach($required in @(
     if($harness -notmatch [regex]::Escape($required)){
         throw "Production containment recovery harness invariant missing: $required"
     }
+}
+
+if($harness -match [regex]::Escape('$journalStream.SetLength($journalStream.Length-1)')){
+    throw 'Journal corruption qualification must not truncate only one trailing byte; JSONL may end in CR/LF and remain valid.'
+}
+$corruptRead=$harness.IndexOf('$corruptBytes=[IO.File]::ReadAllBytes($journalPath)', [StringComparison]::Ordinal)
+$corruptScan=$harness.IndexOf('$corruptBytes[$lastNonWhitespace] -in @(9,10,13,32)', [StringComparison]::Ordinal)
+$corruptSetLength=$harness.IndexOf('$journalStream.SetLength($lastNonWhitespace)', [StringComparison]::Ordinal)
+$corruptStart=$harness.IndexOf('$corruptStart=Invoke-Sc', [StringComparison]::Ordinal)
+if($corruptRead -lt 0 -or $corruptScan -lt 0 -or $corruptSetLength -lt 0 -or $corruptStart -lt 0 -or
+   $corruptRead -ge $corruptScan -or $corruptScan -ge $corruptSetLength -or $corruptSetLength -ge $corruptStart){
+    throw 'Journal corruption qualification must remove a non-whitespace JSON byte before attempting service startup.'
 }
 
 $journalFaultLockOpen=$harness.IndexOf('$journalLock=[IO.File]::Open(', [StringComparison]::Ordinal)

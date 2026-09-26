@@ -869,10 +869,21 @@ try{
     Copy-Item -LiteralPath $journalPath -Destination $journalBackup -Force
     Copy-Item -LiteralPath $journalHead -Destination $headBackup -Force
 
+    $corruptBytes=[IO.File]::ReadAllBytes($journalPath)
+    $lastNonWhitespace=$corruptBytes.Length-1
+    while($lastNonWhitespace -ge 0 -and $corruptBytes[$lastNonWhitespace] -in @(9,10,13,32)){
+        $lastNonWhitespace--
+    }
+    if($lastNonWhitespace -lt 1){
+        throw 'Containment journal is too small for deterministic non-whitespace truncation qualification.'
+    }
+
+    # SetLength takes the new byte count, so using the index of the final
+    # non-whitespace byte removes that JSON byte plus any trailing CR/LF.
+    # This guarantees malformed durable JSON instead of merely deleting a line ending.
     $journalStream=[IO.File]::Open($journalPath,[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::None)
     try{
-        if($journalStream.Length -lt 2){throw 'Containment journal is too small for deterministic truncation qualification.'}
-        $journalStream.SetLength($journalStream.Length-1)
+        $journalStream.SetLength($lastNonWhitespace)
         $journalStream.Flush($true)
     }finally{$journalStream.Dispose()}
 

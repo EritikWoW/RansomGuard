@@ -16,8 +16,9 @@ $dispatcherPath=Join-Path $root '.github\workflows\vm-lab-dispatcher.yml'
 $windowsCiPath=Join-Path $root '.github\workflows\windows-ci.yml'
 $readinessPath=Join-Path $root 'src\RansomGuard.Service\ProductionContainmentReadiness.cs'
 $leasePath=Join-Path $root 'src\RansomGuard.Service\WindowsProcessStateChangeLease.cs'
+$serviceProgramPath=Join-Path $root 'src\RansomGuard.Service\Program.cs'
 
-foreach($path in @($workflowPath,$harnessPath,$fixturePath,$dispatcherPath,$windowsCiPath,$readinessPath,$leasePath)){
+foreach($path in @($workflowPath,$harnessPath,$fixturePath,$dispatcherPath,$windowsCiPath,$readinessPath,$leasePath,$serviceProgramPath)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){
         throw "Production containment recovery qualification source missing: $path"
     }
@@ -29,6 +30,7 @@ $dispatcher=Get-Content -LiteralPath $dispatcherPath -Raw
 $windowsCi=Get-Content -LiteralPath $windowsCiPath -Raw
 $readiness=Get-Content -LiteralPath $readinessPath -Raw
 $lease=Get-Content -LiteralPath $leasePath -Raw
+$serviceProgram=Get-Content -LiteralPath $serviceProgramPath -Raw
 
 foreach($required in @(
     'RansomGuard production containment crash recovery VM qualification',
@@ -67,6 +69,13 @@ foreach($required in @(
     'AutomaticContainmentNotActive',
     'postRestartNoContainment',
     '''AuditOnly''',
+    'journalCorruptionRejected',
+    'journalExactRestoreApplied',
+    'restoredJournalFailClosed',
+    'containment-state-change-journal.pre-corruption.jsonl',
+    '$journalStream.SetLength($journalStream.Length-1)',
+    'Truncated containment journal allowed production kernel lifecycle activation.',
+    'Exact journal restoration did not recover the original incomplete-session fail-closed state.',
     'ProductionProtectionMaintenanceStop',
     'CRASH-RECOVERY-EVIDENCE'
 )){
@@ -122,6 +131,14 @@ foreach($required in @(
 if($lease.IndexOf('_stateChangeHandle.Dispose()', [StringComparison]::Ordinal) -gt
    $lease.IndexOf('_processHandle.Dispose()', [StringComparison]::Ordinal)){
     throw 'Process state-change handle must be released before the process handle.'
+}
+
+$journalInit=$serviceProgram.IndexOf('stateChangeJournal=new ContainmentStateChangeJournal', [StringComparison]::Ordinal)
+$journalVerify=$serviceProgram.IndexOf('stateChangeJournal.VerifyAll()', [StringComparison]::Ordinal)
+$lifecycleRegistration=$serviceProgram.IndexOf('builder.Services.AddHostedService(sp=>new ProductionProtectionLifecycle', [StringComparison]::Ordinal)
+if($journalInit -lt 0 -or $journalVerify -lt 0 -or $lifecycleRegistration -lt 0 -or
+   $journalInit -ge $journalVerify -or $journalVerify -ge $lifecycleRegistration){
+    throw 'Production service must validate the containment state-change journal before registering the kernel lifecycle hosted service.'
 }
 
 foreach($required in @(

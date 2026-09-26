@@ -73,17 +73,25 @@ function Write-State([hashtable]$State,[string]$Path){
     $hash=(Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
     Write-Utf8Durable ($Path+'.sha256') ($hash+[Environment]::NewLine)
 }
-function Read-State([string]$Path,[string]$ExpectedSha){
-    foreach($p in @($Path,$Path+'.sha256')){
+function Read-State(
+    [Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$StateFile,
+    [Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$ExpectedSha
+){
+    $StateFile=[IO.Path]::GetFullPath($StateFile)
+    $hashFile=$StateFile+'.sha256'
+    foreach($p in @($StateFile,$hashFile)){
+        if([string]::IsNullOrWhiteSpace($p)){
+            throw 'Campaign state path resolved to an empty value.'
+        }
         if(-not(Test-Path -LiteralPath $p -PathType Leaf)){throw "Campaign state missing: $p"}
         Assert-NoReparsePath $p 'Campaign state'
     }
-    $expected=(Get-Content -LiteralPath ($Path+'.sha256') -Raw).Trim()
-    $actual=(Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+    $expected=(Get-Content -LiteralPath $hashFile -Raw).Trim()
+    $actual=(Get-FileHash -LiteralPath $StateFile -Algorithm SHA256).Hash
     if(-not [string]::Equals($expected,$actual,[StringComparison]::OrdinalIgnoreCase)){
         throw 'Campaign state SHA-256 mismatch.'
     }
-    $state=Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -Depth 100 -AsHashtable
+    $state=Get-Content -LiteralPath $StateFile -Raw | ConvertFrom-Json -Depth 100 -AsHashtable
     if([int]$state.schema -ne 1){throw 'Campaign state schema must be 1.'}
     if(-not [string]::Equals([string]$state.commit,$ExpectedSha,[StringComparison]::OrdinalIgnoreCase)){
         throw "Campaign state commit '$($state.commit)' does not match '$ExpectedSha'."
@@ -166,9 +174,9 @@ if($RootBase -eq [IO.Path]::GetPathRoot($RootBase).TrimEnd('\')){throw 'RootBase
 New-Item -ItemType Directory -Path $RootBase -Force | Out-Null
 Assert-NoReparsePath $RootBase 'RootBase'
 
-$active=Join-Path $RootBase 'Active'
-$statePath=Join-Path $active 'updater-recovery-campaign.json'
-$evidenceRoot=Join-Path (Join-Path $RootBase 'Evidence') $ExpectedCommit
+$active=[IO.Path]::Combine($RootBase,'Active')
+$statePath=[IO.Path]::GetFullPath([IO.Path]::Combine($active,'updater-recovery-campaign.json'))
+$evidenceRoot=[IO.Path]::GetFullPath([IO.Path]::Combine($RootBase,'Evidence',$ExpectedCommit))
 New-Item -ItemType Directory -Path $active -Force | Out-Null
 New-Item -ItemType Directory -Path $evidenceRoot -Force | Out-Null
 
@@ -267,7 +275,7 @@ if($Phase -eq 'arm'){
 }
 
 $CurrentAdminHelper=Require-Path $CurrentAdminHelper 'CurrentAdminHelper'
-$state=Read-State $statePath $ExpectedCommit
+$state=Read-State -StateFile $statePath -ExpectedSha $ExpectedCommit
 
 if($Phase -eq 'resume'){
     if([string]$state.phase -ne 'armed'){throw "Resume requires armed state; found '$($state.phase)'."}

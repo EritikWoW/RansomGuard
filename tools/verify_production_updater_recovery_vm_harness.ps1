@@ -83,6 +83,11 @@ if($currentServiceCleanup -lt 0 -or $currentHelperRestore -lt 0 -or $currentServ
 
 foreach($required in @(
     "ValidateSet('arm','resume','verify')",
+    '[ValidateNotNullOrEmpty()][string]$StateFile',
+    '$StateFile=[IO.Path]::GetFullPath($StateFile)',
+    '$hashFile=$StateFile+''.sha256''',
+    '$statePath=[IO.Path]::GetFullPath([IO.Path]::Combine($active,''updater-recovery-campaign.json''))',
+    'Read-State -StateFile $statePath -ExpectedSha $ExpectedCommit',
     'Write-InterruptedRecord',
     "'Prepared'",
     'AbortBeforeCommit',
@@ -102,6 +107,10 @@ foreach($required in @(
 )){
     if($harness -notmatch [regex]::Escape($required)){throw "Updater recovery harness invariant missing: $required"}
 }
+if($harness -match [regex]::Escape('foreach($p in @($Path,$Path+''.sha256''))')){
+    throw 'Updater recovery campaign state verification must use an explicit normalized state file and hash file path.'
+}
+
 foreach($forbidden in @(
     '\bStop-Process\b',
     '\btaskkill(?:\.exe)?\b',

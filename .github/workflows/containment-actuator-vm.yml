@@ -116,6 +116,7 @@ jobs:
             'maintenanceRejected',
             'failedRejected',
             'stoppedRejected',
+            'inactiveRejected',
             'telemetryRejected',
             'unknownCriticalRejected',
             'criticalRejected',

@@ -444,11 +444,13 @@ try{
             ForEach-Object {$_ | ConvertFrom-Json} |
             Where-Object {[string]$_.requestId -eq $requestId}
     )
-    $phases=@($journalRecords | ForEach-Object {[string]$_.phase})
-    foreach($requiredPhase in @('Prepared','SuspendApplied','ExplicitResumeApplied','Completed')){
-        if($phases -notcontains $requiredPhase){throw "State-change journal missing phase '$requiredPhase' for request '$requestId'."}
+    # System.Text.Json serializes ContainmentStateChangeJournalPhase as its numeric enum value.
+    # Bind the evidence check to the durable wire representation instead of PowerShell enum names.
+    $phases=@($journalRecords | ForEach-Object {[int]$_.phase})
+    foreach($requiredPhase in @(1,2,3,4)){
+        if($phases -notcontains $requiredPhase){throw "State-change journal missing numeric phase '$requiredPhase' for request '$requestId'."}
     }
-    if($phases -contains 'Abnormal'){throw 'State-change journal unexpectedly recorded an Abnormal terminal phase.'}
+    if($phases -contains 5){throw 'State-change journal unexpectedly recorded an Abnormal terminal phase.'}
     $summary.stateChangeJournalCompleted=$true
 
     $rangeJournal=Join-Path $stateRoot "Rollback\Sessions\$($summary.productionSession)\write-cow\range-journal.jsonl"

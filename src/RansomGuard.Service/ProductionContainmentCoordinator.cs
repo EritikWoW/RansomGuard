@@ -85,7 +85,8 @@ internal sealed class ProductionContainmentCoordinator
 
         if (!string.Equals(authorizedImage.Status, "Hashed", StringComparison.Ordinal) ||
             authorizedImage.Path is null ||
-            authorizedImage.Sha256 is null)
+            authorizedImage.Sha256 is null ||
+            authorizedImage.FileIdentity is null)
         {
             return new(
                 "Denied",
@@ -145,9 +146,37 @@ internal sealed class ProductionContainmentCoordinator
                 {
                     var fresh = _images.Inspect(path, fresh: true);
                     return string.Equals(fresh.Status, "Hashed", StringComparison.Ordinal)
-                        ? fresh.Sha256
-                        : null;
+                        ? (fresh.Sha256, fresh.FileIdentity)
+                        : (null, null);
                 });
+
+            if (lease.ImageFileIdentity is null)
+            {
+                return new(
+                    "Denied",
+                    false,
+                    false,
+                    false,
+                    false,
+                    "FreshImageFileIdentityUnavailable",
+                    new[] { "FreshImageFileIdentityUnavailable" },
+                    requestId,
+                    authorizationId);
+            }
+
+            if (!FileIdentityPolicy.SameFile(authorizedImage.FileIdentity, lease.ImageFileIdentity))
+            {
+                return new(
+                    "Denied",
+                    false,
+                    false,
+                    false,
+                    false,
+                    "ImageFileIdentityChanged",
+                    new[] { "ImageFileIdentityChanged" },
+                    requestId,
+                    authorizationId);
+            }
 
             var live = captureLiveState();
             var protectedService = IsProtectedRansomGuardProcess(lease.ImagePath);

@@ -52,6 +52,7 @@ jobs:
           path: |
             src/**/packages.lock.json
             tests/**/packages.lock.json
+            qualification/**/packages.lock.json
             !**/bin/**
             !**/obj/**
           if-no-files-found: error

@@ -65,6 +65,10 @@ public static partial class ServiceAdministration
             !string.Equals(FileVersionInfo.GetVersionInfo(source).FileVersion, version, StringComparison.Ordinal) ||
             !DecisionPolicy.HashEqual(Convert.ToHexString(SHA256.HashData(input)), expectedServiceHash))
             throw new IOException("Service bytes do not match the SHA-256 embedded in this UI. Use one complete release.");
+
+        _ = InspectUpdateProtectionPackage(
+            packageRoot,
+            version ?? throw new IOException("Version missing."));
     }
     public static string Install(string packageRoot, string expectedServiceHash, string[] roots, bool automatic, string confirmation)
     {
@@ -89,6 +93,7 @@ public static partial class ServiceAdministration
         string hash = Convert.ToHexString(SHA256.HashData(input)); input.Position = 0;
         if (!DecisionPolicy.HashEqual(hash, expectedServiceHash))
             throw new IOException("Service bytes do not match the SHA-256 embedded in this UI. Rebuild/use one complete release; no installation performed.");
+        var sourceProtection = InspectUpdateProtectionPackage(packageRoot, productVersion);
         EnsureInstallDirectory(InstallRoot);
         string dest = Path.Combine(InstallRoot, "v" + productVersion + "-" + Guid.NewGuid().ToString("N"));
         if (Directory.Exists(dest)) throw new IOException("Destination already exists.");
@@ -106,8 +111,10 @@ public static partial class ServiceAdministration
             settings.Validate();
             WriteNew(Path.Combine(dest, "appsettings.json"), settings);
             WriteNew(Path.Combine(dest, "install.json"), new InstallRecord(1, productVersion, hash, DateTime.UtcNow));
+            StageUpdateProtectionPackage(sourceProtection, dest);
             store.Audit(new { Utc = DateTime.UtcNow, Event = "ServiceInstallPrepared", Service = AdminContract.ServiceName,
-                Image = image, Sha256 = hash, Roots = roots, Automatic = automatic, Actor = CurrentActor() });
+                Image = image, Sha256 = hash, Roots = roots, Automatic = automatic,
+                ProtectionPackage = sourceProtection is not null, Actor = CurrentActor() });
             using var service = Scm.CreateServiceW(scm, AdminContract.ServiceName, "RansomGuard - audit monitoring",
                 QueryConfig | QueryStatus, 0x10, automatic ? 2u : 3u, 1, "\"" + image + "\"", null, IntPtr.Zero, null, "LocalSystem", null);
             if (service.IsInvalid) throw Error();
@@ -118,7 +125,8 @@ public static partial class ServiceAdministration
         catch (Exception ex)
         {
             if (registered) throw new IOException("Service WAS registered, but a follow-up check/audit failed. Inspect current service status; it was NOT started. " + ex.Message, ex);
-            // Only the three known files in the newly-created directory. No recursive deletion.
+            CleanupStagedProtectionPackage(dest);
+            // Only the three known non-Protection files in the newly-created directory. No recursive deletion.
             foreach (string file in new[] { image, Path.Combine(dest, "appsettings.json"), Path.Combine(dest, "install.json") })
                 try { if (File.Exists(file)) { FileSafety.NoReparse(file); File.Delete(file); } } catch (IOException) { }
             try { Directory.Delete(dest, false); } catch (IOException) { }

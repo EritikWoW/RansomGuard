@@ -105,11 +105,15 @@ function Wait-JournalMatch([string]$Path,[scriptblock]$Predicate,[int]$Seconds,[
     throw "Timed out waiting for $Description in $Path"
 }
 
-function Test-AccessDeniedException([Exception]$Exception){
+function Test-MappedOperationDeniedException([Exception]$Exception){
     $cursor=$Exception
     while($null -ne $cursor){
         if($cursor -is [UnauthorizedAccessException]){return $true}
-        if((([int]$cursor.HResult -band 0xFFFF) -eq 5)){return $true}
+        $win32=([int]$cursor.HResult -band 0xFFFF)
+        # ERROR_ACCESS_DENIED=5, ERROR_SHARING_VIOLATION=32,
+        # ERROR_USER_MAPPED_FILE=1224. All are safe-denial outcomes for
+        # namespace/EOF operations attempted while the writable mapping is retained.
+        if($win32 -in @(5,32,1224)){return $true}
         $cursor=$cursor.InnerException
     }
     return $false
@@ -316,7 +320,7 @@ try{
     $destination=Join-Path $s.Root 'renamed.bin'
     $renameDenied=$false
     try{[IO.File]::Move($s.Target,$destination)}
-    catch{if(Test-AccessDeniedException $_.Exception){$renameDenied=$true}else{throw}}
+    catch{if(Test-MappedOperationDeniedException $_.Exception){$renameDenied=$true}else{throw}}
     Release-ScenarioHolder $holder $release 'Mapping-rename holder'
     if($renameDenied){
         if(-not(Test-Path -LiteralPath $s.Target -PathType Leaf)){throw 'Denied mapped rename lost source path.'}
@@ -345,10 +349,13 @@ try{
     try{
         $stream=[IO.File]::Open($s.Target,[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
         try{$stream.SetLength(32768);$stream.Flush($true)}finally{$stream.Dispose()}
-    }catch{if(Test-AccessDeniedException $_.Exception){$truncateDenied=$true}else{throw}}
+    }catch{if(Test-MappedOperationDeniedException $_.Exception){$truncateDenied=$true}else{throw}}
     Release-ScenarioHolder $holder $release 'Mapping-truncate holder'
     if($truncateDenied){
         if((Get-Item -LiteralPath $s.Target).Length -ne 65536){throw 'Denied mapped truncate changed file length.'}
+        if(-not [string]::Equals((Get-FileHash -LiteralPath $s.Target -Algorithm SHA256).Hash,$s.OriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+            throw 'Denied mapped truncate changed target content.'
+        }
     }else{
         if((Get-Item -LiteralPath $s.Target).Length -ne 32768){throw 'Allowed mapped truncate did not set expected EOF.'}
         $null=Assert-DurablePreimage $s.Session $s.Target $s.OriginalHash 'mapping truncate'
@@ -369,7 +376,7 @@ try{
     Wait-Path $ready 20 'mapping-delete holder'
     $deleteDenied=$false
     try{[IO.File]::Delete($s.Target)}
-    catch{if(Test-AccessDeniedException $_.Exception){$deleteDenied=$true}else{throw}}
+    catch{if(Test-MappedOperationDeniedException $_.Exception){$deleteDenied=$true}else{throw}}
     Release-ScenarioHolder $holder $release 'Mapping-delete holder'
     if(-not $deleteDenied){
         $null=Assert-DurablePreimage $s.Session $s.Target $s.OriginalHash 'mapping delete'

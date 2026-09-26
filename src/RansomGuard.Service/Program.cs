@@ -137,7 +137,7 @@ try
             if(stateChangeJournal is not null)
                 productionContainment=new ProductionContainmentCoordinator(
                     sp.GetRequiredService<ILogger<ProductionContainmentCoordinator>>(),
-                    settings,store,imageInspector,stateChangeJournal);
+                    settings,store,imageInspector,stateChangeJournal,runtime);
             return new GuardWorker(
                 sp.GetRequiredService<ILogger<GuardWorker>>(),
                 sp.GetRequiredService<IHostApplicationLifetime>(),settings,store,imageInspector,samples,lab,runtime,scopedTrust,

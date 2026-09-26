@@ -103,6 +103,7 @@ jobs:
           }
 
           foreach($name in @(
+            'threadEntry32LayoutValid',
             'successSuspended',
             'exactIdentityBound',
             'unrelatedUnaffected',

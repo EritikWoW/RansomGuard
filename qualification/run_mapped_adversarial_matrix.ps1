@@ -233,6 +233,20 @@ function Cleanup-Scenario {
     Reset-QualificationState
 }
 
+function Release-ScenarioHolder(
+    [System.Diagnostics.Process]$Holder,
+    [string]$ReleaseMarker,
+    [string]$Description
+){
+    New-Item -ItemType File -Path $ReleaseMarker -Force | Out-Null
+    if(-not $Holder.WaitForExit(15000)){
+        Stop-ProcessHard $Holder $Description
+        throw "$Description did not exit after release."
+    }
+    if($Holder.ExitCode -ne 0){throw "$Description failed, exit=$($Holder.ExitCode)."}
+    $activeProcesses.Remove($Holder) | Out-Null
+}
+
 function Start-Scenario([string]$Name,[int]$Salt){
     # Prevent nested helper/script output from becoming part of this function's return value.
     # Start-Scenario must emit exactly one scenario object so StrictMode property access is deterministic.
@@ -278,6 +292,7 @@ try{
     Start-Sleep -Milliseconds 500
     New-Item -ItemType File -Path $go -Force | Out-Null
     Wait-Path $result 20 'mapped-loss flush result'
+    Release-ScenarioHolder $holder $release 'Mapped-loss holder'
     $after=(Get-FileHash -LiteralPath $s.Target -Algorithm SHA256).Hash
     if([string]::Equals($after,$s.OriginalHash,[StringComparison]::OrdinalIgnoreCase)){
         $summary.mappedLossFailSafe=$true
@@ -287,8 +302,6 @@ try{
         $summary.mappedLossFailSafe=$true
         $summary.mappedLossPreimageProven=$true
     }
-    New-Item -ItemType File -Path $release -Force | Out-Null
-    if(-not $holder.WaitForExit(15000)){throw 'Mapped-loss holder did not exit.'}
     Cleanup-Scenario
 
     # 2. Rename while a writable mapping is alive.
@@ -304,6 +317,7 @@ try{
     $renameDenied=$false
     try{[IO.File]::Move($s.Target,$destination)}
     catch{if(Test-AccessDeniedException $_.Exception){$renameDenied=$true}else{throw}}
+    Release-ScenarioHolder $holder $release 'Mapping-rename holder'
     if($renameDenied){
         if(-not(Test-Path -LiteralPath $s.Target -PathType Leaf)){throw 'Denied mapped rename lost source path.'}
         if(-not [string]::Equals((Get-FileHash -LiteralPath $s.Target -Algorithm SHA256).Hash,$s.OriginalHash,[StringComparison]::OrdinalIgnoreCase)){
@@ -316,8 +330,6 @@ try{
     }
     if($renameDenied){$summary.mappingRenamePreimageProven=$true}
     $summary.mappingRenameSafe=$true
-    New-Item -ItemType File -Path $release -Force | Out-Null
-    if(-not $holder.WaitForExit(15000)){throw 'Mapping-rename holder did not exit.'}
     Cleanup-Scenario
 
     # 3. EOF truncation while a writable mapping is alive.
@@ -334,6 +346,7 @@ try{
         $stream=[IO.File]::Open($s.Target,[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
         try{$stream.SetLength(32768);$stream.Flush($true)}finally{$stream.Dispose()}
     }catch{if(Test-AccessDeniedException $_.Exception){$truncateDenied=$true}else{throw}}
+    Release-ScenarioHolder $holder $release 'Mapping-truncate holder'
     if($truncateDenied){
         if((Get-Item -LiteralPath $s.Target).Length -ne 65536){throw 'Denied mapped truncate changed file length.'}
     }else{
@@ -343,8 +356,6 @@ try{
     }
     if($truncateDenied){$summary.mappingTruncatePreimageProven=$true}
     $summary.mappingTruncateSafe=$true
-    New-Item -ItemType File -Path $release -Force | Out-Null
-    if(-not $holder.WaitForExit(15000)){throw 'Mapping-truncate holder did not exit.'}
     Cleanup-Scenario
 
     # 4. Delete disposition while a writable mapping is alive.
@@ -359,6 +370,7 @@ try{
     $deleteDenied=$false
     try{[IO.File]::Delete($s.Target)}
     catch{if(Test-AccessDeniedException $_.Exception){$deleteDenied=$true}else{throw}}
+    Release-ScenarioHolder $holder $release 'Mapping-delete holder'
     if(-not $deleteDenied){
         $null=Assert-DurablePreimage $s.Session $s.Target $s.OriginalHash 'mapping delete'
         $summary.mappingDeletePreimageProven=$true
@@ -370,8 +382,6 @@ try{
         $summary.mappingDeletePreimageProven=$true
     }
     $summary.mappingDeleteSafe=$true
-    New-Item -ItemType File -Path $release -Force | Out-Null
-    if(-not $holder.WaitForExit(15000)){throw 'Mapping-delete holder did not exit.'}
     Cleanup-Scenario
 
     # 5. Dirty mapped page exists before GateClient loss; explicit flush happens after loss.
@@ -391,6 +401,7 @@ try{
     Start-Sleep -Milliseconds 500
     New-Item -ItemType File -Path $go -Force | Out-Null
     Wait-Path $result 20 'dirty mapped flush result'
+    Release-ScenarioHolder $holder $release 'Dirty-flush holder'
     $after=(Get-FileHash -LiteralPath $s.Target -Algorithm SHA256).Hash
     if([string]::Equals($after,$s.OriginalHash,[StringComparison]::OrdinalIgnoreCase)){
         $summary.dirtyFlushBoundarySafe=$true
@@ -400,8 +411,6 @@ try{
         $summary.dirtyFlushBoundarySafe=$true
         $summary.dirtyFlushPreimageProven=$true
     }
-    New-Item -ItemType File -Path $release -Force | Out-Null
-    if(-not $holder.WaitForExit(15000)){throw 'Dirty-flush holder did not exit.'}
     Cleanup-Scenario
 
     $summary.cleanupPassed=$true

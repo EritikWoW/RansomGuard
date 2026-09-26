@@ -52,6 +52,7 @@ jobs:
           if(-not [string]::Equals($actual,$env:RG_EXPECTED_SHA,[StringComparison]::OrdinalIgnoreCase)){
             throw "Exact checkout mismatch. expected=$env:RG_EXPECTED_SHA actual=$actual"
           }
+          .\tools\verify_threat_model.ps1
           .\orchestrator\tools\verify_production_updater_vm_harness.ps1 -RepositoryRoot $PWD
 
       - name: Verify disposable VM runner readiness

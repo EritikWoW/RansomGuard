@@ -80,17 +80,31 @@ jobs:
           $failure=Join-Path $base 'failure'
           foreach($p in @($old,$current,$failure)){New-Item -ItemType Directory -Path $p -Force | Out-Null}
 
-          dotnet publish .\src\RansomGuard.Service\RansomGuard.Service.csproj -c Release -r win-x64 --self-contained true --locked-mode -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj-updater-old\ -p:BaseOutputPath=bin-updater-old\ -o (Join-Path $old 'package')
+          $oldServiceProject='.\src\RansomGuard.Service\RansomGuard.Service.csproj'
+          dotnet restore $oldServiceProject --locked-mode -r win-x64 -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj-updater-old\
+          if($LASTEXITCODE -ne 0){throw 'Old service restore failed.'}
+          dotnet publish $oldServiceProject -c Release -r win-x64 --self-contained true --no-restore -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj-updater-old\ -p:BaseOutputPath=bin-updater-old\ -o (Join-Path $old 'package')
           if($LASTEXITCODE -ne 0){throw 'Old service publish failed.'}
-          dotnet publish .\qualification\RansomGuard.UpdaterQualification\RansomGuard.UpdaterQualification.csproj -c Release -r win-x64 --self-contained true --locked-mode -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj-updater-old\ -p:BaseOutputPath=bin-updater-old\ -o (Join-Path $old 'helper')
+          $helperProject='.\qualification\RansomGuard.UpdaterQualification\RansomGuard.UpdaterQualification.csproj'
+          dotnet restore $helperProject --locked-mode -r win-x64 -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj-updater-old\
+          if($LASTEXITCODE -ne 0){throw 'Old administration helper restore failed.'}
+          dotnet publish $helperProject -c Release -r win-x64 --self-contained true --no-restore -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj-updater-old\ -p:BaseOutputPath=bin-updater-old\ -o (Join-Path $old 'helper')
           if($LASTEXITCODE -ne 0){throw 'Old administration helper publish failed.'}
 
-          dotnet publish .\src\RansomGuard.Service\RansomGuard.Service.csproj -c Release -r win-x64 --self-contained true --locked-mode -p:BaseIntermediateOutputPath=obj-updater-current\ -p:BaseOutputPath=bin-updater-current\ -o (Join-Path $current 'package')
+          $currentServiceProject='.\src\RansomGuard.Service\RansomGuard.Service.csproj'
+          dotnet restore $currentServiceProject --locked-mode -r win-x64 -p:BaseIntermediateOutputPath=obj-updater-current\
+          if($LASTEXITCODE -ne 0){throw 'Current service restore failed.'}
+          dotnet publish $currentServiceProject -c Release -r win-x64 --self-contained true --no-restore -p:BaseIntermediateOutputPath=obj-updater-current\ -p:BaseOutputPath=bin-updater-current\ -o (Join-Path $current 'package')
           if($LASTEXITCODE -ne 0){throw 'Current service publish failed.'}
-          dotnet publish .\qualification\RansomGuard.UpdaterQualification\RansomGuard.UpdaterQualification.csproj -c Release -r win-x64 --self-contained true --locked-mode -p:BaseIntermediateOutputPath=obj-updater-current\ -p:BaseOutputPath=bin-updater-current\ -o (Join-Path $current 'helper')
+          dotnet restore $helperProject --locked-mode -r win-x64 -p:BaseIntermediateOutputPath=obj-updater-current\
+          if($LASTEXITCODE -ne 0){throw 'Current administration helper restore failed.'}
+          dotnet publish $helperProject -c Release -r win-x64 --self-contained true --no-restore -p:BaseIntermediateOutputPath=obj-updater-current\ -p:BaseOutputPath=bin-updater-current\ -o (Join-Path $current 'helper')
           if($LASTEXITCODE -ne 0){throw 'Current administration helper publish failed.'}
 
-          dotnet publish .\qualification\RansomGuard.UpdaterFailureFixture\RansomGuard.UpdaterFailureFixture.csproj -c Release -r win-x64 --self-contained true --locked-mode -p:BaseIntermediateOutputPath=obj-updater-failure\ -p:BaseOutputPath=bin-updater-failure\ -o $failure
+          $failureProject='.\qualification\RansomGuard.UpdaterFailureFixture\RansomGuard.UpdaterFailureFixture.csproj'
+          dotnet restore $failureProject --locked-mode -r win-x64 -p:BaseIntermediateOutputPath=obj-updater-failure\
+          if($LASTEXITCODE -ne 0){throw 'Failure fixture restore failed.'}
+          dotnet publish $failureProject -c Release -r win-x64 --self-contained true --no-restore -p:BaseIntermediateOutputPath=obj-updater-failure\ -p:BaseOutputPath=bin-updater-failure\ -o $failure
           if($LASTEXITCODE -ne 0){throw 'Failure fixture publish failed.'}
 
           $oldService=Join-Path $old 'package\RansomGuard.Service.exe'
@@ -121,7 +135,8 @@ jobs:
           RG_FAILURE_PACKAGE: ${{ steps.build.outputs.failure_package }}
         run: |
           $ErrorActionPreference='Stop'
-          $results=Join-Path $env:RUNNER_TEMP ("ransomguard-production-updater-rollback-evidence-"+$env:GITHUB_RUN_ID+"-"+$env:GITHUB_RUN_ATTEMPT)
+          $results=Join-Path $env:RUNNER_TEMP 'ransomguard-production-updater-rollback-results'
+          if(Test-Path -LiteralPath $results){Remove-Item -LiteralPath $results -Recurse -Force}
           .\qualification\run_production_updater_rollback_vm.ps1 -OldAdminHelper $env:RG_OLD_HELPER -CurrentAdminHelper $env:RG_CURRENT_HELPER -OldPackage $env:RG_OLD_PACKAGE -CurrentPackage $env:RG_CURRENT_PACKAGE -FailurePackage $env:RG_FAILURE_PACKAGE -ExpectedCommit $env:RG_EXPECTED_SHA -RootBase $env:RG_ROOT_BASE -ResultsDirectory $results
           $summary=Get-Content -LiteralPath (Join-Path $results 'production-updater-rollback-result.json') -Raw | ConvertFrom-Json
           foreach($name in @(
@@ -134,7 +149,6 @@ jobs:
           )){
             if($summary.$name -ne $true){throw "Updater qualification invariant '$name' was not true."}
           }
-          "RG_UPDATER_RESULTS=$results" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Ensure service registration cleanup
         if: always()
@@ -153,6 +167,6 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 node24 pinned
         with:
           name: ransomguard-production-updater-rollback-${{ inputs.expected_sha }}
-          path: ${{ env.RG_UPDATER_RESULTS }}/**
+          path: ${{ runner.temp }}/ransomguard-production-updater-rollback-results/**
           if-no-files-found: warn
           retention-days: 30

@@ -20,6 +20,31 @@ internal sealed class SnapshotHandle : SafeHandleZeroOrMinusOneIsInvalid
     protected override bool ReleaseHandle()=>Native.CloseHandle(handle);
 }
 [StructLayout(LayoutKind.Sequential)]
+internal struct NativeFileTime
+{
+    internal uint LowDateTime;
+    internal uint HighDateTime;
+
+    internal long ToFileTimeUtc()
+        => unchecked((long)(((ulong)HighDateTime << 32) | LowDateTime));
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct ByHandleFileInformation
+{
+    internal uint FileAttributes;
+    internal NativeFileTime CreationTime;
+    internal NativeFileTime LastAccessTime;
+    internal NativeFileTime LastWriteTime;
+    internal uint VolumeSerialNumber;
+    internal uint FileSizeHigh;
+    internal uint FileSizeLow;
+    internal uint NumberOfLinks;
+    internal uint FileIndexHigh;
+    internal uint FileIndexLow;
+}
+
+[StructLayout(LayoutKind.Sequential)]
 internal struct ThreadEntry32
 {
     internal uint Size;
@@ -50,6 +75,7 @@ internal static class Native
     [DllImport("kernel32.dll",SetLastError=true)] internal static extern uint WaitForSingleObject(ProcessHandle h,uint timeout);
     [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] internal static extern uint QueryDosDevice(string device,StringBuilder target,int max);
     [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] internal static extern uint GetFinalPathNameByHandle(SafeFileHandle file,StringBuilder path,uint len,uint flags);
+    [DllImport("kernel32.dll",SetLastError=true)] internal static extern bool GetFileInformationByHandle(SafeFileHandle file,out ByHandleFileInformation info);
     [DllImport("ntdll.dll")] internal static extern int NtSuspendProcess(ProcessHandle p);
     [DllImport("ntdll.dll")] internal static extern int NtResumeProcess(ProcessHandle p);
     public static ProcessKey? Identity(ProcessHandle h,int pid)
@@ -65,6 +91,17 @@ internal static class Native
         var b=new StringBuilder(32768);var n=GetFinalPathNameByHandle(h,b,(uint)b.Capacity,0);
         if(n==0 || n>=b.Capacity) throw new IOException("Cannot resolve final opened-file path.");
         return WinPaths.Normalize(b.ToString())??throw new IOException("Unsupported file namespace.");
+    }
+    public static FileIdentityEvidence? FileIdentity(SafeFileHandle h)
+    {
+        if(h.IsInvalid || !GetFileInformationByHandle(h,out var info)) return null;
+        var fileIndex=((ulong)info.FileIndexHigh<<32)|info.FileIndexLow;
+        var size=unchecked((long)(((ulong)info.FileSizeHigh<<32)|info.FileSizeLow));
+        return new FileIdentityEvidence(
+            info.VolumeSerialNumber,
+            fileIndex,
+            size,
+            info.LastWriteTime.ToFileTimeUtc());
     }
 }
 internal sealed record PathResolution(string? Path,string Category);

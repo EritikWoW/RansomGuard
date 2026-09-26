@@ -9,9 +9,9 @@ if (!OperatingSystem.IsWindows())
     return 2;
 }
 
-if (args.Length != 5 || args[0] is not ("--malicious" or "--benign"))
+if (args.Length != 5 || args[0] is not ("--malicious" or "--malicious-exit" or "--benign"))
 {
-    Console.Error.WriteLine("Usage: --malicious|--benign TARGET HEARTBEAT READY RESULT");
+    Console.Error.WriteLine("Usage: --malicious|--malicious-exit|--benign TARGET HEARTBEAT READY RESULT");
     return 3;
 }
 
@@ -53,7 +53,7 @@ double maxGapMs = 0;
 var heartbeatCount = 0;
 var protectedWrites = 0;
 
-if (mode == "malicious")
+if (mode is "malicious" or "malicious-exit")
 {
     var payload = RandomNumberGenerator.GetBytes(4096);
     using var stream = new FileStream(target, FileMode.Open, FileAccess.Write,
@@ -63,6 +63,8 @@ if (mode == "malicious")
     stream.Write(payload);
     stream.Flush(true);
     protectedWrites = 1;
+    if (mode == "malicious-exit")
+        return 0;
 }
 else
 {

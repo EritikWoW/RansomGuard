@@ -123,7 +123,7 @@ function Wait-JsonFile([string]$Path,[int]$Seconds){
     throw "Timed out waiting for JSON file: $Path"
 }
 
-function Find-IncidentForPid([int]$ProcessId,[string[]]$BaselineCases,[int]$Seconds){
+function Find-IncidentForProcess([int]$ProcessId,[long]$CreationFileTimeUtc,[string[]]$BaselineCases,[int]$Seconds){
     $cases=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)) 'RansomGuardV03\Incidents'
     $baseline=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach($path in $BaselineCases){[void]$baseline.Add([IO.Path]::GetFullPath($path))}
@@ -135,14 +135,29 @@ function Find-IncidentForPid([int]$ProcessId,[string[]]$BaselineCases,[int]$Seco
             if(-not(Test-Path -LiteralPath $incidentPath -PathType Leaf)){continue}
             try{
                 $incident=Get-Content -LiteralPath $incidentPath -Raw | ConvertFrom-Json -Depth 100
-                if([int]$incident.Risk.Process.Pid -eq $ProcessId){
+                if([int]$incident.Risk.Process.Pid -eq $ProcessId -and
+                   [long]$incident.Risk.Process.CreationFileTimeUtc -eq $CreationFileTimeUtc){
                     return [pscustomobject]@{Directory=$dir.FullName;Incident=$incident}
                 }
             }catch{}
         }
-        Start-Sleep -Milliseconds 150
+        Start-Sleep -Milliseconds 100
     }
     return $null
+}
+
+function Get-JournalRecordsForProcess([string]$Path,[int]$ProcessId,[long]$CreationFileTimeUtc){
+    if(-not(Test-Path -LiteralPath $Path -PathType Leaf)){return @()}
+    return @(
+        Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue |
+            Where-Object {-not [string]::IsNullOrWhiteSpace($_)} |
+            ForEach-Object {try{$_ | ConvertFrom-Json}catch{$null}} |
+            Where-Object {
+                $null -ne $_ -and
+                [int]$_.processId -eq $ProcessId -and
+                [long]$_.processCreationFileTimeUtc -eq $CreationFileTimeUtc
+            }
+    )
 }
 
 function Get-RansomGuardPublishedInfNames {
@@ -254,15 +269,17 @@ $root=Join-Path $RootBase "containment-e2e-$stamp"
 New-Item -ItemType Directory -Path $root -Force | Out-Null
 Assert-NoReparsePath $root 'ProtectedRoot'
 $canary=Join-Path $root 'containment-canary.txt'
+$exitRaceCanary=Join-Path $root 'process-exit-race-canary.txt'
 $benignTarget=Join-Path $root 'benign-high-io.bin'
 [IO.File]::WriteAllText($canary,'ransomguard-e2e-canary-original',[Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText($exitRaceCanary,'ransomguard-process-exit-original',[Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText($benignTarget,'ransomguard-benign-original',[Text.UTF8Encoding]::new($false))
 $canaryOriginalSha=(Get-FileHash -LiteralPath $canary -Algorithm SHA256).Hash
 
 $config=Get-Content -LiteralPath $appSettings -Raw | ConvertFrom-Json
 $config.Mode='Enforce'
 $config.ProtectedRoots=@($root)
-$config.CanaryFiles=@($canary)
+$config.CanaryFiles=@($canary,$exitRaceCanary)
 $config.Enforce.RequireSignedDriver=$true
 $config.Enforce.AutomaticContainment=$true
 $config.Enforce.ContainmentHoldMilliseconds=1200
@@ -300,6 +317,13 @@ $summary=[ordered]@{
     maliciousProcessCreationFileTimeUtc=0
     maliciousCaseId=$null
     maliciousMaxHeartbeatGapMs=0.0
+    exitRacePid=0
+    exitRaceProcessCreationFileTimeUtc=0
+    exitRaceCaseId=$null
+    exitRaceIncidentPersisted=$false
+    exitRaceProcessIdentityDenied=$false
+    exitRaceNoContainment=$false
+    exitRaceOutcome=$null
     benignPid=0
     benignProcessCreationFileTimeUtc=0
     benignMaxHeartbeatGapMs=0.0
@@ -417,7 +441,7 @@ try{
     }
     $summary.containmentHeartbeatGapObserved=$true
 
-    $case=Find-IncidentForPid -ProcessId $malicious.Id -BaselineCases $baselineCases -Seconds 10
+    $case=Find-IncidentForProcess -ProcessId $malicious.Id -CreationFileTimeUtc ([long]$ready.creationFileTimeUtc) -BaselineCases $baselineCases -Seconds 10
     if($null -eq $case){throw 'No persisted incident was found for the malicious fixture process.'}
     $summary.maliciousIncidentPersisted=$true
     $summary.maliciousCaseId=Split-Path -Leaf $case.Directory
@@ -479,6 +503,56 @@ try{
         throw 'Malicious canary fixture did not actually mutate the protected file.'
     }
 
+    # Integrated process-exit race: generate real protected mutation telemetry from a process
+    # that exits immediately. The ordinary production path must bind the incident to the exact
+    # PID+CreationFileTime instance and must never contain a later/reused process instance.
+    $casesBeforeExitRace=@(Get-ChildItem -LiteralPath $casesRoot -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+    $exitHeartbeat=Join-Path $fixtureRoot 'exit-race-heartbeat.txt'
+    $exitReady=Join-Path $fixtureRoot 'exit-race-ready.json'
+    $exitResult=Join-Path $fixtureRoot 'exit-race-result.json'
+    $exitRace=Start-Process -FilePath $FixtureExecutable -ArgumentList @(
+        '--malicious-exit',$exitRaceCanary,$exitHeartbeat,$exitReady,$exitResult
+    ) -PassThru -WindowStyle Hidden
+    $exitReadyObject=Wait-JsonFile $exitReady 10
+    if([int]$exitReadyObject.pid -ne $exitRace.Id -or [long]$exitReadyObject.creationFileTimeUtc -le 0){
+        throw 'Process-exit fixture ready identity mismatch.'
+    }
+    $summary.exitRacePid=[int]$exitReadyObject.pid
+    $summary.exitRaceProcessCreationFileTimeUtc=[long]$exitReadyObject.creationFileTimeUtc
+    if(-not $exitRace.WaitForExit(5000)){
+        try{$exitRace.Kill($true)}catch{}
+        throw 'Process-exit fixture did not terminate immediately after its protected mutation.'
+    }
+    if($exitRace.ExitCode -ne 0){throw "Process-exit fixture failed exit=$($exitRace.ExitCode)."}
+
+    $exitCase=Find-IncidentForProcess -ProcessId ([int]$exitReadyObject.pid) -CreationFileTimeUtc ([long]$exitReadyObject.creationFileTimeUtc) -BaselineCases $casesBeforeExitRace -Seconds 12
+    if($null -eq $exitCase){throw 'No persisted incident was found for the short-lived malicious process.'}
+    $summary.exitRaceIncidentPersisted=$true
+    $summary.exitRaceCaseId=Split-Path -Leaf $exitCase.Directory
+
+    $exitAuthorization=Wait-JsonFile (Join-Path $exitCase.Directory 'authorization.json') 5
+    $exitResponse=Wait-JsonFile (Join-Path $exitCase.Directory 'response.json') 5
+    $identityDenied=
+        $exitAuthorization.Decision.Eligible -ne $true -and
+        @($exitAuthorization.Decision.Reasons) -contains 'ProcessIdentityNotVerified' -and
+        [string]$exitResponse.Action -eq 'AuditOnly' -and
+        $exitResponse.ActuationAttempted -eq $false
+    $failedClosedBeforeCompletion=
+        $exitAuthorization.Decision.Eligible -eq $true -and
+        [string]$exitResponse.Action -eq 'FailedClosed' -and
+        $exitResponse.ProductionContainment.Completed -ne $true
+
+    if(-not $identityDenied -and -not $failedClosedBeforeCompletion){
+        throw "Short-lived process was not denied/fail-closed by exact live identity. auth=$($exitAuthorization.Decision.State) action=$($exitResponse.Action)"
+    }
+    $exitJournal=@(Get-JournalRecordsForProcess $journalPath ([int]$exitReadyObject.pid) ([long]$exitReadyObject.creationFileTimeUtc))
+    if(@($exitJournal | Where-Object {[int]$_.phase -eq 4}).Count -ne 0){
+        throw 'Short-lived process unexpectedly reached Completed containment journal state.'
+    }
+    $summary.exitRaceProcessIdentityDenied=$identityDenied
+    $summary.exitRaceNoContainment=$true
+    $summary.exitRaceOutcome=if($identityDenied){'AuthorizationDeniedExactProcessGone'}else{'ActuationFailedClosedExactProcessGone'}
+
     $casesBeforeBenign=@(Get-ChildItem -LiteralPath $casesRoot -Directory | Select-Object -ExpandProperty FullName)
     $journalBeforeBenign=@(Get-Content -LiteralPath $journalPath -ErrorAction SilentlyContinue).Count
     $benignHeartbeat=Join-Path $fixtureRoot 'benign-heartbeat.txt'
@@ -506,7 +580,7 @@ try{
     $summary.benignHighIoCompleted=$true
 
     Start-Sleep -Seconds 2
-    $benignCase=Find-IncidentForPid -ProcessId $benign.Id -BaselineCases $casesBeforeBenign -Seconds 1
+    $benignCase=Find-IncidentForProcess -ProcessId $benign.Id -CreationFileTimeUtc ([long]$benignReadyObject.creationFileTimeUtc) -BaselineCases $casesBeforeBenign -Seconds 1
     if($null -ne $benignCase){throw 'Benign high-I/O fixture unexpectedly produced a risk incident.'}
     $summary.benignNoIncident=$true
 

@@ -209,6 +209,81 @@ internal sealed class GuardWorker:BackgroundService
             catch(Exception ex){_log.LogError(ex,"Incident processing failed; no automatic action should be inferred.");}
         }
     }
+    private ContainmentAuthorizationInput BuildContainmentAuthorizationInput(
+        RiskSignal risk,
+        ImageEvidence image,
+        EtwMonitor monitor,
+        ScopedTrustDecision scoped,
+        bool confirmedCanary,
+        bool isLab)
+    {
+        var protection=_runtime.Protection();
+        var monitorState=_runtime.Monitor();
+        var processIdentityVerified=VerifyLiveProcessIdentity(risk);
+        var freshImageIdentityVerified=
+            string.Equals(image.Status,"Hashed",StringComparison.Ordinal) &&
+            WinPaths.Equal(image.Path,risk.ImagePath) &&
+            DecisionPolicy.HashEqual(image.Sha256,image.Sha256) &&
+            DateTime.UtcNow-image.ObservedUtc<=TimeSpan.FromSeconds(30);
+        var protectedScopeResolved=EvidenceScopeResolved(risk);
+
+        return new(
+            _settings.Enforce.AutomaticContainment,
+            protection,
+            monitorState.State,
+            monitor.EventsLost ?? -1,
+            monitor.Dropped,
+            Interlocked.Read(ref _incidentDrops),
+            _engine.WindowEvictions,
+            _engine.TruncatedWindows,
+            IncidentPersisted:true,
+            ProcessIdentityVerified:processIdentityVerified,
+            FreshImageIdentityVerified:freshImageIdentityVerified,
+            ProtectedScopeResolved:protectedScopeResolved,
+            IsLab:isLab,
+            ScopedTrustApplies:scoped.Applies,
+            RiskScore:risk.Score,
+            RiskThreshold:_settings.RiskThreshold,
+            ConfirmedCanary:confirmedCanary);
+    }
+
+    private static bool VerifyLiveProcessIdentity(RiskSignal risk)
+    {
+        try
+        {
+            if(risk.ImagePath is null)return false;
+            using var handle=Native.OpenProcess(Native.Query|Native.Synchronize,false,risk.Process.Pid);
+            var identity=Native.Identity(handle,risk.Process.Pid);
+            var imagePath=Native.ImagePath(handle);
+            return identity is ProcessKey current &&
+                current==risk.Process &&
+                WinPaths.Equal(imagePath,risk.ImagePath);
+        }
+        catch(Exception ex) when(ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private bool EvidenceScopeResolved(RiskSignal risk)
+    {
+        if(risk.Evidence.Length==0)return false;
+        bool Protected(string? path)=>path is not null &&
+            _settings.ProtectedRoots.Any(root=>WinPaths.Equal(path,root)||WinPaths.Under(path,root));
+
+        foreach(var evidence in risk.Evidence)
+        {
+            if(!Protected(evidence.Path))return false;
+            if(evidence.Kind==FileKind.Rename)
+            {
+                // Existing ETW rename telemetry does not guess a destination path. Unknown topology
+                // is therefore not sufficient evidence for production containment authorization.
+                if(evidence.DestinationPath is null||!Protected(evidence.DestinationPath))return false;
+            }
+        }
+        return true;
+    }
+
     private async Task Respond(RiskSignal risk,EtwMonitor monitor,CancellationToken token)
     {
         var isLab=_lab?.Identity?.Process==risk.Process;
@@ -243,13 +318,25 @@ internal sealed class GuardWorker:BackgroundService
             Priority=priority,Content=preliminaryChanges,ScopedTrust=scoped,Telemetry=new{Healthy=healthy,DeliveryLatency=latencyAtDecision,PathResolution=pathsAtDecision,
                 IncidentQueueDropped=Interlocked.Read(ref _incidentDrops),WindowEvictions=_engine.WindowEvictions,TruncatedWindows=_engine.TruncatedWindows},
             LabRunId=isLab?_lab!.RunId:null,Action="RecordedBeforeResponse",Note="No action success is implied by the existence of this file."});
+
+        var authorizationInput=BuildContainmentAuthorizationInput(risk,image,monitor,scoped,confirmedCanary,isLab);
+        var authorization=ContainmentAuthorizationPolicy.Evaluate(authorizationInput);
+        _store.WriteJson(Path.Combine(dir,"authorization.json"),new{
+            SchemaVersion=1,Version=ProductInfo.Version,EvaluatedUtc=DateTime.UtcNow,
+            Input=authorizationInput,Decision=authorization,
+            ActuationAttempted=false,
+            Note="Authorization evidence only. No ordinary-process containment actuator is wired in this milestone."
+        });
+        _runtime.UpdateContainmentAuthorization(authorization);
         _runtime.RecordIncident(new IncidentSummaryDto(caseId,capturedUtc,risk.Process.Pid,risk.Name,risk.Score,priority,risk.DistinctFiles,risk.Writes,risk.Renames,risk.Deletes,
-            image.Signature.Status,image.LocalDisposition,isLab?"LabPending":"AuditOnly",risk.Reasons.Take(8).ToArray(),scoped));
+            image.Signature.Status,image.LocalDisposition,isLab?"LabPending":"AuditOnly",risk.Reasons.Take(8).ToArray(),scoped,authorization));
         if(!isLab||_lab!.ResponseClaimed)
         {
-            _store.WriteJson(Path.Combine(dir,"response.json"),new{Action="AuditOnly",SuspendAttempted=false,ScopedTrust=scoped,
-                Reason="Automatic response to ordinary processes is disabled, including canary and locally blocked-hash matches."});
-            _store.Audit(new{Utc=DateTime.UtcNow,Event="Incident",Case=Path.GetFileName(dir),risk.Process,Priority=priority,image.Sha256,image.Signature,Action="AuditOnly",ScopedTrust=scoped});
+            _store.WriteJson(Path.Combine(dir,"response.json"),new{Action="AuditOnly",SuspendAttempted=false,ActuationAttempted=false,ScopedTrust=scoped,
+                ContainmentAuthorization=authorization,
+                Reason="Automatic response to ordinary processes is disabled; authorization evidence does not execute an action."});
+            _store.Audit(new{Utc=DateTime.UtcNow,Event="Incident",Case=Path.GetFileName(dir),risk.Process,Priority=priority,image.Sha256,image.Signature,
+                Action="AuditOnly",ScopedTrust=scoped,ContainmentAuthorization=authorization});
             if(scoped.NotificationQuieted)
                 _log.LogInformation("AUDIT ONLY repeated scoped event; pid={Pid}; rule={Rule}; case={Case}",risk.Process.Pid,scoped.RuleId,dir);
             else _log.LogWarning("AUDIT ONLY pid={Pid}; signature={Signature}; hash={Hash}; case={Case}",risk.Process.Pid,image.Signature.Status,image.Sha256,dir);

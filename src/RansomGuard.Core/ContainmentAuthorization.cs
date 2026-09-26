@@ -47,7 +47,7 @@ public static class ContainmentAuthorizationPolicy
         {
             ProtectionStateMachine.ValidateSnapshot(input.Protection);
         }
-        catch (InvalidOperationException)
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentNullException)
         {
             protectionValid = false;
             reasons.Add("ProtectionSnapshotInvalid");

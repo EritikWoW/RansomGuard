@@ -39,6 +39,18 @@ Check(DecisionPolicy.HashEqual(hash,hash.ToLowerInvariant()),"SHA-256 matching c
 Check(!DecisionPolicy.HashEqual(new string('G',64),hash),"invalid hexadecimal rejected");
 Check(!DecisionPolicy.HashEqual(new string('A',32),hash),"MD5-length digest rejected");
 Check(!DecisionPolicy.HashEqual(null,null),"missing hashes never match");
+var fileIdentityA=new FileIdentityEvidence(0x12345678,0x1122334455667788UL,4096,now.ToFileTimeUtc());
+var fileIdentitySame=fileIdentityA with{Size=8192,LastWriteFileTimeUtc=now.AddSeconds(1).ToFileTimeUtc()};
+var fileIdentityReplacement=fileIdentityA with{FileIndex=fileIdentityA.FileIndex+1};
+var fileIdentityOtherVolume=fileIdentityA with{VolumeSerialNumber=fileIdentityA.VolumeSerialNumber+1};
+Check(FileIdentityPolicy.SameFile(fileIdentityA,fileIdentitySame),
+    "stable volume serial plus file index identify the same opened executable despite mutable metadata");
+Check(!FileIdentityPolicy.SameFile(fileIdentityA,fileIdentityReplacement),
+    "same path replacement with a different file index is rejected");
+Check(!FileIdentityPolicy.SameFile(fileIdentityA,fileIdentityOtherVolume),
+    "cross-volume file identity is rejected");
+Check(!FileIdentityPolicy.SameFile(fileIdentityA,null),
+    "missing live executable file identity fails closed");
 Check(WinPaths.Equal(@"\\?\C:\Data\test.txt",@"c:\data\test.txt"),"DOS extended namespace normalized");
 Check(WinPaths.Equal(@"\??\C:\Data\test.txt",@"C:\Data\test.txt"),"NT DOS namespace normalized");
 Check(!WinPaths.Under(@"C:\Data2\test.txt",@"C:\Data"),"root boundary enforced");

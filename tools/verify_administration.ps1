@@ -7,6 +7,7 @@ $window=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Ui\Administra
 $rules=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\RuleAdministration.cs') -Raw
 $service=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\ServiceAdministration.cs') -Raw
 $updater=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\ServiceUpdateAdministration.cs') -Raw
+$protectionTransition=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\ServiceUpdateProtectionTransition.cs') -Raw
 $updaterRecovery=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\ServiceUpdateRecoveryAdministration.cs') -Raw
 $core=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Core\AdminContract.cs') -Raw
 $recovery=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\ProductionRecoveryAdministration.cs') -Raw
@@ -20,6 +21,27 @@ foreach($required in @('DemandAdministrator','AdminContract.CheckConfirmation','
 }
 foreach($required in @('DemandAdministrator','AdminContract.CheckConfirmation','AdminContract.ServiceName','VerifyRegistration','FileMode.CreateNew','FileShare.Read','MatchesInstalledPeer','expectedServiceHash','WaitFor(service, 1)','TimeSpan.FromSeconds(30)','IsSha256Hex(record.ImageSha256)','value.All(char.IsAsciiHexDigit)')) {
  if(-not$service.Contains($required)){throw "Missing own-service control invariant: $required"}
+}
+foreach($required in @(
+ 'ServiceInstallReview',
+ 'productionEnforce',
+ 'Production Enforce installation requires exactly one explicit protected root.',
+ 'Production Enforce installation requires the version-bound Protection package.',
+ 'ValidateInitialProtectionPackage',
+ 'StageUpdateProtectionPackage',
+ 'Mode = productionEnforce ? "Enforce" : "Audit"',
+ 'settings.Enforce.AutomaticContainment = productionEnforce',
+ 'CleanupStagedProtectionPackage'
+)) {
+ if(-not$service.Contains($required)){throw "Missing initial production installer invariant: $required"}
+}
+foreach($required in @(
+ 'ValidateInitialProtectionPackage',
+ 'ReadRegisteredProtectionIdentity',
+ 'target.Descriptor.DriverSysSha256',
+ 'target.Descriptor.Altitude'
+)) {
+ if(-not$protectionTransition.Contains($required)){throw "Missing initial protection registration compatibility gate: $required"}
 }
 
 foreach($required in @(
@@ -269,7 +291,7 @@ Write-Host 'Elevated recovery UI source gate PASSED: explicit admin intent, synt
 
 
 if($window -match 'new AdminWindow\("state-repair"' -or $window -match 'TextBox _confirm') {throw 'Do not nest administrative recovery windows or require command tokens in the GUI.'}
-foreach($required in @('SetupReviewPolicy.CanInstall','SetupReviewPolicy.CanReset','SetupReviewPolicy.CanControl','if (_preview) return','StateStoreAdministration.Recover','ServiceAdministration.ReviewInstallInput','IsExpanded = false','_acknowledged = false')) {
+foreach($required in @('SetupReviewPolicy.CanInstall','SetupReviewPolicy.CanReset','SetupReviewPolicy.CanControl','if (_preview) return','StateStoreAdministration.Recover','ServiceAdministration.ReviewInstallInput','IsExpanded = false','_acknowledged = false','Setup.ProductionProtection','productionProtection','Setup.ProductionBoundary')) {
  if(-not $wizard.Contains($required)) {throw "Missing guided setup invariant: $required"}
 }
 Write-Host 'Guided setup source gate: single window, explicit action clicks, separate reset consent, preview cannot mutate, details collapsed.'

@@ -8,12 +8,6 @@ internal sealed class WindowsContainmentActuationPlatform : IContainmentProcessA
 {
     private readonly Func<string?, string?> _freshImageSha256;
 
-    public WindowsContainmentActuationPlatform(ImageInspector images)
-        : this(path => images.Inspect(path, fresh: true).Sha256)
-    {
-        ArgumentNullException.ThrowIfNull(images);
-    }
-
     internal WindowsContainmentActuationPlatform(Func<string?, string?> freshImageSha256)
     {
         _freshImageSha256 = freshImageSha256 ?? throw new ArgumentNullException(nameof(freshImageSha256));

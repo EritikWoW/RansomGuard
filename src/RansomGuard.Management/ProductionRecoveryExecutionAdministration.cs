@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using RansomGuard.Core;
 using RansomGuard.Rollback;
 
 namespace RansomGuard.Management;

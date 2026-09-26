@@ -47,12 +47,12 @@ internal sealed class EtwMonitor:IDisposable
             var source = session.Source;
             var p = new KernelTraceEventParser(source);
             p.ProcessStart += e => _catalog.ObserveStart(
-                e.ProcessID,
+                checked((int)e.ProcessId),
                 (ulong)e.UniqueProcessKey,
                 e.ImageFileName,
                 e.TimeStamp.ToUniversalTime());
             p.ProcessStop += e => _catalog.ObserveStop(
-                e.ProcessID,
+                checked((int)e.ProcessId),
                 (ulong)e.UniqueProcessKey,
                 e.TimeStamp.ToUniversalTime());
             p.FileIOWrite += e => Emit(e.ProcessID, e.FileName, FileKind.Write, e.TimeStamp.ToUniversalTime());

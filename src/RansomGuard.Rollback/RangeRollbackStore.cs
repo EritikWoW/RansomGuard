@@ -38,7 +38,7 @@ public sealed class RangeRollbackStore
     public IReadOnlyCollection<RangeRollbackBlock> Blocks =>
         _blocks.Values.OrderBy(x => x.Sequence).ToArray();
 
-    public RangeRollbackStore(string root, int blockSize = DefaultBlockSize)
+    public RangeRollbackStore(string root, int blockSize = DefaultBlockSize, bool createIfMissing = true)
     {
         if (string.IsNullOrWhiteSpace(root)) throw new ArgumentException("Range rollback root is required.", nameof(root));
         if (blockSize < 64 * 1024 || blockSize > 16 * 1024 * 1024 || (blockSize & (blockSize - 1)) != 0)
@@ -48,7 +48,23 @@ public sealed class RangeRollbackStore
         _objects = Path.Combine(_root, "objects");
         _journal = Path.Combine(_root, "range-journal.jsonl");
         _blockSize = blockSize;
-        Directory.CreateDirectory(_objects);
+        if (createIfMissing)
+        {
+            Directory.CreateDirectory(_objects);
+        }
+        else
+        {
+            if (!Directory.Exists(_root))
+            {
+                if (File.Exists(_root)) throw new IOException("Range rollback root is not a directory: " + _root);
+                throw new DirectoryNotFoundException("Range rollback root does not exist: " + _root);
+            }
+            if (!Directory.Exists(_objects))
+            {
+                if (File.Exists(_objects)) throw new IOException("Range rollback objects path is not a directory: " + _objects);
+                throw new DirectoryNotFoundException("Range rollback objects directory does not exist: " + _objects);
+            }
+        }
         RejectReparse(_root);
         RejectReparse(_objects);
         LoadAndValidateJournal();

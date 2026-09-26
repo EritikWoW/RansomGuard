@@ -1,3 +1,11 @@
+# RansomGuard 0.8.7.0
+
+- Added the first production recovery administration foundation above the existing verified rollback planner.
+- Recovery inventory/planning remains inside the short-lived UAC-elevated administration boundary; the ordinary read-only UI pipe is unchanged.
+- The administrator read model enumerates only validated `production-*` rollback sessions from the fixed private state store and refuses planning while the RansomGuard service/audit engine is active.
+- Deterministic plans are exposed only for terminal `Completed` or `Faulted` production sessions and are bounded to 128 sessions / 200 displayed actions.
+- This foundation performs no recovery execution: no overwrite-in-place, rename, delete, topology mutation, driver/service mutation, or automatic execution of Ready actions is authorized.
+
 # RansomGuard 0.8.6.0
 
 - Added the first normal-service Production Enforce lifecycle above `ReadyForLifecycle` package admission while keeping the default package/configuration Audit.

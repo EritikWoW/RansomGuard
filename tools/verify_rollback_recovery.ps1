@@ -17,8 +17,9 @@ foreach($path in @($planner,$executor,$restart,$truncate,$delete,$cli,$project,$
 
 $plannerText=Get-Content -LiteralPath $planner -Raw
 foreach($required in @(
-    'RollbackRepository(repositoryRoot)',
+    'RollbackRepository(repositoryRoot, createIfMissing)',
     'repository.VerifyAll()',
+    'createIfMissing: createIfMissing',
     'store.VerifyAll()',
     'RestoreFullPreimageCopy',
     'RestoreRangeCowCopy',

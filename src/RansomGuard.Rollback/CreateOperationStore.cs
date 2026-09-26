@@ -56,7 +56,7 @@ public sealed class CreateOperationStore
         }
     }
 
-    public CreateOperationStore(string root)
+    public CreateOperationStore(string root, bool createIfMissing = true)
     {
         if (string.IsNullOrWhiteSpace(root))
             throw new ArgumentException("Create operation root is required.", nameof(root));
@@ -64,7 +64,15 @@ public sealed class CreateOperationStore
         _root = Path.GetFullPath(root);
         _intentJournal = Path.Combine(_root, "create-intent-journal.jsonl");
         _completionJournal = Path.Combine(_root, "create-completion-journal.jsonl");
-        Directory.CreateDirectory(_root);
+        if (createIfMissing)
+        {
+            Directory.CreateDirectory(_root);
+        }
+        else if (!Directory.Exists(_root))
+        {
+            if (File.Exists(_root)) throw new IOException("CreateOperationStore root is not a directory: " + _root);
+            throw new DirectoryNotFoundException("CreateOperationStore root does not exist: " + _root);
+        }
         RejectReparse(_root);
         LoadAndValidateIntents();
         LoadAndValidateCompletions();

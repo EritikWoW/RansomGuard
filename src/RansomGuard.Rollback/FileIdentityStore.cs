@@ -30,14 +30,22 @@ public sealed class FileIdentityStore
     public IReadOnlyCollection<FileIdentityBaseline> Baselines =>
         _byPath.Values.OrderBy(x => x.Sequence).ToArray();
 
-    public FileIdentityStore(string root)
+    public FileIdentityStore(string root, bool createIfMissing = true)
     {
         if (string.IsNullOrWhiteSpace(root))
             throw new ArgumentException("File identity root is required.", nameof(root));
 
         _root = Path.GetFullPath(root);
         _journal = Path.Combine(_root, "identity-journal.jsonl");
-        Directory.CreateDirectory(_root);
+        if (createIfMissing)
+        {
+            Directory.CreateDirectory(_root);
+        }
+        else if (!Directory.Exists(_root))
+        {
+            if (File.Exists(_root)) throw new IOException("FileIdentityStore root is not a directory: " + _root);
+            throw new DirectoryNotFoundException("FileIdentityStore root does not exist: " + _root);
+        }
         RejectReparse(_root);
         LoadAndValidateJournal();
     }

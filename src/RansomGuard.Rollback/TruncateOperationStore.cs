@@ -63,7 +63,7 @@ public sealed class TruncateOperationStore
         get { lock (_intents) return _restart.OrderBy(x => x.Sequence).ToArray(); }
     }
 
-    public TruncateOperationStore(string root)
+    public TruncateOperationStore(string root, bool createIfMissing = true)
     {
         if (string.IsNullOrWhiteSpace(root))
             throw new ArgumentException("Truncate operation root is required.", nameof(root));
@@ -72,7 +72,15 @@ public sealed class TruncateOperationStore
         _intentJournal = Path.Combine(_root, "truncate-intent-journal.jsonl");
         _completionJournal = Path.Combine(_root, "truncate-completion-journal.jsonl");
         _restartJournal = Path.Combine(_root, "truncate-restart-journal.jsonl");
-        Directory.CreateDirectory(_root);
+        if (createIfMissing)
+        {
+            Directory.CreateDirectory(_root);
+        }
+        else if (!Directory.Exists(_root))
+        {
+            if (File.Exists(_root)) throw new IOException("Truncate operation root is not a directory: " + _root);
+            throw new DirectoryNotFoundException("Truncate operation root does not exist: " + _root);
+        }
         RejectReparse(_root);
         LoadAndValidateIntents();
         LoadAndValidateCompletions();

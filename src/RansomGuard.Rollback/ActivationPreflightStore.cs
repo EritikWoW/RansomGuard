@@ -26,13 +26,21 @@ public sealed class ActivationPreflightStore
         get { lock (_records) return _records.OrderBy(x => x.Sequence).ToArray(); }
     }
 
-    public ActivationPreflightStore(string root)
+    public ActivationPreflightStore(string root, bool createIfMissing = true)
     {
         if (string.IsNullOrWhiteSpace(root))
             throw new ArgumentException("Activation preflight root is required.", nameof(root));
         _root = Path.GetFullPath(root);
         _journal = Path.Combine(_root, "activation-preflight-journal.jsonl");
-        Directory.CreateDirectory(_root);
+        if (createIfMissing)
+        {
+            Directory.CreateDirectory(_root);
+        }
+        else if (!Directory.Exists(_root))
+        {
+            if (File.Exists(_root)) throw new IOException("Activation preflight root is not a directory: " + _root);
+            throw new DirectoryNotFoundException("Activation preflight root does not exist: " + _root);
+        }
         RejectReparse(_root);
         LoadAndValidateJournal();
     }

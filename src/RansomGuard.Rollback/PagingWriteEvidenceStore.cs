@@ -29,14 +29,22 @@ public sealed class PagingWriteEvidenceStore
         }
     }
 
-    public PagingWriteEvidenceStore(string root)
+    public PagingWriteEvidenceStore(string root, bool createIfMissing = true)
     {
         if (string.IsNullOrWhiteSpace(root))
             throw new ArgumentException("Paging evidence root is required.", nameof(root));
 
         _root = Path.GetFullPath(root);
         _journal = Path.Combine(_root, "paging-write-journal.jsonl");
-        Directory.CreateDirectory(_root);
+        if (createIfMissing)
+        {
+            Directory.CreateDirectory(_root);
+        }
+        else if (!Directory.Exists(_root))
+        {
+            if (File.Exists(_root)) throw new IOException("Paging-write evidence root is not a directory: " + _root);
+            throw new DirectoryNotFoundException("Paging-write evidence root does not exist: " + _root);
+        }
         RejectReparse(_root);
         LoadAndValidateJournal();
     }

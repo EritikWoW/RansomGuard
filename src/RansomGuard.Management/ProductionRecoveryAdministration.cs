@@ -202,6 +202,16 @@ public static class ProductionRecoveryAdministration
         }
 
         FileSafety.NoReparse(rollbackRoot);
+        var sessionsRoot = Path.Combine(rollbackRoot, "Sessions");
+        if (!Directory.Exists(sessionsRoot))
+        {
+            if (File.Exists(sessionsRoot))
+                throw new IOException("Rollback Sessions path is not a directory.");
+            if (allowMissing) return null;
+            throw new DirectoryNotFoundException("Rollback Sessions directory does not exist; read-only recovery planning will not create it.");
+        }
+
+        FileSafety.NoReparse(sessionsRoot);
         return rollbackRoot;
     }
 

@@ -6,11 +6,17 @@ namespace RansomGuard.Service;
 
 internal sealed class WindowsContainmentActuationPlatform : IContainmentProcessActuationPlatform
 {
-    private readonly ImageInspector _images;
+    private readonly Func<string?, string?> _freshImageSha256;
 
     public WindowsContainmentActuationPlatform(ImageInspector images)
+        : this(path => images.Inspect(path, fresh: true).Sha256)
     {
-        _images = images ?? throw new ArgumentNullException(nameof(images));
+        ArgumentNullException.ThrowIfNull(images);
+    }
+
+    internal WindowsContainmentActuationPlatform(Func<string?, string?> freshImageSha256)
+    {
+        _freshImageSha256 = freshImageSha256 ?? throw new ArgumentNullException(nameof(freshImageSha256));
     }
 
     public IContainmentProcessActuationLease Open(ProcessKey expectedProcess)
@@ -33,14 +39,14 @@ internal sealed class WindowsContainmentActuationPlatform : IContainmentProcessA
                 throw new InvalidOperationException("ProcessIdentityChanged");
 
             var path = Native.ImagePath(handle);
-            var image = _images.Inspect(path, fresh: true);
+            var imageSha256 = _freshImageSha256(path);
             var criticalKnown = Native.IsProcessCritical(handle, out var critical);
 
             return new WindowsContainmentProcessActuationLease(
                 handle,
                 expectedProcess,
                 path,
-                image.Sha256,
+                imageSha256,
                 criticalKnown,
                 critical);
         }

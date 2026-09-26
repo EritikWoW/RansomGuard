@@ -48,6 +48,11 @@ Check(WinPaths.Normalize(@"\\server\share\test.txt") is null,"network paths not 
 Check(WinPaths.Normalize(@"C:\test.txt:stream") is null,"alternate data stream rejected");
 Check(WinPaths.Normalize(@"C:\Data\test. ") is null,"ambiguous trailing dots/spaces rejected");
 Check(WinPaths.Normalize(@"\Device\HarddiskVolume3\Data\test.txt") is null,"unresolved device path never guessed");
+var monitoringScope=new FileMonitoringScope(new[]{@"C:\Data"},new[]{@"D:\Canary\sentinel.bin"});
+Check(monitoringScope.Contains(@"C:\Data\sub\document.tmp"),"monitoring scope accepts protected-root traffic before extension policy");
+Check(!monitoringScope.Contains(@"C:\Data2\sub\document.tmp"),"monitoring scope rejects sibling-root system traffic");
+Check(monitoringScope.Contains(@"D:\Canary\sentinel.bin"),"monitoring scope retains exact canary outside protected root");
+Check(!monitoringScope.Contains(@"D:\Canary\sentinel.bin.bak"),"monitoring scope does not broaden exact canary identity");
 Check(Math.Abs(SampleMath.Entropy(new byte[128]))<0.000001,"zero entropy measured");
 Check(Math.Abs(SampleMath.Entropy(Enumerable.Range(0,256).Select(i=>(byte)i).ToArray())-8)<0.000001,"uniform entropy measured");
 Check(SampleMath.Entropy(Array.Empty<byte>())==0,"empty sample handled");

@@ -119,3 +119,52 @@ public static class WinPaths
         return dot > slash ? p[dot..] : "";
     }
 }
+
+
+public sealed class FileMonitoringScope
+{
+    private readonly string[] _roots;
+    private readonly HashSet<string> _canaries;
+
+    public FileMonitoringScope(IEnumerable<string> roots, IEnumerable<string> canaries)
+    {
+        ArgumentNullException.ThrowIfNull(roots);
+        ArgumentNullException.ThrowIfNull(canaries);
+
+        _roots=roots
+            .Select(WinPaths.Normalize)
+            .Where(p=>p is not null)
+            .Cast<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        _canaries=new(
+            canaries
+                .Select(WinPaths.Normalize)
+                .Where(p=>p is not null)
+                .Cast<string>(),
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    public bool Contains(string? path)
+    {
+        var normalized=WinPaths.Normalize(path);
+        return normalized is not null && ContainsNormalized(normalized);
+    }
+
+    public bool ContainsNormalized(string normalizedPath)
+        => IsCanaryNormalized(normalizedPath) || IsUnderRootNormalized(normalizedPath);
+
+    public bool IsCanaryNormalized(string normalizedPath)
+        => !string.IsNullOrWhiteSpace(normalizedPath) && _canaries.Contains(normalizedPath);
+
+    public bool IsUnderRootNormalized(string normalizedPath)
+    {
+        if(string.IsNullOrWhiteSpace(normalizedPath))return false;
+        foreach(var root in _roots)
+        {
+            if(normalizedPath.StartsWith(root.TrimEnd('\\')+"\\",StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+}

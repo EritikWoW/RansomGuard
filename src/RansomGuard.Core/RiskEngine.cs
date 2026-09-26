@@ -12,8 +12,7 @@ public sealed class RiskEngine
     private readonly Dictionary<ProcessKey,Window> _windows=new();
     private readonly GuardSettings _s;
     private readonly HashSet<string> _extensions;
-    private readonly HashSet<string> _canaries;
-    private readonly string[] _roots;
+    private readonly FileMonitoringScope _scope;
     public long WindowEvictions { get; private set; }
     public long TruncatedWindows { get; private set; }
     public int ProcessCount => _windows.Count;
@@ -21,15 +20,14 @@ public sealed class RiskEngine
     {
         settings.Validate(); _s=settings;
         _extensions=new(settings.ProtectedExtensions,StringComparer.OrdinalIgnoreCase);
-        _roots=roots.Select(WinPaths.Normalize).Where(p=>p is not null).Cast<string>().Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        _canaries=new(canaries.Select(WinPaths.Normalize).Where(p=>p is not null).Cast<string>(),StringComparer.OrdinalIgnoreCase);
+        _scope=new FileMonitoringScope(roots,canaries);
     }
     public RiskSignal? Evaluate(FileSignal input,bool labFastPath=false)
     {
         var path=WinPaths.Normalize(input.Path);
         if (path is null || input.Kind == FileKind.Open || input.Process.CreationFileTimeUtc<=0) return null;
-        var canary=_canaries.Contains(path);
-        if (!canary && (!_roots.Any(r=>WinPaths.Under(path,r)) || !_extensions.Contains(WinPaths.Extension(path)))) return null;
+        var canary=_scope.IsCanaryNormalized(path);
+        if (!canary && (!_scope.IsUnderRootNormalized(path) || !_extensions.Contains(WinPaths.Extension(path)))) return null;
         var e=input with {Path=path, CanaryCandidate=canary};
         if (!_windows.TryGetValue(e.Process,out var w))
         {

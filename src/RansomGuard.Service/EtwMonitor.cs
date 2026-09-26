@@ -12,6 +12,7 @@ internal sealed class EtwMonitor:IDisposable
     private readonly ProcessCatalog _catalog;
     private readonly DevicePaths _paths=new();
     private readonly Channel<RawSignal> _queue;
+    private readonly FileMonitoringScope _scope;
     private readonly ConcurrentDictionary<string,long> _resolution=new(StringComparer.Ordinal);
     private readonly long[] _latencyBits=new long[4096];
     private TraceEventSession? _session;
@@ -24,9 +25,10 @@ internal sealed class EtwMonitor:IDisposable
     public long Unresolved=>Interlocked.Read(ref _unresolved);
     public long Resolved=>Interlocked.Read(ref _resolved);
     public int? EventsLost {get {try{return _session?.EventsLost;}catch{return null;}}}
-    public EtwMonitor(ProcessCatalog catalog,int capacity)
+    public EtwMonitor(ProcessCatalog catalog,int capacity,FileMonitoringScope scope)
     {
         _catalog=catalog;
+        _scope=scope??throw new ArgumentNullException(nameof(scope));
         _queue=Channel.CreateBounded<RawSignal>(new BoundedChannelOptions(capacity){SingleReader=true,SingleWriter=true,FullMode=BoundedChannelFullMode.Wait});
     }
     public void Start()
@@ -72,11 +74,18 @@ internal sealed class EtwMonitor:IDisposable
     {
         if(pid<=4||pid==Environment.ProcessId)return;
         var received=DateTime.UtcNow;
-        RecordLatency((received-time).TotalMilliseconds);
         var resolution=_paths.ResolveDetailed(raw);
         _resolution.AddOrUpdate(resolution.Category,1,static (_,n)=>n+1);
         if(resolution.Path is null){Interlocked.Increment(ref _unresolved);return;}
         Interlocked.Increment(ref _resolved);
+
+        // The ETW session is system-wide, but RansomGuard policy is not. Discard
+        // unrelated filesystem traffic before the bounded analysis queue so ordinary
+        // host I/O cannot consume the telemetry-loss budget for a protected root.
+        // Relevant queue loss remains counted and therefore still fails containment closed.
+        if(!_scope.ContainsNormalized(resolution.Path))return;
+
+        RecordLatency((received-time).TotalMilliseconds);
         if(!_queue.Writer.TryWrite(new(pid,resolution.Path,kind,time,received)))Interlocked.Increment(ref _dropped);
     }
     private void RecordLatency(double ms)

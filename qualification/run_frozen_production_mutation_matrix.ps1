@@ -369,10 +369,10 @@ $summary=[ordered]@{
     hardLinkExOutsideToInsideDenied=$false
     hardLinkExOutsideToOutsideAllowed=$false
     hardLinkDeleteStreamSafe=$false
-    hardLinkDeleteStreamPreimageProven=$false
+    hardLinkDeleteStreamQualified=$false
     hardLinkDeleteStreamOutcome=''
     adsAlternateAliasSafe=$false
-    adsAlternateAliasPreimageProven=$false
+    adsAlternateAliasQualified=$false
     adsAlternateAliasOutcome=''
     fsctlZeroAllowedWithBaseline=$false
     fsctlZeroMutatedTarget=$false
@@ -701,7 +701,7 @@ try{
     if($aliasCreateOutcome -eq 'denied'){
         if(Test-Path -LiteralPath $aliasPath){throw 'Denied inside-to-inside hard-link unexpectedly exists.'}
         $summary.hardLinkDeleteStreamSafe=$true
-        $summary.hardLinkDeleteStreamPreimageProven=$true
+        $summary.hardLinkDeleteStreamQualified=$true
         $summary.hardLinkDeleteStreamOutcome='inside-inside-link-denied'
     }elseif($aliasCreateOutcome -eq 'allowed'){
         if(-not(Test-Path -LiteralPath $aliasPath -PathType Leaf)){throw 'Allowed inside-to-inside hard-link was not created.'}
@@ -719,7 +719,7 @@ try{
                 throw 'Denied single-link deletion changed the underlying stream.'
             }
             $summary.hardLinkDeleteStreamSafe=$true
-            $summary.hardLinkDeleteStreamPreimageProven=$true
+            $summary.hardLinkDeleteStreamQualified=$true
             $summary.hardLinkDeleteStreamOutcome='single-link-delete-denied'
         }else{
             if(Test-Path -LiteralPath $aliasPath){throw 'Single-link deletion left the removed alias present.'}
@@ -745,14 +745,14 @@ try{
                     throw 'Denied underlying-stream mutation changed content after single-link deletion.'
                 }
                 $summary.hardLinkDeleteStreamOutcome='delete-allowed-stream-write-denied'
-                $summary.hardLinkDeleteStreamPreimageProven=$true
+                $summary.hardLinkDeleteStreamQualified=$true
             }else{
                 if([string]::Equals((Get-FileHash -LiteralPath $aliasBase -Algorithm SHA256).Hash,$aliasOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
                     throw 'Allowed underlying-stream write did not mutate the remaining hard-link target.'
                 }
                 Assert-DurableRangePreimage $session $aliasBase $aliasOriginalHash 'hard-link delete then stream mutation'
                 $summary.hardLinkDeleteStreamOutcome='delete-allowed-stream-write-preserved'
-                $summary.hardLinkDeleteStreamPreimageProven=$true
+                $summary.hardLinkDeleteStreamQualified=$true
             }
             $summary.hardLinkDeleteStreamSafe=$true
         }
@@ -775,7 +775,7 @@ try{
     if($adsAliasOutcome -eq 'denied'){
         if(Test-Path -LiteralPath $adsAlias){throw 'Denied ADS alternate alias unexpectedly exists.'}
         $summary.adsAlternateAliasSafe=$true
-        $summary.adsAlternateAliasPreimageProven=$true
+        $summary.adsAlternateAliasQualified=$true
         $summary.adsAlternateAliasOutcome='inside-inside-link-denied'
     }elseif($adsAliasOutcome -eq 'allowed'){
         if(-not(Test-Path -LiteralPath $adsAlias -PathType Leaf)){throw 'ADS alternate alias was not created.'}
@@ -789,13 +789,13 @@ try{
 
         if($adsDenied){
             $summary.adsAlternateAliasOutcome='ads-create-denied'
-            $summary.adsAlternateAliasPreimageProven=$true
+            $summary.adsAlternateAliasQualified=$true
         }else{
             $actualAds=[IO.File]::ReadAllText($adsPath,[Text.Encoding]::UTF8)
             if($actualAds -ne $adsPayload){throw 'ADS write through alternate alias returned unexpected content.'}
             Assert-OriginallyAbsentBaseline $session $adsPath 'ADS alternate-alias create'
             $summary.adsAlternateAliasOutcome='ads-create-originally-absent-preserved'
-            $summary.adsAlternateAliasPreimageProven=$true
+            $summary.adsAlternateAliasQualified=$true
         }
         $summary.adsAlternateAliasSafe=$true
     }else{

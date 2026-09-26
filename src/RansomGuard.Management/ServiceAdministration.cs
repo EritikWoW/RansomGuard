@@ -15,7 +15,7 @@ public sealed record ManagedServiceStatus(bool QuerySucceeded, bool Installed, s
     string Account, string StartMode, uint Pid, string? Error);
 internal sealed record InstallRecord(int Schema, string Version, string ImageSha256, DateTime CreatedUtc);
 
-public static class ServiceAdministration
+public static partial class ServiceAdministration
 {
     public static string InstallRoot => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "RansomGuardV03");
     private const uint QueryConfig = 1, QueryStatus = 4, StartAccess = 16, StopAccess = 32, DeleteAccess = 0x10000;

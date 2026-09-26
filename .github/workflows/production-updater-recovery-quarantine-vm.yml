@@ -14,7 +14,7 @@ on:
       root_base:
         description: Persistent disposable VM updater-recovery root.
         required: true
-        default: C:\\RansomGuard-VM-UpdaterRecovery
+        default: C:\RansomGuard-VM-UpdaterRecovery
         type: string
 
 permissions:

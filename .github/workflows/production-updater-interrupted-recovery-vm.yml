@@ -1,0 +1,170 @@
+name: RansomGuard production updater interrupted recovery VM qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: Multi-reboot updater recovery campaign phase.
+        required: true
+        type: choice
+        options:
+          - arm
+          - resume
+          - verify
+      expected_sha:
+        description: Exact source SHA to qualify.
+        required: true
+        type: string
+      root_base:
+        description: Persistent disposable VM campaign root. Must contain RansomGuard.
+        required: true
+        default: C:\RansomGuard-VM-UpdaterRecovery
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ransomguard-production-updater-interrupted-recovery-vm
+  cancel-in-progress: false
+
+jobs:
+  recovery:
+    environment: ransomguard-lab-vm
+    runs-on: [self-hosted, Windows, X64, ransomguard-lab-vm]
+    timeout-minutes: 50
+    env:
+      RANSOMGUARD_LAB_VM: I_UNDERSTAND
+      RG_PHASE: ${{ inputs.phase }}
+      RG_EXPECTED_SHA: ${{ inputs.expected_sha }}
+      RG_ROOT_BASE: ${{ inputs.root_base }}
+
+    steps:
+      - name: Checkout exact qualification source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
+        with:
+          ref: ${{ inputs.expected_sha }}
+          fetch-depth: 1
+
+      - name: Checkout protected-main orchestration policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
+        with:
+          ref: main
+          path: orchestrator
+          fetch-depth: 1
+
+      - name: Verify exact source and updater recovery gates
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $actual=(git rev-parse HEAD).Trim()
+          if(-not [string]::Equals($actual,$env:RG_EXPECTED_SHA,[StringComparison]::OrdinalIgnoreCase)){
+            throw "Exact checkout mismatch. expected=$env:RG_EXPECTED_SHA actual=$actual"
+          }
+          if($env:RG_PHASE -notin @('arm','resume','verify')){throw "Invalid recovery phase '$env:RG_PHASE'."}
+          .\tools\verify_threat_model.ps1
+          .\orchestrator\tools\verify_production_updater_recovery_vm_harness.ps1 -RepositoryRoot $PWD
+
+      - name: Verify disposable VM runner readiness
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $cs=Get-CimInstance Win32_ComputerSystem
+          $vm="$($cs.Manufacturer) $($cs.Model)"
+          if($vm -notmatch '(?i)virtual|vmware|virtualbox|kvm|qemu|hyper-v|parallels|xen'){
+            throw "REFUSED: updater recovery qualification requires a disposable VM. Detected: $vm"
+          }
+          if($env:RANSOMGUARD_LAB_VM -cne 'I_UNDERSTAND'){throw 'Disposable VM acknowledgement missing.'}
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0 node24 pinned
+        with:
+          dotnet-version: 10.0.401
+
+      - name: Build updater recovery qualification tools
+        id: build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $base=Join-Path $env:RUNNER_TEMP ("ransomguard-updater-recovery-"+$env:GITHUB_RUN_ID+"-"+$env:GITHUB_RUN_ATTEMPT)
+          $old=Join-Path $base 'old'
+          $current=Join-Path $base 'current'
+          foreach($p in @($old,$current)){New-Item -ItemType Directory -Path $p -Force | Out-Null}
+
+          function Remove-QualificationBuildFamily([string]$name){
+            $roots=@(
+              Get-ChildItem -LiteralPath '.\src','.\qualification' -Directory -Recurse -Force |
+                Where-Object { $_.Name -eq $name -and $_.Parent -and $_.Parent.Name -in @('obj','bin') }
+            )
+            foreach($root in $roots){
+              Remove-Item -LiteralPath $root.FullName -Recurse -Force
+            }
+          }
+
+          $service='.\src\RansomGuard.Service\RansomGuard.Service.csproj'
+          $helper='.\qualification\RansomGuard.UpdaterQualification\RansomGuard.UpdaterQualification.csproj'
+
+          dotnet restore $service --locked-mode -r win-x64 -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj\updater-recovery-old-service\
+          if($LASTEXITCODE -ne 0){throw 'Old service restore failed.'}
+          dotnet publish $service -c Release -r win-x64 --self-contained true --no-restore -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj\updater-recovery-old-service\ -p:BaseOutputPath=bin\updater-recovery-old-service\ -o (Join-Path $old 'package')
+          if($LASTEXITCODE -ne 0){throw 'Old service publish failed.'}
+
+          dotnet restore $helper --locked-mode -r win-x64 -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj\updater-recovery-old-helper\
+          if($LASTEXITCODE -ne 0){throw 'Old helper restore failed.'}
+          dotnet publish $helper -c Release -r win-x64 --self-contained true --no-restore -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj\updater-recovery-old-helper\ -p:BaseOutputPath=bin\updater-recovery-old-helper\ -o (Join-Path $old 'helper')
+          if($LASTEXITCODE -ne 0){throw 'Old helper publish failed.'}
+          Remove-QualificationBuildFamily 'updater-recovery-old-service'
+          Remove-QualificationBuildFamily 'updater-recovery-old-helper'
+
+          dotnet restore $service --locked-mode -r win-x64 -p:BaseIntermediateOutputPath=obj\updater-recovery-current-service\
+          if($LASTEXITCODE -ne 0){throw 'Current service restore failed.'}
+          dotnet publish $service -c Release -r win-x64 --self-contained true --no-restore -p:BaseIntermediateOutputPath=obj\updater-recovery-current-service\ -p:BaseOutputPath=bin\updater-recovery-current-service\ -o (Join-Path $current 'package')
+          if($LASTEXITCODE -ne 0){throw 'Current service publish failed.'}
+
+          dotnet restore $helper --locked-mode -r win-x64 -p:BaseIntermediateOutputPath=obj\updater-recovery-current-helper\
+          if($LASTEXITCODE -ne 0){throw 'Current helper restore failed.'}
+          dotnet publish $helper -c Release -r win-x64 --self-contained true --no-restore -p:BaseIntermediateOutputPath=obj\updater-recovery-current-helper\ -p:BaseOutputPath=bin\updater-recovery-current-helper\ -o (Join-Path $current 'helper')
+          if($LASTEXITCODE -ne 0){throw 'Current helper publish failed.'}
+          Remove-QualificationBuildFamily 'updater-recovery-current-service'
+          Remove-QualificationBuildFamily 'updater-recovery-current-helper'
+
+          $oldService=Join-Path $old 'package\RansomGuard.Service.exe'
+          $currentService=Join-Path $current 'package\RansomGuard.Service.exe'
+          $oldVersion=[Diagnostics.FileVersionInfo]::GetVersionInfo($oldService).FileVersion
+          $currentVersion=[Diagnostics.FileVersionInfo]::GetVersionInfo($currentService).FileVersion
+          if($oldVersion -ne '0.8.6.0'){throw "Unexpected old fixture version: $oldVersion"}
+          if(([Version]$currentVersion) -le ([Version]$oldVersion)){throw "Current version is not forward of old fixture. old=$oldVersion current=$currentVersion"}
+
+          "old_package=$(Join-Path $old 'package')" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "old_helper=$(Join-Path $old 'helper\RansomGuard.UpdaterQualification.exe')" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "current_package=$(Join-Path $current 'package')" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "current_helper=$(Join-Path $current 'helper\RansomGuard.UpdaterQualification.exe')" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Execute updater interrupted-recovery phase
+        shell: pwsh
+        env:
+          RG_OLD_PACKAGE: ${{ steps.build.outputs.old_package }}
+          RG_OLD_HELPER: ${{ steps.build.outputs.old_helper }}
+          RG_CURRENT_PACKAGE: ${{ steps.build.outputs.current_package }}
+          RG_CURRENT_HELPER: ${{ steps.build.outputs.current_helper }}
+        run: |
+          $ErrorActionPreference='Stop'
+          .\qualification\run_production_updater_interrupted_recovery_vm.ps1 -Phase $env:RG_PHASE -ExpectedCommit $env:RG_EXPECTED_SHA -RootBase $env:RG_ROOT_BASE -OldAdminHelper $env:RG_OLD_HELPER -CurrentAdminHelper $env:RG_CURRENT_HELPER -OldPackage $env:RG_OLD_PACKAGE -CurrentPackage $env:RG_CURRENT_PACKAGE
+
+      - name: Upload phase evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 node24 pinned
+        with:
+          name: ransomguard-production-updater-recovery-${{ inputs.phase }}-${{ inputs.expected_sha }}
+          path: ${{ inputs.root_base }}\Evidence\${{ inputs.expected_sha }}\**
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Schedule first or second campaign reboot
+        if: ${{ success() && (inputs.phase == 'arm' || inputs.phase == 'resume') }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          & "$env:SystemRoot\System32\shutdown.exe" /r /t 60 /f /d p:4:1 /c "RansomGuard updater interrupted-recovery qualification"
+          if($LASTEXITCODE -ne 0){throw "Unable to schedule disposable VM reboot. exit=$LASTEXITCODE"}
+          Write-Warning "Updater recovery phase '$env:RG_PHASE' passed; VM reboot is scheduled in 60 seconds."

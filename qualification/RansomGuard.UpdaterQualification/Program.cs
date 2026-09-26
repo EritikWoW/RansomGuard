@@ -79,6 +79,34 @@ try
                 return 0;
             }
         }
+        case "review-recovery":
+        {
+            if (args.Length != 1) throw new ArgumentException("review-recovery");
+            Print(ServiceAdministration.ReviewInterruptedUpdate());
+            return 0;
+        }
+        case "recover-update":
+        {
+            if (args.Length != 2) throw new ArgumentException("recover-update <transactionId>");
+            Print(ServiceAdministration.RecoverInterruptedUpdate(args[1], "ROLLBACK UPDATE"));
+            return 0;
+        }
+        case "expect-recovery-review-failure":
+        {
+            if (args.Length != 2) throw new ArgumentException("expect-recovery-review-failure <messageFragment>");
+            try
+            {
+                _ = ServiceAdministration.ReviewInterruptedUpdate();
+                throw new InvalidOperationException("Interrupted-update recovery review unexpectedly succeeded.");
+            }
+            catch (IOException ex)
+            {
+                if (!ex.Message.Contains(args[1], StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Recovery review failed for an unexpected reason: " + ex.Message, ex);
+                Print(new { command, expectedFailure = true, message = ex.Message });
+                return 0;
+            }
+        }
         case "query":
         {
             if (args.Length != 1) throw new ArgumentException("query");

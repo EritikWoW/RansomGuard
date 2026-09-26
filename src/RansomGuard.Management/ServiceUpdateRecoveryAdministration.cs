@@ -277,8 +277,16 @@ public static partial class ServiceAdministration
                 throw new IOException("Update transaction record size invalid: " + path);
 
             using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            var record = JsonSerializer.Deserialize<ServiceUpdateRecord>(file)
-                ?? throw new IOException("Update transaction record invalid: " + path);
+            ServiceUpdateRecord record;
+            try
+            {
+                record = JsonSerializer.Deserialize<ServiceUpdateRecord>(file)
+                    ?? throw new JsonException("Update transaction JSON deserialized to null.");
+            }
+            catch (JsonException ex)
+            {
+                throw new IOException("Update transaction record invalid: " + path, ex);
+            }
             ValidateRecoveryRecord(record, path);
 
             if (record.Phase is "Completed" or "RolledBack" or "AbortedBeforeCommit")

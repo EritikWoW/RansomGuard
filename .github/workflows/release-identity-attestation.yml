@@ -113,7 +113,7 @@ jobs:
           $details | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $rulesetsPath -Encoding utf8NoBOM
           .\orchestrator\tools\verify_release_tag_rulesets.ps1 -RulesetsJsonPath $rulesetsPath -TagName $env:RELEASE_TAG -AllowRedactedBypassActors
 
-          git fetch origin "refs/tags/$env:RELEASE_TAG:refs/tags/$env:RELEASE_TAG" --no-tags
+          git fetch origin "refs/tags/${env:RELEASE_TAG}:refs/tags/${env:RELEASE_TAG}" --no-tags
           if($LASTEXITCODE -ne 0){throw "Release tag '$env:RELEASE_TAG' does not exist on origin."}
 
           $tagType=(git cat-file -t "refs/tags/$env:RELEASE_TAG").Trim()

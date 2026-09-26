@@ -617,6 +617,13 @@ public sealed class ContainmentActuationLedger
             throw new InvalidDataException("Authorization id must be a 32-character GUID in N format.");
         if (string.IsNullOrWhiteSpace(binding.CaseId))
             throw new InvalidDataException("Case id is required.");
+        if (binding.EvaluatedUtc.Kind != DateTimeKind.Utc ||
+            binding.ExpiresUtc.Kind != DateTimeKind.Utc ||
+            binding.ExpiresUtc <= binding.EvaluatedUtc ||
+            binding.ExpiresUtc - binding.EvaluatedUtc > ContainmentActuationPolicy.MaxAuthorizationLifetime)
+            throw new InvalidDataException("Authorization lifetime is invalid.");
+        if (request.RequestedUtc < binding.EvaluatedUtc || request.RequestedUtc > binding.ExpiresUtc)
+            throw new InvalidDataException("Actuation request is outside the authorization lifetime.");
         if (binding.Process.Pid <= 4 || binding.Process.CreationFileTimeUtc <= 0)
             throw new InvalidDataException("Bound process identity is invalid.");
         var imagePath = WinPaths.Normalize(binding.ImagePath)

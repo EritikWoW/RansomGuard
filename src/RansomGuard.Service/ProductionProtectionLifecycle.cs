@@ -16,7 +16,7 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
     private readonly ProtectionPackageAdmission _admission;
     private readonly ProtectionStateMachine _protection;
     private readonly RuntimeState _runtime;
-    private readonly ContainmentStateChangeJournal _stateChangeJournal;
+    private readonly ContainmentStateChangeJournal? _stateChangeJournal;
     private readonly IHostApplicationLifetime _lifetime;
     private readonly string _applicationBase;
     private static readonly TimeSpan GateShutdownSignalTimeout = TimeSpan.FromSeconds(10);
@@ -30,7 +30,7 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
         ProtectionPackageAdmission admission,
         ProtectionStateMachine protection,
         RuntimeState runtime,
-        ContainmentStateChangeJournal stateChangeJournal,
+        ContainmentStateChangeJournal? stateChangeJournal,
         IHostApplicationLifetime lifetime,
         string applicationBase)
     {
@@ -270,6 +270,12 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
     {
         if (!_settings.Enforce.AutomaticContainment)
             return;
+
+        if (_stateChangeJournal is null)
+        {
+            _log.LogError("Automatic containment requested but durable state-change journal is unavailable.");
+            return;
+        }
 
         try
         {

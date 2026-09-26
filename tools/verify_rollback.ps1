@@ -346,19 +346,19 @@ if($service -match 'CapturePreimageAsync\('){throw 'Normal service must not clai
 $gate=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.GateClient\Program.cs') -Raw
 if($gate -notmatch 'repository\.VerifyAll\(\)'){throw 'LAB gate must validate all existing rollback sessions before starting a new session.'}
 $repository=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Rollback\RollbackRepository.cs') -Raw
-if($repository -notmatch 'new RangeRollbackStore\(rangeRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested write-cow stores.'}
-if($repository -notmatch 'new CreateRollbackStore\(createRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested create-state stores.'}
-if($repository -notmatch 'new CreateOperationStore\(createRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include CREATE intent/completion journals.'}
-if($repository -notmatch 'new FileIdentityStore\(identityRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested identity-state stores.'}
-if($repository -notmatch 'new RenameRollbackStore\(renameRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested rename-state stores.'}
-if($repository -notmatch 'new TruncateOperationStore\(truncateRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include TRUNCATE intent/completion/restart journals.'}
-if($repository -notmatch 'new DeleteOperationStore\(deleteRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include DELETE intent/completion/finalization journals.'}
-if($repository -notmatch 'new RestartReconciliationStore\(restartRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested restart-state stores.'}
-if($repository -notmatch 'new PagingWriteEvidenceStore\(pagingRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested paging-state stores.'}
-if($repository -notmatch 'new WritableSectionEvidenceStore\(sectionRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested section-state stores.'}
-if($repository -notmatch 'new ActivationPreflightStore\(activationRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested activation-state stores.'}
-if($repository -notmatch 'new ActivationTopologyStore\(topologyRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested activation-topology-state stores.'}
-if($repository -notmatch 'new ContainmentEvidenceStore\(containmentRoot\)\.VerifyAll\(\)'){throw 'Repository verification must include nested containment-state stores.'}
+if($repository -notmatch 'new RangeRollbackStore\(rangeRoot, createIfMissing: _createIfMissing\)\.VerifyAll\(\)'){throw 'Repository verification must include nested write-cow stores.'}
+if($repository -notmatch 'new CreateRollbackStore\(createRoot, createIfMissing: _createIfMissing\)\.VerifyAll\(\)'){throw 'Repository verification must include nested create-state stores.'}
+if($repository -notmatch 'new CreateOperationStore\(createRoot, createIfMissing: _createIfMissing\)\.VerifyAll\(\)'){throw 'Repository verification must include CREATE intent/completion journals.'}
+if($repository -notmatch 'new FileIdentityStore\(identityRoot, createIfMissing: _createIfMissing\)\.VerifyAll\(\)'){throw 'Repository verification must include nested identity-state stores.'}
+if($repository -notmatch 'new RenameRollbackStore\(renameRoot, createIfMissing: _createIfMissing\)\.VerifyAll\(\)'){throw 'Repository verification must include nested rename-state stores.'}
+if($repository -notmatch 'new TruncateOperationStore\(truncateRoot, createIfMissing: _createIfMissing\)\.VerifyAll\(\)'){throw 'Repository verification must include TRUNCATE intent/completion/restart journals.'}
+if($repository -notmatch 'new DeleteOperationStore\(deleteRoot, createIfMissing: _createIfMissing\)\.VerifyAll\(\)'){throw 'Repository verification must include DELETE intent/completion/finalization journals.'}
+if($repository -notmatch 'new RestartReconciliationStore\(restartRoot, createIfMissing: _createIfMissing\)\.VerifyAll\(\)'){throw 'Repository verification must include nested restart-state stores.'}
+if($repository -notmatch 'new PagingWriteEvidenceStore\(pagingRoot, createIfMissing: _createIfMissing\)\.VerifyAll\(\)'){throw 'Repository verification must include nested paging-state stores.'}
+if($repository -notmatch 'new WritableSectionEvidenceStore\(sectionRoot, createIfMissing: _createIfMissing\)\.VerifyAll\(\)'){throw 'Repository verification must include nested section-state stores.'}
+if($repository -notmatch 'new ActivationPreflightStore\(activationRoot, createIfMissing: _createIfMissing\)\.VerifyAll\(\)'){throw 'Repository verification must include nested activation-state stores.'}
+if($repository -notmatch 'new ActivationTopologyStore\(topologyRoot, createIfMissing: _createIfMissing\)\.VerifyAll\(\)'){throw 'Repository verification must include nested activation-topology-state stores.'}
+if($repository -notmatch 'new ContainmentEvidenceStore\(containmentRoot, createIfMissing: _createIfMissing\)\.VerifyAll\(\)'){throw 'Repository verification must include nested containment-state stores.'}
 Write-Host 'Rollback source gate PASSED: full-file/range COW, CREATE/RENAME/TRUNCATE/DELETE transactions, identity, restart, paging, section, activation, topology and containment journals, hashes, write-through commits and copy-only restore.'
 Write-Host 'Normal service capture remains disabled; blocking preservation and containment remain inside the explicit Engineering LAB gate. Paging/section callbacks remain evidence-only.'
 

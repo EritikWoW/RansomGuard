@@ -20,8 +20,13 @@ $ns=New-Object System.Xml.XmlNamespaceManager($xml.NameTable);$ns.AddNamespace('
 $node=$xml.SelectSingleNode('//asmv3:requestedExecutionLevel',$ns)
 if($null -eq $node -or [string]$node.level -ne 'asInvoker'){throw 'UI read-only gate FAILED: UI must run asInvoker.'}
 $contract=Get-Content -LiteralPath $core -Raw
-foreach($cmd in @('status','incidents','diagnostics','subscribe')){if($contract -notmatch ('"'+[regex]::Escape($cmd)+'"')){throw "UI read-only gate FAILED: missing expected command $cmd"}}
-if($contract -match '"(?:kill|suspend|terminate|trust|block|install|attach|detach|unload)"'){throw 'UI read-only gate FAILED: mutating command literal detected in LocalApi contract.'}
+$expectedCommands=@('status','incidents','diagnostics','subscribe')
+foreach($cmd in $expectedCommands){if($contract -notmatch ('"'+[regex]::Escape($cmd)+'"')){throw "UI read-only gate FAILED: missing expected command $cmd"}}
+$declaredCommands=@([regex]::Matches($contract,'public const string [A-Za-z0-9_]+Command\s*=\s*"([^"]+)"') | ForEach-Object {$_.Groups[1].Value} | Sort-Object -Unique)
+if(@(Compare-Object ($expectedCommands | Sort-Object) $declaredCommands).Count -ne 0){
+ throw "UI read-only gate FAILED: LocalApi command set changed. expected=$($expectedCommands -join ',') actual=$($declaredCommands -join ',')"
+}
+if($contract -match '"(?:kill|suspend|terminate|trust|block|install|attach|detach|unload|recovery|restore|rollback)"'){throw 'UI read-only gate FAILED: mutating/recovery command literal detected in LocalApi contract.'}
 $serverText=Get-Content -LiteralPath $server -Raw
 if($serverText -notmatch 'NetworkSid' -or $serverText -notmatch 'AnonymousSid'){throw 'UI read-only gate FAILED: pipe must explicitly deny NETWORK and ANONYMOUS.'}
 Write-Host 'READ-ONLY DATA API gate PASSED. Administrative UI uses a separate explicitly elevated instance.'

@@ -2,6 +2,7 @@ $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
 $planner=Join-Path $root 'src\RansomGuard.Rollback\RollbackRecoveryPlan.cs'
 $executor=Join-Path $root 'src\RansomGuard.Rollback\RollbackRecoveryExecutor.cs'
+$range=Join-Path $root 'src\RansomGuard.Rollback\RangeRollbackStore.cs'
 $restart=Join-Path $root 'src\RansomGuard.Rollback\RestartReconciliationStore.cs'
 $truncate=Join-Path $root 'src\RansomGuard.Rollback\TruncateOperationStore.cs'
 $delete=Join-Path $root 'src\RansomGuard.Rollback\DeleteOperationStore.cs'
@@ -11,7 +12,7 @@ $build=Join-Path $root 'build_windows.ps1'
 $launcher=Join-Path $root 'rollback_recovery.cmd'
 $tests=Join-Path $root 'tests\RansomGuard.Rollback.Tests\Program.cs'
 
-foreach($path in @($planner,$executor,$restart,$truncate,$delete,$cli,$project,$build,$launcher,$tests)){
+foreach($path in @($planner,$executor,$range,$restart,$truncate,$delete,$cli,$project,$build,$launcher,$tests)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Verified rollback recovery source missing: $path"}
 }
 
@@ -141,8 +142,6 @@ foreach($required in @(
     'current.Actions.Where(x => x.State == RecoveryActionState.Ready)',
     'ComputeExpectedRecoveryAsync',
     'RestoreToNewCopyAsync',
-    'RangeRollbackRecoveryExpectation',
-    'Recovered range temp SHA-256 does not match the pre-output expectation',
     'ExpectedLength',
     'ExpectedSha256',
     'Recovered copy length mismatch',
@@ -156,6 +155,22 @@ foreach($required in @(
 )){
     if($executorText -notmatch [regex]::Escape($required)){throw "Recovery executor invariant missing: $required"}
 }
+$rangeText=Get-Content -LiteralPath $range -Raw
+foreach($required in @(
+    'ComputeExpectedRecoveryAsync',
+    'RangeRollbackRecoveryExpectation',
+    'Recovered range temp length mismatch',
+    'Recovered range temp SHA-256 does not match the pre-output expectation',
+    'File.Move(temp, destination)'
+)){
+    if($rangeText -notmatch [regex]::Escape($required)){throw "Range recovery publication invariant missing: $required"}
+}
+$rangeVerifyPos=$rangeText.IndexOf('Recovered range temp SHA-256 does not match the pre-output expectation')
+$rangePublishPos=$rangeText.IndexOf('File.Move(temp, destination)')
+if($rangeVerifyPos -lt 0 -or $rangePublishPos -lt 0 -or $rangeVerifyPos -gt $rangePublishPos){
+    throw 'Range recovery must verify the temp SHA-256 before final copy publication.'
+}
+
 if($executorText -match [regex]::Escape('requestedPlan.Actions')){
     throw 'Recovery executor must never execute caller-supplied plan actions; it must execute the freshly rebuilt current plan.'
 }

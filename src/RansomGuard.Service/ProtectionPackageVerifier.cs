@@ -152,7 +152,7 @@ internal static class ProtectionPackageVerifier
                 true,
                 true,
                 true,
-                "Protection package identity, signatures and SYS/INF catalog membership passed. Lifecycle activation is a separate milestone.",
+                "Protection package identity, signatures and SYS/INF catalog membership passed; package is admitted for the production lifecycle.",
                 descriptor.Altitude,
                 observed,
                 serviceSignature.CertificateThumbprint);

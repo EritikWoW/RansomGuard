@@ -133,7 +133,12 @@ foreach($required in @(
     'PAGE_EXECUTE_READWRITE',
     'RgObserveWritableSection',
     'PreservationDecision',
+    'ProtectionGeneration',
+    'ClientGeneration',
     'CreateRequestSequence',
+    'gProtectionGeneration',
+    'gClientGeneration',
+    'RgAcquireClientPortGeneration',
     'FLT_SET_CONTEXT_REPLACE_IF_EXISTS',
     'FLT_SET_CONTEXT_KEEP_IF_EXISTS',
     'RgEventActivationPreflight',
@@ -241,6 +246,28 @@ foreach($block in @($queueBlock,$rawQueueBlock)){
     }
 }
 
+if($queueBlock -notmatch [regex]::Escape('work->ClientGeneration = InterlockedCompareExchange(&gClientGeneration, 0, 0)')){
+    throw 'Audit evidence must capture the exact connected-client generation.'
+}
+$rawGenerationStart=$src.IndexOf('static VOID RgQueueRawEventGeneration(',$rawQueueStart)
+$rawGenerationEnd=$src.IndexOf('static VOID RgSendWorker(PVOID Parameter)',$rawGenerationStart)
+if($rawGenerationStart -lt 0 -or $rawGenerationEnd -lt 0){
+    throw 'Generation-bound raw evidence queue implementation missing.'
+}
+$rawGenerationBlock=$src.Substring($rawGenerationStart,$rawGenerationEnd-$rawGenerationStart)
+if($rawGenerationBlock -notmatch [regex]::Escape('work->ClientGeneration = ClientGeneration')){
+    throw 'Raw evidence must retain its originating client generation.'
+}
+$sendGenerationStart=$src.IndexOf('static VOID RgSendWorker(PVOID Parameter)')
+$sendGenerationEnd=$src.IndexOf('static BOOLEAN RgAcquireClientPort(LONG ExpectedMode)',$sendGenerationStart)
+if($sendGenerationStart -lt 0 -or $sendGenerationEnd -lt 0){
+    throw 'Evidence worker generation boundary missing.'
+}
+$sendGenerationBlock=$src.Substring($sendGenerationStart,$sendGenerationEnd-$sendGenerationStart)
+if($sendGenerationBlock -notmatch [regex]::Escape('RgAcquireClientPortGeneration(work->ClientMode, work->ClientGeneration)')){
+    throw 'Queued evidence must never cross to a later client connection of the same mode.'
+}
+
 $nameHelperStart=$src.LastIndexOf('static NTSTATUS RgGetNormalizedNameInformation(')
 $nameHelperEnd=$src.LastIndexOf('static NTSTATUS RgGetNormalizedDestinationNameInformation(')
 $destNameHelperEnd=$src.LastIndexOf('static NTSTATUS RgPopulateEvent(')
@@ -278,8 +305,11 @@ foreach($forbidden in @('RgGateEvent(','FltGetFileNameInformation(','FltGetFileN
     if($pagingBlock.Contains($forbidden)){throw "Paging-write path must remain non-blocking and name-query free: $forbidden"}
 }
 if($pagingBlock -notmatch [regex]::Escape('FltGetStreamContext') -or
+   $pagingBlock -notmatch [regex]::Escape('context->ProtectionGeneration') -or
+   $pagingBlock -notmatch [regex]::Escape('InterlockedCompareExchange(&gProtectionGeneration, 0, 0)') -or
+   $pagingBlock -notmatch [regex]::Escape('RgPathMatchesGateRoot(context->PathStatus, context->Path)') -or
    $pagingBlock -notmatch [regex]::Escape('RgQueueRawEvent(&event, RgCurrentProtectedClientMode())')){
-    throw 'Paging-write path must use the pre-established stream context and queue no-reply evidence.'
+    throw 'Paging-write path must use a current-generation in-root stream context and queue no-reply evidence.'
 }
 
 $sectionStart=$src.IndexOf('FLT_PREOP_CALLBACK_STATUS RgPreAcquireForSectionSynchronization(')
@@ -300,6 +330,15 @@ $sectionObserve=$src.Substring($sectionObserveStart,$sectionObserveEnd-$sectionO
 foreach($forbidden in @('RgGateEvent(','FltGetFileNameInformation(','FltQueryInformationFile(')){
     if($sectionObserve.Contains($forbidden)){throw "Writable-section observation must use only established stream context: $forbidden"}
 }
+foreach($required in @(
+    'context->ProtectionGeneration',
+    'InterlockedCompareExchange(&gProtectionGeneration, 0, 0)',
+    'RgPathMatchesGateRoot(context->PathStatus, context->Path)'
+)){
+    if($sectionObserve -notmatch [regex]::Escape($required)){
+        throw "Writable-section observation must reject stale/out-of-root stream context: $required"
+    }
+}
 $attachStart=$src.IndexOf('static VOID RgAttachPagingStreamContext(PCFLT_RELATED_OBJECTS FltObjects')
 $attachEnd=$src.IndexOf('static VOID RgObservePagingWrite',$attachStart)
 if($attachStart -lt 0 -or $attachEnd -lt 0){throw 'Stream-context attachment helper missing.'}
@@ -307,7 +346,8 @@ $attachBlock=$src.Substring($attachStart,$attachEnd-$attachStart)
 if($attachBlock -notmatch [regex]::Escape('FLT_SET_CONTEXT_REPLACE_IF_EXISTS') -or
    $attachBlock -notmatch [regex]::Escape('FLT_SET_CONTEXT_KEEP_IF_EXISTS') -or
    $attachBlock -notmatch [regex]::Escape('PreservationDecision == RgGateSnapshotCommitted') -or
-   $attachBlock -notmatch [regex]::Escape('PreservationDecision == RgGateBaselineCommitted')){
+   $attachBlock -notmatch [regex]::Escape('PreservationDecision == RgGateBaselineCommitted') -or
+   $attachBlock -notmatch [regex]::Escape('context->ProtectionGeneration')){
     throw 'Protected CREATE must upgrade a prior read-only stream context while read-only CREATE must not downgrade it.'
 }
 
@@ -726,7 +766,7 @@ $truncatePost=$src.IndexOf('context->PostEventType == RgEventTruncateResult')
 $truncatePassive=$src.IndexOf('KeGetCurrentIrql() == PASSIVE_LEVEL',$truncatePost)
 $truncateApc=$src.IndexOf('!KeAreAllApcsDisabled()',$truncatePost)
 $truncateQuery=$src.IndexOf('FltQueryInformationFile(',$truncatePost)
-$truncateQueue=$src.IndexOf('RgQueueRawEvent(&event, RgCurrentProtectedClientMode())',$truncatePost)
+$truncateQueue=$src.IndexOf('RgQueueRawEventGeneration(',$truncatePost)
 if($truncatePost -lt 0 -or $truncatePassive -lt 0 -or $truncateApc -lt 0 -or $truncateQuery -lt 0 -or $truncateQueue -lt 0 -or
    $truncatePost -gt $truncatePassive -or $truncatePassive -gt $truncateQuery -or $truncateApc -gt $truncateQuery -or $truncateQuery -gt $truncateQueue){
     throw 'TRUNCATE post-operation FILE_STANDARD_INFO query must remain PASSIVE/APC-safe and precede no-reply result delivery.'
@@ -754,7 +794,7 @@ $deletePost=$src.IndexOf('context->PostEventType == RgEventDeleteDispositionResu
 $deleteIdentity=$src.IndexOf('RgPopulatePostOperationIdentity(&event, FltObjects)',$deletePost)
 $deleteStateQuery=$src.IndexOf('FileStandardInformation',$deleteIdentity)
 $deleteAttach=$src.IndexOf('RgAttachDeleteHandleContext(',$deleteStateQuery)
-$deleteQueue=$src.IndexOf('RgQueueRawEvent(&event, RgCurrentProtectedClientMode())',$deleteAttach)
+$deleteQueue=$src.IndexOf('RgQueueRawEventGeneration(',$deleteAttach)
 if($deletePost -lt 0 -or $deleteIdentity -lt 0 -or $deleteStateQuery -lt 0 -or
    $deleteAttach -lt 0 -or $deleteQueue -lt 0 -or
    $deletePost -gt $deleteIdentity -or $deleteIdentity -gt $deleteStateQuery -or
@@ -854,6 +894,9 @@ $fsctlPreservation=$src.Substring($fsctlPreservationStart,$fsctlPreservationEnd-
 foreach($required in @(
     'FltGetStreamContext',
     'context->PathStatus == RgPathResolved',
+    'context->ProtectionGeneration',
+    'InterlockedCompareExchange(&gProtectionGeneration, 0, 0)',
+    'RgPathMatchesGateRoot(context->PathStatus, context->Path)',
     'context->CreateRequestSequence != 0',
     'context->PreservationDecision == RgGateSnapshotCommitted',
     'context->PreservationDecision == RgGateBaselineCommitted',

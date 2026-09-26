@@ -7,6 +7,15 @@ using System.Text;
 
 const string PortName = @"\RansomGuardMinifilterPort";
 var options = Options.Parse(args);
+
+void LifecycleProgress(string phase)
+{
+    if (options.Profile != GateProfile.Production || !options.ServiceControlStdin)
+        return;
+    Console.WriteLine($"RG-LIFECYCLE PROGRESS schema=1 phase={phase} pid={Environment.ProcessId}");
+    Console.Out.Flush();
+}
+
 if (options.PrepareOnly)
 {
     LabRootPolicy.Prepare(options.Root);
@@ -19,6 +28,7 @@ if (options.Profile == GateProfile.Production)
     ProductionRootPolicy.Validate(options.Root);
 else
     LabRootPolicy.Validate(options.Root);
+LifecycleProgress("root-validated");
 
 if (PathPolicy.Under(options.StoreRoot, options.Root))
     throw new InvalidOperationException("Rollback store must be outside the protected root.");
@@ -33,13 +43,17 @@ else
     Directory.CreateDirectory(options.StoreRoot);
 }
 var repository = new RollbackRepository(options.StoreRoot);
+LifecycleProgress("repository-verify-start");
 repository.VerifyAll(); // Refuse to start a new gate session on top of ambiguous/crash-damaged rollback state.
+LifecycleProgress("repository-verify-complete");
+LifecycleProgress("restart-reconciliation-start");
 var restartSummary = await RestartReconciliation.ObservePendingAsync(
     repository,
     options.Root,
     checked(options.MaxStoreMiB * RollbackStorageBudget.MiB),
     checked(options.MinFreeMiB * RollbackStorageBudget.MiB),
     CancellationToken.None).ConfigureAwait(false);
+LifecycleProgress("restart-reconciliation-complete");
 if (options.ReconcileOnly)
 {
     Console.WriteLine(
@@ -47,8 +61,27 @@ if (options.ReconcileOnly)
     return;
 }
 var sessionId = options.SessionId ?? $"gate-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}";
-var store = repository.CreateSession(sessionId);
+var existingSession = repository.SessionIds().Contains(sessionId, StringComparer.Ordinal);
+var serviceControlledProduction =
+    options.Profile == GateProfile.Production && options.ServiceControlStdin;
+if (existingSession && !serviceControlledProduction)
+    throw new InvalidOperationException(
+        "Only the service-controlled ProductionGate lifecycle may resume an existing rollback session.");
+
+LifecycleProgress(existingSession ? "session-open-start" : "session-create-start");
+var store = existingSession
+    ? repository.OpenSession(sessionId)
+    : repository.CreateSession(sessionId);
+LifecycleProgress(existingSession ? "session-open-complete" : "session-create-complete");
 var lifecycleStore = new RollbackSessionLifecycleStore(store.Root);
+if (existingSession)
+{
+    lifecycleStore.VerifyAll();
+    if (lifecycleStore.Snapshot.State != RollbackSessionLifecycleState.Active)
+        throw new InvalidOperationException(
+            "ProductionGate service lifecycle may resume only an Active rollback session.");
+    Console.WriteLine($"Production rollback session: RESUME Active session={sessionId}");
+}
 var writeStore = new RangeRollbackStore(Path.Combine(store.Root, "write-cow"));
 var createStore = new CreateRollbackStore(Path.Combine(store.Root, "create-state"));
 var createOperationStore = new CreateOperationStore(Path.Combine(store.Root, "create-state"));
@@ -106,9 +139,55 @@ var context = new RgConnectContext
     GateRoot = ntRoot
 };
 
+LifecycleProgress("kernel-connect-start");
 using var port = Native.Connect(PortName, context);
+LifecycleProgress("kernel-connect-complete");
 using var cts = new CancellationTokenSource();
+var productionServiceShutdownAuthorized = 0;
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); Native.Cancel(port); };
+
+async Task MonitorServiceControlAsync()
+{
+    if (!options.ServiceControlStdin)
+        return;
+
+    // Console.In is a synchronized reader and may execute the ReadLineAsync prefix
+    // synchronously. Yield first so the private service-control read can never stall
+    // ProductionGate activation on the startup thread.
+    await Task.Yield();
+
+    try
+    {
+        while (!cts.IsCancellationRequested)
+        {
+            var line = await Console.In.ReadLineAsync().WaitAsync(cts.Token).ConfigureAwait(false);
+            if (line is null)
+            {
+                // The supervising service disappeared or closed its private control pipe.
+                // Never translate that failure into an authorized whole-gate deactivation.
+                cts.Cancel();
+                Native.Cancel(port);
+                try { Console.Error.WriteLine("Production service control channel closed unexpectedly; disconnect will remain fail-safe."); }
+                catch (IOException) { }
+                return;
+            }
+            if (!string.Equals(line, "shutdown", StringComparison.Ordinal))
+            {
+                Console.Error.WriteLine("Production service control ignored an unknown command.");
+                continue;
+            }
+
+            Interlocked.Exchange(ref productionServiceShutdownAuthorized, 1);
+            Console.WriteLine($"RG-LIFECYCLE STOPPING schema=1 pid={Environment.ProcessId} session={sessionId}");
+            cts.Cancel();
+            Native.Cancel(port);
+            return;
+        }
+    }
+    catch (OperationCanceledException) when (cts.IsCancellationRequested)
+    {
+    }
+}
 
 async Task MonitorShutdownFileAsync()
 {
@@ -133,6 +212,7 @@ async Task MonitorShutdownFileAsync()
     {
     }
 }
+var serviceControlMonitor = MonitorServiceControlAsync();
 var shutdownMonitor = MonitorShutdownFileAsync();
 
 var headerSize = Marshal.SizeOf<FilterMessageHeader>();
@@ -144,15 +224,20 @@ if (headerSize != 16 || eventSize != 2168 || replyHeaderSize != 16 || gateReplyS
     throw new InvalidOperationException($"Unexpected protocol sizes: message={headerSize}, event={eventSize}, replyHeader={replyHeaderSize}, gateReply={gateReplySize}");
 
 var resolver = new DevicePathResolver();
+LifecycleProgress("activation-preflight-start");
 var activationSummary = await ActivationPreflight.RunAsync(
     port, options.Root, resolver, activationStore, topologyStore, storageBudget,
-    options.Profile == GateProfile.Lab ? options.ContainPid : null, cts.Token).ConfigureAwait(false);
+    options.Profile == GateProfile.Lab ? options.ContainPid : null, cts.Token,
+    phase => LifecycleProgress("activation-preflight-" + phase)).ConfigureAwait(false);
+LifecycleProgress("activation-preflight-complete");
 Console.WriteLine($"Activation preflight: directories={activationSummary.DirectoriesHeld}, files={activationSummary.FilesChecked}, writable-views=0, kernel gate ACTIVE.");
 Console.WriteLine(activationSummary.ContainedProcessId is ulong containedPid
     ? $"LAB containment  : ACTIVE for kernel-bound process pid={containedPid}; abrupt disconnect clears only this PEPROCESS latch while root protection degrades fail-safe."
     : options.Profile == GateProfile.Production
         ? "Production containment: disabled by profile."
         : "LAB containment  : not pre-armed.");
+if (options.Profile == GateProfile.Production && options.ServiceControlStdin)
+    Console.WriteLine($"RG-LIFECYCLE READY schema=1 pid={Environment.ProcessId} session={sessionId} profile=ProductionGate");
 
 if (options.Profile == GateProfile.Lab && options.ScopeAmbiguityPid is ulong scopeAmbiguityPid)
 {
@@ -547,6 +632,7 @@ finally
         await Task.WhenAll(activeWorkers).ConfigureAwait(false);
     if (!cts.IsCancellationRequested)
         cts.Cancel();
+    await serviceControlMonitor.ConfigureAwait(false);
     await shutdownMonitor.ConfigureAwait(false);
 }
 
@@ -562,33 +648,45 @@ var pendingContainmentAckCount = containmentRecords.Count(x =>
         y.Phase == ContainmentEvidencePhase.KernelActive &&
         y.KernelSequence == x.KernelSequence));
 var workerFailureCount = Volatile.Read(ref gateWorkerFailures);
-var cleanShutdown = workerFailureCount == 0 &&
+var productionShutdownAuthorized =
+    options.Profile != GateProfile.Production ||
+    !options.ServiceControlStdin ||
+    Volatile.Read(ref productionServiceShutdownAuthorized) == 1;
+var cleanShutdown = productionShutdownAuthorized &&
+                    workerFailureCount == 0 &&
                     pendingCreateCount == 0 &&
                     pendingRenameCount == 0 &&
                     pendingTruncateCount == 0 &&
                     unsettledDeleteCount == 0 &&
                     pendingContainmentAckCount == 0;
-var lifecycleReason = cleanShutdown
-    ? "clean-gate-shutdown"
-    : $"gate-shutdown-faulted:workers={workerFailureCount};pending-create={pendingCreateCount};pending-rename={pendingRenameCount};pending-truncate={pendingTruncateCount};unsettled-delete={unsettledDeleteCount};pending-containment-ack={pendingContainmentAckCount}";
+var lifecycleReason = !productionShutdownAuthorized
+    ? "gate-shutdown-faulted:production-service-shutdown-not-authorized"
+    : cleanShutdown
+        ? "clean-gate-shutdown"
+        : $"gate-shutdown-faulted:workers={workerFailureCount};pending-create={pendingCreateCount};pending-rename={pendingRenameCount};pending-truncate={pendingTruncateCount};unsettled-delete={unsettledDeleteCount};pending-containment-ack={pendingContainmentAckCount}";
 
-await using (var lifecycleReservation = await storageBudget.ReserveAsync(
-                 RollbackStorageBudget.MetadataReservationBytes,
-                 "session-lifecycle-terminal",
-                 CancellationToken.None).ConfigureAwait(false))
+var resumableProductionInterruption =
+    serviceControlledProduction &&
+    !productionShutdownAuthorized &&
+    workerFailureCount == 0;
+
+if (resumableProductionInterruption)
 {
-    if (cleanShutdown)
-    {
-        _ = await lifecycleStore.MarkCompletedAsync(lifecycleReason, CancellationToken.None)
-            .ConfigureAwait(false);
-        Console.WriteLine("Rollback session lifecycle: Completed.");
-    }
-    else
-    {
-        _ = await lifecycleStore.MarkFaultedAsync(lifecycleReason, CancellationToken.None)
-            .ConfigureAwait(false);
-        Console.Error.WriteLine($"Rollback session lifecycle: Faulted ({lifecycleReason}).");
-    }
+    // The kernel retains the same production root/protection epoch in DegradedProtected.
+    // Keep this rollback session Active so the replacement ProductionGate/Service can
+    // reconcile pending operations and continue the exact same evidence namespace.
+    Console.Error.WriteLine(
+        $"Rollback session lifecycle: Active (ProductionGate supervisor lost; resume required; session={sessionId}).");
+}
+else if (!cleanShutdown)
+{
+    await using var lifecycleReservation = await storageBudget.ReserveAsync(
+        RollbackStorageBudget.MetadataReservationBytes,
+        "session-lifecycle-fault",
+        CancellationToken.None).ConfigureAwait(false);
+    _ = await lifecycleStore.MarkFaultedAsync(lifecycleReason, CancellationToken.None)
+        .ConfigureAwait(false);
+    Console.Error.WriteLine($"Rollback session lifecycle: Faulted ({lifecycleReason}).");
 }
 
 if (cleanShutdown)
@@ -629,11 +727,28 @@ if (cleanShutdown)
         throw new InvalidOperationException(
             $"Kernel refused clean gate deactivation. NTSTATUS=0x{deactivationReply.Status:X8}, state={(RgProtectionState)deactivationReply.ProtectionState}.");
 
+    // Completed is terminal evidence that the protection epoch was actually released.
+    // If DeactivateGate or this durable commit fails, the session stays Active and the
+    // service must not detach/unload the driver on an unconfirmed maintenance outcome.
+    await using (var lifecycleReservation = await storageBudget.ReserveAsync(
+                     RollbackStorageBudget.MetadataReservationBytes,
+                     "session-lifecycle-completed",
+                     CancellationToken.None).ConfigureAwait(false))
+    {
+        _ = await lifecycleStore.MarkCompletedAsync(lifecycleReason, CancellationToken.None)
+            .ConfigureAwait(false);
+    }
+    Console.WriteLine("Rollback session lifecycle: Completed after kernel Maintenance.");
+
     Console.WriteLine("Kernel gate graceful deactivation: MAINTENANCE authorized; port close may release the retained LAB root.");
+    if (options.Profile == GateProfile.Production && options.ServiceControlStdin)
+        Console.WriteLine($"RG-LIFECYCLE STOPPED schema=1 pid={Environment.ProcessId} session={sessionId} clean=1");
 }
 else
 {
     Console.Error.WriteLine("Kernel gate graceful deactivation NOT authorized; disconnect must remain fail-safe for the retained LAB root.");
+    if (options.Profile == GateProfile.Production && options.ServiceControlStdin)
+        Console.WriteLine($"RG-LIFECYCLE STOPPED schema=1 pid={Environment.ProcessId} session={sessionId} clean=0");
 }
 
 static class ActivationPreflight
@@ -648,14 +763,15 @@ static class ActivationPreflight
         ActivationTopologyStore topologyStore,
         RollbackStorageBudget storageBudget,
         ulong? containPid,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<string>? progress = null)
     {
         var options = new EnumerationOptions
         {
-            RecurseSubdirectories = true,
+            RecurseSubdirectories = false,
             IgnoreInaccessible = false,
             ReturnSpecialDirectories = false,
-            AttributesToSkip = FileAttributes.ReparsePoint
+            AttributesToSkip = 0
         };
 
         var checkedFiles = 0;
@@ -664,7 +780,18 @@ static class ActivationPreflight
         try
         {
             var rootPath = Path.GetFullPath(root);
+            if ((File.GetAttributes(rootPath) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException($"Activation preflight refuses reparse root: {rootPath}");
+
+            progress?.Invoke("root-open-start");
             var rootHandle = Native.OpenPreflightDirectory(rootPath);
+            progress?.Invoke("root-open-complete");
+            if ((File.GetAttributes(rootPath) & FileAttributes.ReparsePoint) != 0)
+            {
+                rootHandle.Dispose();
+                throw new InvalidOperationException($"Activation preflight refuses racing reparse root: {rootPath}");
+            }
+
             heldHandles.Add(rootHandle);
             var rootIdentity = FileIdentityStore.QueryHandleIdentity(rootHandle);
             await using (var rootReservation = await storageBudget.ReserveAsync(
@@ -677,44 +804,78 @@ static class ActivationPreflight
             }
             heldDirectories++;
 
-            var directories = Directory.EnumerateDirectories(rootPath, "*", options)
-                .Select(Path.GetFullPath)
-                .OrderBy(x => x.Count(ch => ch == Path.DirectorySeparatorChar))
-                .ThenBy(x => x, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
+            // Never use recursive enumeration here. Recursive EnumerationOptions that skip
+            // ReparsePoint entries make a junction disappear from the preflight entirely,
+            // while recursive enumeration that includes them can traverse outside the
+            // protected namespace. Walk one already-held directory at a time instead.
+            var pendingDirectories = new Queue<string>();
+            var files = new List<string>();
+            pendingDirectories.Enqueue(rootPath);
 
-            foreach (var directory in directories)
+            progress?.Invoke("directory-enumeration-start");
+            while (pendingDirectories.Count != 0)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
-                    throw new InvalidOperationException($"Activation preflight refuses reparse directory: {directory}");
+                var currentDirectory = pendingDirectories.Dequeue();
+                var entries = Directory.EnumerateFileSystemEntries(currentDirectory, "*", options)
+                    .Select(Path.GetFullPath)
+                    .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
 
-                var directoryHandle = Native.OpenPreflightDirectory(directory);
-                heldHandles.Add(directoryHandle);
-                var directoryIdentity = FileIdentityStore.QueryHandleIdentity(directoryHandle);
-                await using (var directoryReservation = await storageBudget.ReserveAsync(
-                                 RollbackStorageBudget.MetadataReservationBytes,
-                                 "activation-topology-directory",
-                                 cancellationToken).ConfigureAwait(false))
+                foreach (var entry in entries)
                 {
-                    _ = await topologyStore.RecordAsync(directory, directoryIdentity, isRoot: false, cancellationToken)
-                        .ConfigureAwait(false);
-                }
-                heldDirectories++;
-            }
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var attributes = File.GetAttributes(entry);
+                    if ((attributes & FileAttributes.ReparsePoint) != 0)
+                        throw new InvalidOperationException($"Activation preflight refuses descendant reparse point: {entry}");
 
-            foreach (var rawPath in Directory.EnumerateFiles(rootPath, "*", options))
+                    if ((attributes & FileAttributes.Directory) == 0)
+                    {
+                        files.Add(entry);
+                        continue;
+                    }
+
+                    var directoryHandle = Native.OpenPreflightDirectory(entry);
+                    if ((File.GetAttributes(entry) & FileAttributes.ReparsePoint) != 0)
+                    {
+                        directoryHandle.Dispose();
+                        throw new InvalidOperationException($"Activation preflight refuses racing reparse directory: {entry}");
+                    }
+
+                    heldHandles.Add(directoryHandle);
+                    var directoryIdentity = FileIdentityStore.QueryHandleIdentity(directoryHandle);
+                    await using (var directoryReservation = await storageBudget.ReserveAsync(
+                                     RollbackStorageBudget.MetadataReservationBytes,
+                                     "activation-topology-directory",
+                                     cancellationToken).ConfigureAwait(false))
+                    {
+                        _ = await topologyStore.RecordAsync(entry, directoryIdentity, isRoot: false, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+
+                    heldDirectories++;
+                    pendingDirectories.Enqueue(entry);
+                }
+            }
+            progress?.Invoke("directory-enumeration-complete");
+
+            progress?.Invoke("file-enumeration-start");
+            foreach (var rawPath in files.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                var fileOrdinal = checkedFiles + 1;
+                progress?.Invoke($"file-{fileOrdinal}-prepare");
                 var path = Path.GetFullPath(rawPath);
                 if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
                     throw new InvalidOperationException($"Activation preflight refuses reparse file: {path}");
 
+                progress?.Invoke($"file-{fileOrdinal}-arm-start");
                 var arm = Native.Control(port, new RgControlRequest
                 {
                     ProtocolVersion = ProtocolContract.Version,
                     Command = (uint)RgControlCommand.ArmPreflight
                 });
+                progress?.Invoke($"file-{fileOrdinal}-arm-complete");
                 if (arm.ProtocolVersion != ProtocolContract.Version ||
                     arm.Command != (uint)RgControlCommand.ArmPreflight ||
                     arm.Status != 0 ||
@@ -726,8 +887,12 @@ static class ActivationPreflight
                 // First issue an attribute-only probe that deliberately shares READ/WRITE/DELETE.
                 // This lets the minifilter inspect the existing section object even when a writable
                 // mapping already keeps a write-capable file object alive.
+                progress?.Invoke($"file-{fileOrdinal}-probe-open-start");
                 using var probe = Native.OpenPreflightProbe(path);
+                progress?.Invoke($"file-{fileOrdinal}-probe-open-complete");
+                progress?.Invoke($"file-{fileOrdinal}-event-wait-start");
                 var ev = await ReceivePreflightEventAsync(port, path, resolver, cancellationToken).ConfigureAwait(false);
+                progress?.Invoke($"file-{fileOrdinal}-event-wait-complete");
 
                 DurableFileIdentity? identity = null;
                 if (ev.IdentityStatus == (uint)RgIdentityStatus.Resolved &&
@@ -761,7 +926,9 @@ static class ActivationPreflight
                 // Only after kernel attestation is clean do we acquire the share-sensitive hold.
                 // Keep the probe open until the hold exists, then verify the held object is the same
                 // FILE_ID_INFO so a rename/replace race cannot silently swap the file between phases.
+                progress?.Invoke($"file-{fileOrdinal}-hold-open-start");
                 var hold = Native.OpenPreflightHold(path);
+                progress?.Invoke($"file-{fileOrdinal}-hold-open-complete");
                 var holdIdentity = FileIdentityStore.QueryHandleIdentity(hold);
                 if (!identity.Equals(holdIdentity))
                 {
@@ -781,17 +948,21 @@ static class ActivationPreflight
                 heldHandles.Add(hold);
 
                 checkedFiles++;
+                progress?.Invoke($"file-{fileOrdinal}-complete");
             }
+            progress?.Invoke("file-enumeration-complete");
 
             var activationCommand = containPid.HasValue
                 ? RgControlCommand.ActivateAndContainProcess
                 : RgControlCommand.ActivateGate;
+            progress?.Invoke("kernel-activate-start");
             var activationReply = Native.Control(port, new RgControlRequest
             {
                 ProtocolVersion = ProtocolContract.Version,
                 Command = (uint)activationCommand,
                 TargetProcessId = containPid ?? 0
             });
+            progress?.Invoke("kernel-activate-complete");
             if (activationReply.ProtocolVersion != ProtocolContract.Version ||
                 activationReply.Command != (uint)activationCommand ||
                 activationReply.Status != 0 ||
@@ -1972,6 +2143,7 @@ sealed record Options(
     bool DropFirstTruncateCompletion,
     bool DropFirstDeleteCompletion,
     bool ReconcileOnly,
+    bool ServiceControlStdin,
     string? ShutdownFile)
 {
     public const int DefaultGateWorkers = 4;
@@ -2003,6 +2175,7 @@ sealed record Options(
         var dropFirstTruncateCompletion = false;
         var dropFirstDeleteCompletion = false;
         var reconcileOnly = false;
+        var serviceControlStdin = false;
         string? shutdownFile = null;
         for (var i = 0; i < args.Length; i++)
         {
@@ -2062,6 +2235,7 @@ sealed record Options(
                 case "--drop-first-truncate-completion": dropFirstTruncateCompletion = true; break;
                 case "--drop-first-delete-completion": dropFirstDeleteCompletion = true; break;
                 case "--reconcile-only": reconcileOnly = true; break;
+                case "--service-control-stdin": serviceControlStdin = true; break;
                 case "--shutdown-file" when i + 1 < args.Length:
                     shutdownFile = Path.GetFullPath(args[++i]);
                     break;
@@ -2085,6 +2259,8 @@ sealed record Options(
             throw new ArgumentException("Containment thresholds require --contain-after-pid.");
         if (containAfterPaths > containAfterEvents)
             throw new ArgumentException("--contain-after-paths cannot exceed --contain-after-events.");
+        if (serviceControlStdin && profile != GateProfile.Production)
+            throw new ArgumentException("--service-control-stdin is reserved for the ProductionGate service lifecycle.");
 
         if (profile == GateProfile.Production)
         {
@@ -2116,7 +2292,7 @@ sealed record Options(
             profile, root, store!, session, prepare, gateWorkers, maxStoreMiB, minFreeMiB,
             containPid, scopeAmbiguityPid, containAfterPid, containAfterEvents, containAfterPaths,
             dropFirstCreateCompletion, dropFirstRenameCompletion, dropFirstTruncateCompletion,
-            dropFirstDeleteCompletion, reconcileOnly, shutdownFile);
+            dropFirstDeleteCompletion, reconcileOnly, serviceControlStdin, shutdownFile);
     }
 }
 

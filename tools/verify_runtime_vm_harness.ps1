@@ -121,22 +121,41 @@ foreach($required in @(
     'productionReconnectActivated',
     'productionReconnectMutationAllowed',
     'ProductionGate forbids LAB prepare/fault/reconciliation/shutdown/containment options',
+    'Reset-QualificationStateRoot',
+    "CommonApplicationData)) 'RansomGuardV03'",
+    'Remove-Item -LiteralPath $full -Recurse -Force',
+    'Reset-QualificationStateRoot $stateRoot',
     '.ransomguard-gate-lab-root',
     'RANSOMGUARD-LAB-GATE-V1',
     'Stop-ProcessHard $gate',
-    'LabGate unexpectedly replaced retained ProductionGate state.',
+    'Wait-ExpectedProfileRejection',
+    'Stop-ProcessHard $Process "$Description rejected gate"',
+    'Wait-ExpectedProfileRejection $labWrong $labOut $labErr ''FilterConnectCommunicationPort failed'' ''LabGate retained-ProductionGate profile mismatch'' 30',
     'FilterConnectCommunicationPort failed',
-    'profile-mismatch probe failed before proving the kernel rejected the connection.',
     'production-gate-result.json',
     'cleanupPassed=$false',
     '$installed=$true',
     '& $installScript',
-    '& $unloadScript'
+    '& $unloadScript',
+    '-RemovePackage'
 )){
     if($productionGate -notmatch [regex]::Escape($required)){
         throw "ProductionGate VM qualification script missing invariant: $required"
     }
 }
+$prodStateReset=$productionGate.IndexOf('Reset-QualificationStateRoot $stateRoot')
+$prodFixedStore=$productionGate.IndexOf('$fixedStore=[IO.Path]::GetFullPath((Join-Path $stateRoot ''Rollback''))',$prodStateReset)
+$prodCleanupReset=$productionGate.LastIndexOf('Reset-QualificationStateRoot $stateRoot')
+if($prodStateReset -lt 0 -or $prodFixedStore -lt 0 -or $prodCleanupReset -lt 0 -or
+   $prodStateReset -gt $prodFixedStore -or $prodCleanupReset -le $prodFixedStore){
+    throw 'ProductionGate qualification must isolate the fixed ProgramData state root before use and remove it again during cleanup.'
+}
+
+$prodRemovePackage=$productionGate.IndexOf('& $unloadScript -Volume $volume -RemovePackage')
+if($prodRemovePackage -lt 0){
+    throw 'ProductionGate qualification cleanup must remove its LAB service registration and Driver Store package before normal-Service lifecycle qualification.'
+}
+
 $prodCleanupArm=$productionGate.IndexOf('$installed=$true')
 $prodInstall=$productionGate.IndexOf('& $installScript')
 if($prodCleanupArm -lt 0 -or $prodInstall -lt 0 -or $prodCleanupArm -gt $prodInstall){
@@ -144,6 +163,13 @@ if($prodCleanupArm -lt 0 -or $prodInstall -lt 0 -or $prodCleanupArm -gt $prodIns
 }
 if($productionGate -match '(?i)Set-MpPreference|Add-MpPreference|Remove-MpPreference|bcdedit(?:\.exe)?\s+/(?:set|deletevalue|create|copy|delete|import)'){
     throw 'ProductionGate qualification must not modify Defender or boot policy.'
+}
+
+if($runtime -match [regex]::Escape('WaitForExit(30000)')){
+    throw 'Pre-activation rejection scenarios must use explicit failure evidence, not crash-process exit timing.'
+}
+if($runtime -notmatch [regex]::Escape('Stop-LabProcess $Process "$Description rejected gate"')){
+    throw 'Expected activation rejection evidence must bounded-clean any lingering rejected GateClient process.'
 }
 
 foreach($required in @(
@@ -158,11 +184,16 @@ foreach($required in @(
     'forged GateClient PID',
     '^rejected:0x[0-9A-F]{8}$',
     'predirectory',
+    'Wait-ExpectedGateRejection',
+    'Activation preflight: .*kernel gate ACTIVE',
     'preexistingDirectoryHandleRejected',
     'prewritehandle',
     'dormantWritableHandleRejected',
     'hold-write-handle',
-    'Dormant writable-handle activation failed for an unexpected reason',
+    'Wait-ExpectedGateRejection $gateDir',
+    'Wait-ExpectedGateRejection $gateDormant',
+    'Wait-ExpectedGateRejection $gateHardPre',
+    'Wait-ExpectedGateRejection $gatePre',
     'prehardlink',
     'preexistingHardLinkRejected',
     'NumberOfLinks=2',
@@ -215,6 +246,7 @@ foreach($required in @(
     'disconnectReadAllowed',
     'disconnectOutOfRootAllowed',
     'wrongRootReconnectRejected',
+    'Wait-ExpectedGateRejection $gateWrong $wrongOut $wrongErr ''FilterConnectCommunicationPort failed HRESULT=0x80070005'' ''wrong-root retained-scope reconnect'' 30',
     'sameRootReconnectActivated',
     'sameRootMutationAllowed',
     'gracefulReleaseSucceeded',

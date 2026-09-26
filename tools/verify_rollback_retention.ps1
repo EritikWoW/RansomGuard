@@ -69,7 +69,8 @@ foreach($required in @(
     'unsettledDeleteCount',
     'MarkCompletedAsync',
     'MarkFaultedAsync',
-    'session-lifecycle-terminal'
+    'session-lifecycle-fault',
+    'session-lifecycle-completed'
 )){
     if($gateText -notmatch [regex]::Escape($required)){throw "Gate lifecycle invariant missing: $required"}
 }

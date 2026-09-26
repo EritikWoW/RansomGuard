@@ -29,6 +29,22 @@ function Assert-DisposableVm {
     return $vmText
 }
 
+function Reset-QualificationStateRoot([string]$StateRoot){
+    $expected=[IO.Path]::GetFullPath((Join-Path ([Environment]::GetFolderPath(
+        [Environment+SpecialFolder]::CommonApplicationData)) 'RansomGuardV03'))
+    $full=[IO.Path]::GetFullPath($StateRoot)
+    if(-not [string]::Equals($full,$expected,[StringComparison]::OrdinalIgnoreCase)){
+        throw "REFUSED: qualification state reset escaped the exact RansomGuardV03 ProgramData root: $full"
+    }
+    if(Test-Path -LiteralPath $full){
+        Assert-NoReparsePath $full 'QualificationStateRoot'
+        Remove-Item -LiteralPath $full -Recurse -Force
+    }
+    if(Test-Path -LiteralPath $full){
+        throw "Qualification state root remained after bounded reset: $full"
+    }
+}
+
 function Assert-NoReparsePath([string]$Path,[string]$Label){
     $full=[IO.Path]::GetFullPath($Path)
     $root=[IO.Path]::GetPathRoot($full)
@@ -76,6 +92,54 @@ function Stop-ProcessHard([System.Diagnostics.Process]$Process,[string]$Descript
     if($null -eq $Process -or $Process.HasExited){return}
     Stop-Process -Id $Process.Id -Force -ErrorAction Stop
     if(-not $Process.WaitForExit(10000)){throw "Timed out stopping $Description pid=$($Process.Id)."}
+}
+
+function Read-ProfileLog([string]$Path){
+    if(Test-Path -LiteralPath $Path -PathType Leaf){
+        return [string](Get-Content -LiteralPath $Path -Raw -ErrorAction SilentlyContinue)
+    }
+    return ''
+}
+
+function Wait-ExpectedProfileRejection(
+    [System.Diagnostics.Process]$Process,
+    [string]$StdOut,
+    [string]$StdErr,
+    [string]$ExpectedPattern,
+    [string]$Description,
+    [int]$Seconds=30
+){
+    $deadline=(Get-Date).AddSeconds($Seconds)
+    while((Get-Date) -lt $deadline){
+        $combined=(Read-ProfileLog $StdOut)+[Environment]::NewLine+(Read-ProfileLog $StdErr)
+
+        if($combined -match '(?i)kernel gate ACTIVE'){
+            if(-not $Process.HasExited){Stop-ProcessHard $Process "$Description unexpectedly activated gate"}
+            throw "Kernel gate unexpectedly became ACTIVE during $Description. $combined"
+        }
+
+        if($combined -match $ExpectedPattern){
+            if(-not $Process.HasExited){
+                Stop-ProcessHard $Process "$Description rejected gate"
+            }elseif($Process.ExitCode -eq 0){
+                throw "Gate process returned exit=0 despite rejection evidence during $Description. $combined"
+            }
+            return $combined
+        }
+
+        if($Process.HasExited){
+            if($Process.ExitCode -eq 0){
+                throw "Gate process unexpectedly succeeded during $Description. $combined"
+            }
+            throw "Gate process failed for an unexpected reason during $Description. $combined"
+        }
+
+        Start-Sleep -Milliseconds 100
+    }
+
+    $combined=(Read-ProfileLog $StdOut)+[Environment]::NewLine+(Read-ProfileLog $StdErr)
+    if(-not $Process.HasExited){Stop-ProcessHard $Process "$Description timeout cleanup"}
+    throw "Timed out waiting for expected rejection during $Description. $combined"
 }
 
 function Test-AccessDeniedException([Exception]$Exception){
@@ -142,7 +206,10 @@ Assert-NoReparsePath $root 'ProductionRoot'
 $target=Join-Path $root 'production-target.bin'
 [IO.File]::WriteAllText($target,'production-initial')
 
-$fixedStore=[IO.Path]::GetFullPath((Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)) 'RansomGuardV03\Rollback'))
+$stateRoot=[IO.Path]::GetFullPath((Join-Path ([Environment]::GetFolderPath(
+    [Environment+SpecialFolder]::CommonApplicationData)) 'RansomGuardV03'))
+Reset-QualificationStateRoot $stateRoot
+$fixedStore=[IO.Path]::GetFullPath((Join-Path $stateRoot 'Rollback'))
 New-Item -ItemType Directory -Path $fixedStore -Force | Out-Null
 Assert-NoReparsePath $fixedStore 'ProductionRollbackStore'
 
@@ -255,19 +322,7 @@ try{
     $labWrong=Start-LoggedProcess $gateExe @(
         '--root',(Quote-Arg $root),'--store',(Quote-Arg $labMismatchStore),'--session',"lab-mismatch-$stamp"
     ) $labOut $labErr
-    if(-not $labWrong.WaitForExit(15000)){
-        Stop-Process -Id $labWrong.Id -Force -ErrorAction SilentlyContinue
-        throw 'LabGate unexpectedly stayed connected to retained ProductionGate state.'
-    }
-    $labOutText=if(Test-Path -LiteralPath $labOut){Get-Content -LiteralPath $labOut -Raw}else{''}
-    $labErrText=if(Test-Path -LiteralPath $labErr){Get-Content -LiteralPath $labErr -Raw}else{''}
-    $labText=$labOutText+$labErrText
-    if($labWrong.ExitCode -eq 0 -or $labText -match 'kernel gate ACTIVE'){
-        throw 'LabGate unexpectedly replaced retained ProductionGate state.'
-    }
-    if($labText -notmatch 'FilterConnectCommunicationPort failed'){
-        throw 'LabGate profile-mismatch probe failed before proving the kernel rejected the connection.'
-    }
+    [void](Wait-ExpectedProfileRejection $labWrong $labOut $labErr 'FilterConnectCommunicationPort failed' 'LabGate retained-ProductionGate profile mismatch' 30)
     $labWrong=$null
     $summary.labProfileReconnectRejected=$true
 
@@ -298,7 +353,7 @@ finally{
         }
     }
     if($installed){
-        try{& $unloadScript -Volume $volume}catch{
+        try{& $unloadScript -Volume $volume -RemovePackage}catch{
             if($null -eq $cleanupFailure){$cleanupFailure=$_}
         }
     }
@@ -308,6 +363,11 @@ finally{
         if($LASTEXITCODE -ne 0 -or $filters -match '(?m)^\s*RansomGuardMinifilter\b'){
             throw 'RansomGuardMinifilter remained loaded after ProductionGate qualification.'
         }
+
+        # This qualification owns the fixed ProgramData rollback namespace only inside the
+        # disposable VM. Remove it so the following normal-Service lifecycle must initialize
+        # its own trusted marker/ACL through SecureStore instead of inheriting harness state.
+        Reset-QualificationStateRoot $stateRoot
         $summary.cleanupPassed=$true
     }catch{
         if($null -eq $cleanupFailure){$cleanupFailure=$_}

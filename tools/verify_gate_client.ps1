@@ -12,6 +12,14 @@ $text=Get-Content -LiteralPath $program -Raw
 $manifestText=Get-Content -LiteralPath $manifest -Raw
 $fileIdentityText=Get-Content -LiteralPath $fileIdentity -Raw
 
+$serviceControlStart=$text.IndexOf('async Task MonitorServiceControlAsync()')
+$serviceControlYield=$text.IndexOf('await Task.Yield();',$serviceControlStart)
+$serviceControlRead=$text.IndexOf('Console.In.ReadLineAsync()',$serviceControlStart)
+if($serviceControlStart -lt 0 -or $serviceControlYield -lt 0 -or $serviceControlRead -lt 0 -or
+   $serviceControlYield -gt $serviceControlRead){
+  throw 'Production service-control monitor must yield before touching synchronized Console.In.'
+}
+
 foreach($required in @(
   'RANSOMGUARD-LAB-GATE-V1',
   'CapturePreimageAsync',
@@ -74,6 +82,25 @@ foreach($required in @(
   'ProductionRootPolicy.Validate(options.Root)',
   'ProductionGate root/ancestor cannot be a reparse point',
   'ProductionGate root must not be inside Windows, Program Files, or ProgramData',
+  '--service-control-stdin',
+  'ServiceControlStdin',
+  'MonitorServiceControlAsync',
+  'await Task.Yield();',
+  'Console.In.ReadLineAsync()',
+  'productionServiceShutdownAuthorized',
+  'Interlocked.Exchange(ref productionServiceShutdownAuthorized, 1)',
+  'Production service control channel closed unexpectedly; disconnect will remain fail-safe.',
+  'productionShutdownAuthorized',
+  'gate-shutdown-faulted:production-service-shutdown-not-authorized',
+  'RG-LIFECYCLE READY schema=1',
+  'RG-LIFECYCLE STOPPED schema=1',
+  '--service-control-stdin is reserved for the ProductionGate service lifecycle.',
+  'Only the service-controlled ProductionGate lifecycle may resume an existing rollback session.',
+  'ProductionGate service lifecycle may resume only an Active rollback session.',
+  'Production rollback session: RESUME Active session=',
+  'Rollback session lifecycle: Active (ProductionGate supervisor lost; resume required;',
+  'Rollback session lifecycle: Completed after kernel Maintenance.',
+  'session-lifecycle-completed',
   'DevicePathResolver.ToNtScope(options.Root)',
   'GateVolumeLengthBytes = checked((uint)(ntVolume.Length * 2))',
   'public uint GateRootLengthBytes, GateVolumeLengthBytes;',
@@ -124,7 +151,10 @@ foreach($required in @(
   'ActivationTopologyStore',
   'Native.OpenPreflight',
   'Native.OpenPreflightDirectory',
-  'Directory.EnumerateDirectories',
+  'Directory.EnumerateFileSystemEntries',
+  'RecurseSubdirectories = false',
+  'AttributesToSkip = 0',
+  'Activation preflight refuses descendant reparse point:',
   'FileFlagBackupSemantics',
   'DirectoriesHeld',
   'Native.Control',
@@ -405,9 +435,21 @@ $preflightStart=$text.IndexOf('static class ActivationPreflight')
 $preflightEnd=$text.IndexOf('readonly record struct ActivationPreflightSummary',$preflightStart)
 if($preflightStart -lt 0 -or $preflightEnd -lt 0){throw 'ActivationPreflight implementation missing.'}
 $preflightBlock=$text.Substring($preflightStart,$preflightEnd-$preflightStart)
-foreach($required in @('Directory.EnumerateFiles','Directory.EnumerateDirectories','FileAttributes.ReparsePoint','Native.OpenPreflightProbe','Native.OpenPreflightHold','Native.OpenPreflightDirectory','ActivationPreflightStore','ActivationTopologyStore','FileIdentityStore.QueryHandleIdentity','FileIdentityStore.QueryHandleLinkCount','NumberOfLinks={linkCount}','RgEventType.ActivationPreflight','RgEventType.PagingWrite','RgEventType.WritableSection','heldHandles','RgControlCommand.ArmPreflight','RgControlCommand.ActivateGate','RgControlCommand.ActivateAndContainProcess','TargetProcessId = containPid ?? 0','Native.Control')){
+foreach($required in @('Directory.EnumerateFileSystemEntries','RecurseSubdirectories = false','AttributesToSkip = 0','FileAttributes.ReparsePoint','pendingDirectories','Activation preflight refuses descendant reparse point:','Native.OpenPreflightProbe','Native.OpenPreflightHold','Native.OpenPreflightDirectory','ActivationPreflightStore','ActivationTopologyStore','FileIdentityStore.QueryHandleIdentity','FileIdentityStore.QueryHandleLinkCount','NumberOfLinks={linkCount}','RgEventType.ActivationPreflight','RgEventType.PagingWrite','RgEventType.WritableSection','heldHandles','RgControlCommand.ArmPreflight','RgControlCommand.ActivateGate','RgControlCommand.ActivateAndContainProcess','TargetProcessId = containPid ?? 0','Native.Control')){
   if($preflightBlock -notmatch [regex]::Escape($required)){throw "Activation preflight missing invariant: $required"}
 }
+if($preflightBlock -match 'RecurseSubdirectories\s*=\s*true' -or
+   $preflightBlock -match 'AttributesToSkip\s*=\s*FileAttributes\.ReparsePoint'){
+  throw 'Activation preflight must never recursively skip or traverse descendant reparse points.'
+}
+$enumerateEntries=$preflightBlock.IndexOf('Directory.EnumerateFileSystemEntries')
+$reparseReject=$preflightBlock.IndexOf('Activation preflight refuses descendant reparse point:')
+$enqueueDirectory=$preflightBlock.IndexOf('pendingDirectories.Enqueue(entry)')
+if($enumerateEntries -lt 0 -or $reparseReject -lt 0 -or $enqueueDirectory -lt 0 -or
+   $enumerateEntries -gt $reparseReject -or $reparseReject -gt $enqueueDirectory){
+  throw 'Activation preflight must reject descendant reparse entries before traversing or enqueuing child directories.'
+}
+
 $armInPreflight=$preflightBlock.IndexOf('RgControlCommand.ArmPreflight')
 $probeInPreflight=$preflightBlock.IndexOf('Native.OpenPreflightProbe(path)')
 $receiveInPreflight=$preflightBlock.IndexOf('ReceivePreflightEventAsync(port, path',$probeInPreflight)
@@ -445,11 +487,32 @@ $productionMode=$text.IndexOf('RgClientMode.ProductionGate')
 $productionPreflight=$text.IndexOf('options.Profile == GateProfile.Lab ? options.ContainPid : null')
 $productionScope=$text.IndexOf('options.Profile == GateProfile.Lab && options.ScopeAmbiguityPid')
 $productionTrigger=$text.IndexOf('options.Profile == GateProfile.Lab && options.ContainAfterPid')
+$serviceAuthorization=$text.IndexOf('Interlocked.Exchange(ref productionServiceShutdownAuthorized, 1)')
+$serviceCancel=$text.IndexOf('cts.Cancel();',$serviceAuthorization)
+$productionShutdownPolicy=$text.IndexOf('var productionShutdownAuthorized =',$serviceCancel)
+$cleanShutdownPolicy=$text.IndexOf('var cleanShutdown = productionShutdownAuthorized',$productionShutdownPolicy)
+if($serviceAuthorization -lt 0 -or $serviceCancel -lt 0 -or $productionShutdownPolicy -lt 0 -or $cleanShutdownPolicy -lt 0 -or
+   $serviceAuthorization -gt $serviceCancel -or $serviceCancel -gt $productionShutdownPolicy -or $productionShutdownPolicy -gt $cleanShutdownPolicy){
+  throw 'ProductionGate clean deactivation must require explicit service shutdown authorization before cancellation and terminal lifecycle evaluation.'
+}
+$resumeInterruption=$text.IndexOf('var resumableProductionInterruption =')
+$resumeActive=$text.IndexOf('Rollback session lifecycle: Active (ProductionGate supervisor lost; resume required;',$resumeInterruption)
+$terminalReservation=$text.IndexOf('await using var lifecycleReservation = await storageBudget.ReserveAsync(',$resumeActive)
+if($resumeInterruption -lt 0 -or $resumeActive -lt 0 -or $terminalReservation -lt 0 -or
+   $resumeInterruption -gt $resumeActive -or $resumeActive -gt $terminalReservation){
+  throw 'Unclean service-control loss must leave the production rollback session Active before any terminal lifecycle path.'
+}
+
 $productionContainEvent=$text.IndexOf('ProductionGate received forbidden containment activation evidence.')
+$serviceControl=$text.IndexOf('case "--service-control-stdin"')
+$serviceControlReject=$text.IndexOf('--service-control-stdin is reserved for the ProductionGate service lifecycle.',$serviceControl)
+$readySignal=$text.IndexOf('RG-LIFECYCLE READY schema=1',$productionPreflight)
+$cleanStopSignal=$text.IndexOf('RG-LIFECYCLE STOPPED schema=1',$readySignal)
 if($productionSwitch -lt 0 -or $productionReject -lt 0 -or $productionStore -lt 0 -or
    $productionMode -lt 0 -or $productionPreflight -lt 0 -or $productionScope -lt 0 -or
-   $productionTrigger -lt 0 -or $productionContainEvent -lt 0){
-  throw 'ProductionGate profile must be explicit, fixed-store and unable to reach LAB containment/fault controls.'
+   $productionTrigger -lt 0 -or $productionContainEvent -lt 0 -or
+   $serviceControl -lt 0 -or $serviceControlReject -lt 0 -or $readySignal -lt 0 -or $cleanStopSignal -lt 0){
+  throw 'ProductionGate profile must be explicit, fixed-store, service-supervisable and unable to reach LAB containment/fault controls.'
 }
 
 $containActivation=$preflightBlock.IndexOf('RgControlCommand.ActivateAndContainProcess')
@@ -468,15 +531,19 @@ if($preflightBlock -notmatch [regex]::Escape('activationReply.ProtectionState !=
 }
 
 $cleanShutdown=$text.IndexOf('var cleanShutdown =')
-$lifecycleCompleted=$text.IndexOf('lifecycleStore.MarkCompletedAsync',$cleanShutdown)
-$deactivateRequest=$text.IndexOf('RgControlCommand.DeactivateGate',$lifecycleCompleted)
-$maintenanceCheck=$text.IndexOf('RgProtectionState.Maintenance',$deactivateRequest)
-$faultedBranch=$text.IndexOf('Kernel gate graceful deactivation NOT authorized',$maintenanceCheck)
-if($cleanShutdown -lt 0 -or $lifecycleCompleted -lt 0 -or $deactivateRequest -lt 0 -or
-   $maintenanceCheck -lt 0 -or $faultedBranch -lt 0 -or
-   $cleanShutdown -gt $lifecycleCompleted -or $lifecycleCompleted -gt $deactivateRequest -or
-   $deactivateRequest -gt $maintenanceCheck -or $maintenanceCheck -gt $faultedBranch){
-  throw 'Clean GateClient shutdown must durably complete the session before requesting whole-gate deactivation, while faulted shutdown must not authorize release.'
+$faultedLifecycle=$text.IndexOf('lifecycleStore.MarkFaultedAsync',$cleanShutdown)
+$deactivateRequest=$text.IndexOf('RgControlCommand.DeactivateGate',$faultedLifecycle)
+$maintenanceCheck=$text.IndexOf('deactivationReply.ProtectionState != (uint)RgProtectionState.Maintenance',$deactivateRequest)
+$lifecycleCompleted=$text.IndexOf('lifecycleStore.MarkCompletedAsync',$maintenanceCheck)
+$cleanStopAfterCompleted=$text.IndexOf('RG-LIFECYCLE STOPPED schema=1',$lifecycleCompleted)
+$faultedBranch=$text.IndexOf('Kernel gate graceful deactivation NOT authorized',$cleanStopAfterCompleted)
+if($cleanShutdown -lt 0 -or $faultedLifecycle -lt 0 -or $deactivateRequest -lt 0 -or
+   $maintenanceCheck -lt 0 -or $lifecycleCompleted -lt 0 -or $cleanStopAfterCompleted -lt 0 -or
+   $faultedBranch -lt 0 -or
+   $cleanShutdown -gt $faultedLifecycle -or $faultedLifecycle -gt $deactivateRequest -or
+   $deactivateRequest -gt $maintenanceCheck -or $maintenanceCheck -gt $lifecycleCompleted -or
+   $lifecycleCompleted -gt $cleanStopAfterCompleted -or $cleanStopAfterCompleted -gt $faultedBranch){
+  throw 'Clean GateClient shutdown must prove kernel Maintenance, then durably mark Completed, then emit clean STOPPED; faulted shutdown must never authorize release.'
 }
 foreach($required in @(
   'deactivationReply.GateActivated != 1',
@@ -523,11 +590,11 @@ if($directoryOpenBlock -match 'ShareWrite|ShareDelete'){
   throw 'Activation topology directory handles must not share WRITE or DELETE access.'
 }
 $rootOpen=$preflightBlock.IndexOf('Native.OpenPreflightDirectory(rootPath)')
-$directoryEnumeration=$preflightBlock.IndexOf('Directory.EnumerateDirectories(rootPath')
+$directoryEnumeration=$preflightBlock.IndexOf('Directory.EnumerateFileSystemEntries(currentDirectory')
 $activateAfterTopology=$preflightBlock.IndexOf('RgControlCommand.ActivateGate')
 if($rootOpen -lt 0 -or $directoryEnumeration -lt 0 -or $activateAfterTopology -lt 0 -or
    $rootOpen -gt $directoryEnumeration -or $directoryEnumeration -gt $activateAfterTopology){
-  throw 'Protected root must be held before directory enumeration and remain held until kernel activation.'
+  throw 'Protected root must be held before non-recursive directory enumeration and remain held until kernel activation.'
 }
 if($preflightBlock -match 'Native\.Reply\('){throw 'Activation preflight events must remain no-reply evidence.'}
 
@@ -643,12 +710,18 @@ $verifyBeforeRestart=$text.IndexOf('repository.VerifyAll()')
 $restartObserve=$text.IndexOf('RestartReconciliation.ObservePendingAsync(',$verifyBeforeRestart)
 $reconcileOnly=$text.IndexOf('if (options.ReconcileOnly)',$restartObserve)
 $reconcileReturn=$text.IndexOf('return;',$reconcileOnly)
-$createSession=$text.IndexOf('repository.CreateSession(',$restartObserve)
+$sessionExists=$text.IndexOf('repository.SessionIds().Contains(sessionId, StringComparer.Ordinal)',$reconcileReturn)
+$openSession=$text.IndexOf('repository.OpenSession(sessionId)',$sessionExists)
+$createSession=$text.IndexOf('repository.CreateSession(sessionId)',$sessionExists)
+$activeResume=$text.IndexOf('lifecycleStore.Snapshot.State != RollbackSessionLifecycleState.Active',$createSession)
 if($verifyBeforeRestart -lt 0 -or $restartObserve -lt 0 -or $reconcileOnly -lt 0 -or
-   $reconcileReturn -lt 0 -or $createSession -lt 0 -or
+   $reconcileReturn -lt 0 -or $sessionExists -lt 0 -or $openSession -lt 0 -or
+   $createSession -lt 0 -or $activeResume -lt 0 -or
    $verifyBeforeRestart -gt $restartObserve -or $restartObserve -gt $reconcileOnly -or
-   $reconcileOnly -gt $reconcileReturn -or $reconcileReturn -gt $createSession){
-  throw 'Pending restart evidence must be observed after repository validation, with reconcile-only exiting before any new session is created.'
+   $reconcileOnly -gt $reconcileReturn -or $reconcileReturn -gt $sessionExists -or
+   $sessionExists -gt $openSession -or $sessionExists -gt $createSession -or
+   $createSession -gt $activeResume){
+  throw 'Pending restart evidence must be reconciled before the service-controlled ProductionGate chooses create-vs-resume, and resumed sessions must remain Active.'
 }
 $restartClassStart=$text.IndexOf('static class RestartReconciliation')
 $restartClassEnd=$text.IndexOf('readonly record struct RestartReconciliationSummary',$restartClassStart)
@@ -662,4 +735,4 @@ if($restartBlock -notmatch [regex]::Escape('PathPolicy.Under(intent.OriginalPath
   throw 'Restart reconciliation must remain scoped to the explicitly selected LAB root.'
 }
 
-Write-Host 'GateClient source check PASSED: protocol-v18 LAB/ProductionGate separation, fixed production store/root policy, LAB-only fault/containment controls, protected-volume fail-safe state, durable reconciliation and no destructive/process-control APIs.'
+Write-Host 'GateClient source check PASSED: protocol-v18 LAB/ProductionGate separation, fixed production store/root policy, service lifecycle readiness/shutdown handshake, LAB-only fault/containment controls, protected-volume fail-safe state, durable reconciliation and no destructive/process-control APIs.'

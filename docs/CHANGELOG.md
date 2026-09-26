@@ -1,3 +1,20 @@
+# RansomGuard 0.8.6.0
+
+- Added the first normal-service Production Enforce lifecycle above `ReadyForLifecycle` package admission while keeping the default package/configuration Audit.
+- Windows Service startup now uses an SCM-first outer host: `WindowsServiceLifetime` is established before SecureStore, rollback verification, package admission or driver lifecycle work; a hosted bootstrap then starts the normal inner runtime. This prevents SCM 1053 startup failure while retaining the main-thread global instance mutex.
+- Enforce now validates rollback readiness before any kernel-start transition, verifies/registers the admitted demand-start minifilter, validates registered altitude/flags and installed SYS hash, then loads and attaches only the protected-root volume.
+- The service spawns the exact admitted ProductionGate client and publishes `Protected` only after a bounded structured readiness signal emitted after activation preflight/kernel `ActivateGate`.
+- Added production-only redirected-stdin lifecycle control; GateClient emits structured READY/STOPPED signals and clean shutdown still requires durable terminal evidence before `DeactivateGate`.
+- Unexpected ProductionGate loss publishes `DegradedProtected`; the service retries the same ProductionGate/root profile and returns to `Protected` only after a fresh activation preflight.
+- Loss of the supervising Service control channel is explicitly unauthorized: ProductionGate exits without `DeactivateGate`, preserving the kernel fail-safe latch across a Service process crash until a later validated reconnect.
+- The production supervisor now selects one SHA-256 root-bound rollback session before its reconnect loop. GateClient loss and Service restart reopen that same Active session after repository/restart reconciliation; multiple Active sessions or a session bound to another root fail closed instead of silently starting a disconnected evidence namespace.
+- Production rollback lifecycle completion now occurs only after `DeactivateGate` returns kernel `Maintenance`; GateClient emits clean STOPPED only after the durable `Completed` record. Faulted or legacy-unmanaged service-owned production sessions block new Enforce session creation until explicit recovery.
+- Clean service shutdown may detach/unload the driver only after the kernel confirms `Maintenance`; failure to prove graceful deactivation does not unload the fail-safe driver. Shutdown confirmation/exit/driver cleanup are bounded to 10s/3s/10s budgets.
+- Added bounded Enforce settings for GateClient workers, rollback quota/free-space reserve and reconnect delay. Automatic detector-to-containment remains disabled.
+- Added source/state tests for lifecycle ordering, admitted-package binding, reconnect semantics and maintenance shutdown. Exact-head disposable-VM lifecycle qualification remains a merge/release gate.
+- ProductionGate profile qualification now isolates and removes its qualification-only fixed ProgramData state root before the normal-Service lifecycle runs; it can no longer leave an unmarked `RansomGuardV03\Rollback` directory that correctly triggers SecureStore's fail-closed trusted-generation check.
+- The same profile-qualification cleanup now removes its LAB `RansomGuardMinifilter` service registration and matching Driver Store package after unload, so the following production lifecycle starts from the required service-absent boundary instead of being forced to reject stale LAB altitude/image registration.
+
 # RansomGuard 0.8.5.0
 
 - Removed trust in the user-mode `ClientProcessId` field as a security identity while retaining protocol v18.

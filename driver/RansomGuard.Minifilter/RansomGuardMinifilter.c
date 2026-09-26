@@ -18,7 +18,9 @@ static volatile LONG gGateInFlight = 0;
 static volatile LONG gUnloading = 0;
 static volatile LONG gClientConnected = 0;
 static volatile LONG gClientMode = 0;
+static volatile LONG gClientGeneration = 0;
 static volatile LONG gProtectedClientMode = 0;
+static volatile LONG gProtectionGeneration = 0;
 static volatile LONG64 gClientProcessId = 0;
 static PEPROCESS gClientProcess = NULL;
 static PEPROCESS gContainedProcess = NULL;
@@ -48,6 +50,9 @@ typedef enum _RG_SCOPE_CLASSIFICATION {
 static VOID RgQueueEvent(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects,
                          _In_ RG_EVENT_TYPE EventType, _In_ ULONG FileInformationClass);
 static VOID RgQueueRawEvent(_In_ const RG_EVENT *Event, _In_ LONG ClientMode);
+static VOID RgQueueRawEventGeneration(_In_ const RG_EVENT *Event,
+                                      _In_ LONG ClientMode,
+                                      _In_ LONG ClientGeneration);
 static VOID RgSendWorker(_In_ PVOID Parameter);
 static NTSTATUS RgCreateRenamePostContext(_Inout_ PFLT_CALLBACK_DATA Data,
                                           _In_ PCFLT_RELATED_OBJECTS FltObjects,
@@ -101,6 +106,7 @@ static RG_SCOPE_CLASSIFICATION RgClassifyHardLinkScope(
     _In_ const RG_EVENT *Event,
     _In_ PCFLT_RELATED_OBJECTS FltObjects);
 static BOOLEAN RgIsDataMutatingFsctl(_In_ ULONG FsControlCode);
+static BOOLEAN RgIsNamespaceMutatingFsctl(_In_ ULONG FsControlCode);
 static BOOLEAN RgStreamHasDurablePreservation(_In_ PCFLT_RELATED_OBJECTS FltObjects);
 static BOOLEAN RgPathMatchesGateRoot(_In_ ULONG PathStatus, _In_z_ const WCHAR *Path);
 static BOOLEAN RgEventPathMatchesGateRoot(_In_ const RG_EVENT *Event);
@@ -125,6 +131,8 @@ static BOOLEAN RgGateEvent(_In_ PFLT_CALLBACK_DATA Data,
                            _Out_opt_ PULONG ErrorCode,
                            _Out_opt_ PULONG Decision);
 static BOOLEAN RgAcquireClientPort(_In_ LONG ExpectedMode);
+static BOOLEAN RgAcquireClientPortGeneration(_In_ LONG ExpectedMode,
+                                              _In_ LONG ExpectedGeneration);
 static VOID RgReleaseClientPort(VOID);
 static VOID RgWaitForPortUsers(VOID);
 static LONG RgCurrentClientMode(VOID);
@@ -144,7 +152,9 @@ static VOID RgObserveWritableSection(_Inout_ PFLT_CALLBACK_DATA Data,
 static VOID RgAttachDeleteHandleContext(_In_ PCFLT_RELATED_OBJECTS FltObjects,
                                         _In_ ULONGLONG RequestSequence,
                                         _In_ ULONG FileInformationClass,
-                                        _In_ ULONG DispositionFlags);
+                                        _In_ ULONG DispositionFlags,
+                                        _In_ ULONG ProtectionGeneration,
+                                        _In_ LONG ClientGeneration);
 static VOID RgCancelDeleteHandleContext(_In_ PCFLT_RELATED_OBJECTS FltObjects);
 static VOID RgQueueDeleteFinalization(_In_ PRG_DELETE_HANDLE_CONTEXT Context,
                                       _In_ ULONG EventFlags,
@@ -628,6 +638,20 @@ static BOOLEAN RgIsDataMutatingFsctl(ULONG FsControlCode)
     }
 }
 
+static BOOLEAN RgIsNamespaceMutatingFsctl(ULONG FsControlCode)
+{
+    switch (FsControlCode) {
+    case FSCTL_SET_REPARSE_POINT:
+    case FSCTL_DELETE_REPARSE_POINT:
+#ifdef FSCTL_SET_REPARSE_POINT_EX
+    case FSCTL_SET_REPARSE_POINT_EX:
+#endif
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
 static BOOLEAN RgStreamHasDurablePreservation(PCFLT_RELATED_OBJECTS FltObjects)
 {
     PRG_STREAM_CONTEXT context = NULL;
@@ -643,6 +667,13 @@ static BOOLEAN RgStreamHasDurablePreservation(PCFLT_RELATED_OBJECTS FltObjects)
         FltObjects->FileObject,
         (PFLT_CONTEXT *)&context);
     if (!NT_SUCCESS(status) || context == NULL) {
+        return FALSE;
+    }
+
+    if (context->ProtectionGeneration !=
+            (ULONG)InterlockedCompareExchange(&gProtectionGeneration, 0, 0) ||
+        !RgPathMatchesGateRoot(context->PathStatus, context->Path)) {
+        FltReleaseContext(context);
         return FALSE;
     }
 
@@ -665,6 +696,7 @@ FLT_PREOP_CALLBACK_STATUS RgPreFileSystemControl(
     ULONG fsctl;
     LONG mode;
     BOOLEAN degraded;
+    BOOLEAN namespaceMutation;
     RG_SCOPE_CLASSIFICATION scope;
 
     *CompletionContext = NULL;
@@ -674,7 +706,8 @@ FLT_PREOP_CALLBACK_STATUS RgPreFileSystemControl(
     }
 
     fsctl = Data->Iopb->Parameters.FileSystemControl.Common.FsControlCode;
-    if (!RgIsDataMutatingFsctl(fsctl)) {
+    namespaceMutation = RgIsNamespaceMutatingFsctl(fsctl);
+    if (!namespaceMutation && !RgIsDataMutatingFsctl(fsctl)) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
@@ -697,6 +730,14 @@ FLT_PREOP_CALLBACK_STATUS RgPreFileSystemControl(
     scope = RgClassifyMutationScope(&event, FltObjects);
     if (scope == RgScopeOutside) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    // Reparse-point topology is part of the protected-root trust boundary established
+    // during activation preflight. A post-activation set/delete could redirect an
+    // in-root name or invalidate the namespace proof, so protected/ambiguous namespace
+    // mutation is never admitted while Gate protection owns the root.
+    if (namespaceMutation) {
+        return RgCompleteDenied(Data);
     }
 
     // Ambiguous protected-volume scope, disconnected/degraded protection, preflight,
@@ -1107,6 +1148,9 @@ static NTSTATUS RgCreateRenamePostContext(PFLT_CALLBACK_DATA Data,
     }
 
     RtlZeroMemory(context, sizeof(*context));
+    context->ProtectionGeneration =
+        (ULONG)InterlockedCompareExchange(&gProtectionGeneration, 0, 0);
+    context->ClientGeneration = InterlockedCompareExchange(&gClientGeneration, 0, 0);
     context->RequestSequence = RequestSequence;
     context->PostEventType = RgEventRenameResult;
     context->FileInformationClass =
@@ -1132,6 +1176,9 @@ static NTSTATUS RgCreateTruncatePostContext(PFLT_CALLBACK_DATA Data,
     }
 
     RtlZeroMemory(context, sizeof(*context));
+    context->ProtectionGeneration =
+        (ULONG)InterlockedCompareExchange(&gProtectionGeneration, 0, 0);
+    context->ClientGeneration = InterlockedCompareExchange(&gClientGeneration, 0, 0);
     context->RequestSequence = RequestSequence;
     context->PostEventType = RgEventTruncateResult;
     context->FileInformationClass =
@@ -1163,6 +1210,9 @@ static NTSTATUS RgCreateDeletePostContext(PFLT_CALLBACK_DATA Data,
     }
 
     RtlZeroMemory(context, sizeof(*context));
+    context->ProtectionGeneration =
+        (ULONG)InterlockedCompareExchange(&gProtectionGeneration, 0, 0);
+    context->ClientGeneration = InterlockedCompareExchange(&gClientGeneration, 0, 0);
     context->RequestSequence = RequestSequence;
     context->PostEventType = RgEventDeleteDispositionResult;
     context->FileInformationClass =
@@ -1196,6 +1246,9 @@ static NTSTATUS RgCreateCreatePostContext(PFLT_CALLBACK_DATA Data,
     }
 
     RtlZeroMemory(context, sizeof(*context));
+    context->ProtectionGeneration =
+        (ULONG)InterlockedCompareExchange(&gProtectionGeneration, 0, 0);
+    context->ClientGeneration = InterlockedCompareExchange(&gClientGeneration, 0, 0);
     context->RequestSequence = RequestSequence;
     context->PostEventType = RgEventCreateResult;
     context->PreCreateNameInfo = nameInfo;
@@ -1339,7 +1392,9 @@ FLT_POSTOP_CALLBACK_STATUS RgPostCreate(PFLT_CALLBACK_DATA Data,
                 event.Flags |= RG_EVENT_FLAG_PREFLIGHT_WRITABLE_VIEW;
                 InterlockedExchange(&gActivationHazard, 1);
             }
-        } else {
+        } else if (context->ProtectionGeneration ==
+                       (ULONG)InterlockedCompareExchange(&gProtectionGeneration, 0, 0) &&
+                   RgEventPathMatchesGateRoot(&event)) {
             RgAttachPagingStreamContext(
                 FltObjects, &event, context->GateDecision, context->RequestSequence);
         }
@@ -1347,7 +1402,8 @@ FLT_POSTOP_CALLBACK_STATUS RgPostCreate(PFLT_CALLBACK_DATA Data,
         InterlockedExchange(&gActivationHazard, 1);
     }
 
-    RgQueueRawEvent(&event, RgCurrentProtectedClientMode());
+    RgQueueRawEventGeneration(
+        &event, RgCurrentProtectedClientMode(), context->ClientGeneration);
 
     if (tunneledInfo != NULL) {
         FltReleaseFileNameInformation(tunneledInfo);
@@ -1397,13 +1453,16 @@ static VOID RgQueueDeleteFinalization(PRG_DELETE_HANDLE_CONTEXT Context,
     }
     KeQuerySystemTimePrecise(&systemTime);
     event.SystemTime100ns = systemTime.QuadPart;
-    RgQueueRawEvent(&event, RgCurrentProtectedClientMode());
+    RgQueueRawEventGeneration(
+        &event, RgCurrentProtectedClientMode(), Context->ClientGeneration);
 }
 
 static VOID RgAttachDeleteHandleContext(PCFLT_RELATED_OBJECTS FltObjects,
                                         ULONGLONG RequestSequence,
                                         ULONG FileInformationClass,
-                                        ULONG DispositionFlags)
+                                        ULONG DispositionFlags,
+                                        ULONG ProtectionGeneration,
+                                        LONG ClientGeneration)
 {
     PRG_DELETE_HANDLE_CONTEXT context = NULL;
     PRG_DELETE_HANDLE_CONTEXT oldContext = NULL;
@@ -1430,6 +1489,8 @@ static VOID RgAttachDeleteHandleContext(PCFLT_RELATED_OBJECTS FltObjects,
     context->RequestSequence = RequestSequence;
     context->FileInformationClass = FileInformationClass;
     context->DispositionFlags = DispositionFlags;
+    context->ProtectionGeneration = ProtectionGeneration;
+    context->ClientGeneration = ClientGeneration;
 
     status = FltSetStreamHandleContext(
         FltObjects->Instance,
@@ -1576,6 +1637,8 @@ static VOID RgAttachPagingStreamContext(PCFLT_RELATED_OBJECTS FltObjects,
     context->PathStatus = CreateResult->PathStatus;
     context->IdentityStatus = CreateResult->IdentityStatus;
     context->PreservationDecision = PreservationDecision;
+    context->ProtectionGeneration =
+        (ULONG)InterlockedCompareExchange(&gProtectionGeneration, 0, 0);
     context->CreateRequestSequence = CreateRequestSequence;
     context->VolumeSerialNumber = CreateResult->VolumeSerialNumber;
     context->FileIdLow = CreateResult->FileIdLow;
@@ -1621,6 +1684,13 @@ static VOID RgObservePagingWrite(PFLT_CALLBACK_DATA Data,
         return;
     }
 
+    if (context->ProtectionGeneration !=
+            (ULONG)InterlockedCompareExchange(&gProtectionGeneration, 0, 0) ||
+        !RgPathMatchesGateRoot(context->PathStatus, context->Path)) {
+        FltReleaseContext(context);
+        return;
+    }
+
     RtlZeroMemory(&event, sizeof(event));
     event.ProtocolVersion = RG_PROTOCOL_VERSION;
     event.EventType = RgEventPagingWrite;
@@ -1663,6 +1733,13 @@ static VOID RgObserveWritableSection(PFLT_CALLBACK_DATA Data,
         FltObjects->FileObject,
         (PFLT_CONTEXT *)&context);
     if (!NT_SUCCESS(status) || context == NULL) {
+        return;
+    }
+
+    if (context->ProtectionGeneration !=
+            (ULONG)InterlockedCompareExchange(&gProtectionGeneration, 0, 0) ||
+        !RgPathMatchesGateRoot(context->PathStatus, context->Path)) {
+        FltReleaseContext(context);
         return;
     }
 
@@ -1855,13 +1932,16 @@ static FLT_POSTOP_CALLBACK_STATUS RgPostSetInformationSafe(PFLT_CALLBACK_DATA Da
                 FltObjects,
                 context->RequestSequence,
                 context->FileInformationClass,
-                context->DispositionFlags);
+                context->DispositionFlags,
+                context->ProtectionGeneration,
+                context->ClientGeneration);
         } else {
             RgCancelDeleteHandleContext(FltObjects);
         }
     }
 
-    RgQueueRawEvent(&event, RgCurrentProtectedClientMode());
+    RgQueueRawEventGeneration(
+        &event, RgCurrentProtectedClientMode(), context->ClientGeneration);
 
     if (tunneledInfo != NULL) {
         FltReleaseFileNameInformation(tunneledInfo);
@@ -2309,6 +2389,7 @@ static VOID RgQueueEvent(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjec
 
     RtlZeroMemory(work, sizeof(*work));
     work->ClientMode = RgClientAudit;
+    work->ClientGeneration = InterlockedCompareExchange(&gClientGeneration, 0, 0);
     status = RgPopulateEvent(&work->Event, Data, FltObjects, EventType, FileInformationClass);
     if (!NT_SUCCESS(status) && work->Event.PathStatus != RgPathQueryFailed) {
         RtlSecureZeroMemory(&work->Event, sizeof(work->Event));
@@ -2323,6 +2404,16 @@ static VOID RgQueueEvent(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjec
 }
 
 static VOID RgQueueRawEvent(const RG_EVENT *Event, LONG ClientMode)
+{
+    RgQueueRawEventGeneration(
+        Event,
+        ClientMode,
+        InterlockedCompareExchange(&gClientGeneration, 0, 0));
+}
+
+static VOID RgQueueRawEventGeneration(const RG_EVENT *Event,
+                                      LONG ClientMode,
+                                      LONG ClientGeneration)
 {
     PRG_WORK_ITEM work = NULL;
     LONG pending;
@@ -2360,6 +2451,7 @@ static VOID RgQueueRawEvent(const RG_EVENT *Event, LONG ClientMode)
     RtlZeroMemory(work, sizeof(*work));
     RtlCopyMemory(&work->Event, Event, sizeof(*Event));
     work->ClientMode = ClientMode;
+    work->ClientGeneration = ClientGeneration;
     ExInitializeWorkItem(&work->WorkItem, RgSendWorker, work);
     ExQueueWorkItem(&work->WorkItem, DelayedWorkQueue);
 }
@@ -2374,7 +2466,7 @@ static VOID RgSendWorker(PVOID Parameter)
     timeout.QuadPart = -((RgIsGateClientMode(work->ClientMode) ?
         RG_RECONCILE_SEND_TIMEOUT_MS : RG_SEND_TIMEOUT_MS) * 10LL * 1000LL);
 
-    if (RgAcquireClientPort(work->ClientMode)) {
+    if (RgAcquireClientPortGeneration(work->ClientMode, work->ClientGeneration)) {
         status = FltSendMessage(gFilter, &gClientPort,
             &work->Event, sizeof(work->Event),
             NULL, NULL, &timeout);
@@ -2402,6 +2494,30 @@ static BOOLEAN RgAcquireClientPort(LONG ExpectedMode)
     ExAcquireFastMutex(&gPortMutex);
     if (gClientPort != NULL &&
         gClientMode == ExpectedMode &&
+        InterlockedCompareExchange(&gClientConnected, 0, 0) != 0 &&
+        InterlockedCompareExchange(&gUnloading, 0, 0) == 0) {
+        acquired = TRUE;
+    }
+    ExReleaseFastMutex(&gPortMutex);
+
+    if (!acquired) {
+        ExReleaseRundownProtection(&gPortRundown);
+    }
+    return acquired;
+}
+
+static BOOLEAN RgAcquireClientPortGeneration(LONG ExpectedMode, LONG ExpectedGeneration)
+{
+    BOOLEAN acquired = FALSE;
+
+    if (!ExAcquireRundownProtection(&gPortRundown)) {
+        return FALSE;
+    }
+
+    ExAcquireFastMutex(&gPortMutex);
+    if (gClientPort != NULL &&
+        gClientMode == ExpectedMode &&
+        InterlockedCompareExchange(&gClientGeneration, 0, 0) == ExpectedGeneration &&
         InterlockedCompareExchange(&gClientConnected, 0, 0) != 0 &&
         InterlockedCompareExchange(&gUnloading, 0, 0) == 0) {
         acquired = TRUE;
@@ -2541,6 +2657,7 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
             InterlockedExchange(&gProtectedClientMode, 0);
         }
 
+        InterlockedIncrement(&gClientGeneration);
         gClientPort = ClientPort;
         gClientMode = (LONG)context->ClientMode;
         gClientProcess = candidateClientProcess;
@@ -2555,6 +2672,7 @@ static NTSTATUS RgConnect(PFLT_PORT ClientPort, PVOID ServerPortCookie, PVOID Co
 
         if (RgIsGateClientMode((LONG)context->ClientMode) &&
             InterlockedCompareExchange(&gProtectionRequired, 0, 0) == 0) {
+            InterlockedIncrement(&gProtectionGeneration);
             RtlCopyMemory(gGateRoot, context->GateRoot, rootBytes);
             gGateRootLengthBytes = (USHORT)rootBytes;
             gGateRoot[rootBytes / sizeof(WCHAR)] = L'\0';

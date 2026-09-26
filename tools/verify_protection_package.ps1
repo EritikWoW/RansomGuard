@@ -10,16 +10,18 @@ $RepositoryRoot=[IO.Path]::GetFullPath($RepositoryRoot)
 $corePath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\ProtectionPackage.cs'
 $verifierPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\ProtectionPackageVerifier.cs'
 $programPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\Program.cs'
+$lifecyclePath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\ProductionProtectionLifecycle.cs'
 $authPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\Authenticode.cs'
 $catalogTrustPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\DriverCatalogTrust.cs'
 $buildPath=Join-Path $RepositoryRoot 'build_windows.ps1'
-foreach($path in @($corePath,$verifierPath,$programPath,$authPath,$catalogTrustPath,$buildPath)){
+foreach($path in @($corePath,$verifierPath,$programPath,$lifecyclePath,$authPath,$catalogTrustPath,$buildPath)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Production package gate source missing: $path"}
 }
 
 $core=Get-Content -LiteralPath $corePath -Raw
 $verifier=Get-Content -LiteralPath $verifierPath -Raw
 $program=Get-Content -LiteralPath $programPath -Raw
+$lifecycle=Get-Content -LiteralPath $lifecyclePath -Raw
 $auth=Get-Content -LiteralPath $authPath -Raw
 $catalogTrust=Get-Content -LiteralPath $catalogTrustPath -Raw
 $build=Get-Content -LiteralPath $buildPath -Raw
@@ -79,7 +81,7 @@ foreach($required in @(
     'DriverCatalogTrust.VerifyMember(inf, infPath, catPath)',
     '"ValidCatalogMember"',
     '"Admitted"',
-    'Lifecycle activation is a separate milestone.'
+    'package is admitted for the production lifecycle.'
 )){
     if($verifier -notmatch [regex]::Escape($required)){throw "Protection package verifier invariant missing: $required"}
 }
@@ -102,9 +104,14 @@ foreach($required in @(
 }
 
 $inspect=$program.IndexOf('ProtectionPackageVerifier.Inspect(AppContext.BaseDirectory,ProductInfo.Version)')
-$unavailable=$program.IndexOf('protection.MarkUnavailable("Protection package admission: "+protectionPackage.Reason)',$inspect)
-if($inspect -lt 0 -or $unavailable -lt 0 -or $inspect -gt $unavailable){
-    throw 'Enforce startup must inspect the fixed protection package and remain EnforceUnavailable with the admission reason.'
+$admissionCheck=$program.IndexOf('!protectionPackage.ReadyForLifecycle',$inspect)
+$lifecycleRegistration=$program.IndexOf('new ProductionProtectionLifecycle(',$admissionCheck)
+if($inspect -lt 0 -or $admissionCheck -lt 0 -or $lifecycleRegistration -lt 0 -or
+   $inspect -gt $admissionCheck -or $admissionCheck -gt $lifecycleRegistration){
+    throw 'Enforce startup must inspect the fixed protection package and register lifecycle mutation only after ReadyForLifecycle admission.'
+}
+if($lifecycle -notmatch [regex]::Escape('_admission.ReadyForLifecycle')){
+    throw 'Production lifecycle must independently refuse a package that is not ReadyForLifecycle.'
 }
 
 foreach($forbidden in @(
@@ -112,10 +119,11 @@ foreach($forbidden in @(
     'StartServiceW(',
     'CreateServiceW(',
     'fltmc.exe',
-    'sc.exe start RansomGuardMinifilter'
+    'pnputil.exe',
+    'rundll32.exe'
 )){
-    if(($verifier+$program) -match [regex]::Escape($forbidden)){
-        throw "Protection package admission must remain inspection-only before lifecycle qualification: $forbidden"
+    if($verifier -match [regex]::Escape($forbidden)){
+        throw "ProtectionPackageVerifier must remain inspection-only even though the separately gated lifecycle now mutates driver state: $forbidden"
     }
 }
 
@@ -130,4 +138,4 @@ foreach($required in @(
     }
 }
 
-Write-Host 'Production protection-package admission gate PASSED: exact layout, running-service signer binding, hashes/version/protocol, LAB identity rejection, Authenticode and SYS/INF catalog-membership verification, with no lifecycle mutation.' -ForegroundColor Green
+Write-Host 'Production protection-package admission gate PASSED: exact layout, running-service signer binding, hashes/version/protocol, LAB identity rejection, Authenticode and SYS/INF catalog-membership verification; lifecycle mutation is permitted only after ReadyForLifecycle.' -ForegroundColor Green

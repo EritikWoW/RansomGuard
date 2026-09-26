@@ -73,7 +73,13 @@ Check(rejected,"whole-drive Enforce root rejected");
 rejected=false;try{new GuardSettings{Mode="Enforce",ProtectedRoots=new[]{@"C:\Data"},Enforce=new(){RequireSignedDriver=false}}.Validate();}catch(InvalidOperationException){rejected=true;}
 Check(rejected,"Enforce cannot disable signed-driver requirement");
 rejected=false;try{new GuardSettings{Mode="Enforce",ProtectedRoots=new[]{@"C:\Data"},Enforce=new(){AutomaticContainment=true}}.Validate();}catch(InvalidOperationException){rejected=true;}
-Check(rejected,"automatic containment stays disabled in 0.8.0 foundation");
+Check(rejected,"automatic containment stays disabled until production policy is qualified");
+rejected=false;try{new GuardSettings{Mode="Enforce",ProtectedRoots=new[]{@"C:\Data"},Enforce=new(){GateWorkers=9}}.Validate();}catch(InvalidOperationException){rejected=true;}
+Check(rejected,"production GateClient worker count is bounded");
+rejected=false;try{new GuardSettings{Mode="Enforce",ProtectedRoots=new[]{@"C:\Data"},Enforce=new(){RollbackMinFreeMiB=32}}.Validate();}catch(InvalidOperationException){rejected=true;}
+Check(rejected,"production rollback free-space reserve is bounded");
+rejected=false;try{new GuardSettings{Mode="Enforce",ProtectedRoots=new[]{@"C:\Data"},Enforce=new(){ReconnectDelaySeconds=31}}.Validate();}catch(InvalidOperationException){rejected=true;}
+Check(rejected,"production reconnect delay is bounded");
 
 var auditProtection=new ProtectionStateMachine("Audit");
 var auditSnapshot=auditProtection.Snapshot();
@@ -100,9 +106,19 @@ Check(enforceProtection.Snapshot().KernelEnforcementActive&&enforceProtection.Sn
 enforceProtection.MarkDegraded("GateClient unavailable; kernel fail-safe remains active.");
 Check(enforceProtection.Snapshot().KernelEnforcementActive&&!enforceProtection.Snapshot().KernelChannelConnected,
     "DegradedProtected preserves kernel enforcement without a live user-mode channel");
+enforceProtection.MarkReconnectedProtected("ProductionGate reconnect completed.");
+Check(enforceProtection.Snapshot().State=="Protected"&&enforceProtection.Snapshot().KernelEnforcementActive&&enforceProtection.Snapshot().KernelChannelConnected,
+    "qualified ProductionGate reconnect returns DegradedProtected to Protected");
+enforceProtection.MarkDegraded("Second GateClient loss for maintenance transition test.");
 enforceProtection.BeginMaintenance("Authorized maintenance transition.");
-Check(!enforceProtection.Snapshot().KernelEnforcementActive&&enforceProtection.Snapshot().State=="Maintenance",
-    "maintenance does not claim active kernel enforcement");
+Check(!enforceProtection.Snapshot().KernelEnforcementActive&&
+      !enforceProtection.Snapshot().KernelChannelConnected&&
+      enforceProtection.Snapshot().State=="Maintenance",
+    "maintenance closes the kernel channel and does not claim active kernel enforcement");
+var invalidReconnect=new ProtectionStateMachine("Enforce");
+invalidReconnect.MarkRollbackReady();
+rejected=false;try{invalidReconnect.MarkReconnectedProtected("invalid");}catch(InvalidOperationException){rejected=true;}
+Check(rejected,"ProductionGate reconnect cannot forge Protected outside DegradedProtected");
 
 var unavailableProtection=new ProtectionStateMachine("Enforce");
 unavailableProtection.MarkRollbackReady();

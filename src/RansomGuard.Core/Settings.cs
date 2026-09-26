@@ -57,15 +57,25 @@ public sealed class EnforceSettings
     public bool RequireSignedDriver { get; set; } = true;
     public bool AutomaticContainment { get; set; } = false;
     public int StartupTimeoutSeconds { get; set; } = 30;
+    public int GateWorkers { get; set; } = 4;
+    public long RollbackMaxStoreMiB { get; set; } = 8192;
+    public long RollbackMinFreeMiB { get; set; } = 2048;
+    public int ReconnectDelaySeconds { get; set; } = 2;
 
     public void ValidateFoundation()
     {
         if (!RequireSignedDriver)
             throw new InvalidOperationException("Enforce cannot disable the signed-driver requirement.");
         if (AutomaticContainment)
-            throw new InvalidOperationException("AutomaticContainment is not enabled in the 0.8.0 foundation milestone.");
+            throw new InvalidOperationException("AutomaticContainment remains disabled until production detector-to-containment policy is separately qualified.");
         if (StartupTimeoutSeconds is < 10 or > 120)
             throw new InvalidOperationException("Enforce StartupTimeoutSeconds must be between 10 and 120 seconds.");
+        if (GateWorkers is < 1 or > 8)
+            throw new InvalidOperationException("Enforce GateWorkers must be between 1 and 8.");
+        if (RollbackMaxStoreMiB is < 64 or > 1048576 || RollbackMinFreeMiB is < 64 or > 1048576)
+            throw new InvalidOperationException("Enforce rollback storage limits must be between 64 and 1048576 MiB.");
+        if (ReconnectDelaySeconds is < 1 or > 30)
+            throw new InvalidOperationException("Enforce ReconnectDelaySeconds must be between 1 and 30 seconds.");
     }
 }
 public static class WinPaths

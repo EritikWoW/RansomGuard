@@ -15,6 +15,7 @@ concurrency:
 
 jobs:
   build:
+    name: Windows build
     runs-on: windows-latest
     timeout-minutes: 45
 

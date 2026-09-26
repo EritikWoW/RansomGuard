@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text.Json;
+
 namespace RansomGuard.Core;
 
 public enum ContainmentActuationValidationState
@@ -34,7 +37,8 @@ public sealed record ContainmentActuationValidationInput(
 public sealed record ContainmentActuationValidationDecision(
     string State,
     bool Ready,
-    string[] Reasons);
+    string[] Reasons,
+    string BindingFingerprint = "");
 
 public static class ContainmentActuationPolicy
 {
@@ -140,12 +144,53 @@ public static class ContainmentActuationPolicy
         return new(
             ContainmentActuationValidationState.Ready.ToString(),
             true,
-            Array.Empty<string>());
+            Array.Empty<string>(),
+            ComputeBindingFingerprint(binding));
+    }
+
+    public static string ComputeBindingFingerprint(ContainmentActuationBinding binding)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        var normalizedPath = WinPaths.Normalize(binding.ImagePath)
+            ?? throw new InvalidDataException("Containment actuation binding image path is invalid.");
+        if (!DecisionPolicy.HashEqual(binding.ImageSha256, binding.ImageSha256))
+            throw new InvalidDataException("Containment actuation binding SHA-256 is invalid.");
+
+        var payload = new ContainmentActuationBindingFingerprintPayload(
+            binding.AuthorizationId.ToLowerInvariant(),
+            binding.CaseId,
+            binding.EvaluatedUtc.Ticks,
+            binding.ExpiresUtc.Ticks,
+            binding.Process.Pid,
+            binding.Process.CreationFileTimeUtc,
+            normalizedPath.ToUpperInvariant(),
+            binding.ImageSha256.ToUpperInvariant(),
+            binding.ProtectionObservedUtc.Ticks,
+            binding.Authorization.State,
+            binding.Authorization.Eligible,
+            binding.Authorization.Reasons ?? Array.Empty<string>());
+        return Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(payload)));
     }
 
     private static ContainmentActuationValidationDecision Denied(IEnumerable<string> reasons) =>
         new(
             ContainmentActuationValidationState.Denied.ToString(),
             false,
-            reasons.Distinct(StringComparer.Ordinal).ToArray());
+            reasons.Distinct(StringComparer.Ordinal).ToArray(),
+            "");
+}
+
+internal sealed record ContainmentActuationBindingFingerprintPayload(
+    string AuthorizationId,
+    string CaseId,
+    long EvaluatedUtcTicks,
+    long ExpiresUtcTicks,
+    int ProcessId,
+    long ProcessCreationFileTimeUtc,
+    string ImagePath,
+    string ImageSha256,
+    long ProtectionObservedUtcTicks,
+    string AuthorizationState,
+    bool AuthorizationEligible,
+    string[] AuthorizationReasons);
 }

@@ -427,13 +427,24 @@ try
         expiresUtc:now.AddSeconds(5));
     var ledgerValidation=ContainmentActuationPolicy.Evaluate(
         ActuationInput(binding:ledgerBinding,nowUtc:now.AddSeconds(1)));
-    Check(ledgerValidation.Ready,"ledger fixture uses a current Ready actuation validation");
+    Check(ledgerValidation.Ready&&
+          DecisionPolicy.HashEqual(ledgerValidation.BindingFingerprint,ContainmentActuationPolicy.ComputeBindingFingerprint(ledgerBinding)),
+        "ledger fixture uses a current Ready validation bound to the exact capability fingerprint");
 
     var ledger=new ContainmentActuationLedger(actuationLedgerRoot);
     var ledgerRequest=new ContainmentActuationRequest(
         ledgerRequestId,
         ledgerBinding,
         now.AddSeconds(1));
+    rejected=false;try
+    {
+        ledger.Prepare(
+            ledgerRequest,
+            ledgerValidation with{BindingFingerprint=new string('F',64)});
+    }
+    catch(InvalidOperationException ex) when(ex.Message=="ActuationValidationBindingMismatch"){rejected=true;}
+    Check(rejected,"ledger refuses a Ready decision from a different actuation binding");
+
     var prepared=ledger.Prepare(ledgerRequest,ledgerValidation);
     Check(prepared.Phase==ContainmentActuationLedgerPhase.Prepared&&
           ledger.IsAuthorizationConsumed(ledgerAuthorizationId),

@@ -278,7 +278,8 @@ jobs:
             'Minifilter Driver Verifier VM lab',
             'RansomGuard Driver Verifier CLEAR recovery',
             'RansomGuard frozen immutable-package Driver Verifier',
-            'RansomGuard frozen service topology qualification'
+            'RansomGuard frozen service topology qualification',
+            'RansomGuard frozen mapped adversarial qualification'
           )
           if([string]$run.name -notin $allowed){
             throw "Run $env:TARGET_RUN_ID is not an allowed LAB workflow."
@@ -850,4 +851,82 @@ jobs:
           PACKAGE_ARTIFACT_ID: ${{ steps.request.outputs.artifact_id }}
         run: |
           Write-Host "Dispatched frozen service-topology qualification for '$env:TARGET_SHA' using artifact '$env:PACKAGE_ARTIFACT_ID'."
+
+  dispatch-frozen-mapped-adversarial:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 59 &&
+      github.event.comment.user.login == github.repository_owner &&
+      startsWith(github.event.comment.body, '/run-frozen-mapped-adversarial ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout policy source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
+        with:
+          ref: main
+
+      - name: Verify threat-model policy
+        shell: pwsh
+        run: |
+          .\tools\verify_threat_model.ps1
+
+      - name: Parse frozen mapped-adversarial request
+        id: request
+        shell: pwsh
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          $ErrorActionPreference='Stop'
+          $body=[string]$env:COMMENT_BODY
+          if($body -notmatch '^/run-frozen-mapped-adversarial\s+([0-9a-fA-F]{40})\s+([0-9]+)\s*$'){
+            throw 'Expected exactly: /run-frozen-mapped-adversarial <40-char-sha> <package-artifact-id>'
+          }
+          "sha=$($Matches[1].ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "artifact_id=$($Matches[2])" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Validate frozen source and package artifact
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TARGET_SHA: ${{ steps.request.outputs.sha }}
+          PACKAGE_ARTIFACT_ID: ${{ steps.request.outputs.artifact_id }}
+        run: |
+          $ErrorActionPreference='Stop'
+          gh api "repos/$env:GH_REPO/commits/$env:TARGET_SHA" --silent
+          if($LASTEXITCODE -ne 0){throw "Commit $env:TARGET_SHA was not found."}
+          $meta=gh api "repos/$env:GH_REPO/actions/artifacts/$env:PACKAGE_ARTIFACT_ID" | ConvertFrom-Json
+          $expected="ransomguard-frozen-candidate-package-$env:TARGET_SHA"
+          if([bool]$meta.expired){throw "Package artifact $env:PACKAGE_ARTIFACT_ID is expired."}
+          if(-not [string]::Equals([string]$meta.name,$expected,[StringComparison]::Ordinal)){
+            throw "Package artifact '$($meta.name)' does not match '$expected'."
+          }
+
+      - name: Dispatch frozen mapped-adversarial qualification
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TARGET_SHA: ${{ steps.request.outputs.sha }}
+          PACKAGE_ARTIFACT_ID: ${{ steps.request.outputs.artifact_id }}
+        run: |
+          $ErrorActionPreference='Stop'
+          $payload=@{
+            ref='main'
+            inputs=@{
+              expected_sha=$env:TARGET_SHA
+              package_artifact_id=$env:PACKAGE_ARTIFACT_ID
+              root_base='C:\RansomGuard-VM-MappedAdversarial'
+            }
+          } | ConvertTo-Json -Depth 4 -Compress
+          $payload | gh api --method POST -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$env:GH_REPO/actions/workflows/frozen-mapped-adversarial-vm.yml/dispatches" --input -
+
+      - name: Record frozen mapped-adversarial dispatch
+        shell: pwsh
+        env:
+          TARGET_SHA: ${{ steps.request.outputs.sha }}
+          PACKAGE_ARTIFACT_ID: ${{ steps.request.outputs.artifact_id }}
+        run: |
+          Write-Host "Dispatched frozen mapped-adversarial qualification for '$env:TARGET_SHA' using artifact '$env:PACKAGE_ARTIFACT_ID'."
 

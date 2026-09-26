@@ -10,6 +10,8 @@ on:
 
 permissions:
   contents: read
+  id-token: write
+  attestations: write
 
 concurrency:
   group: frozen-release-governance-${{ inputs.source_sha }}
@@ -80,6 +82,80 @@ jobs:
               -OutputDir (Join-Path $PWD 'build-logs\frozen-release-governance') `
               -SourceSha $env:SOURCE_SHA
 
+      - name: Sign frozen release-governance predicate with GitHub OIDC/Sigstore
+        id: release_attestation
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1 node24 pinned
+        with:
+          subject-path: candidate/release/*.zip
+          predicate-type: https://github.com/EritikWoW/RansomGuard/attestations/release-governance/v1
+          predicate-path: build-logs/frozen-release-governance/release-governance-attestation.json
+
+      - name: Sign frozen release SPDX SBOM attestation
+        id: sbom_attestation
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1 node24 pinned
+        with:
+          subject-path: candidate/release/*.zip
+          sbom-path: build-logs/frozen-release-governance/ransomguard.spdx.json
+
+      - name: Preserve and verify Sigstore attestation bundles
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          ORCHESTRATION_SHA: ${{ github.sha }}
+          RELEASE_BUNDLE: ${{ steps.release_attestation.outputs.bundle-path }}
+          RELEASE_ATTESTATION_ID: ${{ steps.release_attestation.outputs.attestation-id }}
+          RELEASE_ATTESTATION_URL: ${{ steps.release_attestation.outputs.attestation-url }}
+          SBOM_BUNDLE: ${{ steps.sbom_attestation.outputs.bundle-path }}
+          SBOM_ATTESTATION_ID: ${{ steps.sbom_attestation.outputs.attestation-id }}
+          SBOM_ATTESTATION_URL: ${{ steps.sbom_attestation.outputs.attestation-url }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $evidence = Join-Path $PWD 'build-logs\frozen-release-governance'
+          foreach($pair in @(
+            @($env:RELEASE_BUNDLE,'release-governance.sigstore.json'),
+            @($env:SBOM_BUNDLE,'release-sbom.sigstore.json')
+          )){
+            if([string]::IsNullOrWhiteSpace([string]$pair[0]) -or -not(Test-Path -LiteralPath $pair[0] -PathType Leaf)){
+              throw "Artifact attestation bundle missing: $($pair[0])"
+            }
+            Copy-Item -LiteralPath $pair[0] -Destination (Join-Path $evidence $pair[1]) -Force
+          }
+
+          $zip = @(Get-ChildItem -LiteralPath (Join-Path $PWD 'candidate\release') -Filter '*.zip' -File)
+          if($zip.Count -ne 1){throw "Expected exactly one frozen normal-release ZIP, found $($zip.Count)."}
+
+          $customType = 'https://github.com/EritikWoW/RansomGuard/attestations/release-governance/v1'
+          $signerWorkflow = 'EritikWoW/RansomGuard/.github/workflows/frozen-release-governance.yml'
+          $verifiedJson = & gh attestation verify $zip[0].FullName --repo $env:GITHUB_REPOSITORY --bundle (Join-Path $evidence 'release-governance.sigstore.json') --predicate-type $customType --signer-workflow $signerWorkflow --source-digest $env:ORCHESTRATION_SHA --format json
+          if($LASTEXITCODE -ne 0){throw 'GitHub/Sigstore release-governance attestation verification failed.'}
+          $verified = $verifiedJson | ConvertFrom-Json -Depth 100
+          $predicate = @($verified)[0].verificationResult.statement.predicate
+          if($null -eq $predicate){throw 'Verified release-governance attestation has no predicate.'}
+          if(-not [string]::Equals([string]$predicate.sourceSha,$env:SOURCE_SHA,[StringComparison]::OrdinalIgnoreCase)){
+            throw "Verified release-governance attestation source SHA mismatch: $($predicate.sourceSha)"
+          }
+
+          & gh attestation verify $zip[0].FullName --repo $env:GITHUB_REPOSITORY --bundle (Join-Path $evidence 'release-sbom.sigstore.json') --predicate-type 'https://spdx.dev/Document/v2.3' --signer-workflow $signerWorkflow --source-digest $env:ORCHESTRATION_SHA
+          if($LASTEXITCODE -ne 0){throw 'GitHub/Sigstore SPDX SBOM attestation verification failed.'}
+
+          [ordered]@{
+            schema=1
+            sourceSha=$env:SOURCE_SHA.ToLowerInvariant()
+            orchestrationSha=$env:ORCHESTRATION_SHA.ToLowerInvariant()
+            subject=$zip[0].Name
+            subjectSha256=(Get-FileHash -LiteralPath $zip[0].FullName -Algorithm SHA256).Hash.ToUpperInvariant()
+            signerRepository=$env:GITHUB_REPOSITORY
+            signerWorkflow='.github/workflows/frozen-release-governance.yml'
+            oidcIssuer='https://token.actions.githubusercontent.com'
+            releaseGovernancePredicateType=$customType
+            releaseAttestationId=$env:RELEASE_ATTESTATION_ID
+            releaseAttestationUrl=$env:RELEASE_ATTESTATION_URL
+            sbomPredicateType='https://spdx.dev/Document/v2.3'
+            sbomAttestationId=$env:SBOM_ATTESTATION_ID
+            sbomAttestationUrl=$env:SBOM_ATTESTATION_URL
+            verified=$true
+          } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $evidence 'artifact-attestation-record.json') -Encoding utf8NoBOM
       - name: Upload frozen release governance evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 node24 pinned
         with:

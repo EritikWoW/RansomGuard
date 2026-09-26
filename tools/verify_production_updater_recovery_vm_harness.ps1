@@ -163,59 +163,21 @@ foreach($required in @(
     'campaign_sha',
     'repair_source_sha',
     'runs-on: [self-hosted, Windows, X64, ransomguard-lab-vm]',
-    'ref: ${{ inputs.repair_source_sha }}',
+    'ref: \${{ inputs.repair_source_sha }}',
     'git rev-parse HEAD',
     'verify_production_updater_recovery_vm_harness.ps1',
     'quarantine_production_updater_recovery_vm.ps1',
-    'ransomguard-production-updater-recovery-quarantine-${{ inputs.campaign_sha }}-${{ inputs.repair_source_sha }}'
+    'ransomguard-production-updater-recovery-quarantine-\${{ inputs.campaign_sha }}-\${{ inputs.repair_source_sha }}'
 )){
     if($quarantineWorkflow -notmatch [regex]::Escape($required)){throw "Updater recovery quarantine workflow invariant missing: $required"}
 }
-if($quarantineWorkflow -match '(?im)^\s*continue-on-error\s*:\s*true\s*
-    '/run-production-updater-recovery-resume-vm ',
-    '/run-production-updater-recovery-verify-vm ',
-    '/quarantine-production-updater-recovery-vm ',
-    'production-updater-interrupted-recovery-vm.yml',
-    'production-updater-recovery-quarantine-vm.yml'
-)){
-    if($dispatcher -notmatch [regex]::Escape($required)){throw "Updater recovery dispatcher invariant missing: $required"}
-}
-if($windowsCi -notmatch [regex]::Escape('verify_production_updater_recovery_vm_harness.ps1')){
-    throw 'Windows CI must run the updater interrupted-recovery source gate.'
-}
-
-Write-Host 'Production updater interrupted-recovery VM harness gate PASSED: exact-SHA three-phase reboot campaign plus owner-only stale-campaign quarantine that preserves state, performs reviewed rollback, unregisters the stale service and cannot use direct SCM/kill shortcuts.'
-){
+if($quarantineWorkflow -match '(?im)^\s*continue-on-error\s*:\s*true\s*$'){
     throw 'Updater recovery quarantine workflow must not continue after a failed cleanup/recovery step.'
 }
 
 foreach($required in @(
-    '[ValidatePattern(''^[A-Fa-f0-9]{40}
-    '/run-production-updater-recovery-resume-vm ',
-    '/run-production-updater-recovery-verify-vm ',
-    'production-updater-interrupted-recovery-vm.yml'
-)){
-    if($dispatcher -notmatch [regex]::Escape($required)){throw "Updater recovery dispatcher invariant missing: $required"}
-}
-if($windowsCi -notmatch [regex]::Escape('verify_production_updater_recovery_vm_harness.ps1')){
-    throw 'Windows CI must run the updater interrupted-recovery source gate.'
-}
-
-Write-Host 'Production updater interrupted-recovery VM harness gate PASSED: exact-SHA three-phase reboot campaign, post-SCM/pre-journal crash window, explicit recovery, idempotent second reboot, truncated-journal fail-closed check and cleanup.'
-')][string]$ExpectedCampaignCommit',
-    '[ValidatePattern(''^[A-Fa-f0-9]{40}
-    '/run-production-updater-recovery-resume-vm ',
-    '/run-production-updater-recovery-verify-vm ',
-    'production-updater-interrupted-recovery-vm.yml'
-)){
-    if($dispatcher -notmatch [regex]::Escape($required)){throw "Updater recovery dispatcher invariant missing: $required"}
-}
-if($windowsCi -notmatch [regex]::Escape('verify_production_updater_recovery_vm_harness.ps1')){
-    throw 'Windows CI must run the updater interrupted-recovery source gate.'
-}
-
-Write-Host 'Production updater interrupted-recovery VM harness gate PASSED: exact-SHA three-phase reboot campaign, post-SCM/pre-journal crash window, explicit recovery, idempotent second reboot, truncated-journal fail-closed check and cleanup.'
-')][string]$RepairSourceCommit',
+    '[ValidatePattern(''^[A-Fa-f0-9]{40}$'')][string]$ExpectedCampaignCommit',
+    '[ValidatePattern(''^[A-Fa-f0-9]{40}$'')][string]$RepairSourceCommit',
     'campaign-state-pre-quarantine.json',
     'Campaign state SHA-256 mismatch.',
     'Only an armed failed campaign may be quarantined',
@@ -247,7 +209,9 @@ foreach($required in @(
     '/run-production-updater-recovery-arm-vm ',
     '/run-production-updater-recovery-resume-vm ',
     '/run-production-updater-recovery-verify-vm ',
-    'production-updater-interrupted-recovery-vm.yml'
+    '/quarantine-production-updater-recovery-vm ',
+    'production-updater-interrupted-recovery-vm.yml',
+    'production-updater-recovery-quarantine-vm.yml'
 )){
     if($dispatcher -notmatch [regex]::Escape($required)){throw "Updater recovery dispatcher invariant missing: $required"}
 }
@@ -255,4 +219,4 @@ if($windowsCi -notmatch [regex]::Escape('verify_production_updater_recovery_vm_h
     throw 'Windows CI must run the updater interrupted-recovery source gate.'
 }
 
-Write-Host 'Production updater interrupted-recovery VM harness gate PASSED: exact-SHA three-phase reboot campaign, post-SCM/pre-journal crash window, explicit recovery, idempotent second reboot, truncated-journal fail-closed check and cleanup.'
+Write-Host 'Production updater interrupted-recovery VM harness gate PASSED: exact-SHA three-phase reboot campaign plus owner-only stale-campaign quarantine that preserves state, performs reviewed rollback, unregisters the stale service and cannot use direct SCM/kill shortcuts.'

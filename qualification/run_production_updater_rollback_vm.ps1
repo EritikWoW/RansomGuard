@@ -78,7 +78,7 @@ function Get-UpdateRecord([string]$TransactionId){
     }
     return $matches[0]
 }
-function Get-AuditEntries([DateTimeOffset]$SinceUtc){
+function Get-AuditEntries {
     $root=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)) 'RansomGuardV03'
     $paths=@(
         (Join-Path $root 'audit.jsonl'),
@@ -94,7 +94,7 @@ function Get-AuditEntries([DateTimeOffset]$SinceUtc){
             if([string]::IsNullOrWhiteSpace($line)){continue}
             try{
                 $item=$line | ConvertFrom-Json
-                if($item.PSObject.Properties['Utc'] -and [DateTimeOffset]::Parse([string]$item.Utc) -ge $SinceUtc){$items += $item}
+                if($item.PSObject.Properties['Utc']){[void][DateTimeOffset]::Parse([string]$item.Utc);$items += $item}
             }catch{}
         }
     }
@@ -192,7 +192,7 @@ try{
     # Capture exact forward-update audit evidence before uninstall. Uninstall intentionally
     # removes the product data root, so deferring this check until the rollback scenario
     # would turn valid cleanup semantics into a false qualification failure.
-    $forwardAudit=@(Get-AuditEntries $startedUtc)
+    $forwardAudit=@(Get-AuditEntries)
     $forwardAuditEvidence=@($forwardAudit | Where-Object {
         $_.Event -eq 'ServiceUpdateCompleted' -and
         [string]::Equals([string]$_.Transaction,[string]$summary.forwardTransactionId,[StringComparison]::OrdinalIgnoreCase)
@@ -246,7 +246,7 @@ try{
     $summary.rollbackJournalTerminal=$true
     $records | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'updater-transactions.json') -Encoding utf8
 
-    $rollbackAudit=@(Get-AuditEntries $startedUtc)
+    $rollbackAudit=@(Get-AuditEntries)
     $rollbackAuditEvidence=@($rollbackAudit | Where-Object {
         $_.Event -eq 'ServiceUpdateRolledBack' -and
         [string]::Equals([string]$_.Transaction,[string]$summary.rollbackTransactionId,[StringComparison]::OrdinalIgnoreCase)

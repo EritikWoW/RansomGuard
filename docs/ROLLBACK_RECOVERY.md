@@ -144,6 +144,14 @@ Only `Ready` full-preimage/range-COW copy actions can execute. Every emitted fil
 
 The output root includes `recovery-plan.json`, `recovery-execution.json`, and `production-recovery-execution.json`. Partial failures remain explicit; already completed copies are not represented as rolled back.
 
+### Elevated operator workflow
+
+The same-EXE UAC-elevated recovery window can now invoke this boundary after an explicit review step. The operator must build the current plan, review its Ready/Review/Blocked/Informational actions, type a fully qualified new local output root, and acknowledge that the operation creates recovered copies only. The UI passes only the exact reviewed session/PlanId/evidence/lifecycle tuple to the Management API; it performs no direct filesystem or service mutation itself.
+
+After any execution attempt—success, partial failure, stale-plan refusal, or other error—the UI clears the reviewed plan and approval. A new attempt therefore requires a fresh plan rebuild/review.
+
+Preview/UI-smoke mode remains synthetic and never calls the production executor or queries ProgramData/SCM.
+
 0.8.7 still does not provide:
 
 
@@ -151,7 +159,6 @@ The output root includes `recovery-plan.json`, `recovery-execution.json`, and `p
 - automatic removal of incident-created paths;
 - automatic rename reversal;
 - recovery from a missing live source when only range-COW evidence exists;
-- production UI orchestration;
 - incident-wide merge with adaptive crypto recovery;
 - production minifilter certification/signing.
 

@@ -192,7 +192,8 @@ internal sealed class WindowsServiceBootstrap : BackgroundService
                     settings,
                     store,
                     imageInspector,
-                    stateChangeJournal);
+                    stateChangeJournal,
+                    runtime);
 
             return new GuardWorker(
                 sp.GetRequiredService<ILogger<GuardWorker>>(),

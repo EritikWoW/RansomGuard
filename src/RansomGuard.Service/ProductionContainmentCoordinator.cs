@@ -331,8 +331,7 @@ internal sealed class ProductionContainmentCoordinator
         catch (Exception ex) when (
             ex is IOException or
             Win32Exception or
-            InvalidOperationException or
-            ObjectDisposedException)
+            InvalidOperationException)
         {
             _log.LogCritical(
                 ex,

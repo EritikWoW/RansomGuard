@@ -76,7 +76,7 @@ foreach($required in @(
 }
 
 foreach($required in @(
-    "$generationMarkerName='.ransomguard-state-v1'",
+    '$generationMarkerName=''.ransomguard-state-v1''',
     "RansomGuard state generation v1",
     'Set-PrivateFile $marker',
     '$fs.Flush($true)'

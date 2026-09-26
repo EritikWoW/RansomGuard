@@ -5,7 +5,8 @@ param(
     [Parameter(Mandatory=$true)][string]$DriverPackageDirectory,
     [Parameter(Mandatory=$true)][ValidatePattern('^[A-Fa-f0-9]{40}$')][string]$CertificateThumbprint,
     [Parameter(Mandatory=$true)][string]$OutputDirectory,
-    [string]$QualificationAltitude='385201.806'
+    [string]$QualificationAltitude='385201.806',
+    [string]$ProductVersionOverride=''
 )
 
 $ErrorActionPreference='Stop'
@@ -133,8 +134,14 @@ Copy-Item -LiteralPath $sysSource -Destination $sys
 
 $repoRoot=Split-Path -Parent $PSScriptRoot
 [xml]$props=Get-Content -LiteralPath (Join-Path $repoRoot 'Directory.Build.props') -Raw
-$productVersion=[string]$props.Project.PropertyGroup.Version
-if($productVersion -notmatch '^\d+\.\d+\.\d+\.\d+$'){throw "Invalid product version: $productVersion"}
+$canonicalProductVersion=[string]$props.Project.PropertyGroup.Version
+$productVersion=if([string]::IsNullOrWhiteSpace($ProductVersionOverride)){
+    $canonicalProductVersion
+}else{
+    $ProductVersionOverride.Trim()
+}
+if($canonicalProductVersion -notmatch '^\d+\.\d+\.\d+\.\d+$'){throw "Invalid canonical product version: $canonicalProductVersion"}
+if($productVersion -notmatch '^\d+\.\d+\.\d+\.\d+$'){throw "Invalid qualification product version: $productVersion"}
 foreach($exe in @($service,$gate)){
     $fileVersion=(Get-Item -LiteralPath $exe).VersionInfo.FileVersion
     if($fileVersion -ne $productVersion){throw "Qualification executable version mismatch: $exe expected=$productVersion actual=$fileVersion"}
@@ -142,6 +149,7 @@ foreach($exe in @($service,$gate)){
 
 $infLines=@(Get-Content -LiteralPath $infSource)
 $transformed=New-Object System.Collections.Generic.List[string]
+$driverVerTransformed=$false
 foreach($line in $infLines){
     $trim=$line.Trim()
     if($trim -eq '; RansomGuard read-only minifilter LAB prototype.' -or
@@ -151,7 +159,10 @@ foreach($line in $infLines){
         continue
     }
 
-    if($trim.StartsWith('ProviderString', [StringComparison]::Ordinal)){
+    if($trim -match '^DriverVer\s*=\s*(?<date>[^,]+),\s*\d+\.\d+\.\d+\.\d+\s*$'){
+        $transformed.Add(('DriverVer={0},{1}' -f $Matches['date'].Trim(),$productVersion))
+        $driverVerTransformed=$true
+    }elseif($trim.StartsWith('ProviderString', [StringComparison]::Ordinal)){
         $transformed.Add('ProviderString      = "RansomGuard"')
     }elseif($trim.StartsWith('ServiceDescription', [StringComparison]::Ordinal)){
         $transformed.Add('ServiceDescription = "RansomGuard production lifecycle qualification minifilter"')
@@ -181,9 +192,15 @@ foreach($expected in $expectedLines){
         throw "Qualification INF transform did not produce the expected line: $expected"
     }
 }
+if(-not $driverVerTransformed){
+    throw 'Qualification INF transform did not find exactly one versioned DriverVer line.'
+}
 $infText=($transformed -join [Environment]::NewLine) + [Environment]::NewLine
 if($infText -match '(?i)UNASSIGNED LAB PLACEHOLDER|RansomGuard Lab|370099\.4242'){
     throw 'Qualification INF still contains a forbidden LAB production-admission identity.'
+}
+if($infText -notmatch ('(?im)^\s*DriverVer\s*=\s*[^,]+,'+[regex]::Escape($productVersion)+'\s*$')){
+    throw "Qualification INF DriverVer was not rebound to product version '$productVersion'."
 }
 Set-Content -LiteralPath $inf -Value $infText -Encoding ascii -NoNewline
 
@@ -251,6 +268,8 @@ $summary=[ordered]@{
     schema=1
     commit=$commit
     productVersion=$productVersion
+    canonicalProductVersion=$canonicalProductVersion
+    productVersionOverrideApplied=(-not [string]::Equals($productVersion,$canonicalProductVersion,[StringComparison]::Ordinal))
     preparedUtc=(Get-Date).ToUniversalTime().ToString('o')
     vm=$vm
     qualificationOnly=$true

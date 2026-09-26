@@ -186,6 +186,8 @@ The normal service does not actuate detector-driven containment for ordinary app
 
 Authorization is fail-closed unless the snapshot proves Enforce + Protected, rollback readiness, active kernel enforcement, a Running monitor, zero telemetry/queue/window-loss counters, durable incident persistence, stable live process identity, fresh valid SHA-256 image inspection, resolved protected scope, non-LAB identity, no scoped-trust veto, and the configured risk criterion. Startup, pre-activation, degraded, maintenance, failed, stopped, invalid or ambiguous states deny authorization.
 
+The first actuator milestone adds only a **non-actuating binding/revalidation contract**. A short-lived binding carries a unique authorization id, incident id, exact `ProcessKey`, normalized image path/SHA-256, the protection snapshot observation time, and an explicit expiry. Revalidation must reject expiry/replay, PID reuse, image drift, protection transitions, degraded telemetry, critical/unknown process state, RansomGuard itself, and protected service processes. The current `GuardWorker` is source-gated against referencing this actuation policy or any production suspend/kill primitive; the contract can produce only `Ready` or `Denied` evidence until a separate actuator is implemented and VM-qualified.
+
 Before production containment actuation is enabled, the chain must be extended and separately qualified end-to-end:
 
 `incident evidence -> live process identity -> preservation health -> authorization decision -> separately qualified actuator -> exact kernel/user-mode receipt -> post-containment audit -> safe deactivation/recovery`

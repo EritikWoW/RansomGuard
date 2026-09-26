@@ -238,6 +238,57 @@ function Assert-DurablePreimage(
     }
 }
 
+
+function Test-SafeMutationRejection([Exception]$Exception){
+    $cursor=$Exception
+    while($null -ne $cursor){
+        if($cursor -is [UnauthorizedAccessException]){return $true}
+        $code=([int]$cursor.HResult -band 0xFFFF)
+        if($code -in @(5,32,1224)){return $true}
+        $cursor=$cursor.InnerException
+    }
+    return $false
+}
+
+function Assert-DurableRangePreimage(
+    [string]$Session,
+    [string]$Target,
+    [string]$OriginalHash,
+    [string]$Description
+){
+    $sessionRoot=Join-Path $fixedStore ("Sessions\"+$Session)
+    $entry=Wait-JournalMatch (Join-Path $sessionRoot 'write-cow\range-journal.jsonl') {
+        param($x)
+        [int]$x.kind -eq 2 -and
+        [string]::Equals([string]$x.originalPath,$Target,[StringComparison]::OrdinalIgnoreCase) -and
+        [int64]$x.blockOffset -eq 0
+    } 20 "$Description durable range pre-image"
+
+    if([string]::IsNullOrWhiteSpace([string]$entry.snapshotRelativePath)){
+        throw "$Description range pre-image has no snapshot path."
+    }
+    $snapshot=Join-Path (Join-Path $sessionRoot 'write-cow') ([string]$entry.snapshotRelativePath)
+    if(-not(Test-Path -LiteralPath $snapshot -PathType Leaf)){
+        throw "$Description range snapshot missing: $snapshot"
+    }
+    $snapshotHash=(Get-FileHash -LiteralPath $snapshot -Algorithm SHA256).Hash
+    if(-not [string]::Equals($snapshotHash,$OriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw "$Description range snapshot hash mismatch. expected=$OriginalHash actual=$snapshotHash"
+    }
+}
+
+function Assert-OriginallyAbsentBaseline(
+    [string]$Session,
+    [string]$Target,
+    [string]$Description
+){
+    $sessionRoot=Join-Path $fixedStore ("Sessions\"+$Session)
+    $null=Wait-JournalMatch (Join-Path $sessionRoot 'create-state\create-journal.jsonl') {
+        param($x)
+        [string]::Equals([string]$x.originalPath,$Target,[StringComparison]::OrdinalIgnoreCase)
+    } 20 "$Description originally-absent baseline"
+}
+
 Assert-Administrator
 $vm=Assert-DisposableVm
 
@@ -317,6 +368,12 @@ $summary=[ordered]@{
     hardLinkExInsideToOutsideDenied=$false
     hardLinkExOutsideToInsideDenied=$false
     hardLinkExOutsideToOutsideAllowed=$false
+    hardLinkDeleteStreamSafe=$false
+    hardLinkDeleteStreamQualified=$false
+    hardLinkDeleteStreamOutcome=''
+    adsAlternateAliasSafe=$false
+    adsAlternateAliasQualified=$false
+    adsAlternateAliasOutcome=''
     fsctlZeroAllowedWithBaseline=$false
     fsctlZeroMutatedTarget=$false
     fsctlZeroPreimageHashMatched=$false
@@ -626,6 +683,125 @@ try{
     if($LASTEXITCODE -ne 0 -or (Get-Content $result -Raw).Trim() -ne 'allowed-ex' -or -not(Test-Path $outsideOutsideEx)){throw 'ProductionGate over-blocked outside-to-outside FileLinkInformationEx.'}
     $summary.hardLinkExOutsideToOutsideAllowed=$true
     Remove-Item $outsideOutsideEx -Force
+
+    # Scenario 5b: distinguish deletion of one in-root hard-link pathname from mutation
+    # of the shared underlying stream. If inside->inside hard-link creation is unsupported
+    # under ProductionGate, that is an explicit fail-safe outcome. If it is supported,
+    # deleting one name must not corrupt the remaining stream, and a later stream mutation
+    # must either be denied or have a durable range pre-image.
+    $aliasBase=Join-Path $root 'alias-delete-base.bin'
+    $aliasPath=Join-Path $root 'alias-delete-link.bin'
+    New-TestFile $aliasBase 73
+    $aliasOriginalHash=(Get-FileHash -LiteralPath $aliasBase -Algorithm SHA256).Hash
+    $aliasResult=Join-Path $ResultsDirectory 'hardlink-inside-inside-delete.result'
+    & $helperExe hard-link --existing $aliasBase --link $aliasPath --result $aliasResult
+    if($LASTEXITCODE -ne 0){throw 'Inside-to-inside hard-link helper failed.'}
+    $aliasCreateOutcome=(Get-Content -LiteralPath $aliasResult -Raw).Trim()
+
+    if($aliasCreateOutcome -eq 'denied'){
+        if(Test-Path -LiteralPath $aliasPath){throw 'Denied inside-to-inside hard-link unexpectedly exists.'}
+        $summary.hardLinkDeleteStreamSafe=$true
+        $summary.hardLinkDeleteStreamQualified=$true
+        $summary.hardLinkDeleteStreamOutcome='inside-inside-link-denied'
+    }elseif($aliasCreateOutcome -eq 'allowed'){
+        if(-not(Test-Path -LiteralPath $aliasPath -PathType Leaf)){throw 'Allowed inside-to-inside hard-link was not created.'}
+        $deleteDenied=$false
+        try{Remove-Item -LiteralPath $aliasPath -Force -ErrorAction Stop}
+        catch{
+            if(Test-SafeMutationRejection $_.Exception){$deleteDenied=$true}else{throw}
+        }
+
+        if($deleteDenied){
+            if(-not(Test-Path -LiteralPath $aliasPath -PathType Leaf) -or -not(Test-Path -LiteralPath $aliasBase -PathType Leaf)){
+                throw 'Denied single-link deletion changed namespace state.'
+            }
+            if(-not [string]::Equals((Get-FileHash -LiteralPath $aliasBase -Algorithm SHA256).Hash,$aliasOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+                throw 'Denied single-link deletion changed the underlying stream.'
+            }
+            $summary.hardLinkDeleteStreamSafe=$true
+            $summary.hardLinkDeleteStreamQualified=$true
+            $summary.hardLinkDeleteStreamOutcome='single-link-delete-denied'
+        }else{
+            if(Test-Path -LiteralPath $aliasPath){throw 'Single-link deletion left the removed alias present.'}
+            if(-not(Test-Path -LiteralPath $aliasBase -PathType Leaf)){throw 'Single-link deletion removed the shared underlying stream.'}
+            if(-not [string]::Equals((Get-FileHash -LiteralPath $aliasBase -Algorithm SHA256).Hash,$aliasOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+                throw 'Single-link deletion changed the shared stream before mutation.'
+            }
+
+            $writeDenied=$false
+            try{
+                $stream=[IO.File]::Open($aliasBase,[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+                try{
+                    $stream.Position=0
+                    $stream.WriteByte(0xA7)
+                    $stream.Flush($true)
+                }finally{$stream.Dispose()}
+            }catch{
+                if(Test-SafeMutationRejection $_.Exception){$writeDenied=$true}else{throw}
+            }
+
+            if($writeDenied){
+                if(-not [string]::Equals((Get-FileHash -LiteralPath $aliasBase -Algorithm SHA256).Hash,$aliasOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+                    throw 'Denied underlying-stream mutation changed content after single-link deletion.'
+                }
+                $summary.hardLinkDeleteStreamOutcome='delete-allowed-stream-write-denied'
+                $summary.hardLinkDeleteStreamQualified=$true
+            }else{
+                if([string]::Equals((Get-FileHash -LiteralPath $aliasBase -Algorithm SHA256).Hash,$aliasOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+                    throw 'Allowed underlying-stream write did not mutate the remaining hard-link target.'
+                }
+                Assert-DurableRangePreimage $session $aliasBase $aliasOriginalHash 'hard-link delete then stream mutation'
+                $summary.hardLinkDeleteStreamOutcome='delete-allowed-stream-write-preserved'
+                $summary.hardLinkDeleteStreamQualified=$true
+            }
+            $summary.hardLinkDeleteStreamSafe=$true
+        }
+    }else{
+        throw "Unexpected inside-to-inside hard-link outcome '$aliasCreateOutcome'."
+    }
+
+    # Scenario 5c: ADS creation/mutation through an alternate in-root hard-link alias.
+    # If alternate aliases are denied, the route is explicitly unsupported/fail-safe.
+    # If the alias and ADS are allowed, the ADS must have a durable originally-absent
+    # baseline so rollback can remove the stream rather than inventing prior contents.
+    $adsBase=Join-Path $root 'ads-alias-base.bin'
+    $adsAlias=Join-Path $root 'ads-alias-link.bin'
+    New-TestFile $adsBase 91
+    $adsAliasResult=Join-Path $ResultsDirectory 'hardlink-inside-inside-ads.result'
+    & $helperExe hard-link --existing $adsBase --link $adsAlias --result $adsAliasResult
+    if($LASTEXITCODE -ne 0){throw 'ADS alternate-alias hard-link helper failed.'}
+    $adsAliasOutcome=(Get-Content -LiteralPath $adsAliasResult -Raw).Trim()
+
+    if($adsAliasOutcome -eq 'denied'){
+        if(Test-Path -LiteralPath $adsAlias){throw 'Denied ADS alternate alias unexpectedly exists.'}
+        $summary.adsAlternateAliasSafe=$true
+        $summary.adsAlternateAliasQualified=$true
+        $summary.adsAlternateAliasOutcome='inside-inside-link-denied'
+    }elseif($adsAliasOutcome -eq 'allowed'){
+        if(-not(Test-Path -LiteralPath $adsAlias -PathType Leaf)){throw 'ADS alternate alias was not created.'}
+        $adsPath=$adsAlias+':ransomguard-qualification'
+        $adsPayload='RANSOMGUARD-ADS-ALIAS-QUALIFICATION'
+        $adsDenied=$false
+        try{[IO.File]::WriteAllText($adsPath,$adsPayload,[Text.Encoding]::UTF8)}
+        catch{
+            if(Test-SafeMutationRejection $_.Exception){$adsDenied=$true}else{throw}
+        }
+
+        if($adsDenied){
+            $summary.adsAlternateAliasOutcome='ads-create-denied'
+            $summary.adsAlternateAliasQualified=$true
+        }else{
+            $actualAds=[IO.File]::ReadAllText($adsPath,[Text.Encoding]::UTF8)
+            if($actualAds -ne $adsPayload){throw 'ADS write through alternate alias returned unexpected content.'}
+            Assert-OriginallyAbsentBaseline $session $adsPath 'ADS alternate-alias create'
+            $summary.adsAlternateAliasOutcome='ads-create-originally-absent-preserved'
+            $summary.adsAlternateAliasQualified=$true
+        }
+        $summary.adsAlternateAliasSafe=$true
+    }else{
+        throw "Unexpected ADS alternate-alias hard-link outcome '$adsAliasOutcome'."
+    }
+
     Stop-ProcessHard $gate.Process 'ProductionGate hard-link scenario'
     Cleanup-Scenario 'active hard-link topology'
 

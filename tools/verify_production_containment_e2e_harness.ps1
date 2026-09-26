@@ -44,6 +44,8 @@ foreach($required in @(
     'prepare_production_lifecycle_qualification_package.ps1',
     'RansomGuard.ProductionContainmentE2EFixture',
     'run_production_containment_e2e_lab.ps1',
+    '''exitRaceIncidentPersisted''',
+    '''exitRaceNoContainment''',
     'ransomguard-production-containment-e2e-${{ inputs.expected_sha }}'
 )){
     if($workflow -notmatch [regex]::Escape($required)){

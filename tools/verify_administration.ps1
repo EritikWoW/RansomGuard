@@ -141,7 +141,7 @@ foreach($required in @(
  'nativeStateQueries = false',
  'nativeExecutionCalls = false',
  'sourceMutationControls = false',
- 'copyOutControls = _currentPlan is { ReadyCount: > 0 }'
+ 'copyOutControls = _currentPlan is { ReadyCount: > 0, ActionsTruncated: false }'
 )) {
  $source=if($required -eq 'recovery-review'){$core}else{$recoveryPane}
  if(-not $source.Contains($required)){throw "Missing elevated recovery review invariant: $required"}

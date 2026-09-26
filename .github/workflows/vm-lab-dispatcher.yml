@@ -303,6 +303,85 @@ jobs:
           if($LASTEXITCODE -ne 0){throw "Unable to force-cancel Driver Verifier run $env:TARGET_RUN_ID."}
           Write-Host "Force-cancelled stale LAB run $env:TARGET_RUN_ID."
 
+  cancel-lab-run:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.comment.user.login == github.repository_owner &&
+      startsWith(github.event.comment.body, '/cancel-lab-run ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout policy source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
+        with:
+          ref: main
+
+      - name: Verify threat-model policy
+        shell: pwsh
+        run: |
+          .\tools\verify_threat_model.ps1
+
+      - name: Parse LAB run id
+        id: request
+        shell: pwsh
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          $ErrorActionPreference='Stop'
+          $body=[string]$env:COMMENT_BODY
+          if($body -notmatch '^/cancel-lab-run\s+([0-9]+)\s*$'){
+            throw 'Expected exactly: /cancel-lab-run <run-id>'
+          }
+          "run_id=$($Matches[1])" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Validate target LAB run
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TARGET_RUN_ID: ${{ steps.request.outputs.run_id }}
+        run: |
+          $ErrorActionPreference='Stop'
+          $runJson=gh api "repos/$env:GH_REPO/actions/runs/$env:TARGET_RUN_ID"
+          if($LASTEXITCODE -ne 0){throw "Unable to inspect Actions run $env:TARGET_RUN_ID."}
+          $run=$runJson | ConvertFrom-Json
+          $allowed=@(
+            'Minifilter Driver Verifier VM lab',
+            'RansomGuard Driver Verifier CLEAR recovery',
+            'RansomGuard frozen immutable-package Driver Verifier',
+            'RansomGuard frozen service topology qualification',
+            'RansomGuard frozen mapped adversarial qualification',
+            'RansomGuard frozen ProductionGate mutation matrix',
+            'RansomGuard containment actuator VM qualification',
+            'RansomGuard production containment E2E VM qualification',
+            'RansomGuard production containment crash recovery VM qualification',
+            'RansomGuard production containment reboot recovery VM qualification',
+            'RansomGuard production updater rollback VM qualification',
+            'RansomGuard production updater interrupted recovery VM qualification'
+          )
+          if([string]$run.name -notin $allowed){
+            throw "Run $env:TARGET_RUN_ID is not an allowed self-hosted LAB workflow."
+          }
+          if([string]::Equals([string]$run.status,'completed',[StringComparison]::OrdinalIgnoreCase)){
+            throw "Run $env:TARGET_RUN_ID is already completed and must not be cancelled."
+          }
+          if(-not [string]::Equals([string]$run.repository.full_name,$env:GH_REPO,[StringComparison]::OrdinalIgnoreCase)){
+            throw "Run $env:TARGET_RUN_ID does not belong to $env:GH_REPO."
+          }
+          Write-Host "Validated stale LAB run $env:TARGET_RUN_ID ($($run.name)) for cancellation."
+
+      - name: Force-cancel stale LAB run
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TARGET_RUN_ID: ${{ steps.request.outputs.run_id }}
+        run: |
+          $ErrorActionPreference='Stop'
+          gh api --method POST "repos/$env:GH_REPO/actions/runs/$env:TARGET_RUN_ID/force-cancel" --silent
+          if($LASTEXITCODE -ne 0){throw "Unable to force-cancel LAB run $env:TARGET_RUN_ID."}
+          Write-Host "Force-cancelled stale LAB run $env:TARGET_RUN_ID."
+
   dispatch-verifier-clear-recovery:
     if: >-
       github.event_name == 'issue_comment' &&

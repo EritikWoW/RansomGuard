@@ -6,19 +6,23 @@ Set-StrictMode -Version Latest
 $root=[IO.Path]::GetFullPath($RepositoryRoot)
 
 $workflowPath=Join-Path $root '.github\workflows\production-updater-interrupted-recovery-vm.yml'
+$quarantineWorkflowPath=Join-Path $root '.github\workflows\production-updater-recovery-quarantine-vm.yml'
 $harnessPath=Join-Path $root 'qualification\run_production_updater_interrupted_recovery_vm.ps1'
+$quarantineHarnessPath=Join-Path $root 'qualification\quarantine_production_updater_recovery_vm.ps1'
 $helperPath=Join-Path $root 'qualification\RansomGuard.UpdaterQualification\Program.cs'
 $recoveryPath=Join-Path $root 'src\RansomGuard.Management\ServiceUpdateRecoveryAdministration.cs'
 $updaterPath=Join-Path $root 'src\RansomGuard.Management\ServiceUpdateAdministration.cs'
 $dispatcherPath=Join-Path $root '.github\workflows\vm-lab-dispatcher.yml'
 $windowsCiPath=Join-Path $root '.github\workflows\windows-ci.yml'
 
-foreach($path in @($workflowPath,$harnessPath,$helperPath,$recoveryPath,$updaterPath,$dispatcherPath,$windowsCiPath)){
+foreach($path in @($workflowPath,$quarantineWorkflowPath,$harnessPath,$quarantineHarnessPath,$helperPath,$recoveryPath,$updaterPath,$dispatcherPath,$windowsCiPath)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Updater interrupted-recovery qualification source missing: $path"}
 }
 
 $workflow=Get-Content -LiteralPath $workflowPath -Raw
+$quarantineWorkflow=Get-Content -LiteralPath $quarantineWorkflowPath -Raw
 $harness=Get-Content -LiteralPath $harnessPath -Raw
+$quarantineHarness=Get-Content -LiteralPath $quarantineHarnessPath -Raw
 $helper=Get-Content -LiteralPath $helperPath -Raw
 $recovery=Get-Content -LiteralPath $recoveryPath -Raw
 $updater=Get-Content -LiteralPath $updaterPath -Raw
@@ -155,10 +159,68 @@ foreach($required in @(
 }
 
 foreach($required in @(
+    'RansomGuard production updater recovery quarantine VM',
+    'campaign_sha',
+    'repair_source_sha',
+    'runs-on: [self-hosted, Windows, X64, ransomguard-lab-vm]',
+    'ref: ${{ inputs.repair_source_sha }}',
+    'git rev-parse HEAD',
+    'verify_production_updater_recovery_vm_harness.ps1',
+    'quarantine_production_updater_recovery_vm.ps1',
+    'ransomguard-production-updater-recovery-quarantine-${{ inputs.campaign_sha }}-${{ inputs.repair_source_sha }}'
+)){
+    if($quarantineWorkflow -notmatch [regex]::Escape($required)){throw "Updater recovery quarantine workflow invariant missing: $required"}
+}
+if($quarantineWorkflow -match '(?im)^\s*continue-on-error\s*:\s*true\s*$'){
+    throw 'Updater recovery quarantine workflow must not continue after a failed cleanup/recovery step.'
+}
+
+foreach($required in @(
+    '[ValidatePattern(''^[A-Fa-f0-9]{40}$'')][string]$ExpectedCampaignCommit',
+    '[ValidatePattern(''^[A-Fa-f0-9]{40}$'')][string]$RepairSourceCommit',
+    'campaign-state-pre-quarantine.json',
+    'Campaign state SHA-256 mismatch.',
+    'Only an armed failed campaign may be quarantined',
+    'SCM image does not match the stale campaign target image.',
+    '$before.QuerySucceeded -ne $true',
+    'if($before.Installed -eq $true)',
+    '''review-recovery''',
+    '''RollbackToPrevious''',
+    '''recover-update''',
+    '''RolledBack''',
+    '''uninstall''',
+    '''NotRecoverableServiceAbsent''',
+    '''ServiceUpdates-quarantined''',
+    '''expect-recovery-review-failure''',
+    '$serviceAbsentAtQuarantine=$true',
+    '$incompleteJournalQuarantined=$true',
+    'Move-Item -LiteralPath $crashJournal -Destination $journalDestination',
+    '$finalService.QuerySucceeded -ne $true -or $finalService.Installed -eq $true',
+    'Active-quarantined',
+    'UPDATER-RECOVERY-QUARANTINE PASS'
+)){
+    if($quarantineHarness -notmatch [regex]::Escape($required)){throw "Updater recovery quarantine harness invariant missing: $required"}
+}
+foreach($forbidden in @(
+    '\bStop-Process\b',
+    '\btaskkill(?:\.exe)?\b',
+    '\bTerminateProcess\b',
+    '\bProcess\.Kill\s*\(',
+    '\bsc(?:\.exe)?\s+(?:delete|config)\b'
+)){
+    if($quarantineHarness -match $forbidden){throw "Updater recovery quarantine harness contains forbidden direct cleanup shortcut: $forbidden"}
+}
+if($quarantineHarness -notmatch [regex]::Escape('Move-Item -LiteralPath $active -Destination $quarantinedActive')){
+    throw 'Updater recovery quarantine must preserve the exact stale Active state instead of deleting it in place.'
+}
+
+foreach($required in @(
     '/run-production-updater-recovery-arm-vm ',
     '/run-production-updater-recovery-resume-vm ',
     '/run-production-updater-recovery-verify-vm ',
-    'production-updater-interrupted-recovery-vm.yml'
+    '/quarantine-production-updater-recovery-vm ',
+    'production-updater-interrupted-recovery-vm.yml',
+    'production-updater-recovery-quarantine-vm.yml'
 )){
     if($dispatcher -notmatch [regex]::Escape($required)){throw "Updater recovery dispatcher invariant missing: $required"}
 }
@@ -166,4 +228,4 @@ if($windowsCi -notmatch [regex]::Escape('verify_production_updater_recovery_vm_h
     throw 'Windows CI must run the updater interrupted-recovery source gate.'
 }
 
-Write-Host 'Production updater interrupted-recovery VM harness gate PASSED: exact-SHA three-phase reboot campaign, post-SCM/pre-journal crash window, explicit recovery, idempotent second reboot, truncated-journal fail-closed check and cleanup.'
+Write-Host 'Production updater interrupted-recovery VM harness gate PASSED: exact-SHA three-phase reboot campaign plus owner-only stale-campaign quarantine that preserves state, performs reviewed rollback, unregisters the stale service and cannot use direct SCM/kill shortcuts.'

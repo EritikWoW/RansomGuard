@@ -1,0 +1,116 @@
+name: RansomGuard production updater recovery quarantine VM
+
+on:
+  workflow_dispatch:
+    inputs:
+      campaign_sha:
+        description: Exact stale updater-recovery campaign SHA to quarantine.
+        required: true
+        type: string
+      repair_source_sha:
+        description: Exact current source SHA containing the quarantine implementation.
+        required: true
+        type: string
+      root_base:
+        description: Persistent disposable VM updater-recovery root.
+        required: true
+        default: C:\RansomGuard-VM-UpdaterRecovery
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ransomguard-production-updater-recovery-quarantine-vm
+  cancel-in-progress: false
+
+jobs:
+  quarantine:
+    environment: ransomguard-lab-vm
+    runs-on: [self-hosted, Windows, X64, ransomguard-lab-vm]
+    timeout-minutes: 30
+    env:
+      RANSOMGUARD_LAB_VM: I_UNDERSTAND
+      RG_CAMPAIGN_SHA: ${{ inputs.campaign_sha }}
+      RG_REPAIR_SHA: ${{ inputs.repair_source_sha }}
+      RG_ROOT_BASE: ${{ inputs.root_base }}
+
+    steps:
+      - name: Checkout exact quarantine source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
+        with:
+          ref: ${{ inputs.repair_source_sha }}
+          fetch-depth: 1
+
+      - name: Checkout protected-main orchestration policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
+        with:
+          ref: main
+          path: orchestrator
+          fetch-depth: 1
+
+      - name: Verify exact source and quarantine gates
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $actual=(git rev-parse HEAD).Trim()
+          if(-not [string]::Equals($actual,$env:RG_REPAIR_SHA,[StringComparison]::OrdinalIgnoreCase)){
+            throw "Exact checkout mismatch. expected=$env:RG_REPAIR_SHA actual=$actual"
+          }
+          if($env:RG_CAMPAIGN_SHA -notmatch '^[A-Fa-f0-9]{40}$'){throw 'campaign_sha must be an exact 40-char SHA.'}
+          .\tools\verify_threat_model.ps1
+          .\orchestrator\tools\verify_production_updater_recovery_vm_harness.ps1 -RepositoryRoot $PWD
+
+      - name: Verify disposable VM runner readiness
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $cs=Get-CimInstance Win32_ComputerSystem
+          $vm="$($cs.Manufacturer) $($cs.Model)"
+          if($vm -notmatch '(?i)virtual|vmware|virtualbox|kvm|qemu|hyper-v|parallels|xen'){
+            throw "REFUSED: updater recovery quarantine requires a disposable VM. Detected: $vm"
+          }
+          if($env:RANSOMGUARD_LAB_VM -cne 'I_UNDERSTAND'){throw 'Disposable VM acknowledgement missing.'}
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0 node24 pinned
+        with:
+          dotnet-version: 10.0.401
+
+      - name: Publish exact quarantine administration helper
+        id: build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $project='.\qualification\RansomGuard.UpdaterQualification\RansomGuard.UpdaterQualification.csproj'
+          $family='updater-recovery-quarantine-helper'
+          dotnet restore $project --locked-mode -r win-x64 -p:BaseIntermediateOutputPath="obj\$family\"
+          if($LASTEXITCODE -ne 0){throw 'Quarantine helper restore failed.'}
+          $out=Join-Path $env:RUNNER_TEMP ("ransomguard-updater-recovery-quarantine-"+$env:GITHUB_RUN_ID)
+          if(Test-Path -LiteralPath $out){Remove-Item -LiteralPath $out -Recurse -Force}
+          dotnet publish $project -c Release -r win-x64 --self-contained true --no-restore -p:BaseIntermediateOutputPath="obj\$family\" -p:BaseOutputPath="bin\$family\" -o $out
+          if($LASTEXITCODE -ne 0){throw 'Quarantine helper publish failed.'}
+          $exe=Join-Path $out 'RansomGuard.UpdaterQualification.exe'
+          if(-not(Test-Path -LiteralPath $exe -PathType Leaf)){throw 'Quarantine administration helper executable missing.'}
+          "helper=$exe" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          foreach($root in @(Get-ChildItem -LiteralPath '.\src','.\qualification' -Directory -Recurse -Force |
+              Where-Object { $_.Name -eq $family -and $_.Parent -and $_.Parent.Name -in @('obj','bin') })){
+              Remove-Item -LiteralPath $root.FullName -Recurse -Force
+          }
+
+      - name: Quarantine and terminally recover stale campaign
+        shell: pwsh
+        env:
+          RG_ADMIN_HELPER: ${{ steps.build.outputs.helper }}
+        run: |
+          $ErrorActionPreference='Stop'
+          .\qualification\quarantine_production_updater_recovery_vm.ps1 -ExpectedCampaignCommit $env:RG_CAMPAIGN_SHA -RepairSourceCommit $env:RG_REPAIR_SHA -AdminHelper $env:RG_ADMIN_HELPER -RootBase $env:RG_ROOT_BASE
+
+      - name: Upload quarantine evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 node24 pinned
+        with:
+          name: ransomguard-production-updater-recovery-quarantine-${{ inputs.campaign_sha }}-${{ inputs.repair_source_sha }}
+          path: ${{ inputs.root_base }}\Evidence\quarantine-${{ inputs.campaign_sha }}-*/**
+          if-no-files-found: warn
+          retention-days: 30

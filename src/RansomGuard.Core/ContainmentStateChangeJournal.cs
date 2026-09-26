@@ -35,6 +35,8 @@ public sealed record ContainmentStateChangeJournalEntry(
 public sealed class ContainmentStateChangeJournal
 {
     private const string JournalName = "containment-state-change-journal.jsonl";
+    private const long MaxJournalBytes = 64L * 1024 * 1024;
+    private const int MaxJournalRecords = 100_000;
     private const string PreparedReason = "ValidationReady";
     private const string SuspendReason = "StateChangeSuspendApplied";
     private const string ResumeReason = "StateChangeExplicitResumeApplied";
@@ -290,6 +292,9 @@ public sealed class ContainmentStateChangeJournal
         var normalizedPath = WinPaths.Normalize(binding.ImagePath)
             ?? throw new InvalidDataException("State-change journal image path is invalid.");
 
+        if (_records.Count >= MaxJournalRecords)
+            throw new IOException("ContainmentStateChangeJournalQuotaReached: record limit reached.");
+
         var sequence = checked(++_nextSequence);
         var payload = new ContainmentStateChangeJournalPayload(
             sequence,
@@ -349,12 +354,17 @@ public sealed class ContainmentStateChangeJournal
         }
 
         RejectReparseChain(_journal);
+        if (new FileInfo(_journal).Length > MaxJournalBytes)
+            throw new InvalidDataException("Containment state-change journal exceeds the maximum qualified size.");
+
         var rebuilt = new List<ContainmentStateChangeJournalEntry>();
         var expectedPrevious = new string('0', 64);
         long expectedSequence = 1;
 
         foreach (var raw in File.ReadLines(_journal, Encoding.UTF8))
         {
+            if (rebuilt.Count >= MaxJournalRecords)
+                throw new InvalidDataException("Containment state-change journal exceeds the maximum qualified record count.");
             if (string.IsNullOrWhiteSpace(raw))
                 throw new InvalidDataException("Blank containment state-change journal record.");
 
@@ -480,6 +490,11 @@ public sealed class ContainmentStateChangeJournal
         RejectReparseChain(_root);
         RejectReparseChain(_journal);
         var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(line, _json) + "\n");
+        var existingLength = File.Exists(_journal) ? new FileInfo(_journal).Length : 0;
+        if (existingLength < 0 || existingLength > MaxJournalBytes ||
+            bytes.LongLength > MaxJournalBytes - existingLength)
+            throw new IOException("ContainmentStateChangeJournalQuotaReached: byte limit reached.");
+
         using var fs = new FileStream(
             _journal,
             FileMode.Append,

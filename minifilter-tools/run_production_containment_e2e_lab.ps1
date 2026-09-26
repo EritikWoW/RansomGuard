@@ -90,6 +90,76 @@ function Get-AuditEntries([DateTimeOffset]$SinceUtc){
     return $entries
 }
 
+function Get-ServiceFailureDiagnostics([DateTimeOffset]$SinceUtc){
+    $snapshot=[ordered]@{
+        capturedUtc=[DateTimeOffset]::UtcNow.ToString('o')
+        service=$null
+        scQueryEx=$null
+        events=@()
+    }
+
+    try{
+        $svc=Get-CimInstance Win32_Service -Filter "Name='RansomGuardV03'" -ErrorAction Stop
+        if($null -ne $svc){
+            $snapshot.service=[ordered]@{
+                name=[string]$svc.Name
+                state=[string]$svc.State
+                status=[string]$svc.Status
+                processId=[int]$svc.ProcessId
+                exitCode=[uint32]$svc.ExitCode
+                serviceSpecificExitCode=[uint32]$svc.ServiceSpecificExitCode
+                startMode=[string]$svc.StartMode
+                pathName=[string]$svc.PathName
+            }
+        }
+    }catch{
+        $snapshot.service=[ordered]@{error=$_.Exception.Message}
+    }
+
+    try{
+        $snapshot.scQueryEx=(& sc.exe queryex RansomGuardV03 2>&1 | Out-String).Trim()
+    }catch{
+        $snapshot.scQueryEx='query failed: '+$_.Exception.Message
+    }
+
+    foreach($logName in @('Application','System')){
+        try{
+            $cutoff=$SinceUtc.UtcDateTime.AddSeconds(-5)
+            $events=@(
+                Get-WinEvent -FilterHashtable @{LogName=$logName;StartTime=$cutoff} -ErrorAction Stop |
+                    Where-Object {
+                        $message=[string]$_.Message
+                        $message -match '(?i)RansomGuardV03|RansomGuard\.Service|RansomGuard'
+                    } |
+                    Select-Object -First 12 |
+                    ForEach-Object {
+                        $message=(([string]$_.Message) -replace '\s+',' ').Trim()
+                        if($message.Length -gt 1600){$message=$message.Substring(0,1600)}
+                        [ordered]@{
+                            log=$logName
+                            utc=$_.TimeCreated.ToUniversalTime().ToString('o')
+                            provider=[string]$_.ProviderName
+                            id=[int]$_.Id
+                            level=[string]$_.LevelDisplayName
+                            message=$message
+                        }
+                    }
+            )
+            $snapshot.events += $events
+        }catch{
+            $snapshot.events += [ordered]@{log=$logName;error=$_.Exception.Message}
+        }
+    }
+
+    return [pscustomobject]$snapshot
+}
+
+function Format-ServiceFailureDiagnostics($Diagnostics){
+    $json=$Diagnostics | ConvertTo-Json -Depth 8 -Compress
+    if($json.Length -gt 6000){return $json.Substring(0,6000)+'...'}
+    return $json
+}
+
 function Wait-Audit([string]$Property,[string]$Value,[DateTimeOffset]$SinceUtc,[int]$Seconds){
     $deadline=(Get-Date).AddSeconds($Seconds)
     while((Get-Date) -lt $deadline){
@@ -100,7 +170,10 @@ function Wait-Audit([string]$Property,[string]$Value,[DateTimeOffset]$SinceUtc,[
         if($matches.Count -gt 0){return $matches[-1]}
         $svc=Get-Service -Name 'RansomGuardV03' -ErrorAction SilentlyContinue
         if($null -eq $svc -or [string]$svc.Status -ne 'Running'){
-            throw "Service left Running while waiting for audit $Property='$Value'."
+            $script:lastServiceFailureDiagnostics=Get-ServiceFailureDiagnostics $SinceUtc
+            $detail=Format-ServiceFailureDiagnostics $script:lastServiceFailureDiagnostics
+            $state=if($svc){[string]$svc.Status}else{'missing'}
+            throw "Service left Running state while waiting for audit $Property='$Value'. Service=$state. Diagnostics=$detail"
         }
         Start-Sleep -Milliseconds 200
     }
@@ -109,7 +182,15 @@ function Wait-Audit([string]$Property,[string]$Value,[DateTimeOffset]$SinceUtc,[
         elseif($_.PSObject.Properties['Event']){"Event=$($_.Event)"}
         else{'<untyped>'}
     })
-    throw "Timed out waiting for audit $Property='$Value'. Recent=$($recent -join ' -> ')"
+    $svc=Get-Service -Name 'RansomGuardV03' -ErrorAction SilentlyContinue
+    $state=if($svc){[string]$svc.Status}else{'missing'}
+    if($null -eq $svc -or [string]$svc.Status -ne 'Running'){
+        $script:lastServiceFailureDiagnostics=Get-ServiceFailureDiagnostics $SinceUtc
+    }
+    $detail=if($null -ne $script:lastServiceFailureDiagnostics){
+        '; Diagnostics='+(Format-ServiceFailureDiagnostics $script:lastServiceFailureDiagnostics)
+    }else{''}
+    throw "Timed out waiting for audit $Property='$Value'. Service=$state. Recent=$($recent -join ' -> ')$detail"
 }
 
 function Wait-JsonFile([string]$Path,[int]$Seconds){
@@ -297,11 +378,13 @@ $summary=[ordered]@{
     driverUnloaded=$false
     cleanupPassed=$false
     cleanupError=$null
+    serviceFailureDiagnosticsCaptured=$false
     passed=$false
 }
 $runtimeFailure=$null
 $cleanupFailure=$null
 $serviceCreated=$false
+$script:lastServiceFailureDiagnostics=$null
 
 try{
     Remove-StaleQualificationState
@@ -533,6 +616,13 @@ try{
     }
 
     try{
+        if($null -ne $script:lastServiceFailureDiagnostics){
+            $summary.serviceFailureDiagnosticsCaptured=$true
+            $script:lastServiceFailureDiagnostics |
+                ConvertTo-Json -Depth 8 |
+                Set-Content -LiteralPath (Join-Path $ResultsDirectory 'production-containment-e2e-service-diagnostics.json') -Encoding utf8
+        }
+
         $audit=@(Get-AuditEntries $startedUtc)
         ConvertTo-Json -InputObject $audit -Depth 20 |
             Set-Content -LiteralPath (Join-Path $ResultsDirectory 'production-containment-e2e-audit.json') -Encoding utf8

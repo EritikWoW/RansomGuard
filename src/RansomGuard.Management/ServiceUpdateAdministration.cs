@@ -391,12 +391,9 @@ public static partial class ServiceAdministration
 
     private static void RequireForwardVersion(string currentText, string targetText)
     {
-        if (!Version.TryParse(currentText, out var current) ||
-            !Version.TryParse(targetText, out var target))
-            throw new IOException("Installed or target version is not a comparable numeric product version.");
-        if (target <= current)
+        if (!ServiceUpdatePolicy.IsForwardVersion(currentText, targetText))
             throw new IOException(
-                $"Update replay/downgrade rejected. Installed={current}; target={target}. " +
+                $"Update replay/downgrade rejected. Installed={currentText}; target={targetText}. " +
                 "Use recovery/rollback evidence, not the updater, to restore an older image.");
     }
 

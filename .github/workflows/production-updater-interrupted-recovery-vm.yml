@@ -94,24 +94,24 @@ jobs:
           $service='.\src\RansomGuard.Service\RansomGuard.Service.csproj'
           $helper='.\qualification\RansomGuard.UpdaterQualification\RansomGuard.UpdaterQualification.csproj'
 
-          dotnet restore $service --locked-mode -r win-x64 -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj-updater-recovery-old-service\
+          dotnet restore $service --locked-mode -r win-x64 -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj\updater-recovery-old-service\
           if($LASTEXITCODE -ne 0){throw 'Old service restore failed.'}
-          dotnet publish $service -c Release -r win-x64 --self-contained true --no-restore -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj-updater-recovery-old-service\ -p:BaseOutputPath=bin-updater-recovery-old-service\ -o (Join-Path $old 'package')
+          dotnet publish $service -c Release -r win-x64 --self-contained true --no-restore -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj\updater-recovery-old-service\ -p:BaseOutputPath=bin\updater-recovery-old-service\ -o (Join-Path $old 'package')
           if($LASTEXITCODE -ne 0){throw 'Old service publish failed.'}
 
-          dotnet restore $helper --locked-mode -r win-x64 -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj-updater-recovery-old-helper\
+          dotnet restore $helper --locked-mode -r win-x64 -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj\updater-recovery-old-helper\
           if($LASTEXITCODE -ne 0){throw 'Old helper restore failed.'}
-          dotnet publish $helper -c Release -r win-x64 --self-contained true --no-restore -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj-updater-recovery-old-helper\ -p:BaseOutputPath=bin-updater-recovery-old-helper\ -o (Join-Path $old 'helper')
+          dotnet publish $helper -c Release -r win-x64 --self-contained true --no-restore -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj\updater-recovery-old-helper\ -p:BaseOutputPath=bin\updater-recovery-old-helper\ -o (Join-Path $old 'helper')
           if($LASTEXITCODE -ne 0){throw 'Old helper publish failed.'}
 
-          dotnet restore $service --locked-mode -r win-x64 -p:BaseIntermediateOutputPath=obj-updater-recovery-current-service\
+          dotnet restore $service --locked-mode -r win-x64 -p:BaseIntermediateOutputPath=obj\updater-recovery-current-service\
           if($LASTEXITCODE -ne 0){throw 'Current service restore failed.'}
-          dotnet publish $service -c Release -r win-x64 --self-contained true --no-restore -p:BaseIntermediateOutputPath=obj-updater-recovery-current-service\ -p:BaseOutputPath=bin-updater-recovery-current-service\ -o (Join-Path $current 'package')
+          dotnet publish $service -c Release -r win-x64 --self-contained true --no-restore -p:BaseIntermediateOutputPath=obj\updater-recovery-current-service\ -p:BaseOutputPath=bin\updater-recovery-current-service\ -o (Join-Path $current 'package')
           if($LASTEXITCODE -ne 0){throw 'Current service publish failed.'}
 
-          dotnet restore $helper --locked-mode -r win-x64 -p:BaseIntermediateOutputPath=obj-updater-recovery-current-helper\
+          dotnet restore $helper --locked-mode -r win-x64 -p:BaseIntermediateOutputPath=obj\updater-recovery-current-helper\
           if($LASTEXITCODE -ne 0){throw 'Current helper restore failed.'}
-          dotnet publish $helper -c Release -r win-x64 --self-contained true --no-restore -p:BaseIntermediateOutputPath=obj-updater-recovery-current-helper\ -p:BaseOutputPath=bin-updater-recovery-current-helper\ -o (Join-Path $current 'helper')
+          dotnet publish $helper -c Release -r win-x64 --self-contained true --no-restore -p:BaseIntermediateOutputPath=obj\updater-recovery-current-helper\ -p:BaseOutputPath=bin\updater-recovery-current-helper\ -o (Join-Path $current 'helper')
           if($LASTEXITCODE -ne 0){throw 'Current helper publish failed.'}
 
           $oldService=Join-Path $old 'package\RansomGuard.Service.exe'

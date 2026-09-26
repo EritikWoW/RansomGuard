@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -20,10 +21,19 @@ internal sealed class RecoveryReviewPane : UserControl
     };
     private readonly Button _refresh = new() { Margin = new Thickness(0, 0, 8, 0) };
     private readonly Button _plan = new() { Margin = new Thickness(0, 0, 8, 0) };
+    private readonly TextBox _outputRoot = new()
+    {
+        MinWidth = 420,
+        HorizontalAlignment = HorizontalAlignment.Stretch,
+        Margin = new Thickness(0, 4, 0, 8)
+    };
+    private readonly CheckBox _executeApproval = new() { Margin = new Thickness(0, 2, 0, 10) };
+    private readonly Button _execute = new() { Margin = new Thickness(0, 0, 8, 0) };
     private readonly Button _close = new();
     private readonly TextBlock _status = Text("", 13, "SecondaryBrush");
     private readonly StackPanel _sessionBody = new();
     private readonly StackPanel _planBody = new();
+    private readonly StackPanel _executionBody = new();
     private ProductionRecoverySessionSummary[] _sessionRows = [];
     private ProductionRecoveryPlanSummary? _currentPlan;
 
@@ -36,6 +46,9 @@ internal sealed class RecoveryReviewPane : UserControl
 
         _refresh.Content = L.T("RecoveryReview.Refresh");
         _plan.Content = L.T("RecoveryReview.BuildPlan");
+        _execute.Content = L.T("RecoveryReview.ExecuteCopyOut");
+        _executeApproval.Content = L.T("RecoveryReview.CopyOutApproval");
+        _outputRoot.ToolTip = L.T("RecoveryReview.OutputHelp");
         _close.Content = L.T("RecoveryReview.Close");
 
         var root = new Grid();
@@ -62,6 +75,7 @@ internal sealed class RecoveryReviewPane : UserControl
 
         body.Children.Add(_sessionBody);
         body.Children.Add(_planBody);
+        body.Children.Add(_executionBody);
 
         var scroll = new ScrollViewer
         {
@@ -84,12 +98,17 @@ internal sealed class RecoveryReviewPane : UserControl
         _sessions.SelectionChanged += (_, _) =>
         {
             _currentPlan = null;
+            ResetExecutionReview();
             RenderSelectedSession();
             RenderPlan();
             UpdateButtons();
         };
         _refresh.Click += async (_, _) => await LoadAsync();
         _plan.Click += async (_, _) => await BuildSelectedPlanAsync();
+        _execute.Click += async (_, _) => await ExecuteSelectedCopyOutAsync();
+        _outputRoot.TextChanged += (_, _) => UpdateButtons();
+        _executeApproval.Checked += (_, _) => UpdateButtons();
+        _executeApproval.Unchecked += (_, _) => UpdateButtons();
         _close.Click += (_, _) => CloseRequested?.Invoke(this, EventArgs.Empty);
         UpdateButtons();
     }
@@ -105,6 +124,7 @@ internal sealed class RecoveryReviewPane : UserControl
         await BusyAsync(async () =>
         {
             _currentPlan = null;
+            ResetExecutionReview();
             _sessionRows = await Task.Run(ProductionRecoveryAdministration.ListSessions);
             _sessions.ItemsSource = _sessionRows;
             _sessions.SelectedIndex = _sessionRows.Length == 0 ? -1 : 0;
@@ -130,9 +150,52 @@ internal sealed class RecoveryReviewPane : UserControl
         await BusyAsync(async () =>
         {
             _currentPlan = await Task.Run(() => ProductionRecoveryAdministration.BuildPlan(selected.SessionId));
+            ResetExecutionReview();
             _status.Text = L.T("RecoveryReview.PlanReady");
             RenderPlan();
         });
+    }
+
+    private async Task ExecuteSelectedCopyOutAsync()
+    {
+        if (_sessions.SelectedItem is not ProductionRecoverySessionSummary selected ||
+            _currentPlan is null ||
+            !_currentPlan.SessionId.Equals(selected.SessionId, StringComparison.Ordinal) ||
+            _currentPlan.ReadyCount <= 0)
+            return;
+
+        var outputRoot = _outputRoot.Text.Trim();
+        if (_executeApproval.IsChecked != true || !Path.IsPathFullyQualified(outputRoot))
+            return;
+
+        if (_preview)
+        {
+            _status.Text = L.T("RecoveryReview.PreviewExecution");
+            return;
+        }
+
+        var request = new ProductionRecoveryExecutionRequest(
+            selected.SessionId,
+            _currentPlan.PlanId,
+            _currentPlan.JournalEvidenceSha256,
+            selected.LastRecordSha256,
+            outputRoot);
+
+        await BusyAsync(async () =>
+        {
+            var manifest = await ProductionRecoveryExecutionAdministration.ExecuteCopyOutAsync(request);
+            _status.Text = manifest.Succeeded
+                ? L.F("RecoveryReview.CopyOutCompleted", manifest.OutputRoot)
+                : L.F("RecoveryReview.CopyOutPartial", manifest.OutputRoot);
+        });
+
+        // Every execution attempt invalidates the operator-reviewed UI state. The
+        // Management layer also revalidates the plan, but the UI never offers an
+        // implicit retry against a plan/evidence identity that may now be stale.
+        _currentPlan = null;
+        ResetExecutionReview();
+        RenderPlan();
+        UpdateButtons();
     }
 
     private async Task BusyAsync(Func<Task> work)
@@ -196,6 +259,7 @@ internal sealed class RecoveryReviewPane : UserControl
     private void RenderPlan()
     {
         _planBody.Children.Clear();
+        _executionBody.Children.Clear();
         if (_currentPlan is null) return;
 
         _planBody.Children.Add(Text(L.T("RecoveryReview.PlanTitle"), 16, "TextBrush", true));
@@ -238,6 +302,39 @@ internal sealed class RecoveryReviewPane : UserControl
                 L.T("RecoveryReview.Truncated"),
                 L.F("RecoveryReview.TruncatedHelp", _currentPlan.TotalActions, _currentPlan.Actions.Length),
                 "WarningBrush"));
+
+        RenderExecutionControls();
+    }
+
+    private void RenderExecutionControls()
+    {
+        if (_currentPlan is null) return;
+
+        _executionBody.Children.Add(Text(L.T("RecoveryReview.CopyOutTitle"), 16, "TextBrush", true));
+        _executionBody.Children.Add(Card(
+            L.T("RecoveryReview.CopyOutBoundary"),
+            L.T("RecoveryReview.CopyOutSafety"),
+            _currentPlan.ReadyCount > 0 ? "SuccessBrush" : "WarningBrush"));
+
+        if (_currentPlan.ReadyCount <= 0)
+        {
+            _executionBody.Children.Add(Card(
+                L.T("RecoveryReview.CopyOutUnavailable"),
+                L.T("RecoveryReview.CopyOutNoReady"),
+                "WarningBrush"));
+            return;
+        }
+
+        _executionBody.Children.Add(Text(L.T("RecoveryReview.OutputRoot"), 13, "TextBrush", true));
+        _executionBody.Children.Add(_outputRoot);
+        _executionBody.Children.Add(_executeApproval);
+        _executionBody.Children.Add(_execute);
+    }
+
+    private void ResetExecutionReview()
+    {
+        _outputRoot.Text = string.Empty;
+        _executeApproval.IsChecked = false;
     }
 
     private void UpdateButtons()
@@ -245,6 +342,15 @@ internal sealed class RecoveryReviewPane : UserControl
         _refresh.IsEnabled = !IsBusy;
         _plan.IsEnabled = !IsBusy &&
             _sessions.SelectedItem is ProductionRecoverySessionSummary { CanPlan: true };
+        var canExecute = !IsBusy &&
+            _currentPlan is { ReadyCount: > 0 } &&
+            _sessions.SelectedItem is ProductionRecoverySessionSummary { CanPlan: true } selected &&
+            _currentPlan.SessionId.Equals(selected.SessionId, StringComparison.Ordinal);
+        _outputRoot.IsEnabled = canExecute;
+        _executeApproval.IsEnabled = canExecute;
+        _execute.IsEnabled = canExecute &&
+            _executeApproval.IsChecked == true &&
+            Path.IsPathFullyQualified(_outputRoot.Text.Trim());
         _close.IsEnabled = !IsBusy;
     }
 
@@ -315,8 +421,9 @@ internal sealed class RecoveryReviewPane : UserControl
         ];
         _sessions.ItemsSource = _sessionRows;
         _sessions.SelectedIndex = scenario == "active" ? 1 : 0;
+        ResetExecutionReview();
 
-        _currentPlan = scenario == "plan"
+        _currentPlan = scenario is "plan" or "execute"
             ? new ProductionRecoveryPlanSummary(
                 "production-20260926-001",
                 "Completed",
@@ -337,6 +444,12 @@ internal sealed class RecoveryReviewPane : UserControl
                 L.T("RecoveryReview.PreviewSafety"))
             : null;
 
+        if (scenario == "execute")
+        {
+            _outputRoot.Text = @"C:\RansomGuard-Recovered\case-preview-001";
+            _executeApproval.IsChecked = true;
+        }
+
         _status.Text = L.T("RecoveryReview.Preview");
         RenderSelectedSession();
         RenderPlan();
@@ -355,8 +468,11 @@ internal sealed class RecoveryReviewPane : UserControl
             syntheticSessions = _sessionRows.Length,
             planVisible = _currentPlan is not null,
             nativeStateQueries = false,
-            mutationControls = false,
-            planEnabled = _plan.IsEnabled
+            nativeExecutionCalls = false,
+            sourceMutationControls = false,
+            copyOutControls = _currentPlan is { ReadyCount: > 0 },
+            planEnabled = _plan.IsEnabled,
+            executeEnabled = _execute.IsEnabled
         };
     }
 }

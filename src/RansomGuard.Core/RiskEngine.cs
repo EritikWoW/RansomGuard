@@ -9,7 +9,8 @@ public sealed class RiskEngine
         public int Writes, Renames, Deletes;
         public DateTime LastAlert=DateTime.MinValue, LastSeen, TruncatedUntil;
     }
-    private readonly Dictionary<ProcessKey,Window> _windows=new();
+    private readonly record struct WindowKey(int Pid,long CreationFileTimeUtc,ulong EtwUniqueProcessKey,long EtwStartFileTimeUtc);
+    private readonly Dictionary<WindowKey,Window> _windows=new();
     private readonly GuardSettings _s;
     private readonly HashSet<string> _extensions;
     private readonly FileMonitoringScope _scope;
@@ -25,15 +26,18 @@ public sealed class RiskEngine
     public RiskSignal? Evaluate(FileSignal input,bool labFastPath=false)
     {
         var path=WinPaths.Normalize(input.Path);
-        if (path is null || input.Kind == FileKind.Open || input.Process.CreationFileTimeUtc<=0) return null;
+        if (path is null || input.Kind == FileKind.Open) return null;
+        var windowKey=GetWindowKey(input);
+        if(windowKey is null)return null;
         var canary=_scope.IsCanaryNormalized(path);
         if (!canary && (!_scope.IsUnderRootNormalized(path) || !_extensions.Contains(WinPaths.Extension(path)))) return null;
         var e=input with {Path=path, CanaryCandidate=canary};
-        if (!_windows.TryGetValue(e.Process,out var w))
+        var key=windowKey.Value;
+        if (!_windows.TryGetValue(key,out var w))
         {
             if (_windows.Count >= _s.MaxProcesses)
             { var old=_windows.MinBy(p=>p.Value.LastSeen).Key; _windows.Remove(old); WindowEvictions++; }
-            _windows[e.Process]=w=new Window();
+            _windows[key]=w=new Window();
         }
         var cutoff=e.ReceivedUtc.AddSeconds(-_s.WindowSeconds);
         while(w.Events.Count>0 && w.Events.Peek().ReceivedUtc<cutoff) Remove(w);
@@ -57,7 +61,20 @@ public sealed class RiskEngine
         w.LastAlert=e.ReceivedUtc;
         return new(e.Process,e.ProcessName,e.ImagePath,e.ReceivedUtc,e.EventUtc,
             (e.ReceivedUtc-e.EventUtc).TotalMilliseconds,score,w.Writes,w.Renames,w.Deletes,w.Paths.Count,
-            canary,w.TruncatedUntil>e.ReceivedUtc,reasons.ToArray(),w.Events.TakeLast(_s.MaxEvidenceEvents).ToArray());
+            canary,w.TruncatedUntil>e.ReceivedUtc,reasons.ToArray(),w.Events.TakeLast(_s.MaxEvidenceEvents).ToArray())
+        {
+            ProcessIdentityExact=e.ProcessIdentityExact,
+            EtwUniqueProcessKey=e.EtwUniqueProcessKey,
+            EtwProcessStartUtc=e.EtwProcessStartUtc
+        };
+    }
+    private static WindowKey? GetWindowKey(FileSignal input)
+    {
+        if(input.ProcessIdentityExact && input.Process.CreationFileTimeUtc>0)
+            return new(input.Process.Pid,input.Process.CreationFileTimeUtc,0,0);
+        if(!input.ProcessIdentityExact && input.EtwUniqueProcessKey!=0 && input.EtwProcessStartUtc is DateTime start)
+            return new(input.Process.Pid,0,input.EtwUniqueProcessKey,start.ToFileTimeUtc());
+        return null;
     }
     private static void Remove(Window w)
     {

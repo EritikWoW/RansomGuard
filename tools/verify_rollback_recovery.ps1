@@ -2,6 +2,7 @@ $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
 $planner=Join-Path $root 'src\RansomGuard.Rollback\RollbackRecoveryPlan.cs'
 $executor=Join-Path $root 'src\RansomGuard.Rollback\RollbackRecoveryExecutor.cs'
+$range=Join-Path $root 'src\RansomGuard.Rollback\RangeRollbackStore.cs'
 $restart=Join-Path $root 'src\RansomGuard.Rollback\RestartReconciliationStore.cs'
 $truncate=Join-Path $root 'src\RansomGuard.Rollback\TruncateOperationStore.cs'
 $delete=Join-Path $root 'src\RansomGuard.Rollback\DeleteOperationStore.cs'
@@ -11,7 +12,7 @@ $build=Join-Path $root 'build_windows.ps1'
 $launcher=Join-Path $root 'rollback_recovery.cmd'
 $tests=Join-Path $root 'tests\RansomGuard.Rollback.Tests\Program.cs'
 
-foreach($path in @($planner,$executor,$restart,$truncate,$delete,$cli,$project,$build,$launcher,$tests)){
+foreach($path in @($planner,$executor,$range,$restart,$truncate,$delete,$cli,$project,$build,$launcher,$tests)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Verified rollback recovery source missing: $path"}
 }
 
@@ -132,10 +133,19 @@ if($deleteText -match '\b(File\.Delete|Directory\.Delete|File\.Move|Directory\.M
 
 $executorText=Get-Content -LiteralPath $executor -Raw
 foreach($required in @(
-    'RollbackRecoveryPlanner.Build(repositoryFull, requestedPlan.SessionId)',
+    'RollbackRecoveryPlanner.Build(',
+    'createIfMissing: false, verifyRepositoryAll: false',
+    'new RollbackRepository(repositoryFull, createIfMissing: false)',
+    'repository.VerifySession(current.SessionId)',
+    'new RangeRollbackStore(rangeRoot, createIfMissing: false)',
     'ValidateRequestedPlan(requestedPlan, current, repositoryFull)',
     'current.Actions.Where(x => x.State == RecoveryActionState.Ready)',
+    'ComputeExpectedRecoveryAsync',
     'RestoreToNewCopyAsync',
+    'ExpectedLength',
+    'ExpectedSha256',
+    'Recovered copy length mismatch',
+    'Recovered copy SHA-256 does not match the pre-output evidence expectation',
     'Recovery output root already exists',
     'Recovery output root must remain outside the rollback repository',
     'Recovery plan is stale or does not match the currently validated rollback evidence',
@@ -145,6 +155,22 @@ foreach($required in @(
 )){
     if($executorText -notmatch [regex]::Escape($required)){throw "Recovery executor invariant missing: $required"}
 }
+$rangeText=Get-Content -LiteralPath $range -Raw
+foreach($required in @(
+    'ComputeExpectedRecoveryAsync',
+    'RangeRollbackRecoveryExpectation',
+    'Recovered range temp length mismatch',
+    'Recovered range temp SHA-256 does not match the pre-output expectation',
+    'File.Move(temp, destination)'
+)){
+    if($rangeText -notmatch [regex]::Escape($required)){throw "Range recovery publication invariant missing: $required"}
+}
+$rangeVerifyPos=$rangeText.IndexOf('Recovered range temp SHA-256 does not match the pre-output expectation')
+$rangePublishPos=$rangeText.IndexOf('File.Move(temp, destination)')
+if($rangeVerifyPos -lt 0 -or $rangePublishPos -lt 0 -or $rangeVerifyPos -gt $rangePublishPos){
+    throw 'Range recovery must verify the temp SHA-256 before final copy publication.'
+}
+
 if($executorText -match [regex]::Escape('requestedPlan.Actions')){
     throw 'Recovery executor must never execute caller-supplied plan actions; it must execute the freshly rebuilt current plan.'
 }
@@ -236,7 +262,13 @@ foreach($required in @(
     'authoritative DELETE plus observed pathname absence is topology review, never automatic recreation',
     'lost DELETE disposition completion with restart absence evidence remains review-only',
     'cleanup-only DELETE evidence remains blocked until pathname topology is proven',
-    'stale recovery plan is rejected before any output is created'
+    'stale recovery plan is rejected before any output is created',
+    'existing recovery output root refuses overwrite',
+    'reparse recovery destination is refused',
+    'range recovery source drift is rejected before final copy publication',
+    'copy-out executor leaves damaged live sources untouched',
+    'recovery output length and SHA-256 match evidence expectations',
+    'partial recovery failure is reported without undoing completed copies'
 )){
     if($testText -notmatch [regex]::Escape($required)){throw "Crash reconciliation recovery test invariant missing: $required"}
 }

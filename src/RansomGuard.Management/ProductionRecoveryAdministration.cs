@@ -146,7 +146,7 @@ public static class ProductionRecoveryAdministration
         value.Length <= 80 &&
         value.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
 
-    private static void ValidateProductionSessionId(string sessionId)
+    internal static void ValidateProductionSessionId(string sessionId)
     {
         if (!IsProductionSessionId(sessionId))
             throw new ArgumentException("A canonical production rollback session id is required.", nameof(sessionId));
@@ -185,7 +185,7 @@ public static class ProductionRecoveryAdministration
             note);
     }
 
-    private static string? ValidateStateAndGetRollbackRoot(bool allowMissing)
+    internal static string? ValidateStateAndGetRollbackRoot(bool allowMissing)
     {
         var state = StateStoreAdministration.Inspect();
         if (!state.Exists)
@@ -218,7 +218,7 @@ public static class ProductionRecoveryAdministration
         return rollbackRoot;
     }
 
-    private static void EnsureIdle()
+    internal static void EnsureIdle()
     {
         var status = ServiceAdministration.Query();
         if (!status.QuerySucceeded)

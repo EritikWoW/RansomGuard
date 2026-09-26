@@ -1,4 +1,4 @@
-# Verified rollback recovery — current through v0.7.19.0
+# Verified rollback recovery — current through v0.8.7
 
 RansomGuard 0.7.16 introduced deterministic recovery planning for Engineering LAB rollback sessions. 0.7.19 extends that planner with conservative review-only use of durable restart reconciliation evidence.
 
@@ -121,7 +121,31 @@ The executor contains no automatic topology mutation path and does not expose de
 
 ## Current limitations
 
-0.7.19 still does not provide:
+0.8.7 adds a separate production administration boundary around the same verified copy-out executor.
+
+## Production copy-out boundary (0.8.7)
+
+Production execution is available only through the short-lived UAC-elevated administration surface. It is not an ordinary `RansomGuard.ReadOnly.v2` command.
+
+Before output creation, production execution requires:
+
+- a canonical `production-*` terminal session;
+- Administrator/UAC elevation;
+- the RansomGuard service and audit engine to be stopped;
+- the exact operator-reviewed `PlanId`;
+- the exact journal evidence SHA-256;
+- the exact lifecycle-record SHA-256;
+- a local, absolute, canonical output path that does not already exist;
+- the output path to remain outside RansomGuard private state and source evidence directories.
+
+The plan is rebuilt from read-only stores immediately before execution and again after execution. Lifecycle evidence is revalidated before and after copy-out.
+
+Only `Ready` full-preimage/range-COW copy actions can execute. Every emitted file records its evidence record, expected length/SHA-256, and actual length/SHA-256. Range-COW computes the expected digest before output creation from the validated live base plus committed original blocks, so source drift during copy-out fails verification.
+
+The output root includes `recovery-plan.json`, `recovery-execution.json`, and `production-recovery-execution.json`. Partial failures remain explicit; already completed copies are not represented as rolled back.
+
+0.8.7 still does not provide:
+
 
 - automatic directory-tree rollback;
 - automatic removal of incident-created paths;

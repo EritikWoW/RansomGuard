@@ -29,7 +29,8 @@ public static class RollbackRecoveryExecutor
             throw new ArgumentException("Recovery output root is required.", nameof(outputRoot));
 
         var repositoryFull = Path.GetFullPath(repositoryRoot);
-        var current = RollbackRecoveryPlanner.Build(repositoryFull, requestedPlan.SessionId);
+        var current = RollbackRecoveryPlanner.Build(
+            repositoryFull, requestedPlan.SessionId, createIfMissing: false, verifyRepositoryAll: false);
         ValidateRequestedPlan(requestedPlan, current, repositoryFull);
 
         var outputFull = Path.GetFullPath(outputRoot);
@@ -45,14 +46,14 @@ public static class RollbackRecoveryExecutor
         var planPath = Path.Combine(outputFull, "recovery-plan.json");
         WriteNewJson(planPath, current);
 
-        var repository = new RollbackRepository(repositoryFull);
-        repository.VerifyAll();
+        var repository = new RollbackRepository(repositoryFull, createIfMissing: false);
+        repository.VerifySession(current.SessionId);
         var store = repository.OpenSession(current.SessionId);
         store.VerifyAll();
 
         var rangeRoot = Path.Combine(store.Root, "write-cow");
         RangeRollbackStore? range = Directory.Exists(rangeRoot)
-            ? new RangeRollbackStore(rangeRoot)
+            ? new RangeRollbackStore(rangeRoot, createIfMissing: false)
             : null;
         range?.VerifyAll();
 
@@ -69,6 +70,8 @@ public static class RollbackRecoveryExecutor
             Directory.CreateDirectory(actionDirectory);
             RejectReparse(actionDirectory);
 
+            var expectedLength = 0L;
+            var expectedSha256 = string.Empty;
             try
             {
                 string recoveredPath;
@@ -85,6 +88,8 @@ public static class RollbackRecoveryExecutor
                                 StringComparison.OrdinalIgnoreCase))
                             ?? throw new InvalidDataException(
                                 "Recovery action no longer matches a committed full pre-image.");
+                        expectedLength = capture.OriginalLength;
+                        expectedSha256 = capture.OriginalSha256;
                         recoveredPath = await store.RestoreToNewCopyAsync(
                             capture, actionDirectory, cancellationToken).ConfigureAwait(false);
                         break;
@@ -103,9 +108,15 @@ public static class RollbackRecoveryExecutor
                                 StringComparison.OrdinalIgnoreCase))
                             ?? throw new InvalidDataException(
                                 "Recovery action no longer matches a committed range-COW baseline.");
-                        _ = baseline;
+                        var expectation = await range.ComputeExpectedRecoveryAsync(
+                            action.PrimaryPath, cancellationToken).ConfigureAwait(false);
+                        if (expectation.ExpectedLength != baseline.OriginalLength)
+                            throw new InvalidDataException(
+                                "Range recovery expectation length does not match the committed baseline.");
+                        expectedLength = expectation.ExpectedLength;
+                        expectedSha256 = expectation.ExpectedSha256;
                         recoveredPath = await range.RestoreToNewCopyAsync(
-                            action.PrimaryPath, actionDirectory, cancellationToken).ConfigureAwait(false);
+                            action.PrimaryPath, actionDirectory, expectation, cancellationToken).ConfigureAwait(false);
                         break;
                     }
 
@@ -116,12 +127,22 @@ public static class RollbackRecoveryExecutor
 
                 var info = new FileInfo(recoveredPath);
                 var sha = await HashFileAsync(recoveredPath, cancellationToken).ConfigureAwait(false);
+                if (info.Length != expectedLength)
+                    throw new InvalidDataException(
+                        $"Recovered copy length mismatch. expected={expectedLength} actual={info.Length}");
+                if (!sha.Equals(expectedSha256, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException(
+                        "Recovered copy SHA-256 does not match the pre-output evidence expectation.");
+
                 results.Add(new RollbackRecoveryExecutionItem(
                     action.Index,
                     action.Kind,
                     action.PrimaryPath,
+                    action.EvidenceRecordSha256,
                     recoveredPath,
                     RollbackRecoveryExecutionState.Succeeded,
+                    expectedLength,
+                    expectedSha256,
                     info.Length,
                     sha,
                     string.Empty));
@@ -133,8 +154,11 @@ public static class RollbackRecoveryExecutor
                     action.Index,
                     action.Kind,
                     action.PrimaryPath,
+                    action.EvidenceRecordSha256,
                     string.Empty,
                     RollbackRecoveryExecutionState.Failed,
+                    expectedLength,
+                    expectedSha256,
                     0,
                     string.Empty,
                     ex.Message));
@@ -143,7 +167,7 @@ public static class RollbackRecoveryExecutor
         }
 
         var report = new RollbackRecoveryExecutionReport(
-            Schema: 1,
+            Schema: 2,
             PlanId: current.PlanId,
             SessionId: current.SessionId,
             RepositoryRoot: repositoryFull,
@@ -248,8 +272,11 @@ public sealed record RollbackRecoveryExecutionItem(
     int ActionIndex,
     RecoveryActionKind Kind,
     string SourcePath,
+    string EvidenceRecordSha256,
     string RecoveredPath,
     RollbackRecoveryExecutionState State,
+    long ExpectedLength,
+    string ExpectedSha256,
     long RecoveredLength,
     string RecoveredSha256,
     string Error);

@@ -79,17 +79,26 @@ function Get-UpdateRecord([string]$TransactionId){
     return $matches[0]
 }
 function Get-AuditEntries([DateTimeOffset]$SinceUtc){
-    $path=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)) 'RansomGuardV03\audit.jsonl'
-    if(-not(Test-Path -LiteralPath $path -PathType Leaf)){return @()}
+    $root=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)) 'RansomGuardV03'
+    $paths=@(
+        (Join-Path $root 'audit.jsonl'),
+        (Join-Path $root 'audit.1.jsonl'),
+        (Join-Path $root 'audit.2.jsonl'),
+        (Join-Path $root 'audit.3.jsonl')
+    )
     $items=@()
-    foreach($line in Get-Content -LiteralPath $path -ErrorAction SilentlyContinue){
-        if([string]::IsNullOrWhiteSpace($line)){continue}
-        try{
-            $item=$line | ConvertFrom-Json
-            if($item.PSObject.Properties['Utc'] -and [DateTimeOffset]::Parse([string]$item.Utc) -ge $SinceUtc){$items += $item}
-        }catch{}
+    foreach($path in $paths){
+        if(-not(Test-Path -LiteralPath $path -PathType Leaf)){continue}
+        Assert-NoReparsePath $path 'Audit evidence'
+        foreach($line in Get-Content -LiteralPath $path -ErrorAction SilentlyContinue){
+            if([string]::IsNullOrWhiteSpace($line)){continue}
+            try{
+                $item=$line | ConvertFrom-Json
+                if($item.PSObject.Properties['Utc'] -and [DateTimeOffset]::Parse([string]$item.Utc) -ge $SinceUtc){$items += $item}
+            }catch{}
+        }
     }
-    return $items
+    return @($items | Sort-Object {[DateTimeOffset]::Parse([string]$_.Utc)})
 }
 
 Assert-Administrator

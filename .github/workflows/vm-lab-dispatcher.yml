@@ -279,7 +279,8 @@ jobs:
             'RansomGuard Driver Verifier CLEAR recovery',
             'RansomGuard frozen immutable-package Driver Verifier',
             'RansomGuard frozen service topology qualification',
-            'RansomGuard frozen mapped adversarial qualification'
+            'RansomGuard frozen mapped adversarial qualification',
+            'RansomGuard frozen ProductionGate mutation matrix'
           )
           if([string]$run.name -notin $allowed){
             throw "Run $env:TARGET_RUN_ID is not an allowed LAB workflow."
@@ -290,7 +291,7 @@ jobs:
           if(-not [string]::Equals([string]$run.repository.full_name,$env:GH_REPO,[StringComparison]::OrdinalIgnoreCase)){
             throw "Run $env:TARGET_RUN_ID does not belong to $env:GH_REPO."
           }
-          Write-Host "Validated stale Driver Verifier run $env:TARGET_RUN_ID for cancellation."
+          Write-Host "Validated stale LAB run $env:TARGET_RUN_ID for cancellation."
 
       - name: Force-cancel stale verifier run
         shell: pwsh
@@ -302,7 +303,7 @@ jobs:
           $ErrorActionPreference='Stop'
           gh api --method POST "repos/$env:GH_REPO/actions/runs/$env:TARGET_RUN_ID/force-cancel" --silent
           if($LASTEXITCODE -ne 0){throw "Unable to force-cancel Driver Verifier run $env:TARGET_RUN_ID."}
-          Write-Host "Force-cancelled stale Driver Verifier run $env:TARGET_RUN_ID."
+          Write-Host "Force-cancelled stale LAB run $env:TARGET_RUN_ID."
 
   dispatch-verifier-clear-recovery:
     if: >-

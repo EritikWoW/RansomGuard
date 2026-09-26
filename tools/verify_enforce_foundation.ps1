@@ -12,6 +12,7 @@ $runtimePath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\ProtectionRuntime.c
 $containmentAuthorizationPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\ContainmentAuthorization.cs'
 $containmentActuationPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\ContainmentActuation.cs'
 $containmentActuationLedgerPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\ContainmentActuationLedger.cs'
+$containmentSuspendCoordinatorPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\ContainmentSuspendCoordinator.cs'
 $localApiPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\LocalApi.cs'
 $serviceRuntimePath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\RuntimeState.cs'
 $guardWorkerPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\GuardWorker.cs'
@@ -21,7 +22,7 @@ $lifecyclePath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\ProductionProt
 $appSettingsPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\appsettings.json'
 $driverPath=Join-Path $RepositoryRoot 'driver\RansomGuard.Minifilter\RansomGuardMinifilter.c'
 $buildPath=Join-Path $RepositoryRoot 'build_windows.ps1'
-foreach($path in @($settingsPath,$runtimePath,$containmentAuthorizationPath,$containmentActuationPath,$containmentActuationLedgerPath,$localApiPath,$serviceRuntimePath,$guardWorkerPath,$programPath,$bootstrapPath,$lifecyclePath,$appSettingsPath,$driverPath,$buildPath)){
+foreach($path in @($settingsPath,$runtimePath,$containmentAuthorizationPath,$containmentActuationPath,$containmentActuationLedgerPath,$containmentSuspendCoordinatorPath,$localApiPath,$serviceRuntimePath,$guardWorkerPath,$programPath,$bootstrapPath,$lifecyclePath,$appSettingsPath,$driverPath,$buildPath)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Production Enforce lifecycle file missing: $path"}
 }
 
@@ -30,6 +31,7 @@ $runtime=Get-Content -LiteralPath $runtimePath -Raw
 $containmentAuthorization=Get-Content -LiteralPath $containmentAuthorizationPath -Raw
 $containmentActuation=Get-Content -LiteralPath $containmentActuationPath -Raw
 $containmentActuationLedger=Get-Content -LiteralPath $containmentActuationLedgerPath -Raw
+$containmentSuspendCoordinator=Get-Content -LiteralPath $containmentSuspendCoordinatorPath -Raw
 $localApi=Get-Content -LiteralPath $localApiPath -Raw
 $serviceRuntime=Get-Content -LiteralPath $serviceRuntimePath -Raw
 $guardWorker=Get-Content -LiteralPath $guardWorkerPath -Raw
@@ -420,6 +422,41 @@ foreach($forbidden in @(
     if($containmentActuationLedger -match [regex]::Escape($forbidden)){
         throw "Containment actuation ledger must remain non-actuating evidence/state code: $forbidden"
     }
+}
+
+foreach($required in @(
+    'ContainmentSuspendCoordinator',
+    'IContainmentSuspendPlatform',
+    'IContainmentSuspendSession',
+    'OpenExact',
+    'RecordSuspendOwned',
+    'RecordSuspendCompleted',
+    'RecordFailed',
+    'RecordResumeOwned',
+    'RecordResumeCompleted',
+    'ResumeOutstanding',
+    'ThreadSetNotStable',
+    'ActuationRevalidationDenied',
+    'OwnedRollbackIncomplete'
+)){
+    if($containmentSuspendCoordinator -notmatch [regex]::Escape($required)){throw "Containment suspension coordinator invariant missing: $required"}
+}
+foreach($forbidden in @(
+    'DllImport',
+    'OpenProcess',
+    'OpenThread',
+    'NtSuspendProcess',
+    'NtResumeProcess',
+    'SuspendThread',
+    'ResumeThread',
+    'TerminateProcess'
+)){
+    if($containmentSuspendCoordinator -match [regex]::Escape($forbidden)){
+        throw "Platform-neutral containment coordinator must not embed Windows actuation primitives: $forbidden"
+    }
+}
+if($guardWorker -match [regex]::Escape('ContainmentSuspendCoordinator')){
+    throw 'Ordinary GuardWorker must not reach the production suspension coordinator before VM qualification.'
 }
 
 foreach($forbidden in @(

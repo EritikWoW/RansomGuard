@@ -14,7 +14,6 @@ jobs:
   dispatch-runtime-vm:
     if: >-
       github.event_name == 'issue_comment' &&
-      github.event.issue.number == 59 &&
       github.event.comment.user.login == github.repository_owner &&
       startsWith(github.event.comment.body, '/run-runtime-vm ')
     runs-on: ubuntu-latest
@@ -90,7 +89,6 @@ jobs:
   dispatch-verifier-vm:
     if: >-
       github.event_name == 'issue_comment' &&
-      github.event.issue.number == 59 &&
       github.event.comment.user.login == github.repository_owner &&
       startsWith(github.event.comment.body, '/run-verifier-vm ')
     runs-on: ubuntu-latest
@@ -173,7 +171,6 @@ jobs:
   dispatch-verifier-reboot:
     if: >-
       github.event_name == 'issue_comment' &&
-      github.event.issue.number == 59 &&
       github.event.comment.user.login == github.repository_owner &&
       startsWith(github.event.comment.body, '/reboot-verifier-vm ')
     runs-on: ubuntu-latest
@@ -234,7 +231,6 @@ jobs:
   cancel-verifier-run:
     if: >-
       github.event_name == 'issue_comment' &&
-      github.event.issue.number == 59 &&
       github.event.comment.user.login == github.repository_owner &&
       startsWith(github.event.comment.body, '/cancel-verifier-run ')
     runs-on: ubuntu-latest
@@ -308,7 +304,6 @@ jobs:
   dispatch-verifier-clear-recovery:
     if: >-
       github.event_name == 'issue_comment' &&
-      github.event.issue.number == 59 &&
       github.event.comment.user.login == github.repository_owner &&
       startsWith(github.event.comment.body, '/run-verifier-clear-recovery ')
     runs-on: ubuntu-latest
@@ -372,7 +367,6 @@ jobs:
   dispatch-frozen-candidate-provenance:
     if: >-
       github.event_name == 'issue_comment' &&
-      github.event.issue.number == 59 &&
       github.event.comment.user.login == github.repository_owner &&
       startsWith(github.event.comment.body, '/run-frozen-candidate-provenance ')
     runs-on: ubuntu-latest
@@ -436,7 +430,6 @@ jobs:
   dispatch-frozen-production-mutation:
     if: >-
       github.event_name == 'issue_comment' &&
-      github.event.issue.number == 59 &&
       github.event.comment.user.login == github.repository_owner &&
       startsWith(github.event.comment.body, '/run-frozen-boundary-proof ')
     runs-on: ubuntu-latest
@@ -514,7 +507,6 @@ jobs:
   dispatch-frozen-immutable-runtime:
     if: >-
       github.event_name == 'issue_comment' &&
-      github.event.issue.number == 59 &&
       github.event.comment.user.login == github.repository_owner &&
       startsWith(github.event.comment.body, '/run-frozen-runtime ')
     runs-on: ubuntu-latest
@@ -584,7 +576,6 @@ jobs:
   dispatch-frozen-immutable-verifier:
     if: >-
       github.event_name == 'issue_comment' &&
-      github.event.issue.number == 59 &&
       github.event.comment.user.login == github.repository_owner &&
       startsWith(github.event.comment.body, '/run-frozen-verifier-vm ')
     runs-on: ubuntu-latest
@@ -659,7 +650,6 @@ jobs:
   dispatch-frozen-verifier-reboot:
     if: >-
       github.event_name == 'issue_comment' &&
-      github.event.issue.number == 59 &&
       github.event.comment.user.login == github.repository_owner &&
       startsWith(github.event.comment.body, '/reboot-frozen-verifier-vm ')
     runs-on: ubuntu-latest
@@ -714,7 +704,6 @@ jobs:
   dispatch-frozen-release-governance:
     if: >-
       github.event_name == 'issue_comment' &&
-      github.event.issue.number == 59 &&
       github.event.comment.user.login == github.repository_owner &&
       startsWith(github.event.comment.body, '/run-frozen-release-governance ')
     runs-on: ubuntu-latest
@@ -778,7 +767,6 @@ jobs:
   dispatch-frozen-service-topology:
     if: >-
       github.event_name == 'issue_comment' &&
-      github.event.issue.number == 59 &&
       github.event.comment.user.login == github.repository_owner &&
       startsWith(github.event.comment.body, '/run-frozen-service-topology ')
     runs-on: ubuntu-latest
@@ -856,7 +844,6 @@ jobs:
   dispatch-frozen-mapped-adversarial:
     if: >-
       github.event_name == 'issue_comment' &&
-      github.event.issue.number == 59 &&
       github.event.comment.user.login == github.repository_owner &&
       startsWith(github.event.comment.body, '/run-frozen-mapped-adversarial ')
     runs-on: ubuntu-latest
@@ -934,7 +921,6 @@ jobs:
   dispatch-release-identity-preflight:
     if: >-
       github.event_name == 'issue_comment' &&
-      github.event.issue.number == 59 &&
       github.event.comment.user.login == github.repository_owner &&
       startsWith(github.event.comment.body, '/run-release-identity-preflight ')
     runs-on: ubuntu-latest

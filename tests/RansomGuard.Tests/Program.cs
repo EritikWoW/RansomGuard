@@ -142,6 +142,122 @@ rejected=false;try{
 }catch(InvalidOperationException){rejected=true;}
 Check(rejected,"foundation cannot publish automatic containment even in Protected state");
 
+var containmentProtectedMachine=new ProtectionStateMachine("Enforce");
+containmentProtectedMachine.MarkRollbackReady();
+containmentProtectedMachine.BeginKernelStartup();
+containmentProtectedMachine.MarkKernelConnected();
+containmentProtectedMachine.MarkProtected();
+var containmentProtected=containmentProtectedMachine.Snapshot();
+
+ContainmentAuthorizationInput ContainmentInput(
+    bool configured=true,
+    ProtectionStatusDto? protection=null,
+    string monitorState="Running",
+    long etwLoss=0,
+    long monitorQueueDropped=0,
+    long incidentQueueDropped=0,
+    long windowEvictions=0,
+    long truncatedWindows=0,
+    bool incidentPersisted=true,
+    bool processIdentityVerified=true,
+    bool freshImageIdentityVerified=true,
+    bool protectedScopeResolved=true,
+    bool isLab=false,
+    bool scopedTrustApplies=false,
+    int riskScore=200,
+    int riskThreshold=85,
+    bool confirmedCanary=false)
+    =>new(
+        configured,
+        protection??containmentProtected,
+        monitorState,
+        etwLoss,
+        monitorQueueDropped,
+        incidentQueueDropped,
+        windowEvictions,
+        truncatedWindows,
+        incidentPersisted,
+        processIdentityVerified,
+        freshImageIdentityVerified,
+        protectedScopeResolved,
+        isLab,
+        scopedTrustApplies,
+        riskScore,
+        riskThreshold,
+        confirmedCanary);
+
+var containmentDecision=ContainmentAuthorizationPolicy.Evaluate(ContainmentInput());
+Check(containmentDecision.Eligible&&containmentDecision.State=="Eligible"&&containmentDecision.Reasons.Length==0,
+    "containment policy can identify a fully evidenced eligible decision without actuating");
+
+containmentDecision=ContainmentAuthorizationPolicy.Evaluate(ContainmentInput(configured:false));
+Check(!containmentDecision.Eligible&&containmentDecision.State=="DisabledByConfiguration"&&
+      containmentDecision.Reasons.Contains("DisabledByConfiguration"),
+    "containment policy preserves explicit configuration disable");
+
+var containmentAudit=new ProtectionStateMachine("Audit").Snapshot();
+containmentDecision=ContainmentAuthorizationPolicy.Evaluate(ContainmentInput(protection:containmentAudit));
+Check(!containmentDecision.Eligible&&containmentDecision.Reasons.Contains("RequestedModeNotEnforce")&&
+      containmentDecision.Reasons.Contains("ProtectionStateNotProtected"),
+    "Audit protection state cannot authorize production containment");
+
+var containmentDegradedMachine=new ProtectionStateMachine("Enforce");
+containmentDegradedMachine.MarkRollbackReady();
+containmentDegradedMachine.BeginKernelStartup();
+containmentDegradedMachine.MarkKernelConnected();
+containmentDegradedMachine.MarkProtected();
+containmentDegradedMachine.MarkDegraded("test");
+containmentDecision=ContainmentAuthorizationPolicy.Evaluate(ContainmentInput(protection:containmentDegradedMachine.Snapshot()));
+Check(!containmentDecision.Eligible&&containmentDecision.Reasons.Contains("ProtectionStateNotProtected")&&
+      containmentDecision.Reasons.Contains("KernelChannelNotConnected"),
+    "DegradedProtected cannot authorize detector-driven containment");
+
+containmentDecision=ContainmentAuthorizationPolicy.Evaluate(ContainmentInput(
+    etwLoss:1,monitorQueueDropped:1,incidentQueueDropped:1,windowEvictions:1,truncatedWindows:1));
+Check(!containmentDecision.Eligible&&
+      containmentDecision.Reasons.Contains("EtwLossObserved")&&
+      containmentDecision.Reasons.Contains("MonitorQueueLossObserved")&&
+      containmentDecision.Reasons.Contains("IncidentQueueLossObserved")&&
+      containmentDecision.Reasons.Contains("WindowEvictionsObserved")&&
+      containmentDecision.Reasons.Contains("TruncatedWindowsObserved"),
+    "telemetry loss categories independently veto containment authorization");
+
+containmentDecision=ContainmentAuthorizationPolicy.Evaluate(ContainmentInput(
+    incidentPersisted:false,processIdentityVerified:false,freshImageIdentityVerified:false,protectedScopeResolved:false));
+Check(!containmentDecision.Eligible&&
+      containmentDecision.Reasons.Contains("IncidentNotPersisted")&&
+      containmentDecision.Reasons.Contains("ProcessIdentityNotVerified")&&
+      containmentDecision.Reasons.Contains("FreshImageIdentityNotVerified")&&
+      containmentDecision.Reasons.Contains("ProtectedScopeUnresolved"),
+    "missing durable identity/scope evidence fails containment authorization closed");
+
+containmentDecision=ContainmentAuthorizationPolicy.Evaluate(ContainmentInput(isLab:true));
+Check(!containmentDecision.Eligible&&containmentDecision.Reasons.Contains("LabIdentityNotEligible"),
+    "LAB identity is never eligible for production containment authorization");
+
+containmentDecision=ContainmentAuthorizationPolicy.Evaluate(ContainmentInput(scopedTrustApplies:true));
+Check(!containmentDecision.Eligible&&containmentDecision.Reasons.Contains("ScopedTrustVeto"),
+    "scoped trust may veto but never silently authorize containment");
+
+containmentDecision=ContainmentAuthorizationPolicy.Evaluate(ContainmentInput(riskScore:40,riskThreshold:85));
+Check(!containmentDecision.Eligible&&containmentDecision.Reasons.Contains("RiskBelowAuthorizationThreshold"),
+    "below-threshold incident is not containment eligible");
+
+containmentDecision=ContainmentAuthorizationPolicy.Evaluate(ContainmentInput(riskScore:40,riskThreshold:85,confirmedCanary:true));
+Check(containmentDecision.Eligible,
+    "confirmed canary evidence can satisfy the risk criterion when all other authorization evidence is healthy");
+
+containmentDecision=ContainmentAuthorizationPolicy.Evaluate(ContainmentInput(
+    protection:containmentProtected with{KernelChannelConnected=false}));
+Check(!containmentDecision.Eligible&&containmentDecision.Reasons.Contains("ProtectionSnapshotInvalid"),
+    "internally inconsistent protection snapshot fails containment authorization closed");
+
+containmentDecision=ContainmentAuthorizationPolicy.Evaluate(
+    ContainmentInput() with { Protection = null! });
+Check(!containmentDecision.Eligible&&containmentDecision.Reasons.Contains("ProtectionSnapshotInvalid"),
+    "missing protection snapshot fails containment authorization closed without throwing");
+
+
 var productionHash=new string('A',64);
 var productionPackage=new ProtectionPackageDescriptor(
     1,"ProductionProtection","0.8.3.0",18,"RansomGuard","385201",

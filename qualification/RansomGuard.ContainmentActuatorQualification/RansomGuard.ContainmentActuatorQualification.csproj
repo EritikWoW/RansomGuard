@@ -10,6 +10,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/RansomGuard.Core/RansomGuard.Core.csproj" />
-    <ProjectReference Include="../../src/RansomGuard.Service/RansomGuard.Service.csproj" />
+    <Compile Include="../../src/RansomGuard.Service/Native.cs" Link="Service/Native.cs" />
+    <Compile Include="../../src/RansomGuard.Service/WindowsContainmentActuator.cs" Link="Service/WindowsContainmentActuator.cs" />
   </ItemGroup>
 </Project>

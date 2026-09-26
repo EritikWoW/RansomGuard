@@ -123,6 +123,17 @@ public sealed class ContainmentActuator
                             thread.CreationFileTimeUtc);
                         owned.Add(thread);
                     }
+                    catch (InvalidOperationException ex) when (
+                        ex.Message == "ThreadIdentityChangedForOwnedSuspend")
+                    {
+                        // A TID was reused between bounded passes. The just-applied
+                        // increment is not ours durably yet, so compensate it first,
+                        // then fail and release every previously owned exact thread.
+                        _ = lease.TryResumeThread(thread, out _);
+                        ledger.RecordFailed(request.RequestId, "ThreadIdentityChanged");
+                        RollbackOwned(request.RequestId, ledger, lease, owned);
+                        return ledger.ResultFor(request.RequestId);
+                    }
                     catch
                     {
                         // The increment succeeded but durable ownership did not.

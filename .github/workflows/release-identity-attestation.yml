@@ -178,8 +178,6 @@ jobs:
           if(@($sums).Count -ne 1){throw 'Expected exactly one SHA256SUMS.txt.'}
           .\orchestrator\tools\verify_release_artifact_reconstruction.ps1 -WindowsArtifactDirectory $windows -InventoryPath $inventoryPath.FullName -ReconstructedRoot $reconstructed -ExpectedSourceSha $env:SOURCE_SHA
           "RG_RECONSTRUCTED_RELEASE=$reconstructed" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          $sums=(Get-ChildItem -LiteralPath $governance -Recurse -File -Filter 'SHA256SUMS.txt')
-          if(@($sums).Count -ne 1){throw 'Expected exactly one SHA256SUMS.txt.'}
           $sbom=(Get-ChildItem -LiteralPath $governance -Recurse -File -Filter 'ransomguard.spdx.json')
           if(@($sbom).Count -ne 1){throw 'Expected exactly one ransomguard.spdx.json.'}
 

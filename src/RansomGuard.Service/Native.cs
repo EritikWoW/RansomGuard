@@ -25,7 +25,7 @@ internal struct ThreadEntry32
     internal uint Size;
     internal uint Usage;
     internal uint ThreadId;
-    internal uint OwnerProcessId;
+    internal UIntPtr OwnerProcessId;
     internal int BasePriority;
     internal int DeltaPriority;
     internal uint Flags;

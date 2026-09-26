@@ -92,6 +92,16 @@ foreach($required in @(
     if($harness -notmatch [regex]::Escape($required)){throw "Updater rollback harness invariant missing: $required"}
 }
 
+foreach($required in @(
+    'audit.jsonl',
+    'audit.1.jsonl',
+    'audit.2.jsonl',
+    'audit.3.jsonl',
+    "Assert-NoReparsePath $path 'Audit evidence'"
+)){
+    if($harness -notmatch [regex]::Escape($required)){throw "Updater rollback audit-rotation evidence invariant missing: $required"}
+}
+
 foreach($forbidden in @(
     '\bStop-Process\b',
     '\btaskkill(?:\.exe)?\b',

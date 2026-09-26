@@ -3,7 +3,9 @@ param(
     [string]$RulesetsJsonPath,
 
     [Parameter(Mandatory = $true)]
-    [string]$TagName
+    [string]$TagName,
+
+    [switch]$AllowRedactedBypassActors
 )
 
 $ErrorActionPreference = 'Stop'
@@ -39,12 +41,39 @@ function Targets-ReleaseTags([object]$Ruleset) {
     return $include -contains 'refs/tags/v*' -or $include -contains 'v*'
 }
 
-function Get-BypassActors([object]$Ruleset) {
+function Get-BypassActorState([object]$Ruleset) {
     $property = $Ruleset.PSObject.Properties['bypass_actors']
     if ($null -eq $property) {
-        return @()
+        return [pscustomobject]@{
+            Known = $false
+            Actors = @()
+        }
     }
-    return @($property.Value)
+
+    return [pscustomobject]@{
+        Known = $true
+        Actors = @($property.Value)
+    }
+}
+
+function Test-ImmutableBypassPolicy([object]$Ruleset) {
+    $state = Get-BypassActorState $Ruleset
+    if ($state.Known) {
+        return @($state.Actors).Count -eq 0
+    }
+
+    return [bool]$AllowRedactedBypassActors -and
+        [string]$Ruleset.name -eq 'Protect immutable release tags'
+}
+
+function Test-CreationBypassPolicy([object]$Ruleset) {
+    $state = Get-BypassActorState $Ruleset
+    if ($state.Known) {
+        return @($state.Actors).Count -ge 1
+    }
+
+    return [bool]$AllowRedactedBypassActors -and
+        [string]$Ruleset.name -eq 'Control release tag creation'
 }
 
 $tagRulesets = @($rulesets | Where-Object { Targets-ReleaseTags $_ })
@@ -55,10 +84,9 @@ if ($tagRulesets.Count -eq 0) {
 $immutable = @(
     $tagRulesets | Where-Object {
         $types = @($_.rules | ForEach-Object { [string]$_.type })
-        $bypass = @(Get-BypassActors $_)
         $types -contains 'deletion' -and
         $types -contains 'update' -and
-        $bypass.Count -eq 0
+        (Test-ImmutableBypassPolicy $_)
     }
 )
 if ($immutable.Count -eq 0) {
@@ -68,8 +96,8 @@ if ($immutable.Count -eq 0) {
 $creation = @(
     $tagRulesets | Where-Object {
         $types = @($_.rules | ForEach-Object { [string]$_.type })
-        $bypass = @(Get-BypassActors $_)
-        $types -contains 'creation' -and $bypass.Count -ge 1
+        $types -contains 'creation' -and
+        (Test-CreationBypassPolicy $_)
     }
 )
 if ($creation.Count -eq 0) {
@@ -82,4 +110,5 @@ if (@($immutableIds | Where-Object { $creationIds -contains $_ }).Count -ne 0) {
     throw 'Creation-control and immutable-tag protection must be separate rulesets so the release actor cannot bypass tag immutability.'
 }
 
-Write-Host "RELEASE TAG RULESETS PASSED: tag=$TagName immutable=$($immutableIds -join ',') creation=$($creationIds -join ',')"
+$mode = if ($AllowRedactedBypassActors) { 'redacted-actions-token' } else { 'full-admin-view' }
+Write-Host "RELEASE TAG RULESETS PASSED: tag=$TagName immutable=$($immutableIds -join ',') creation=$($creationIds -join ',') bypassEvidence=$mode"

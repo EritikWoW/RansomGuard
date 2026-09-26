@@ -86,6 +86,12 @@ foreach($required in @(
     'Expected exactly one new terminal RolledBack transaction',
     'forward-completed-transaction.json',
     'forward-completed-audit.json',
+    'function Export-AuditSnapshot',
+    'forward-audit-miss',
+    'rollback-audit-miss',
+    "'-raw-'",
+    "'-parsed.json'",
+    "'-candidates.json'",
     'previousImageRestored',
     'cleanupPassed',
     'PRODUCTION-UPDATER-ROLLBACK-EVIDENCE PASS'
@@ -103,6 +109,16 @@ foreach($required in @(
     if($harness -notmatch [regex]::Escape($required)){throw "Updater rollback audit-rotation evidence invariant missing: $required"}
 }
 
+$forwardAuditMissSnapshot=$harness.IndexOf("Export-AuditSnapshot 'forward-audit-miss'",[StringComparison]::Ordinal)
+$forwardAuditMissThrow=$harness.IndexOf("throw 'Exact ServiceUpdateCompleted audit evidence missing before uninstall.'",[StringComparison]::Ordinal)
+if($forwardAuditMissSnapshot -lt 0 -or $forwardAuditMissThrow -lt 0 -or $forwardAuditMissSnapshot -ge $forwardAuditMissThrow){
+    throw 'Updater qualification must persist raw/parsed audit diagnostics before failing an exact ServiceUpdateCompleted lookup.'
+}
+$rollbackAuditMissSnapshot=$harness.IndexOf("Export-AuditSnapshot 'rollback-audit-miss'",[StringComparison]::Ordinal)
+$rollbackAuditMissThrow=$harness.IndexOf("throw 'Exact ServiceUpdateRolledBack audit evidence missing.'",[StringComparison]::Ordinal)
+if($rollbackAuditMissSnapshot -lt 0 -or $rollbackAuditMissThrow -lt 0 -or $rollbackAuditMissSnapshot -ge $rollbackAuditMissThrow){
+    throw 'Updater qualification must persist raw/parsed audit diagnostics before failing an exact ServiceUpdateRolledBack lookup.'
+}
 $forwardAuditCapture=$harness.IndexOf("'forward-completed-audit.json'",[StringComparison]::Ordinal)
 $firstUninstall=$harness.IndexOf("@('uninstall')",[StringComparison]::Ordinal)
 if($forwardAuditCapture -lt 0 -or $firstUninstall -lt 0 -or $forwardAuditCapture -ge $firstUninstall){
@@ -175,4 +191,4 @@ if($windowsCi -notmatch [regex]::Escape('verify_production_updater_vm_harness.ps
     throw 'Windows CI must run the updater rollback source gate.'
 }
 
-Write-Host 'Production updater rollback VM harness gate PASSED: exact-SHA disposable VM, real ServiceAdministration path, tampered hash/replay rejection, forward update, post-commit failure and deterministic rollback evidence.'
+Write-Host 'Production updater rollback VM harness gate PASSED: exact-SHA disposable VM, real ServiceAdministration path, tampered hash/replay rejection, forward update, post-commit failure, deterministic rollback evidence, and raw audit diagnostics on any exact-transaction evidence miss.'

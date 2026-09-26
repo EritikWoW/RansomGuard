@@ -235,7 +235,9 @@ function Assert-NoActivation([DateTimeOffset]$SinceUtc,[string]$Label){
 function Run-StartupRejectionScenario([string]$Kind,[string]$Root,[string]$File){
     Cleanup-OwnedState $Root
     New-Item -ItemType Directory -Path $Root -Force | Out-Null
-    [IO.File]::WriteAllBytes($File,(0..255 | ForEach-Object {[byte]$_}))
+    $fixture=New-Object byte[] 8192
+    for($i=0;$i -lt $fixture.Length;$i++){$fixture[$i]=[byte](($i*31+17)%251)}
+    [IO.File]::WriteAllBytes($File,$fixture)
     Configure-Package $Root
 
     $ready=Join-Path $ResultsDirectory "$Kind.ready"
@@ -262,8 +264,8 @@ function Run-StartupRejectionScenario([string]$Kind,[string]$Root,[string]$File)
         New-Item -ItemType File -Path $release -Force | Out-Null
         if(-not $holder.WaitForExit(15000)){Stop-ProcessHard $holder "$Kind holder"}
         if($holder.HasExited -and $holder.ExitCode -ne 0){
-            $holderOut=if(Test-Path -LiteralPath $out -PathType Leaf){(Get-Content -LiteralPath $out -Raw -ErrorAction SilentlyContinue).Trim()}else{''}
-            $holderErr=if(Test-Path -LiteralPath $err -PathType Leaf){(Get-Content -LiteralPath $err -Raw -ErrorAction SilentlyContinue).Trim()}else{''}
+            $holderOut=if(Test-Path -LiteralPath $out -PathType Leaf){([string](Get-Content -LiteralPath $out -Raw -ErrorAction SilentlyContinue)).Trim()}else{''}
+            $holderErr=if(Test-Path -LiteralPath $err -PathType Leaf){([string](Get-Content -LiteralPath $err -Raw -ErrorAction SilentlyContinue)).Trim()}else{''}
             $holderFailure="$Kind holder failed exit=$($holder.ExitCode). stdout='$holderOut' stderr='$holderErr'"
             if($null -ne $scenarioFailure){Write-Warning $holderFailure}else{throw $holderFailure}
         }
@@ -393,8 +395,8 @@ try{
         New-Item -ItemType File -Path $release -Force | Out-Null
         if(-not $holder.WaitForExit(15000)){Stop-ProcessHard $holder 'reconnect map holder'}
         if($holder.HasExited -and $holder.ExitCode -ne 0){
-            $reconnectOut=if(Test-Path -LiteralPath $holderOut -PathType Leaf){(Get-Content -LiteralPath $holderOut -Raw -ErrorAction SilentlyContinue).Trim()}else{''}
-            $reconnectErr=if(Test-Path -LiteralPath $holderErr -PathType Leaf){(Get-Content -LiteralPath $holderErr -Raw -ErrorAction SilentlyContinue).Trim()}else{''}
+            $reconnectOut=if(Test-Path -LiteralPath $holderOut -PathType Leaf){([string](Get-Content -LiteralPath $holderOut -Raw -ErrorAction SilentlyContinue)).Trim()}else{''}
+            $reconnectErr=if(Test-Path -LiteralPath $holderErr -PathType Leaf){([string](Get-Content -LiteralPath $holderErr -Raw -ErrorAction SilentlyContinue)).Trim()}else{''}
             $holderFailure="Reconnect map holder failed exit=$($holder.ExitCode). stdout='$reconnectOut' stderr='$reconnectErr'"
             if($null -ne $reconnectFailure){Write-Warning $holderFailure}else{throw $holderFailure}
         }

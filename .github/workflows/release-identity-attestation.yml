@@ -38,9 +38,26 @@ jobs:
           ref: ${{ inputs.source_sha }}
           fetch-depth: 0
 
+      - name: Checkout exact protected-main attestation policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
+        with:
+          ref: ${{ github.sha }}
+          path: orchestrator
+          fetch-depth: 1
+
       - name: Audit repository security gates
         shell: pwsh
         run: |
+          Push-Location .\orchestrator
+          try {
+            .\tools\verify_powershell_automation.ps1
+            .\tools\verify_supply_chain.ps1
+            .\tools\verify_threat_model.ps1
+          }
+          finally {
+            Pop-Location
+          }
+
           .\tools\verify_powershell_automation.ps1
           .\tools\verify_supply_chain.ps1
           .\tools\verify_threat_model.ps1
@@ -63,8 +80,12 @@ jobs:
           if(-not [string]::Equals($env:WORKFLOW_REF,'refs/heads/main',[StringComparison]::Ordinal)){
             throw "Release identity attestation must be dispatched from protected main. ref=$env:WORKFLOW_REF"
           }
-          if(-not [string]::Equals($env:WORKFLOW_SHA,$env:SOURCE_SHA,[StringComparison]::OrdinalIgnoreCase)){
-            throw "Workflow provenance SHA must equal release source SHA. workflow=$env:WORKFLOW_SHA source=$env:SOURCE_SHA"
+          $compareRaw=gh api "repos/$env:GH_REPO/compare/$env:SOURCE_SHA...$env:WORKFLOW_SHA"
+          if($LASTEXITCODE -ne 0){throw 'Unable to verify release-source ancestry against attestation workflow SHA.'}
+          $compare=$compareRaw | ConvertFrom-Json
+          if([int]$compare.behind_by -ne 0 -or
+             ([string]$compare.status -ne 'ahead' -and [string]$compare.status -ne 'identical')){
+            throw "Attestation workflow SHA must be the exact release source or a protected-main descendant. status=$($compare.status) ahead=$($compare.ahead_by) behind=$($compare.behind_by)"
           }
 
           $actual=(git rev-parse HEAD).Trim()
@@ -90,7 +111,7 @@ jobs:
           }
           $rulesetsPath=Join-Path $PWD 'build-logs\release-identity\repository-rulesets.json'
           $details | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $rulesetsPath -Encoding utf8NoBOM
-          .\tools\verify_release_tag_rulesets.ps1 -RulesetsJsonPath $rulesetsPath -TagName $env:RELEASE_TAG
+          .\orchestrator\tools\verify_release_tag_rulesets.ps1 -RulesetsJsonPath $rulesetsPath -TagName $env:RELEASE_TAG
 
           git fetch origin "refs/tags/$env:RELEASE_TAG:refs/tags/$env:RELEASE_TAG" --no-tags
           if($LASTEXITCODE -ne 0){throw "Release tag '$env:RELEASE_TAG' does not exist on origin."}
@@ -107,6 +128,8 @@ jobs:
             throw "Release tag '$env:RELEASE_TAG' does not resolve to exact source '$env:SOURCE_SHA'. actual=$tagCommitSha"
           }
           "RG_TAG_OBJECT_SHA=$tagObjectSha" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RG_ATTESTATION_WORKFLOW_SHA=$($env:WORKFLOW_SHA.ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RG_ATTESTATION_WORKFLOW_REF=$env:WORKFLOW_REF" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Verify and download exact Windows build artifacts
         shell: pwsh
@@ -179,6 +202,8 @@ jobs:
             tagName=$env:RELEASE_TAG
             sourceSha=$env:SOURCE_SHA.ToLowerInvariant()
             tagObjectSha=$env:RG_TAG_OBJECT_SHA
+            attestationWorkflowSha=$env:RG_ATTESTATION_WORKFLOW_SHA
+            attestationWorkflowRef=$env:RG_ATTESTATION_WORKFLOW_REF
             windowsBuildRunId=[long]$env:WINDOWS_BUILD_RUN_ID
             windowsBuildRunUrl="https://github.com/$env:GH_REPO/actions/runs/$env:WINDOWS_BUILD_RUN_ID"
             artifactInventory=@($inventory.files)
@@ -188,7 +213,7 @@ jobs:
             tagRulesetEvidenceSha256=(Get-FileHash -Algorithm SHA256 -LiteralPath $rulesetsPath).Hash
             preflightSha256=(Get-FileHash -Algorithm SHA256 -LiteralPath $preflightPath).Hash
             generatedUtc=[DateTime]::UtcNow.ToString('o')
-            note='GitHub/Sigstore attestation workflow binds this release identity and the exact governed Windows artifact bytes to the protected-main source SHA. The workflow does not create or move a Git tag.'
+            note='GitHub/Sigstore attestation workflow binds this immutable annotated tag, exact release source, governed Windows artifact bytes, and protected-main attestation workflow SHA. The workflow does not create or move a Git tag.'
           }
           $identityPath=Join-Path $PWD 'build-logs\release-identity\release-identity.json'
           $identity | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $identityPath -Encoding utf8NoBOM

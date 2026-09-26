@@ -39,6 +39,14 @@ function Targets-ReleaseTags([object]$Ruleset) {
     return $include -contains 'refs/tags/v*' -or $include -contains 'v*'
 }
 
+function Get-BypassActors([object]$Ruleset) {
+    $property = $Ruleset.PSObject.Properties['bypass_actors']
+    if ($null -eq $property) {
+        return @()
+    }
+    return @($property.Value)
+}
+
 $tagRulesets = @($rulesets | Where-Object { Targets-ReleaseTags $_ })
 if ($tagRulesets.Count -eq 0) {
     throw 'No active tag ruleset exactly covers release tags v* without exclusions.'
@@ -47,7 +55,7 @@ if ($tagRulesets.Count -eq 0) {
 $immutable = @(
     $tagRulesets | Where-Object {
         $types = @($_.rules | ForEach-Object { [string]$_.type })
-        $bypass = @($_.bypass_actors)
+        $bypass = @(Get-BypassActors $_)
         $types -contains 'deletion' -and
         $types -contains 'update' -and
         $bypass.Count -eq 0

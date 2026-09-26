@@ -133,6 +133,9 @@ public sealed class ContainmentActuationLedger
             throw new InvalidOperationException("Actuation preparation requires a current Ready validation decision.");
 
         var normalized = NormalizeRequest(request);
+        var expectedFingerprint = ContainmentActuationPolicy.ComputeBindingFingerprint(normalized.Binding);
+        if (!DecisionPolicy.HashEqual(validation.BindingFingerprint, expectedFingerprint))
+            throw new InvalidOperationException("ActuationValidationBindingMismatch");
 
         lock (_gate)
         {

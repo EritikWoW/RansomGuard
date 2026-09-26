@@ -55,6 +55,10 @@ foreach($pattern in @(
  'ExecuteReadyAsync',
  'File\.Move\s*\(',
  'File\.Delete\s*\(',
+ 'File\.Create\s*\(',
+ 'File\.OpenWrite\s*\(',
+ 'Directory\.CreateDirectory\s*\(',
+ 'Directory\.Move\s*\(',
  'Directory\.Delete\s*\(',
  'File\.Copy\s*\(',
  'WriteAllBytes\s*\(',
@@ -64,6 +68,9 @@ foreach($pattern in @(
 }
 if($recovery -notmatch 'StartsWith\(ProductionPrefix' -or $recovery -notmatch 'production-'){
  throw 'Production recovery administration must enumerate only production-* sessions.'
+}
+if($recovery -notmatch 'Rollback Sessions directory does not exist; read-only recovery planning will not create it\.'){
+ throw 'Production recovery administration must refuse a missing Sessions directory instead of creating state.'
 }
 Write-Host 'Production recovery administration source gate PASSED: UAC/admin-only, fixed private store, stopped-service boundary, terminal-session deterministic planning, bounded summaries, no execution verbs.'
 

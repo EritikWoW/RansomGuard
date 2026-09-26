@@ -100,7 +100,8 @@ jobs:
           $currentVersion=[Diagnostics.FileVersionInfo]::GetVersionInfo($currentService).FileVersion
           $badVersion=[Diagnostics.FileVersionInfo]::GetVersionInfo($badService).FileVersion
           if($oldVersion -ne '0.8.6.0'){throw "Unexpected old fixture version: $oldVersion"}
-          if(-not [Version]::TryParse($currentVersion,[ref]([Version]$parsed=$null))){throw "Invalid current version: $currentVersion"}
+          $parsed=$null
+          if(-not [Version]::TryParse($currentVersion,[ref]$parsed)){throw "Invalid current version: $currentVersion"}
           if(([Version]$currentVersion) -le ([Version]$oldVersion)){throw "Current version is not forward of old fixture. old=$oldVersion current=$currentVersion"}
           if($badVersion -ne $currentVersion){throw "Failure fixture version mismatch. bad=$badVersion current=$currentVersion"}
 

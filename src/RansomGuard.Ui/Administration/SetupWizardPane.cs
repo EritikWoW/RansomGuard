@@ -32,7 +32,7 @@ internal sealed class SetupWizardPane : UserControl
     private readonly Expander _details;
     private readonly TextBox _technical;
     private string _error = "", _errorDetails = "", _doneTitle = "", _doneMessage = "", _archive = "";
-    private bool _automatic, _startAfter = true, _acknowledged, _installedHere, _loadStarted, _attemptedInstall;
+    private bool _automatic, _startAfter = true, _productionProtection, _acknowledged, _installedHere, _loadStarted, _attemptedInstall;
     private string _workingKey = "Setup.Checking";
     public bool IsBusy { get; private set; }
     public bool Applied { get; private set; }
@@ -138,12 +138,13 @@ internal sealed class SetupWizardPane : UserControl
     {
         if (_preview) { SetPreviewScenario("review"); return; }
         string[] folders = _folders.ToArray();
+        bool productionProtection = _productionProtection;
         await BusyAsync("Setup.Checking", async () =>
         {
             _review = null;
             string package = ServiceAdministration.GetPackageRoot(AppContext.BaseDirectory);
             string hash = PackageIdentity.ServiceSha256();
-            await Task.Run(() => ServiceAdministration.ReviewInstallInput(package, hash, folders));
+            await Task.Run(() => ServiceAdministration.ReviewInstallInput(package, hash, folders, productionProtection));
             _service = await Task.Run(ServiceAdministration.Query);
             _state = await Task.Run(StateStoreAdministration.Inspect);
             _review = ReviewSnapshot(true, true); _acknowledged = false;
@@ -185,13 +186,13 @@ internal sealed class SetupWizardPane : UserControl
         if (_intent == "install")
         {
             if (!SetupReviewPolicy.CanInstall(_review, IsBusy)) return;
-            string[] folders = _folders.ToArray(); bool automatic = _automatic, startAfter = _startAfter;
+            string[] folders = _folders.ToArray(); bool automatic = _automatic, startAfter = _startAfter, productionProtection = _productionProtection;
             await BusyAsync("Setup.Installing", async () =>
             {
                 string package = ServiceAdministration.GetPackageRoot(AppContext.BaseDirectory);
                 string hash = PackageIdentity.ServiceSha256();
                 _attemptedInstall = true;
-                await Task.Run(() => ServiceAdministration.Install(package, hash, folders, automatic, AdminContract.Confirmation("install")));
+                await Task.Run(() => ServiceAdministration.Install(package, hash, folders, automatic, productionProtection, AdminContract.Confirmation("install")));
                 _installedHere = true; MarkChanged();
                 if (startAfter)
                 {
@@ -259,10 +260,11 @@ internal sealed class SetupWizardPane : UserControl
         });
         _subtitle.Text = L.T(_page switch
         {
-            Page.Folders => "Setup.ChooseHelp", Page.Reset => _state?.Exists == true ? "Setup.ResetHelp" : "Setup.FirstTimeStore", Page.Review => _intent == "install" ? "Setup.ReviewHelp" : "Setup." + _intent + ".Help",
+            Page.Folders => _productionProtection ? "Setup.ChooseProtectionHelp" : "Setup.ChooseHelp", Page.Reset => _state?.Exists == true ? "Setup.ResetHelp" : "Setup.FirstTimeStore", Page.Review => _intent == "install" ? "Setup.ReviewHelp" : "Setup." + _intent + ".Help",
             Page.Done => _doneMessage, Page.Error => "Setup.ErrorHelp", _ => "Setup.Wait"
         });
-        _footerNote.Text = L.T(_page == Page.Working ? "Setup.DoNotClose" : "Setup.AuditBoundary");
+        _footerNote.Text = L.T(_page == Page.Working ? "Setup.DoNotClose" :
+            _intent == "install" && _productionProtection ? "Setup.ProductionBoundary" : "Setup.AuditBoundary");
         _back.Visibility = (_page is Page.Review or Page.Reset) && _intent == "install" ? Visibility.Visible : Visibility.Collapsed;
         _back.IsEnabled = !IsBusy;
         _close.Content = L.T("Setup.Cancel"); _close.IsEnabled = !IsBusy;
@@ -322,6 +324,12 @@ internal sealed class SetupWizardPane : UserControl
         }; _body.Children.Add(add);
         var auto = Check("Setup.Automatic", _automatic); auto.Checked += (_, _) => _automatic = true; auto.Unchecked += (_, _) => _automatic = false; _body.Children.Add(auto);
         var start = Check("Setup.StartAfter", _startAfter); start.Checked += (_, _) => _startAfter = true; start.Unchecked += (_, _) => _startAfter = false; _body.Children.Add(start);
+        var production = Check("Setup.ProductionProtection", _productionProtection);
+        production.Checked += (_, _) => { _productionProtection = true; Render(); };
+        production.Unchecked += (_, _) => { _productionProtection = false; Render(); };
+        _body.Children.Add(production);
+        var protectionHelp = Text(L.T("Setup.ProductionProtectionHelp"), 13, "SecondaryBrush");
+        protectionHelp.Margin = new Thickness(28, 0, 0, 8); _body.Children.Add(protectionHelp);
     }
     private void RenderReview()
     {
@@ -329,6 +337,8 @@ internal sealed class SetupWizardPane : UserControl
         {
             AddCard("folder", "Setup.SelectedFolders", string.Join(Environment.NewLine, _folders), "InfoBrush");
             AddCard("server", "Setup.InstallPlan", L.T(_startAfter ? "Setup.PlanStart" : "Setup.PlanNoStart"), "AccentBrush");
+            AddCard("server", "Setup.ProtectionMode",
+                L.T(_productionProtection ? "Setup.ProductionProtectionOn" : "Setup.AuditOnly"), "InfoBrush");
             _body.Children.Add(Text(L.T(_automatic ? "Setup.AutoOn" : "Setup.AutoOff"), 14, "SecondaryBrush"));
         }
         else
@@ -364,7 +374,7 @@ internal sealed class SetupWizardPane : UserControl
     {
         _primary.IsEnabled = !IsBusy && (_page switch
         {
-            Page.Folders => _folders.Count is > 0 and <= 64,
+            Page.Folders => _folders.Count is > 0 and <= 64 && (!_productionProtection || _folders.Count == 1),
             Page.Reset => !_preview && SetupReviewPolicy.CanReset(_review, _acknowledged, IsBusy),
             Page.Review => !_preview && (_intent == "install" ? SetupReviewPolicy.CanInstall(_review, IsBusy) : SetupReviewPolicy.CanControl(_review, _intent, _acknowledged, IsBusy)),
             Page.Done => true, Page.Error => !_preview, _ => false

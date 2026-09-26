@@ -94,6 +94,17 @@ internal sealed class WindowsServiceBootstrap : BackgroundService
 
         var rollbackRepository = new RollbackRepository(store.Rollback);
         rollbackRepository.VerifyAll();
+
+        var imageInspector = new ImageInspector(store);
+        ContainmentStateChangeJournal? stateChangeJournal = null;
+        if (settings.Enforce.AutomaticContainment)
+        {
+            stateChangeJournal = new ContainmentStateChangeJournal(
+                store.ContainmentStateChange,
+                createIfMissing: false);
+            stateChangeJournal.VerifyAll();
+        }
+
         store.Audit(new
         {
             Type = "ServiceBootstrapRollbackVerified",
@@ -165,22 +176,36 @@ internal sealed class WindowsServiceBootstrap : BackgroundService
                 admittedPackage,
                 protection,
                 runtime,
+                stateChangeJournal,
                 sp.GetRequiredService<IHostApplicationLifetime>(),
                 AppContext.BaseDirectory));
         }
 
         var scopedTrust = new ScopedTrustCoordinator(store, runtime);
         builder.Services.AddHostedService(_ => new ScopedTrustPublisher(scopedTrust));
-        builder.Services.AddHostedService(sp => new GuardWorker(
-            sp.GetRequiredService<ILogger<GuardWorker>>(),
-            sp.GetRequiredService<IHostApplicationLifetime>(),
-            settings,
-            store,
-            new ImageInspector(store),
-            samples,
-            lab: null,
-            runtime,
-            scopedTrust));
+        builder.Services.AddHostedService(sp =>
+        {
+            ProductionContainmentCoordinator? productionContainment = null;
+            if (stateChangeJournal is not null)
+                productionContainment = new ProductionContainmentCoordinator(
+                    sp.GetRequiredService<ILogger<ProductionContainmentCoordinator>>(),
+                    settings,
+                    store,
+                    imageInspector,
+                    stateChangeJournal);
+
+            return new GuardWorker(
+                sp.GetRequiredService<ILogger<GuardWorker>>(),
+                sp.GetRequiredService<IHostApplicationLifetime>(),
+                settings,
+                store,
+                imageInspector,
+                samples,
+                lab: null,
+                runtime,
+                scopedTrust,
+                productionContainment);
+        });
         builder.Services.AddHostedService(sp => new ReadOnlyPipeServer(
             sp.GetRequiredService<ILogger<ReadOnlyPipeServer>>(),
             runtime,

@@ -71,6 +71,99 @@ function Wait-Path([string]$Path,[int]$Seconds,[string]$Label){
     throw "Timed out waiting for $Label at $Path"
 }
 
+
+function Test-SafeMutationRejection([Exception]$Exception){
+    $cursor=$Exception
+    while($null -ne $cursor){
+        if($cursor -is [UnauthorizedAccessException]){return $true}
+        $code=([int]$cursor.HResult -band 0xFFFF)
+        if($code -in @(5,32,1224)){return $true}
+        $cursor=$cursor.InnerException
+    }
+    return $false
+}
+
+function Wait-JournalMatch(
+    [string]$Path,
+    [scriptblock]$Predicate,
+    [int]$Seconds,
+    [string]$Label
+){
+    $deadline=(Get-Date).AddSeconds($Seconds)
+    while((Get-Date) -lt $deadline){
+        if(Test-Path -LiteralPath $Path -PathType Leaf){
+            foreach($line in Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue){
+                if([string]::IsNullOrWhiteSpace($line)){continue}
+                try{$obj=$line | ConvertFrom-Json -Depth 30}catch{continue}
+                if(& $Predicate $obj){return $obj}
+            }
+        }
+        Start-Sleep -Milliseconds 150
+    }
+    throw "Timed out waiting for $Label in $Path"
+}
+
+function New-ControlledWritableMap([string]$Path){
+    $share=[IO.FileShare]([int][IO.FileShare]::ReadWrite -bor [int][IO.FileShare]::Delete)
+    $stream=[IO.File]::Open($Path,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,$share)
+    try{
+        $mmf=[IO.MemoryMappedFiles.MemoryMappedFile]::CreateFromFile(
+            $stream,$null,0,
+            [IO.MemoryMappedFiles.MemoryMappedFileAccess]::ReadWrite,
+            [IO.HandleInheritability]::None,
+            $true)
+        try{
+            $view=$mmf.CreateViewAccessor(0,0,[IO.MemoryMappedFiles.MemoryMappedFileAccess]::ReadWrite)
+            return [pscustomobject]@{Stream=$stream;Mapping=$mmf;View=$view}
+        }catch{
+            $mmf.Dispose()
+            throw
+        }
+    }catch{
+        $stream.Dispose()
+        throw
+    }
+}
+
+function Close-ControlledWritableMap($Mapping){
+    if($null -eq $Mapping){return}
+    try{if($Mapping.View){$Mapping.View.Dispose()}}catch{}
+    try{if($Mapping.Mapping){$Mapping.Mapping.Dispose()}}catch{}
+    try{if($Mapping.Stream){$Mapping.Stream.Dispose()}}catch{}
+}
+
+function Assert-MappedBaseline(
+    [string]$Session,
+    [string]$File,
+    [string]$OriginalHash,
+    [string]$Label
+){
+    $sessionRoot=Join-Path (Join-Path $stateRoot 'Rollback\Sessions') $Session
+    $sectionJournal=Join-Path $sessionRoot 'section-state\writable-section-journal.jsonl'
+    $null=Wait-JournalMatch $sectionJournal {
+        param($x)
+        [int]$x.state -eq 1 -and
+        [string]::Equals([IO.Path]::GetFullPath([string]$x.trackedPath),[IO.Path]::GetFullPath($File),[StringComparison]::OrdinalIgnoreCase)
+    } 30 "$Label BaselineVerified writable-section evidence"
+
+    $rollbackJournal=Join-Path $sessionRoot 'journal.jsonl'
+    $capture=Wait-JournalMatch $rollbackJournal {
+        param($x)
+        [string]::Equals([IO.Path]::GetFullPath([string]$x.originalPath),[IO.Path]::GetFullPath($File),[StringComparison]::OrdinalIgnoreCase)
+    } 30 "$Label full pre-image evidence"
+
+    if(-not [string]::Equals([string]$capture.originalSha256,$OriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw "$Label pre-image hash mismatch. expected=$OriginalHash actual=$($capture.originalSha256)"
+    }
+    $snapshot=Join-Path $sessionRoot ([string]$capture.snapshotRelativePath)
+    if(-not(Test-Path -LiteralPath $snapshot -PathType Leaf)){throw "$Label pre-image object is missing: $snapshot"}
+    $snapshotHash=(Get-FileHash -LiteralPath $snapshot -Algorithm SHA256).Hash
+    if(-not [string]::Equals($snapshotHash,$OriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+        throw "$Label snapshot hash mismatch. expected=$OriginalHash actual=$snapshotHash"
+    }
+    return [pscustomobject]@{SessionRoot=$sessionRoot;Capture=$capture;Snapshot=$snapshot;SnapshotHash=$snapshotHash}
+}
+
 function Convert-AuditUtc($Value){
     if($Value -is [DateTimeOffset]){return [DateTimeOffset]$Value}
     if($Value -is [DateTime]){
@@ -301,6 +394,14 @@ $summary=[ordered]@{
     degradedMutationPreservedHash=$false
     reconnectAfterMappingReleaseProtected=$false
     reconnectSessionPreserved=$false
+    mappedLossBaselineVerified=$false
+    mappedLossFailSafe=$false
+    mappedLossReconnectBlocked=$false
+    mappedLossReconnectProtected=$false
+    mappedLossSessionPreserved=$false
+    mappingRenameFailSafe=$false
+    mappingTruncateFailSafe=$false
+    mappingDeleteFailSafe=$false
     cleanupPassed=$false
     passed=$false
     startedUtc=[DateTimeOffset]::UtcNow.ToString('o')
@@ -386,6 +487,170 @@ try{
     }
     $summary.reconnectSessionPreserved=$true
     $summary.reconnectAfterMappingReleaseProtected=$true
+
+    # Scenario: create a writable mapping while fully protected, then lose GateClient,
+    # dirty+flush that already-authorized section while the kernel is degraded, prove the
+    # durable full pre-image remains valid, and require reconnect preflight to stay blocked
+    # until the writable mapping is released.
+    $lossFile=Join-Path $reconnectRoot 'mapped-loss.bin'
+    $lossBytes=New-Object byte[] 65536
+    for($i=0;$i -lt $lossBytes.Length;$i++){$lossBytes[$i]=[byte](($i*41+13)%251)}
+    [IO.File]::WriteAllBytes($lossFile,$lossBytes)
+    $lossOriginalHash=(Get-FileHash -LiteralPath $lossFile -Algorithm SHA256).Hash
+    $lossMap=$null
+    try{
+        $lossMap=New-ControlledWritableMap $lossFile
+        $null=Assert-MappedBaseline $session $lossFile $lossOriginalHash 'mapped-loss'
+        $summary.mappedLossBaselineVerified=$true
+
+        $activeBeforeLoss=@(Get-AuditEntries ([DateTimeOffset]::UtcNow.AddMinutes(-2)) | Where-Object {
+            $_.PSObject.Properties['Type'] -and [string]$_.Type -eq 'ProductionProtectionActivated' -and
+            $_.PSObject.Properties['Session'] -and [string]$_.Session -eq $session
+        } | Select-Object -Last 1)
+        if($activeBeforeLoss.Count -ne 1 -or [int]$activeBeforeLoss[0].GateClientPid -le 0){
+            throw 'Unable to resolve active GateClient PID for mapped-loss scenario.'
+        }
+
+        $lossStarted=[DateTimeOffset]::UtcNow
+        Stop-Process -Id ([int]$activeBeforeLoss[0].GateClientPid) -Force -ErrorAction Stop
+        $lossEvent=Wait-AuditType 'ProductionGateLost' $lossStarted 30 $session
+
+        $payload=[Text.Encoding]::ASCII.GetBytes('RANSOMGUARD-MAPPED-LOSS-FLUSH-V1')
+        $writeRejected=$false
+        try{
+            $lossMap.View.WriteArray(0,$payload,0,$payload.Length)
+            $lossMap.View.Flush()
+            $lossMap.Stream.Flush($true)
+        }catch{
+            if(Test-SafeMutationRejection $_.Exception){$writeRejected=$true}else{throw}
+        }
+
+        # Reconnect must not re-activate while this writable section remains mapped.
+        $null=Wait-AuditType 'ProductionLifecycleStartupFailed' (Convert-AuditUtc $lossEvent.Utc) 45 $session
+        $summary.mappedLossReconnectBlocked=$true
+
+        $lossAfterHash=(Get-FileHash -LiteralPath $lossFile -Algorithm SHA256).Hash
+        $null=Assert-MappedBaseline $session $lossFile $lossOriginalHash 'mapped-loss-postflush'
+        if($writeRejected){
+            if(-not [string]::Equals($lossAfterHash,$lossOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+                throw 'Mapped-loss write was rejected but protected content changed.'
+            }
+        }
+        $summary.mappedLossFailSafe=$true
+    }finally{
+        Close-ControlledWritableMap $lossMap
+    }
+
+    $lossReconnect=Wait-AuditType 'ProductionProtectionActivated' ([DateTimeOffset]::UtcNow.AddMinutes(-2)) 75 $session
+    if([string]$lossReconnect.Session -ne $session){throw 'Mapped-loss reconnect changed rollback session.'}
+    if([string]$lossReconnect.Root -ne $reconnectRoot){throw 'Mapped-loss reconnect changed protected root.'}
+    if([string]$lossReconnect.Protection.State -ne 'Protected' -or
+       $lossReconnect.Protection.KernelEnforcementActive -ne $true -or
+       $lossReconnect.Protection.KernelChannelConnected -ne $true){
+        throw 'Mapped-loss reconnect did not return to Protected with kernel enforcement connected.'
+    }
+    $summary.mappedLossSessionPreserved=$true
+    $summary.mappedLossReconnectProtected=$true
+
+    # Mapping + rename. Either the operation is safely rejected with the original path/hash
+    # intact, or it succeeds only after the already-mapped file has a durable full pre-image.
+    $renameFile=Join-Path $reconnectRoot 'mapped-rename.bin'
+    $renameDest=Join-Path $reconnectRoot 'mapped-rename-destination.bin'
+    [IO.File]::WriteAllBytes($renameFile,$lossBytes)
+    $renameOriginalHash=(Get-FileHash -LiteralPath $renameFile -Algorithm SHA256).Hash
+    $renameMap=$null
+    try{
+        $renameMap=New-ControlledWritableMap $renameFile
+        $null=Assert-MappedBaseline $session $renameFile $renameOriginalHash 'mapping-rename'
+        $renameRejected=$false
+        try{[IO.File]::Move($renameFile,$renameDest,$false)}
+        catch{
+            if(Test-SafeMutationRejection $_.Exception){$renameRejected=$true}else{throw}
+        }
+        if($renameRejected){
+            if(-not(Test-Path -LiteralPath $renameFile -PathType Leaf) -or (Test-Path -LiteralPath $renameDest)){
+                throw 'Rejected mapping+rename changed namespace state.'
+            }
+            if(-not [string]::Equals((Get-FileHash -LiteralPath $renameFile -Algorithm SHA256).Hash,$renameOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+                throw 'Rejected mapping+rename changed protected content.'
+            }
+        }else{
+            if(Test-Path -LiteralPath $renameFile){throw 'Successful mapping+rename left the source path present.'}
+            if(-not(Test-Path -LiteralPath $renameDest -PathType Leaf)){throw 'Successful mapping+rename did not create destination path.'}
+            if(-not [string]::Equals((Get-FileHash -LiteralPath $renameDest -Algorithm SHA256).Hash,$renameOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+                throw 'Successful mapping+rename changed file content unexpectedly.'
+            }
+        }
+        $summary.mappingRenameFailSafe=$true
+    }finally{
+        Close-ControlledWritableMap $renameMap
+    }
+
+    # Mapping + truncate/EOF. The platform may reject truncation of a user-mapped file
+    # (ERROR_USER_MAPPED_FILE); otherwise a durable pre-image must already exist.
+    $truncateFile=Join-Path $reconnectRoot 'mapped-truncate.bin'
+    [IO.File]::WriteAllBytes($truncateFile,$lossBytes)
+    $truncateOriginalHash=(Get-FileHash -LiteralPath $truncateFile -Algorithm SHA256).Hash
+    $truncateOriginalLength=(Get-Item -LiteralPath $truncateFile).Length
+    $truncateMap=$null
+    try{
+        $truncateMap=New-ControlledWritableMap $truncateFile
+        $null=Assert-MappedBaseline $session $truncateFile $truncateOriginalHash 'mapping-truncate'
+        $truncateRejected=$false
+        try{
+            $truncateMap.Stream.SetLength([int64]($truncateOriginalLength/2))
+            $truncateMap.Stream.Flush($true)
+        }catch{
+            if(Test-SafeMutationRejection $_.Exception){$truncateRejected=$true}else{throw}
+        }
+        if($truncateRejected){
+            if((Get-Item -LiteralPath $truncateFile).Length -ne $truncateOriginalLength){
+                throw 'Rejected mapping+truncate changed file length.'
+            }
+            if(-not [string]::Equals((Get-FileHash -LiteralPath $truncateFile -Algorithm SHA256).Hash,$truncateOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+                throw 'Rejected mapping+truncate changed protected content.'
+            }
+        }else{
+            if((Get-Item -LiteralPath $truncateFile).Length -ne [int64]($truncateOriginalLength/2)){
+                throw 'Successful mapping+truncate did not produce the requested EOF.'
+            }
+        }
+        $summary.mappingTruncateFailSafe=$true
+    }finally{
+        Close-ControlledWritableMap $truncateMap
+    }
+
+    # Mapping + delete disposition. If deletion is accepted, the full pre-image must already
+    # be durable; if Windows/filter rejects it, the original path/hash must remain intact.
+    $deleteFile=Join-Path $reconnectRoot 'mapped-delete.bin'
+    [IO.File]::WriteAllBytes($deleteFile,$lossBytes)
+    $deleteOriginalHash=(Get-FileHash -LiteralPath $deleteFile -Algorithm SHA256).Hash
+    $deleteMap=$null
+    $deleteRejected=$false
+    try{
+        $deleteMap=New-ControlledWritableMap $deleteFile
+        $null=Assert-MappedBaseline $session $deleteFile $deleteOriginalHash 'mapping-delete'
+        try{[IO.File]::Delete($deleteFile)}
+        catch{
+            if(Test-SafeMutationRejection $_.Exception){$deleteRejected=$true}else{throw}
+        }
+        if($deleteRejected){
+            if(-not(Test-Path -LiteralPath $deleteFile -PathType Leaf)){
+                throw 'Rejected mapping+delete removed the protected pathname.'
+            }
+            if(-not [string]::Equals((Get-FileHash -LiteralPath $deleteFile -Algorithm SHA256).Hash,$deleteOriginalHash,[StringComparison]::OrdinalIgnoreCase)){
+                throw 'Rejected mapping+delete changed protected content.'
+            }
+        }
+    }finally{
+        Close-ControlledWritableMap $deleteMap
+    }
+    if(-not $deleteRejected -and (Test-Path -LiteralPath $deleteFile)){
+        # Delete may be pending until the mapped section is released; give cleanup a bounded window.
+        for($i=0;$i -lt 50 -and (Test-Path -LiteralPath $deleteFile);$i++){Start-Sleep -Milliseconds 100}
+        if(Test-Path -LiteralPath $deleteFile){throw 'Successful mapping+delete remained present after mapped-section release.'}
+    }
+    $summary.mappingDeleteFailSafe=$true
 
     Invoke-Sc @('stop','RansomGuardV03') | Out-Null
     Wait-ServiceState 'Stopped' 60

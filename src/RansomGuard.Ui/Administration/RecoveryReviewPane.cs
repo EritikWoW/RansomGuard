@@ -454,6 +454,8 @@ internal sealed class RecoveryReviewPane : UserControl
         RenderSelectedSession();
         RenderPlan();
         UpdateButtons();
+        if (scenario == "execute" && !_execute.IsEnabled)
+            throw new InvalidOperationException("Synthetic copy-out review must enable execution after explicit preview approval.");
     }
 
     internal object AssertPreviewLayout()

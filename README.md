@@ -1,4 +1,4 @@
-# RansomGuard 0.8.7.0
+# RansomGuard 0.9.0.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
@@ -189,7 +189,7 @@ Use only userspace output from a run that ends with `BUILD PASSED`.
 
 Normal UI:
 
-    release\RansomGuard-v0.8.7.0-<timestamp>\UI\RansomGuard.Ui.exe
+    release\RansomGuard-v0.9.0.0-<timestamp>\UI\RansomGuard.Ui.exe
 
 Manual disposable-VM runtime workflows:
 

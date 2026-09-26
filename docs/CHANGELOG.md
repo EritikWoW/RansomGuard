@@ -1,3 +1,10 @@
+# RansomGuard 0.9.0.0
+
+- Promoted the hardened production-containment, crash/restart recovery, transactional updater and production installer qualification surface into the 0.9 RC line.
+- Added exact-process containment state-change journaling, fail-closed recovery admission, deterministic corruption/fault qualification and real reboot recovery campaigns.
+- Added deterministic transactional forward-update and post-commit rollback qualification with exact durable transaction and audit binding, plus interrupted-update recovery across two real reboots.
+- Added bounded ETW lifecycle attribution for short-lived processes so delayed protected-file telemetry can persist an incident without granting actuation identity; containment still requires exact live process identity.
+- Added release-governance inventory/SBOM, release-identity preflight/attestation and immutable-candidate qualification wiring for the planned `v0.9.0-rc.1` candidate.
 # RansomGuard 0.8.7.0
 
 - Added the first production recovery administration foundation above the existing verified rollback planner.

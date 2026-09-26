@@ -1,6 +1,6 @@
-# RansomGuard 0.8.7.0 - guided setup
+# RansomGuard 0.9.0.0 - guided setup
 
-This document describes the default Audit guided setup. Version 0.8.7 retains the qualified protocol-v18 ProductionGate/LAB separation and 0.8.6 Enforce lifecycle contract while adding a read-only, UAC-elevated production recovery administration foundation. The ordinary Audit bundle still excludes SYS/CAT/INF/GateClient and does not activate kernel blocking. Enforce activation still requires the fixed signed package, one explicit protected root, rollback readiness, driver load/attach verification and a successful ProductionGate activation handshake. Recovery planning requires the service/audit engine to be stopped and performs no recovery execution or live-file mutation. Automatic containment remains disabled.
+This document describes the default Audit guided setup. Version 0.9.0 retains the qualified protocol-v18 ProductionGate/LAB separation and 0.8.6 Enforce lifecycle contract while adding a read-only, UAC-elevated production recovery administration foundation. The ordinary Audit bundle still excludes SYS/CAT/INF/GateClient and does not activate kernel blocking. Enforce activation still requires the fixed signed package, one explicit protected root, rollback readiness, driver load/attach verification and a successful ProductionGate activation handshake. Recovery planning requires the service/audit engine to be stopped and performs no recovery execution or live-file mutation. Automatic containment remains disabled.
 It does not change Defender or widen trust rules.
 The dashboard, chosen icons, Ukrainian/English languages and theme palettes remain.
 

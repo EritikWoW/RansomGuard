@@ -114,10 +114,9 @@ try{
         verifiedUtc=[DateTimeOffset]::UtcNow.ToString('o')
         passed=$true
     }
-    $summaryPath=Join-Path $outputRoot 'reconstruction-verification.json'
+    $summaryPath=$outputRoot+'.verification.json'
     $summary | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $summaryPath -Encoding utf8NoBOM
-    # The summary is verification evidence, not a shipped release file; keep it outside
-    # exact file-set validation by writing it only after the inventory comparison succeeds.
+    # Verification evidence stays beside, never inside, the exact reconstructed release tree.
     Write-Host "Release artifact reconstruction PASSED: zips=$($releaseZips.Count) files=$($byRelative.Count) root=$outputRoot"
 }catch{
     try{if(Test-Path -LiteralPath $outputRoot){Remove-Item -LiteralPath $outputRoot -Recurse -Force}}catch{}

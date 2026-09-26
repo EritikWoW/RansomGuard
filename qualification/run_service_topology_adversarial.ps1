@@ -71,6 +71,13 @@ function Wait-Path([string]$Path,[int]$Seconds,[string]$Label){
     throw "Timed out waiting for $Label at $Path"
 }
 
+function Read-OptionalText([string]$Path){
+    if(-not(Test-Path -LiteralPath $Path -PathType Leaf)){return ''}
+    $raw=Get-Content -LiteralPath $Path -Raw -ErrorAction SilentlyContinue
+    if($null -eq $raw){return ''}
+    return ([string]$raw).Trim()
+}
+
 function Convert-AuditUtc($Value){
     if($Value -is [DateTimeOffset]){return [DateTimeOffset]$Value}
     if($Value -is [DateTime]){
@@ -264,8 +271,8 @@ function Run-StartupRejectionScenario([string]$Kind,[string]$Root,[string]$File)
         New-Item -ItemType File -Path $release -Force | Out-Null
         if(-not $holder.WaitForExit(15000)){Stop-ProcessHard $holder "$Kind holder"}
         if($holder.HasExited -and $holder.ExitCode -ne 0){
-            $holderOut=if(Test-Path -LiteralPath $out -PathType Leaf){([string](Get-Content -LiteralPath $out -Raw -ErrorAction SilentlyContinue)).Trim()}else{''}
-            $holderErr=if(Test-Path -LiteralPath $err -PathType Leaf){([string](Get-Content -LiteralPath $err -Raw -ErrorAction SilentlyContinue)).Trim()}else{''}
+            $holderOut=Read-OptionalText $out
+            $holderErr=Read-OptionalText $err
             $holderFailure="$Kind holder failed exit=$($holder.ExitCode). stdout='$holderOut' stderr='$holderErr'"
             if($null -ne $scenarioFailure){Write-Warning $holderFailure}else{throw $holderFailure}
         }
@@ -351,10 +358,10 @@ try{
     if([string]$first.Root -ne $reconnectRoot){throw 'Initial reconnect scenario activation root mismatch.'}
     if([int]$first.GateClientPid -le 0){throw 'Initial reconnect scenario activation did not report GateClient PID.'}
     $session=[string]$first.Session
+    $before=(Get-FileHash -LiteralPath $reconnectFile -Algorithm SHA256).Hash
 
-    Stop-Process -Id ([int]$first.GateClientPid) -Force -ErrorAction Stop
-    $lost=Wait-AuditType 'ProductionGateLost' $started 30 $session
-
+    # Establish the writable mapping while fully Protected. The adversarial condition is
+    # that this already-existing mapping survives GateClient loss into DegradedProtected.
     $ready=Join-Path $ResultsDirectory 'reconnect-map.ready'
     $release=Join-Path $ResultsDirectory 'reconnect-map.release'
     $holderOut=Join-Path $ResultsDirectory 'reconnect-map-holder.out.log'
@@ -362,13 +369,16 @@ try{
     $holder=Start-LoggedProcess $RuntimeHelperExe @(
         'hold-map','--file',(Quote-Arg $reconnectFile),'--ready',(Quote-Arg $ready),'--release',(Quote-Arg $release)
     ) $holderOut $holderErr
+    Wait-Path $ready 20 'pre-loss reconnect writable mapping'
+
+    Stop-Process -Id ([int]$first.GateClientPid) -Force -ErrorAction Stop
+    $lost=Wait-AuditType 'ProductionGateLost' $started 30 $session
+
     $reconnectFailure=$null
     try{
-        Wait-Path $ready 20 'reconnect writable mapping'
         $failure=Wait-AuditType 'ProductionLifecycleStartupFailed' (Convert-AuditUtc $lost.Utc) 45 $session
         $summary.reconnectMappingPreflightRejected=$true
 
-        $before=(Get-FileHash -LiteralPath $reconnectFile -Algorithm SHA256).Hash
         $denied=$false
         try{
             $fs=[IO.File]::Open($reconnectFile,[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::ReadWrite)
@@ -381,13 +391,8 @@ try{
             }
             if(-not $denied){throw}
         }
-        if(-not $denied){throw 'Mutation unexpectedly succeeded while reconnect preflight was blocked by writable mapping.'}
+        if(-not $denied){throw 'Mutation unexpectedly succeeded while reconnect preflight was blocked by the retained writable mapping.'}
         $summary.degradedMutationDeniedWhileReconnectBlocked=$true
-        $after=(Get-FileHash -LiteralPath $reconnectFile -Algorithm SHA256).Hash
-        if(-not [string]::Equals($before,$after,[StringComparison]::OrdinalIgnoreCase)){
-            throw 'Protected content changed while reconnect remained blocked in DegradedProtected.'
-        }
-        $summary.degradedMutationPreservedHash=$true
     }catch{
         $reconnectFailure=$_
         throw
@@ -395,12 +400,20 @@ try{
         New-Item -ItemType File -Path $release -Force | Out-Null
         if(-not $holder.WaitForExit(15000)){Stop-ProcessHard $holder 'reconnect map holder'}
         if($holder.HasExited -and $holder.ExitCode -ne 0){
-            $reconnectOut=if(Test-Path -LiteralPath $holderOut -PathType Leaf){([string](Get-Content -LiteralPath $holderOut -Raw -ErrorAction SilentlyContinue)).Trim()}else{''}
-            $reconnectErr=if(Test-Path -LiteralPath $holderErr -PathType Leaf){([string](Get-Content -LiteralPath $holderErr -Raw -ErrorAction SilentlyContinue)).Trim()}else{''}
+            $reconnectOut=Read-OptionalText $holderOut
+            $reconnectErr=Read-OptionalText $holderErr
             $holderFailure="Reconnect map holder failed exit=$($holder.ExitCode). stdout='$reconnectOut' stderr='$reconnectErr'"
             if($null -ne $reconnectFailure){Write-Warning $holderFailure}else{throw $holderFailure}
         }
     }
+
+    # Measure content only after the write-capable mapping handle is gone. The mutation
+    # attempt above still occurred while the retained mapping blocked reconnect.
+    $after=(Get-FileHash -LiteralPath $reconnectFile -Algorithm SHA256).Hash
+    if(-not [string]::Equals($before,$after,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'Protected content changed while reconnect remained blocked in DegradedProtected.'
+    }
+    $summary.degradedMutationPreservedHash=$true
 
     $second=Wait-AuditType 'ProductionProtectionActivated' (Convert-AuditUtc $lost.Utc) 75 $session
     if([string]$second.Session -ne $session){throw 'Reconnect after mapping release changed rollback session.'}

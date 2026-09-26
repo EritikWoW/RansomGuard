@@ -64,10 +64,18 @@ The service uses a private redirected-stdin control channel to request Productio
 
 Clean maintenance is bounded to a 10-second GateClient confirmation window, a 3-second child-exit window and a shared 10-second driver detach/unload cleanup budget so one hung lifecycle utility cannot multiply the Service stop time. If the service has already authorized shutdown but clean deactivation cannot be proved, it does not unload the driver and it does not claim that kernel enforcement is still active: the maintenance outcome is explicitly `Failed`/unconfirmed. If the kernel has already confirmed `Maintenance` but subsequent Filter Manager detach/unload fails, the state remains truthfully `Maintenance`; this is recorded separately as driver cleanup failure rather than being misreported as unknown enforcement. If shutdown occurs before any ProductionGate has proved `READY`, no maintenance authorization is sent at all; the uncertain child is terminated and any retained kernel gate remains fail-safe for restart. Windows lifecycle helper processes are also terminated on service cancellation so package/load/attach commands cannot continue orphaned after the Enforce host stops.
 
+## Version-bound service update transition
+
+The 0.9 RC hardening path treats `Protection/` as part of the immutable service-version identity whenever production protection has been provisioned. A service update is therefore not allowed to copy only a new `RansomGuard.Service.exe` while silently retaining or dropping an older version-bound GateClient/driver package.
+
+Before the SCM image-path commit, the updater now revalidates the current configuration, the previous immutable `Protection/` package when present, the target descriptor, exact package layout, SHA-256 inventory, GateClient FileVersion, INF provider/altitude/DriverVer, and any existing `RansomGuardMinifilter` registration. If the installed version has a protection package, the target must carry its own package. The staged package is copied into the new immutable version directory and revalidated after copying.
+
+An in-place service update may reuse an already registered production minifilter only when the filter identity is unchanged: protocol/provider remain compatible, the admitted altitude is identical, and the target SYS SHA-256 is identical. A changed SYS or altitude is deliberately refused before SCM commit. Such a change requires a separate explicit driver-maintenance transaction; the service updater never replaces a registered kernel component implicitly.
+
+This preserves rollback safety. The previous service directory and its version-bound `Protection/` package remain untouched. The updated service still performs the full Authenticode/catalog admission on startup; if that post-commit verification fails, the updater returns the SCM registration to the previous immutable service image. Because the allowed in-place path does not change the registered SYS/altitude, the previous version remains compatible with the retained registration.
+
 ## Deliberate remaining boundaries
 
-Automatic detector-to-containment authorization remains disabled in 0.8.6; `AutomaticContainment=true` is rejected. Production recovery orchestration, local Administrator/SYSTEM self-protection, controlled release signing, installer/update/uninstall orchestration and a Microsoft-assigned production altitude remain separate release work.
+The protection-package admission and updater compatibility checks do not prove that a numeric altitude was assigned by Microsoft, and they do not replace controlled production signing. Release governance must bind the shipped INF/descriptor to the external Microsoft assignment and approved signing identity.
 
-The admission check can validate syntax and cryptographic package binding, but a numeric altitude in a local descriptor is not proof that Microsoft assigned it. Release governance must bind the shipped INF/descriptor to the external Microsoft assignment and controlled production signing identity.
-
-The 0.8.6 lifecycle implementation must be exact-head qualified on the disposable Windows VM before it is treated as a release gate. Source/hosted CI alone is not proof of Filter Manager lifecycle behavior.
+Any transition that changes the registered production minifilter binary or altitude remains a separate release task and must have its own Maintenance transaction, rollback contract and disposable-VM qualification. Source/hosted CI alone is not proof of Filter Manager lifecycle behavior; release acceptance remains exact-SHA VM evidence.

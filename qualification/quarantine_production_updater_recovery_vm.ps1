@@ -113,46 +113,81 @@ foreach($pair in @(
 
 $before=Invoke-Helper $AdminHelper @('query')
 $before | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'service-before.json') -Encoding utf8
-if($before.Installed -ne $true -or [string]$before.State -ne 'Stopped'){
-    throw 'Stale updater campaign must retain a stopped installed service before quarantine.'
-}
-if(-not [string]::Equals(
-    [IO.Path]::GetFullPath([string]$before.ImagePath),
-    [IO.Path]::GetFullPath([string]$state.targetImage),
-    [StringComparison]::OrdinalIgnoreCase)){
-    throw 'SCM image does not match the stale campaign target image.'
+
+$crashJournal=[IO.Path]::GetFullPath([string]$state.crashJournal)
+$crashBefore=Get-Content -LiteralPath $crashJournal -Raw | ConvertFrom-Json -Depth 50
+if([string]$crashBefore.TransactionId -ne [string]$state.crashTransaction -or
+   [string]$crashBefore.Phase -ne 'Prepared'){
+    throw 'Stale crash journal is not the exact expected Prepared transaction.'
 }
 
-$review=Invoke-Helper $AdminHelper @('review-recovery')
-$review | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'recovery-review.json') -Encoding utf8
-if([string]$review.TransactionId -ne [string]$state.crashTransaction -or
-   [string]$review.JournalPhase -ne 'Prepared' -or
-   [string]$review.RequiredAction -ne 'RollbackToPrevious'){
-    throw 'Stale updater campaign is not the expected Prepared -> RollbackToPrevious transaction.'
+$recoveryPerformed=$false
+$serviceAbsentAtQuarantine=$false
+$incompleteJournalQuarantined=$false
+$reviewRequiredAction=$null
+$recoveryOutcome=$null
+
+if($before.Installed -eq $true){
+    if([string]$before.State -ne 'Stopped'){
+        throw 'Stale updater campaign service must be stopped before quarantine.'
+    }
+    if(-not [string]::Equals(
+        [IO.Path]::GetFullPath([string]$before.ImagePath),
+        [IO.Path]::GetFullPath([string]$state.targetImage),
+        [StringComparison]::OrdinalIgnoreCase)){
+        throw 'SCM image does not match the stale campaign target image.'
+    }
+
+    $review=Invoke-Helper $AdminHelper @('review-recovery')
+    $review | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'recovery-review.json') -Encoding utf8
+    if([string]$review.TransactionId -ne [string]$state.crashTransaction -or
+       [string]$review.JournalPhase -ne 'Prepared' -or
+       [string]$review.RequiredAction -ne 'RollbackToPrevious'){
+        throw 'Stale updater campaign is not the expected Prepared -> RollbackToPrevious transaction.'
+    }
+    $reviewRequiredAction=[string]$review.RequiredAction
+
+    $recovered=Invoke-Helper $AdminHelper @('recover-update',[string]$state.crashTransaction)
+    $recovered | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'recovery-result.json') -Encoding utf8
+    if([string]$recovered.Outcome -ne 'RolledBack'){throw "Stale updater recovery outcome was '$($recovered.Outcome)'."}
+    $recoveryOutcome=[string]$recovered.Outcome
+    $recoveryPerformed=$true
+
+    $afterRecovery=Invoke-Helper $AdminHelper @('query')
+    $afterRecovery | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'service-after-recovery.json') -Encoding utf8
+    if($afterRecovery.Installed -ne $true -or [string]$afterRecovery.State -ne 'Stopped' -or
+       -not [string]::Equals(
+           [IO.Path]::GetFullPath([string]$afterRecovery.ImagePath),
+           [IO.Path]::GetFullPath([string]$state.previousImage),
+           [StringComparison]::OrdinalIgnoreCase)){
+        throw 'Stale updater quarantine did not restore the recorded previous service image.'
+    }
+
+    $terminal=Get-Content -LiteralPath $crashJournal -Raw | ConvertFrom-Json -Depth 50
+    if([string]$terminal.Phase -ne 'RolledBack'){throw 'Recovered stale transaction did not reach terminal RolledBack.'}
+    Copy-Item -LiteralPath $crashJournal -Destination (Join-Path $ResultsDirectory 'crash-journal-post-recovery.json') -Force
+
+    [void](Invoke-Helper $AdminHelper @('uninstall'))
+    $gone=Invoke-Helper $AdminHelper @('query')
+    $gone | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'service-after-uninstall.json') -Encoding utf8
+    if($gone.Installed -eq $true){throw 'Stale updater campaign quarantine left RansomGuardV03 registered.'}
+}else{
+    $serviceAbsentAtQuarantine=$true
+    $reviewRequiredAction='UnavailableServiceAbsent'
+    $recoveryOutcome='NotRecoverableServiceAbsent'
+
+    # A later failed qualification already removed the SCM registration. Recovery can
+    # no longer be honestly executed. Preserve the exact Prepared journal, then move
+    # only that verified incomplete record out of the live ServiceUpdates namespace.
+    $journalQuarantine=Join-Path $ResultsDirectory 'ServiceUpdates-quarantined'
+    New-Item -ItemType Directory -Path $journalQuarantine -Force | Out-Null
+    $journalDestination=Join-Path $journalQuarantine ([IO.Path]::GetFileName($crashJournal))
+    if(Test-Path -LiteralPath $journalDestination){throw "Journal quarantine destination already exists: $journalDestination"}
+    Move-Item -LiteralPath $crashJournal -Destination $journalDestination
+    $incompleteJournalQuarantined=$true
+
+    [void](Invoke-Helper $AdminHelper @('expect-recovery-review-failure','No interrupted service update transaction exists'))
 }
-
-$recovered=Invoke-Helper $AdminHelper @('recover-update',[string]$state.crashTransaction)
-$recovered | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'recovery-result.json') -Encoding utf8
-if([string]$recovered.Outcome -ne 'RolledBack'){throw "Stale updater recovery outcome was '$($recovered.Outcome)'."}
-
-$afterRecovery=Invoke-Helper $AdminHelper @('query')
-$afterRecovery | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'service-after-recovery.json') -Encoding utf8
-if($afterRecovery.Installed -ne $true -or [string]$afterRecovery.State -ne 'Stopped' -or
-   -not [string]::Equals(
-       [IO.Path]::GetFullPath([string]$afterRecovery.ImagePath),
-       [IO.Path]::GetFullPath([string]$state.previousImage),
-       [StringComparison]::OrdinalIgnoreCase)){
-    throw 'Stale updater quarantine did not restore the recorded previous service image.'
-}
-
-$terminal=Get-Content -LiteralPath ([string]$state.crashJournal) -Raw | ConvertFrom-Json -Depth 50
-if([string]$terminal.Phase -ne 'RolledBack'){throw 'Recovered stale transaction did not reach terminal RolledBack.'}
-Copy-Item -LiteralPath ([string]$state.crashJournal) -Destination (Join-Path $ResultsDirectory 'crash-journal-post-recovery.json') -Force
-
-[void](Invoke-Helper $AdminHelper @('uninstall'))
-$gone=Invoke-Helper $AdminHelper @('query')
-$gone | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'service-after-uninstall.json') -Encoding utf8
-if($gone.Installed -eq $true){throw 'Stale updater campaign quarantine left RansomGuardV03 registered.'}
 
 $quarantinedActive=Join-Path $ResultsDirectory 'Active-quarantined'
 if(Test-Path -LiteralPath $quarantinedActive){throw "Quarantine evidence destination already exists: $quarantinedActive"}
@@ -164,11 +199,14 @@ $summary=[ordered]@{
     staleCampaignCommit=$ExpectedCampaignCommit
     staleCampaignPhase='armed'
     crashTransaction=[string]$state.crashTransaction
-    reviewRequiredAction=[string]$review.RequiredAction
-    recoveryOutcome=[string]$recovered.Outcome
+    reviewRequiredAction=$reviewRequiredAction
+    recoveryOutcome=$recoveryOutcome
+    recoveryPerformed=$recoveryPerformed
+    serviceAbsentAtQuarantine=$serviceAbsentAtQuarantine
+    incompleteJournalQuarantined=$incompleteJournalQuarantined
     previousImage=[string]$state.previousImage
     targetImage=[string]$state.targetImage
-    serviceUnregistered=$true
+    serviceAbsentAfterQuarantine=$true
     activeStateQuarantined=$true
     vm=$vm
     completedUtc=[DateTime]::UtcNow.ToString('O')

@@ -294,6 +294,10 @@ if(-not [string]::Equals([string]$package.commit,$ExpectedCommit,[StringComparis
 
 if(-not $ResultsDirectory){$ResultsDirectory=Join-Path ([IO.Path]::GetTempPath()) ('RansomGuard-ServiceTopology-'+(Get-Date -Format 'yyyyMMdd-HHmmss'))}
 $ResultsDirectory=[IO.Path]::GetFullPath($ResultsDirectory)
+if(Test-Path -LiteralPath $ResultsDirectory){
+    Assert-NoReparsePath $ResultsDirectory 'ResultsDirectory'
+    Remove-Item -LiteralPath $ResultsDirectory -Recurse -Force
+}
 New-Item -ItemType Directory -Path $ResultsDirectory -Force | Out-Null
 New-Item -ItemType Directory -Path $RootBase -Force | Out-Null
 Assert-NoReparsePath $ResultsDirectory 'ResultsDirectory'

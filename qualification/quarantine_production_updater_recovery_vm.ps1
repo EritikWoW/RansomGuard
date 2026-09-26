@@ -101,30 +101,39 @@ Assert-NoReparsePath $ResultsDirectory 'ResultsDirectory'
 
 Copy-Item -LiteralPath $statePath -Destination (Join-Path $ResultsDirectory 'campaign-state-pre-quarantine.json') -Force
 Copy-Item -LiteralPath $hashPath -Destination (Join-Path $ResultsDirectory 'campaign-state-pre-quarantine.json.sha256') -Force
-foreach($pair in @(
-    @([string]$state.crashJournal,'crash-journal-pre-recovery.json'),
-    @([string]$state.abortJournal,'abort-journal.json')
-)){
-    $source=[IO.Path]::GetFullPath([string]$pair[0])
-    Assert-NoReparsePath $source 'Campaign journal'
-    if(-not(Test-Path -LiteralPath $source -PathType Leaf)){throw "Campaign journal missing: $source"}
-    Copy-Item -LiteralPath $source -Destination (Join-Path $ResultsDirectory ([string]$pair[1])) -Force
+
+$crashJournal=[IO.Path]::GetFullPath([string]$state.crashJournal)
+$abortJournal=[IO.Path]::GetFullPath([string]$state.abortJournal)
+Assert-NoReparsePath $crashJournal 'Crash journal'
+Assert-NoReparsePath $abortJournal 'Abort journal'
+$crashJournalPresent=Test-Path -LiteralPath $crashJournal -PathType Leaf
+$abortJournalPresent=Test-Path -LiteralPath $abortJournal -PathType Leaf
+if($crashJournalPresent){
+    Copy-Item -LiteralPath $crashJournal -Destination (Join-Path $ResultsDirectory 'crash-journal-pre-recovery.json') -Force
+}
+if($abortJournalPresent){
+    Copy-Item -LiteralPath $abortJournal -Destination (Join-Path $ResultsDirectory 'abort-journal.json') -Force
 }
 
 $before=Invoke-Helper $AdminHelper @('query')
 $before | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'service-before.json') -Encoding utf8
 if($before.QuerySucceeded -ne $true){throw "Unable to query RansomGuardV03 before stale-campaign quarantine: $($before.Error)"}
+if($before.Installed -eq $true -and -not $crashJournalPresent){
+    throw 'Installed stale updater campaign lost its crash journal; recovery is refused.'
+}
 
-$crashJournal=[IO.Path]::GetFullPath([string]$state.crashJournal)
-$crashBefore=Get-Content -LiteralPath $crashJournal -Raw | ConvertFrom-Json -Depth 50
-if([string]$crashBefore.TransactionId -ne [string]$state.crashTransaction -or
-   [string]$crashBefore.Phase -ne 'Prepared'){
-    throw 'Stale crash journal is not the exact expected Prepared transaction.'
+if($crashJournalPresent){
+    $crashBefore=Get-Content -LiteralPath $crashJournal -Raw | ConvertFrom-Json -Depth 50
+    if([string]$crashBefore.TransactionId -ne [string]$state.crashTransaction -or
+       [string]$crashBefore.Phase -ne 'Prepared'){
+        throw 'Stale crash journal is not the exact expected Prepared transaction.'
+    }
 }
 
 $recoveryPerformed=$false
 $serviceAbsentAtQuarantine=$false
 $incompleteJournalQuarantined=$false
+$journalAlreadyAbsent=$false
 $reviewRequiredAction=$null
 $recoveryOutcome=$null
 
@@ -175,17 +184,24 @@ if($before.Installed -eq $true){
 }else{
     $serviceAbsentAtQuarantine=$true
     $reviewRequiredAction='UnavailableServiceAbsent'
-    $recoveryOutcome='NotRecoverableServiceAbsent'
 
-    # A later failed qualification already removed the SCM registration. Recovery can
-    # no longer be honestly executed. Preserve the exact Prepared journal, then move
-    # only that verified incomplete record out of the live ServiceUpdates namespace.
-    $journalQuarantine=Join-Path $ResultsDirectory 'ServiceUpdates-quarantined'
-    New-Item -ItemType Directory -Path $journalQuarantine -Force | Out-Null
-    $journalDestination=Join-Path $journalQuarantine ([IO.Path]::GetFileName($crashJournal))
-    if(Test-Path -LiteralPath $journalDestination){throw "Journal quarantine destination already exists: $journalDestination"}
-    Move-Item -LiteralPath $crashJournal -Destination $journalDestination
-    $incompleteJournalQuarantined=$true
+    # A later qualification may already have removed both the SCM registration and
+    # the ServiceUpdates journal. Never fabricate a terminal phase. If the exact
+    # Prepared journal still exists, preserve and quarantine it. If it is already
+    # absent, require the live recovery namespace to prove that no incomplete update
+    # transaction remains before releasing the stale campaign root.
+    if($crashJournalPresent){
+        $recoveryOutcome='NotRecoverableServiceAbsent'
+        $journalQuarantine=Join-Path $ResultsDirectory 'ServiceUpdates-quarantined'
+        New-Item -ItemType Directory -Path $journalQuarantine -Force | Out-Null
+        $journalDestination=Join-Path $journalQuarantine ([IO.Path]::GetFileName($crashJournal))
+        if(Test-Path -LiteralPath $journalDestination){throw "Journal quarantine destination already exists: $journalDestination"}
+        Move-Item -LiteralPath $crashJournal -Destination $journalDestination
+        $incompleteJournalQuarantined=$true
+    }else{
+        $recoveryOutcome='NotRecoverableServiceAndJournalAbsent'
+        $journalAlreadyAbsent=$true
+    }
 
     [void](Invoke-Helper $AdminHelper @('expect-recovery-review-failure','No interrupted service update transaction exists'))
 }
@@ -210,7 +226,10 @@ $summary=[ordered]@{
     recoveryOutcome=$recoveryOutcome
     recoveryPerformed=$recoveryPerformed
     serviceAbsentAtQuarantine=$serviceAbsentAtQuarantine
+    crashJournalPresentAtQuarantine=$crashJournalPresent
+    abortJournalPresentAtQuarantine=$abortJournalPresent
     incompleteJournalQuarantined=$incompleteJournalQuarantined
+    journalAlreadyAbsent=$journalAlreadyAbsent
     previousImage=[string]$state.previousImage
     targetImage=[string]$state.targetImage
     serviceAbsentAfterQuarantine=$true

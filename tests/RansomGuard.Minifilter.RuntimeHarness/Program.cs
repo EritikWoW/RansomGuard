@@ -5,7 +5,7 @@ if (!OperatingSystem.IsWindows())
     throw new PlatformNotSupportedException("RansomGuard minifilter runtime harness is Windows-only.");
 
 if (args.Length == 0)
-    throw new ArgumentException("Use: connect-spoof --root <path> --claimed-pid <pid> --result <marker> | hold-map --file <path> --ready <marker> --release <marker> | hold-write-handle --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | hard-link --existing <path> --link <path> --result <marker> [--ready <marker> --go <marker>] | hard-link-ex --existing <path> --link <path> --result <marker> [--ready <marker> --go <marker>] | fsctl-zero --file <path> --offset <bytes> --length <bytes> --result <marker> | map-write --file <path> [--ready <marker> --go <marker>] | create-new --file <path> [--ready <marker> --go <marker>] | rename-file --source <path> --destination <path> [--ready <marker> --go <marker>] | truncate-eof --file <path> --length <bytes> --ready <marker> --go <marker> | delete-file --file <path> --ready <marker> --go <marker> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker> | containment-transition --file-a <path> --file-b <path> --ready <marker> --go <marker> --result <marker>");
+    throw new ArgumentException("Use: connect-spoof --root <path> --claimed-pid <pid> --result <marker> | hold-map --file <path> --ready <marker> --release <marker> | hold-map-mutate --file <path> --ready <marker> --go <marker> --release <marker> --result <marker> | hold-map-dirty-flush --file <path> --ready <marker> --go <marker> --release <marker> --result <marker> | hold-write-handle --file <path> --ready <marker> --release <marker> | hold-dir-delete --directory <path> --ready <marker> --release <marker> | hard-link --existing <path> --link <path> --result <marker> [--ready <marker> --go <marker>] | hard-link-ex --existing <path> --link <path> --result <marker> [--ready <marker> --go <marker>] | fsctl-zero --file <path> --offset <bytes> --length <bytes> --result <marker> | map-write --file <path> [--ready <marker> --go <marker>] | create-new --file <path> [--ready <marker> --go <marker>] | rename-file --source <path> --destination <path> [--ready <marker> --go <marker>] | truncate-eof --file <path> --length <bytes> --ready <marker> --go <marker> | delete-file --file <path> --ready <marker> --go <marker> | containment-probe --file <path> --ready <marker> --go <marker> --result <marker> | containment-transition --file-a <path> --file-b <path> --ready <marker> --go <marker> --result <marker>");
 
 var command = args[0].ToLowerInvariant();
 var options = Parse(args.Skip(1).ToArray());
@@ -25,6 +25,24 @@ try
                 Require(options, "--file"),
                 Require(options, "--ready"),
                 Require(options, "--release"));
+            break;
+        case "hold-map-mutate":
+            HoldMappedMutation(
+                Require(options, "--file"),
+                Require(options, "--ready"),
+                Require(options, "--go"),
+                Require(options, "--release"),
+                Require(options, "--result"),
+                dirtyBeforeGo: false);
+            break;
+        case "hold-map-dirty-flush":
+            HoldMappedMutation(
+                Require(options, "--file"),
+                Require(options, "--ready"),
+                Require(options, "--go"),
+                Require(options, "--release"),
+                Require(options, "--result"),
+                dirtyBeforeGo: true);
             break;
         case "hold-write-handle":
             HoldWritableHandle(
@@ -255,6 +273,74 @@ static void HoldMappedView(string filePath, string readyMarker, string releaseMa
             if (DateTime.UtcNow >= deadline)
                 throw new TimeoutException("Timed out waiting for mapped-view release marker.");
             Thread.Sleep(100);
+        }
+    }
+    finally
+    {
+        if (view != IntPtr.Zero) _ = Native.UnmapViewOfFile(view);
+        if (mapping != IntPtr.Zero) _ = Native.CloseHandle(mapping);
+        file.Dispose();
+    }
+}
+
+static void HoldMappedMutation(
+    string filePath,
+    string readyMarker,
+    string goMarker,
+    string releaseMarker,
+    string resultMarker,
+    bool dirtyBeforeGo)
+{
+    EnsureFile(filePath);
+    foreach (var marker in new[] { readyMarker, goMarker, releaseMarker, resultMarker })
+    {
+        var parent = Path.GetDirectoryName(marker);
+        if (!string.IsNullOrWhiteSpace(parent)) Directory.CreateDirectory(parent);
+    }
+    foreach (var marker in new[] { readyMarker, goMarker, releaseMarker, resultMarker })
+        if (File.Exists(marker)) File.Delete(marker);
+
+    var (file, mapping, view) = CreateWritableView(filePath);
+    try
+    {
+        var payload = System.Text.Encoding.ASCII.GetBytes(
+            dirtyBeforeGo
+                ? "RANSOMGUARD-MAPPED-DIRTY-BEFORE-RECONNECT-V1"
+                : "RANSOMGUARD-MAPPED-MUTATION-AFTER-LOSS-V1");
+
+        if (dirtyBeforeGo)
+            Marshal.Copy(payload, 0, view, payload.Length);
+
+        File.WriteAllText(
+            readyMarker,
+            $"pid={Environment.ProcessId};file={filePath};dirtyBeforeGo={dirtyBeforeGo};utc={DateTime.UtcNow:O}");
+
+        var goDeadline = DateTime.UtcNow.AddMinutes(5);
+        while (!File.Exists(goMarker))
+        {
+            if (DateTime.UtcNow >= goDeadline)
+                throw new TimeoutException("Timed out waiting for mapped mutation go marker.");
+            Thread.Sleep(50);
+        }
+
+        if (!dirtyBeforeGo)
+            Marshal.Copy(payload, 0, view, payload.Length);
+
+        var flushViewOk = Native.FlushViewOfFile(view, (UIntPtr)(uint)payload.Length);
+        var flushViewError = flushViewOk ? 0 : Marshal.GetLastWin32Error();
+        var flushFileOk = Native.FlushFileBuffers(file);
+        var flushFileError = flushFileOk ? 0 : Marshal.GetLastWin32Error();
+
+        File.WriteAllText(
+            resultMarker,
+            $"flushViewOk={flushViewOk};flushViewError={flushViewError};flushFileOk={flushFileOk};flushFileError={flushFileError}");
+
+        var releaseDeadline = DateTime.UtcNow.AddMinutes(5);
+        while (!File.Exists(releaseMarker))
+        {
+            if (DateTime.UtcNow >= releaseDeadline)
+                throw new TimeoutException("Timed out waiting for mapped mutation release marker.");
+            Thread.Sleep(50);
         }
     }
     finally

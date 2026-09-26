@@ -27,14 +27,22 @@ public sealed class ActivationTopologyStore
         get { lock (_records) return _records.OrderBy(x => x.Sequence).ToArray(); }
     }
 
-    public ActivationTopologyStore(string root)
+    public ActivationTopologyStore(string root, bool createIfMissing = true)
     {
         if (string.IsNullOrWhiteSpace(root))
             throw new ArgumentException("Activation topology root is required.", nameof(root));
 
         _root = Path.GetFullPath(root);
         _journal = Path.Combine(_root, "activation-topology-journal.jsonl");
-        Directory.CreateDirectory(_root);
+        if (createIfMissing)
+        {
+            Directory.CreateDirectory(_root);
+        }
+        else if (!Directory.Exists(_root))
+        {
+            if (File.Exists(_root)) throw new IOException("Activation topology root is not a directory: " + _root);
+            throw new DirectoryNotFoundException("Activation topology root does not exist: " + _root);
+        }
         RejectReparse(_root);
         LoadAndValidateJournal();
     }

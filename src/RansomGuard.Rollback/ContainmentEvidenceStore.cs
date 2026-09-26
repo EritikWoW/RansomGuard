@@ -45,14 +45,22 @@ public sealed class ContainmentEvidenceStore
         get { lock (_records) return _records.OrderBy(x => x.Sequence).ToArray(); }
     }
 
-    public ContainmentEvidenceStore(string root)
+    public ContainmentEvidenceStore(string root, bool createIfMissing = true)
     {
         if (string.IsNullOrWhiteSpace(root))
             throw new ArgumentException("Containment evidence root is required.", nameof(root));
 
         _root = Path.GetFullPath(root);
         _journal = Path.Combine(_root, "containment-journal.jsonl");
-        Directory.CreateDirectory(_root);
+        if (createIfMissing)
+        {
+            Directory.CreateDirectory(_root);
+        }
+        else if (!Directory.Exists(_root))
+        {
+            if (File.Exists(_root)) throw new IOException("Containment evidence root is not a directory: " + _root);
+            throw new DirectoryNotFoundException("Containment evidence root does not exist: " + _root);
+        }
         RejectReparse(_root);
         LoadAndValidateJournal();
     }

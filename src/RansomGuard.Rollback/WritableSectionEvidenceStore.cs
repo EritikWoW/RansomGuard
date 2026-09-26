@@ -21,14 +21,22 @@ public sealed class WritableSectionEvidenceStore
         get { lock (_records) return _records.OrderBy(x => x.Sequence).ToArray(); }
     }
 
-    public WritableSectionEvidenceStore(string root)
+    public WritableSectionEvidenceStore(string root, bool createIfMissing = true)
     {
         if (string.IsNullOrWhiteSpace(root))
             throw new ArgumentException("Writable-section evidence root is required.", nameof(root));
 
         _root = Path.GetFullPath(root);
         _journal = Path.Combine(_root, "writable-section-journal.jsonl");
-        Directory.CreateDirectory(_root);
+        if (createIfMissing)
+        {
+            Directory.CreateDirectory(_root);
+        }
+        else if (!Directory.Exists(_root))
+        {
+            if (File.Exists(_root)) throw new IOException("Writable-section evidence root is not a directory: " + _root);
+            throw new DirectoryNotFoundException("Writable-section evidence root does not exist: " + _root);
+        }
         RejectReparse(_root);
         LoadAndValidateJournal();
     }

@@ -43,14 +43,26 @@ public static class ProductionRecoveryExecutionAdministration
         WriteIndented = true
     };
 
-    public static async Task<ProductionRecoveryExecutionManifest> ExecuteCopyOutAsync(
+    public static Task<ProductionRecoveryExecutionManifest> ExecuteCopyOutAsync(
         ProductionRecoveryExecutionRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        return Task.Run(
+            () => ExecuteCopyOut(request, cancellationToken),
+            cancellationToken);
+    }
+
+    private static ProductionRecoveryExecutionManifest ExecuteCopyOut(
+        ProductionRecoveryExecutionRequest request,
+        CancellationToken cancellationToken)
+    {
         RuleAdministration.DemandAdministrator();
         ValidateRequest(request);
 
+        // StateMaintenanceGate is a named Mutex and is deliberately thread-affine.
+        // The entire copy-out body therefore stays synchronous on this worker thread;
+        // async I/O is joined here rather than retaining the Mutex across an await.
         using var maintenance = StateMaintenanceGate.Acquire();
         ProductionRecoveryAdministration.EnsureIdle();
 
@@ -84,11 +96,11 @@ public static class ProductionRecoveryExecutionAdministration
         var outputFull = ValidateOutputRoot(request.OutputRoot, rollbackRoot, currentPlan);
         var startedUtc = DateTime.UtcNow;
 
-        var report = await RollbackRecoveryExecutor.ExecuteReadyAsync(
+        var report = RollbackRecoveryExecutor.ExecuteReadyAsync(
             rollbackRoot,
             currentPlan,
             outputFull,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken).GetAwaiter().GetResult();
 
         // Prove that the service stayed idle and the exact lifecycle/evidence revision did
         // not move underneath the copy-out. The executor itself never writes the repository.

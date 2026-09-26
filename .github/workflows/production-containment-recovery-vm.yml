@@ -1,0 +1,231 @@
+name: RansomGuard production containment crash recovery VM qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact source SHA to qualify for production containment crash/restart recovery.
+        required: true
+        type: string
+      root_base:
+        description: Disposable VM-only protected-root base. Must contain RansomGuard.
+        required: true
+        default: C:\RansomGuard-VM-ProductionContainmentRecovery
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ransomguard-production-containment-recovery-vm
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    environment: ransomguard-lab-vm
+    runs-on: [self-hosted, Windows, X64, ransomguard-lab-vm]
+    timeout-minutes: 50
+    env:
+      RANSOMGUARD_LAB_VM: I_UNDERSTAND
+      RANSOMGUARD_LAB_CERT_THUMBPRINT: ${{ secrets.RANSOMGUARD_LAB_CERT_THUMBPRINT }}
+      RG_EXPECTED_SHA: ${{ inputs.expected_sha }}
+      RG_ROOT_BASE: ${{ inputs.root_base }}
+
+    steps:
+      - name: Checkout exact qualification source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
+        with:
+          ref: ${{ inputs.expected_sha }}
+          fetch-depth: 1
+
+      - name: Checkout protected-main orchestration policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
+        with:
+          ref: main
+          path: orchestrator
+          fetch-depth: 1
+
+      - name: Verify exact source and security gates
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $actual=(git rev-parse HEAD).Trim()
+          if(-not [string]::Equals($actual,$env:RG_EXPECTED_SHA,[StringComparison]::OrdinalIgnoreCase)){
+            throw "Exact checkout mismatch. expected=$env:RG_EXPECTED_SHA actual=$actual"
+          }
+          if([string]::IsNullOrWhiteSpace($env:RANSOMGUARD_LAB_CERT_THUMBPRINT)){
+            throw 'Environment secret RANSOMGUARD_LAB_CERT_THUMBPRINT is required.'
+          }
+          $root=[IO.Path]::GetFullPath($env:RG_ROOT_BASE)
+          if($root -notmatch '(?i)RansomGuard'){throw 'root_base must contain RansomGuard.'}
+          if($root -eq [IO.Path]::GetPathRoot($root).TrimEnd('\')){throw 'root_base cannot be an entire drive.'}
+
+          Push-Location .\orchestrator
+          try{
+            .\tools\verify_powershell_automation.ps1
+            .\tools\verify_supply_chain.ps1
+            .\tools\verify_threat_model.ps1
+          }finally{Pop-Location}
+
+          .\tools\verify_powershell_automation.ps1
+          .\tools\verify_supply_chain.ps1
+          .\tools\verify_threat_model.ps1
+          .\tools\verify_production_lifecycle_vm_harness.ps1
+          .\tools\verify_production_containment_recovery_harness.ps1
+
+      - name: Verify disposable VM runner readiness
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          .\minifilter-tools\verify_runtime_runner_readiness.ps1 -CertificateThumbprint $env:RANSOMGUARD_LAB_CERT_THUMBPRINT
+          $filters=(& fltmc filters 2>$null | Out-String)
+          if($LASTEXITCODE -ne 0){throw 'Unable to query Filter Manager.'}
+          if($filters -match '(?m)^\s*RansomGuardMinifilter\b'){
+            throw 'REFUSED: RansomGuardMinifilter is already loaded before E2E qualification. Revert/clean the disposable VM snapshot.'
+          }
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0 node24 pinned
+        with:
+          dotnet-version: 10.0.401
+
+      - name: Build exact-source userspace bundles
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          .\build_lab.cmd
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+
+          $lab=Get-ChildItem .\release -Directory -Filter 'RansomGuard-Lab-v*' | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+          $normal=Get-ChildItem .\release -Directory -Filter 'RansomGuard-v*' | Where-Object { $_.Name -notlike 'RansomGuard-Lab-v*' } | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+          if(-not $lab){throw 'Engineering LAB release directory not found.'}
+          if(-not $normal){throw 'Normal release directory not found.'}
+
+          "RG_LAB_RELEASE=$($lab.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RG_NORMAL_RELEASE=$($normal.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build and sign exact-source driver package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $package=Join-Path $env:RUNNER_TEMP 'ransomguard-containment-recovery-runtime-driver'
+          if(Test-Path -LiteralPath $package){Remove-Item -LiteralPath $package -Recurse -Force}
+          .\minifilter-tools\prepare_runtime_driver_package.ps1 -CertificateThumbprint $env:RANSOMGUARD_LAB_CERT_THUMBPRINT -OutputDirectory $package
+
+          $provenance=Get-Content -LiteralPath (Join-Path $package 'runtime-package.json') -Raw | ConvertFrom-Json
+          if([int]$provenance.schema -ne 2){throw 'Runtime driver package provenance schema mismatch.'}
+          if(-not [string]::Equals([string]$provenance.commit,$env:RG_EXPECTED_SHA,[StringComparison]::OrdinalIgnoreCase)){
+            throw "Runtime driver package commit '$($provenance.commit)' does not match '$env:RG_EXPECTED_SHA'."
+          }
+          "RG_DRIVER_PACKAGE=$package" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Prepare admitted production lifecycle package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $package=Join-Path $env:RUNNER_TEMP 'RansomGuard-ProductionContainment-Recovery-Qualification'
+          if(Test-Path -LiteralPath $package){Remove-Item -LiteralPath $package -Recurse -Force}
+
+          .\minifilter-tools\prepare_production_lifecycle_qualification_package.ps1 -NormalReleaseDirectory $env:RG_NORMAL_RELEASE -LabReleaseDirectory $env:RG_LAB_RELEASE -DriverPackageDirectory $env:RG_DRIVER_PACKAGE -CertificateThumbprint $env:RANSOMGUARD_LAB_CERT_THUMBPRINT -OutputDirectory $package
+
+          $summary=Get-Content -LiteralPath (Join-Path $package 'qualification-package.json') -Raw | ConvertFrom-Json
+          if([int]$summary.schema -ne 1 -or $summary.qualificationOnly -ne $true){
+            throw 'Production containment recovery qualification package provenance is invalid.'
+          }
+          if(-not [string]::Equals([string]$summary.commit,$env:RG_EXPECTED_SHA,[StringComparison]::OrdinalIgnoreCase)){
+            throw "Qualification package commit '$($summary.commit)' does not match '$env:RG_EXPECTED_SHA'."
+          }
+          "RG_QUALIFICATION_PACKAGE=$package" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Publish malicious and benign E2E fixture
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $project='.\qualification\RansomGuard.ProductionContainmentE2EFixture\RansomGuard.ProductionContainmentE2EFixture.csproj'
+          dotnet restore $project --locked-mode -r win-x64
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          $out=Join-Path $env:RUNNER_TEMP 'ransomguard-production-containment-recovery-fixture'
+          if(Test-Path -LiteralPath $out){Remove-Item -LiteralPath $out -Recurse -Force}
+          dotnet publish $project -c Release -r win-x64 --self-contained true --no-restore -o $out
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          $exe=Join-Path $out 'RansomGuard.ProductionContainmentE2EFixture.exe'
+          if(-not(Test-Path -LiteralPath $exe -PathType Leaf)){throw 'E2E fixture executable was not published.'}
+          "RG_E2E_FIXTURE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run real production automatic-containment crash recovery scenario
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $results=Join-Path $env:RUNNER_TEMP 'ransomguard-production-containment-recovery-results'
+          if(Test-Path -LiteralPath $results){Remove-Item -LiteralPath $results -Recurse -Force}
+          New-Item -ItemType Directory -Path $results -Force | Out-Null
+
+          .\minifilter-tools\run_production_containment_crash_recovery_lab.ps1 -QualificationDirectory $env:RG_QUALIFICATION_PACKAGE -FixtureExecutable $env:RG_E2E_FIXTURE -ExpectedCommit $env:RG_EXPECTED_SHA -RootBase $env:RG_ROOT_BASE -ResultsDirectory $results
+
+          $summary=Get-Content -LiteralPath (Join-Path $results 'production-containment-recovery-result.json') -Raw | ConvertFrom-Json
+          if([int]$summary.schema -ne 1){throw "Recovery result schema must be 1. Found '$($summary.schema)'."}
+          if(-not [string]::Equals([string]$summary.commit,$env:RG_EXPECTED_SHA,[StringComparison]::OrdinalIgnoreCase)){
+            throw "Recovery result commit '$($summary.commit)' does not match '$env:RG_EXPECTED_SHA'."
+          }
+          foreach($name in @(
+            'stateGenerationMarkerReady',
+            'initialProtectionReady',
+            'suspendAppliedBeforeCrash',
+            'serviceHardKilled',
+            'gateExitedAfterServiceCrash',
+            'kernelFailSafeRetained',
+            'crashReleaseHeartbeatObserved',
+            'crashFixtureCompleted',
+            'incompleteJournalPreserved',
+            'restartedService',
+            'restartedProtection',
+            'automaticContainmentBlockedAfterRestart',
+            'automaticContainmentReadyAbsentAfterRestart',
+            'postRestartIncidentPersisted',
+            'postRestartAuthorizationDenied',
+            'postRestartNoContainment',
+            'cleanMaintenanceStop',
+            'driverUnloaded',
+            'cleanupPassed',
+            'passed'
+          )){
+            if($summary.$name -ne $true){throw "Recovery result invariant '$name' was not true."}
+          }
+          if([double]$summary.crashReleaseLatencyMs -gt 5000){
+            throw 'State-change crash release exceeded the qualified recovery latency bound.'
+          }
+          "RG_E2E_RESULTS=$results" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Ensure kernel cleanup after crash recovery
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $filters=(& fltmc filters 2>$null | Out-String)
+          if($LASTEXITCODE -ne 0){throw 'Unable to query Filter Manager during final cleanup verification.'}
+          if($filters -match '(?m)^\s*RansomGuardMinifilter\b'){
+            throw 'Crash-recovery qualification left RansomGuardMinifilter loaded. Revert the disposable VM snapshot before another run.'
+          }
+
+      - name: Upload production containment crash recovery evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 node24 pinned
+        with:
+          name: ransomguard-production-containment-recovery-${{ inputs.expected_sha }}
+          path: ${{ runner.temp }}/ransomguard-production-containment-recovery-results/**
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Remove qualification signing material copies
+        if: always()
+        shell: pwsh
+        run: |
+          foreach($path in @(
+            $env:RG_DRIVER_PACKAGE,
+            $env:RG_QUALIFICATION_PACKAGE,
+            (Join-Path $env:RUNNER_TEMP 'ransomguard-production-containment-recovery-fixture')
+          )){
+            if($path -and (Test-Path -LiteralPath $path)){
+              Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
+            }
+          }

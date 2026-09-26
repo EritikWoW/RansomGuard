@@ -97,7 +97,7 @@ foreach($required in @(
     'audit.1.jsonl',
     'audit.2.jsonl',
     'audit.3.jsonl',
-    "Assert-NoReparsePath $path 'Audit evidence'"
+    'Assert-NoReparsePath $path'
 )){
     if($harness -notmatch [regex]::Escape($required)){throw "Updater rollback audit-rotation evidence invariant missing: $required"}
 }

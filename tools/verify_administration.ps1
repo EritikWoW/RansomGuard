@@ -7,6 +7,7 @@ $window=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Ui\Administra
 $rules=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\RuleAdministration.cs') -Raw
 $service=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\ServiceAdministration.cs') -Raw
 $core=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Core\AdminContract.cs') -Raw
+$recovery=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\ProductionRecoveryAdministration.cs') -Raw
 foreach($required in @('Environment.ProcessPath','Verb = "runas"','AdminContract.ValidateIntent','child.WaitForExitAsync','1223')) {
  if(-not$launch.Contains($required)){throw "Missing elevation boundary: $required"}
 }
@@ -33,6 +34,39 @@ $project=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Ui\RansomGua
 $identity=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Ui\Administration\PackageIdentity.cs') -Raw
 if(-not $project.Contains('RansomGuardServiceHash') -or -not $identity.Contains('RansomGuard.ServiceSha256')){throw 'Missing embedded UI/service hash pairing.'}
 Write-Host 'Published UI is cryptographically paired to its service bytes; registration/path alone does not authorize installation.'
+
+foreach($required in @(
+ 'RuleAdministration.DemandAdministrator',
+ 'StateMaintenanceGate.Acquire',
+ 'StateStoreAdministration.Inspect',
+ 'ServiceAdministration.Query',
+ 'RollbackRepository',
+ 'RollbackRecoveryPlanner.Build',
+ 'RollbackSessionLifecycleState.Completed',
+ 'RollbackSessionLifecycleState.Faulted',
+ 'MaxSessions = 128',
+ 'MaxActions = 200',
+ 'READ-ONLY PLAN'
+)) {
+ if(-not $recovery.Contains($required)){throw "Missing production recovery administration invariant: $required"}
+}
+foreach($pattern in @(
+ 'RollbackRecoveryExecutor',
+ 'ExecuteReadyAsync',
+ 'File\.Move\s*\(',
+ 'File\.Delete\s*\(',
+ 'Directory\.Delete\s*\(',
+ 'File\.Copy\s*\(',
+ 'WriteAllBytes\s*\(',
+ 'WriteAllText\s*\('
+)) {
+ if($recovery -match $pattern){throw "Production recovery foundation must remain read-only: forbidden pattern '$pattern'"}
+}
+if($recovery -notmatch 'StartsWith\(ProductionPrefix' -or $recovery -notmatch 'production-'){
+ throw 'Production recovery administration must enumerate only production-* sessions.'
+}
+Write-Host 'Production recovery administration source gate PASSED: UAC/admin-only, fixed private store, stopped-service boundary, terminal-session deterministic planning, bounded summaries, no execution verbs.'
+
 
 if($window -match 'new AdminWindow\("state-repair"' -or $window -match 'TextBox _confirm') {throw 'Do not nest administrative recovery windows or require command tokens in the GUI.'}
 foreach($required in @('SetupReviewPolicy.CanInstall','SetupReviewPolicy.CanReset','SetupReviewPolicy.CanControl','if (_preview) return','StateStoreAdministration.Recover','ServiceAdministration.ReviewInstallInput','IsExpanded = false','_acknowledged = false')) {

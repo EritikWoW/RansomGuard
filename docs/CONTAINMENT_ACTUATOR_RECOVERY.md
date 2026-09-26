@@ -71,4 +71,6 @@ Before `AutomaticContainment=true` is accepted by product configuration, disposa
 - replay, PID reuse, image drift, protection-state drift and telemetry-loss vetoes fail closed;
 - the evidence artifact is bound to an exact source SHA.
 
+Automatic production containment remains disabled until disposable-VM restart/recovery qualification passes.
+
 This runbook is a safety contract, not a claim that production automatic containment is currently enabled.

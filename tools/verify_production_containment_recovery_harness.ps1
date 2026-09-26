@@ -67,6 +67,13 @@ foreach($required in @(
     'AutomaticContainmentNotActive',
     'postRestartNoContainment',
     '''AuditOnly''',
+    'journalCorruptionRejected',
+    'journalExactRestoreApplied',
+    'restoredJournalFailClosed',
+    'containment-state-change-journal.pre-corruption.jsonl',
+    '$journalStream.SetLength($journalStream.Length-1)',
+    'Truncated containment journal allowed production kernel lifecycle activation.',
+    'Exact journal restoration did not recover the original incomplete-session fail-closed state.',
     'ProductionProtectionMaintenanceStop',
     'CRASH-RECOVERY-EVIDENCE'
 )){

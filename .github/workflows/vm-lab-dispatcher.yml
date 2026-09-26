@@ -277,10 +277,11 @@ jobs:
           $allowed=@(
             'Minifilter Driver Verifier VM lab',
             'RansomGuard Driver Verifier CLEAR recovery',
-            'RansomGuard frozen immutable-package Driver Verifier'
+            'RansomGuard frozen immutable-package Driver Verifier',
+            'RansomGuard frozen service topology qualification'
           )
           if([string]$run.name -notin $allowed){
-            throw "Run $env:TARGET_RUN_ID is not an allowed Driver Verifier workflow."
+            throw "Run $env:TARGET_RUN_ID is not an allowed LAB workflow."
           }
           if([string]::Equals([string]$run.status,'completed',[StringComparison]::OrdinalIgnoreCase)){
             throw "Run $env:TARGET_RUN_ID is already completed and must not be cancelled."

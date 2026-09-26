@@ -57,17 +57,26 @@ function Get-ServiceHash([string]$Package){
     if(-not(Test-Path -LiteralPath $exe -PathType Leaf)){throw "Service package missing: $exe"}
     return (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
 }
-function Get-UpdateRecords([DateTimeOffset]$SinceUtc){
+function Get-UpdateRecords {
     $root=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)) 'RansomGuardV03\ServiceUpdates'
     if(-not(Test-Path -LiteralPath $root -PathType Container)){return @()}
     $records=@()
     foreach($file in Get-ChildItem -LiteralPath $root -Filter '*.json' -File -ErrorAction Stop){
         try{
             $item=Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json -Depth 50
-            if([DateTimeOffset]::Parse([string]$item.UpdatedUtc) -ge $SinceUtc){$records += $item}
+            if([string]$item.TransactionId -match '^[A-Fa-f0-9]{32}$'){$records += $item}
         }catch{}
     }
     return $records
+}
+function Get-UpdateRecord([string]$TransactionId){
+    $matches=@(Get-UpdateRecords | Where-Object {
+        [string]::Equals([string]$_.TransactionId,$TransactionId,[StringComparison]::OrdinalIgnoreCase)
+    })
+    if($matches.Count -ne 1){
+        throw "Expected exactly one durable update transaction '$TransactionId'; found $($matches.Count)."
+    }
+    return $matches[0]
 }
 function Get-AuditEntries([DateTimeOffset]$SinceUtc){
     $path=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)) 'RansomGuardV03\audit.jsonl'
@@ -122,11 +131,13 @@ $summary=[ordered]@{
     tamperedExpectedHashRejected=$false
     forwardReviewPassed=$false
     forwardUpdateCompleted=$false
+    forwardTransactionId=$null
     forwardTargetSelected=$false
     sameVersionReplayRejected=$false
     firstUninstallPassed=$false
     oldInstallForRollback=$false
     postCommitFailureObserved=$false
+    rollbackTransactionId=$null
     previousImageRestored=$false
     rollbackJournalTerminal=$false
     completedJournalTerminal=$false
@@ -160,6 +171,14 @@ try{
     $updated=Invoke-Helper $CurrentAdminHelper @('update',$CurrentPackage)
     if([string]$updated.Outcome -ne 'Completed'){throw "Forward update outcome was '$($updated.Outcome)'."}
     $summary.forwardUpdateCompleted=$true
+    $summary.forwardTransactionId=[string]$updated.TransactionId
+    $completedRecord=Get-UpdateRecord ([string]$updated.TransactionId)
+    if([string]$completedRecord.Phase -ne 'Completed'){
+        throw "Forward update transaction '$($updated.TransactionId)' is not terminal Completed: $($completedRecord.Phase)"
+    }
+    $summary.completedJournalTerminal=$true
+    $completedRecord | ConvertTo-Json -Depth 20 |
+        Set-Content -LiteralPath (Join-Path $ResultsDirectory 'forward-completed-transaction.json') -Encoding utf8
 
     $afterUpdate=Invoke-Helper $CurrentAdminHelper @('query')
     if($afterUpdate.State -ne 'Stopped'){throw "Successful update did not leave service Stopped: $($afterUpdate.State)"}
@@ -177,6 +196,7 @@ try{
     $old2=Invoke-Helper $OldAdminHelper @('install',$OldPackage,$root)
     $oldImage2=[IO.Path]::GetFullPath([string]$old2.image)
     $summary.oldInstallForRollback=$true
+    $baselineBeforeRollback=@(Get-UpdateRecords | ForEach-Object {[string]$_.TransactionId})
 
     [void](Invoke-Helper $CurrentAdminHelper @('expect-update-failure',$FailurePackage,'rolled back to the previous verified image'))
     $summary.postCommitFailureObserved=$true
@@ -188,16 +208,31 @@ try{
     }
     $summary.previousImageRestored=$true
 
-    $records=@(Get-UpdateRecords $startedUtc)
-    if(@($records | Where-Object {$_.Phase -eq 'Completed'}).Count -lt 1){throw 'No terminal Completed update transaction was retained.'}
-    if(@($records | Where-Object {$_.Phase -eq 'RolledBack'}).Count -lt 1){throw 'No terminal RolledBack update transaction was retained.'}
-    $summary.completedJournalTerminal=$true
+    $records=@(Get-UpdateRecords)
+    $newRollback=@($records | Where-Object {
+        $id=[string]$_.TransactionId
+        $baselineBeforeRollback -notcontains $id -and [string]$_.Phase -eq 'RolledBack'
+    })
+    if($newRollback.Count -ne 1){
+        throw "Expected exactly one new terminal RolledBack transaction; found $($newRollback.Count)."
+    }
+    $rollbackRecord=$newRollback[0]
+    $summary.rollbackTransactionId=[string]$rollbackRecord.TransactionId
+    if(-not [string]::Equals([IO.Path]::GetFullPath([string]$rollbackRecord.PreviousImage),$oldImage2,[StringComparison]::OrdinalIgnoreCase)){
+        throw 'RolledBack transaction does not bind to the exact previous immutable image used by this scenario.'
+    }
     $summary.rollbackJournalTerminal=$true
     $records | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'updater-transactions.json') -Encoding utf8
 
     $audit=@(Get-AuditEntries $startedUtc)
-    if(@($audit | Where-Object {$_.Event -eq 'ServiceUpdateCompleted'}).Count -lt 1){throw 'ServiceUpdateCompleted audit evidence missing.'}
-    if(@($audit | Where-Object {$_.Event -eq 'ServiceUpdateRolledBack'}).Count -lt 1){throw 'ServiceUpdateRolledBack audit evidence missing.'}
+    if(@($audit | Where-Object {
+        $_.Event -eq 'ServiceUpdateCompleted' -and
+        [string]::Equals([string]$_.Transaction,[string]$summary.forwardTransactionId,[StringComparison]::OrdinalIgnoreCase)
+    }).Count -lt 1){throw 'Exact ServiceUpdateCompleted audit evidence missing.'}
+    if(@($audit | Where-Object {
+        $_.Event -eq 'ServiceUpdateRolledBack' -and
+        [string]::Equals([string]$_.Transaction,[string]$summary.rollbackTransactionId,[StringComparison]::OrdinalIgnoreCase)
+    }).Count -lt 1){throw 'Exact ServiceUpdateRolledBack audit evidence missing.'}
     $summary.completionAuditObserved=$true
     $summary.rollbackAuditObserved=$true
     $audit | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'updater-audit.json') -Encoding utf8

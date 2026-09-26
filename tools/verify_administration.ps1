@@ -132,9 +132,16 @@ foreach($required in @(
  'recovery-review',
  'ProductionRecoveryAdministration.ListSessions',
  'ProductionRecoveryAdministration.BuildPlan',
+ 'ProductionRecoveryExecutionRequest',
+ 'ProductionRecoveryExecutionAdministration.ExecuteCopyOutAsync',
+ 'selected.LastRecordSha256',
+ '_executeApproval.IsChecked',
+ 'Path.IsPathFullyQualified',
  'SetPreviewScenario',
  'nativeStateQueries = false',
- 'mutationControls = false'
+ 'nativeExecutionCalls = false',
+ 'sourceMutationControls = false',
+ 'copyOutControls = _currentPlan is { ReadyCount: > 0 }'
 )) {
  $source=if($required -eq 'recovery-review'){$core}else{$recoveryPane}
  if(-not $source.Contains($required)){throw "Missing elevated recovery review invariant: $required"}
@@ -150,8 +157,6 @@ foreach($required in @(
 foreach($pattern in @(
  'RollbackRecoveryExecutor',
  'ExecuteReadyAsync',
- 'ProductionRecoveryExecutionAdministration',
- 'ExecuteCopyOutAsync',
  'ServiceAdministration\.Execute',
  'File\.Move\s*\(',
  'File\.Delete\s*\(',
@@ -161,15 +166,23 @@ foreach($pattern in @(
  'Directory\.CreateDirectory\s*\(',
  'Directory\.Delete\s*\('
 )) {
- if($recoveryPane -match $pattern){throw "Elevated recovery review must remain read-only: forbidden pattern '$pattern'"}
+ if($recoveryPane -match $pattern){throw "Elevated recovery UI contains a forbidden direct mutation/control primitive '$pattern'"}
+}
+if(([regex]::Matches($recoveryPane,'ProductionRecoveryExecutionAdministration\.ExecuteCopyOutAsync')).Count -ne 1){
+ throw 'Elevated recovery UI must have exactly one reviewed call into the production copy-out boundary.'
 }
 if($window -match 'ProductionRecoveryExecutionAdministration|ExecuteCopyOutAsync'){
  throw 'Current elevated review window must not expose production copy-out execution before a separately reviewed UI slice.'
 }
-if($recoveryPane -notmatch 'if \(_preview\)' -or $recoveryPane -notmatch 'Synthetic scene only'){
- throw 'Recovery review preview must remain synthetic-only and branch before production administration calls.'
+if($recoveryPane -notmatch 'if \(_preview\)' -or $recoveryPane -notmatch 'Synthetic scene only' -or $recoveryPane -notmatch 'RecoveryReview\.PreviewExecution'){
+ throw 'Recovery review preview must remain synthetic-only and branch before production administration/execution calls.'
 }
-Write-Host 'Elevated recovery review source gate PASSED: explicit admin intent, synthetic preview, bounded read-only plan rendering, no executor/filesystem/service mutation.'
+if($recoveryPane -notmatch 'Every execution attempt invalidates the operator-reviewed UI state' -or
+   $recoveryPane -notmatch '_currentPlan = null;' -or
+   $recoveryPane -notmatch 'ResetExecutionReview\(\)'){
+ throw 'Recovery copy-out UI must invalidate the reviewed plan/approval after every execution attempt.'
+}
+Write-Host 'Elevated recovery UI source gate PASSED: explicit admin intent, synthetic preview, exact reviewed plan/evidence binding, one approved copy-out call, no direct filesystem/service mutation.'
 
 
 if($window -match 'new AdminWindow\("state-repair"' -or $window -match 'TextBox _confirm') {throw 'Do not nest administrative recovery windows or require command tokens in the GUI.'}

@@ -158,6 +158,23 @@ public static partial class ServiceAdministration
         }
     }
 
+    private static void ValidateInitialProtectionPackage(UpdateProtectionPackage target)
+    {
+        var registered = ReadRegisteredProtectionIdentity();
+        if (registered is null)
+            return;
+
+        if (!DecisionPolicy.HashEqual(
+                registered.DriverSysSha256,
+                target.Descriptor.DriverSysSha256) ||
+            !string.Equals(
+                registered.Altitude,
+                target.Descriptor.Altitude,
+                StringComparison.Ordinal))
+            throw new IOException(
+                "The existing production filter registration is incompatible with the selected initial Protection package.");
+    }
+
     private static void StageUpdateProtectionPackage(
         UpdateProtectionPackage? source,
         string targetFolder)

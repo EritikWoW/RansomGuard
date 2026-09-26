@@ -13,6 +13,7 @@ namespace RansomGuard.Management;
 
 public sealed record ManagedServiceStatus(bool QuerySucceeded, bool Installed, string State, string ImagePath,
     string Account, string StartMode, uint Pid, string? Error);
+public sealed record ServiceInstallReview(string Mode, bool ProductionProtection, string? Altitude);
 internal sealed record InstallRecord(int Schema, string Version, string ImageSha256, DateTime CreatedUtc);
 
 public static partial class ServiceAdministration
@@ -49,7 +50,14 @@ public static partial class ServiceAdministration
     }
     // Read-only preflight. The actual install independently repeats all checks;
     // opening a wizard or pressing Next does not create directories or register a service.
-    public static void ReviewInstallInput(string packageRoot, string expectedServiceHash, string[] roots)
+    public static void ReviewInstallInput(string packageRoot, string expectedServiceHash, string[] roots) =>
+        _ = ReviewInstallInput(packageRoot, expectedServiceHash, roots, productionEnforce: false);
+
+    public static ServiceInstallReview ReviewInstallInput(
+        string packageRoot,
+        string expectedServiceHash,
+        string[] roots,
+        bool productionEnforce)
     {
         RuleAdministration.DemandAdministrator();
         ValidateRoots(roots);
@@ -59,14 +67,42 @@ public static partial class ServiceAdministration
         var source = Path.Combine(packageRoot, "RansomGuard.Service.exe");
         FileSafety.NoReparse(source);
         using var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read);
-        var version = typeof(ServiceAdministration).Assembly.GetName().Version?.ToString();
+        var version = typeof(ServiceAdministration).Assembly.GetName().Version?.ToString()
+            ?? throw new IOException("Version missing.");
         if (input.Length is < 4096 or > 256L * 1024 * 1024 ||
             !WinPaths.Equal(source, Native.FinalFilePath(input.SafeFileHandle)) ||
             !string.Equals(FileVersionInfo.GetVersionInfo(source).FileVersion, version, StringComparison.Ordinal) ||
             !DecisionPolicy.HashEqual(Convert.ToHexString(SHA256.HashData(input)), expectedServiceHash))
             throw new IOException("Service bytes do not match the SHA-256 embedded in this UI. Use one complete release.");
+
+        UpdateProtectionPackage? protection = null;
+        if (productionEnforce)
+        {
+            if (roots.Length != 1)
+                throw new IOException("Production Enforce installation requires exactly one explicit protected root.");
+            protection = InspectUpdateProtectionPackage(packageRoot, version)
+                ?? throw new IOException("Production Enforce installation requires the version-bound Protection package.");
+            ValidateInitialProtectionPackage(protection);
+        }
+
+        return new(productionEnforce ? "Enforce" : "Audit", protection is not null, protection?.Descriptor.Altitude);
     }
-    public static string Install(string packageRoot, string expectedServiceHash, string[] roots, bool automatic, string confirmation)
+
+    public static string Install(
+        string packageRoot,
+        string expectedServiceHash,
+        string[] roots,
+        bool automatic,
+        string confirmation) =>
+        Install(packageRoot, expectedServiceHash, roots, automatic, productionEnforce: false, confirmation);
+
+    public static string Install(
+        string packageRoot,
+        string expectedServiceHash,
+        string[] roots,
+        bool automatic,
+        bool productionEnforce,
+        string confirmation)
     {
         using var maintenance = StateMaintenanceGate.Acquire();
         RuleAdministration.DemandAdministrator(); AdminContract.CheckConfirmation("install", confirmation);
@@ -89,6 +125,17 @@ public static partial class ServiceAdministration
         string hash = Convert.ToHexString(SHA256.HashData(input)); input.Position = 0;
         if (!DecisionPolicy.HashEqual(hash, expectedServiceHash))
             throw new IOException("Service bytes do not match the SHA-256 embedded in this UI. Rebuild/use one complete release; no installation performed.");
+
+        UpdateProtectionPackage? protection = null;
+        if (productionEnforce)
+        {
+            if (roots.Length != 1)
+                throw new IOException("Production Enforce installation requires exactly one explicit protected root.");
+            protection = InspectUpdateProtectionPackage(packageRoot, productVersion)
+                ?? throw new IOException("Production Enforce installation requires the version-bound Protection package.");
+            ValidateInitialProtectionPackage(protection);
+        }
+
         EnsureInstallDirectory(InstallRoot);
         string dest = Path.Combine(InstallRoot, "v" + productVersion + "-" + Guid.NewGuid().ToString("N"));
         if (Directory.Exists(dest)) throw new IOException("Destination already exists.");
@@ -102,13 +149,23 @@ public static partial class ServiceAdministration
             SetInstallFileAcl(image);
             using (var copied = File.OpenRead(image))
                 if (!DecisionPolicy.HashEqual(hash, Convert.ToHexString(SHA256.HashData(copied)))) throw new IOException("Service copy hash mismatch.");
-            var settings = new GuardSettings { ProtectedRoots = roots.ToArray(), Mode = "Audit" };
+            if (productionEnforce)
+                StageUpdateProtectionPackage(protection!, dest);
+
+            var settings = new GuardSettings
+            {
+                ProtectedRoots = roots.ToArray(),
+                Mode = productionEnforce ? "Enforce" : "Audit"
+            };
+            settings.Enforce.AutomaticContainment = productionEnforce;
             settings.Validate();
             WriteNew(Path.Combine(dest, "appsettings.json"), settings);
             WriteNew(Path.Combine(dest, "install.json"), new InstallRecord(1, productVersion, hash, DateTime.UtcNow));
             store.Audit(new { Utc = DateTime.UtcNow, Event = "ServiceInstallPrepared", Service = AdminContract.ServiceName,
-                Image = image, Sha256 = hash, Roots = roots, Automatic = automatic, Actor = CurrentActor() });
-            using var service = Scm.CreateServiceW(scm, AdminContract.ServiceName, "RansomGuard - audit monitoring",
+                Image = image, Sha256 = hash, Roots = roots, Automatic = automatic,
+                Mode = settings.Mode, ProductionProtection = protection is not null,
+                ProtectionAltitude = protection?.Descriptor.Altitude, Actor = CurrentActor() });
+            using var service = Scm.CreateServiceW(scm, AdminContract.ServiceName, "RansomGuard protection service",
                 QueryConfig | QueryStatus, 0x10, automatic ? 2u : 3u, 1, "\"" + image + "\"", null, IntPtr.Zero, null, "LocalSystem", null);
             if (service.IsInvalid) throw Error();
             registered = true;
@@ -118,7 +175,9 @@ public static partial class ServiceAdministration
         catch (Exception ex)
         {
             if (registered) throw new IOException("Service WAS registered, but a follow-up check/audit failed. Inspect current service status; it was NOT started. " + ex.Message, ex);
-            // Only the three known files in the newly-created directory. No recursive deletion.
+            if (productionEnforce)
+                CleanupStagedProtectionPackage(dest);
+            // Only the known files in the newly-created directory. No recursive deletion.
             foreach (string file in new[] { image, Path.Combine(dest, "appsettings.json"), Path.Combine(dest, "install.json") })
                 try { if (File.Exists(file)) { FileSafety.NoReparse(file); File.Delete(file); } } catch (IOException) { }
             try { Directory.Delete(dest, false); } catch (IOException) { }

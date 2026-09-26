@@ -678,7 +678,7 @@ static int RunFixture(string ready, string release, string heartbeat)
     {
         while (!File.Exists(release))
         {
-            File.WriteAllText(heartbeat, DateTime.UtcNow.Ticks.ToString());
+            WriteHeartbeat(heartbeat, DateTime.UtcNow.Ticks);
             Thread.Sleep(40);
         }
     }
@@ -732,11 +732,51 @@ static void WaitForFile(string path, TimeSpan timeout)
     }
 }
 
+static void WriteHeartbeat(string path, long value)
+{
+    using var stream = new FileStream(
+        path,
+        FileMode.Create,
+        FileAccess.Write,
+        FileShare.ReadWrite | FileShare.Delete);
+    using var writer = new StreamWriter(
+        stream,
+        new System.Text.UTF8Encoding(false),
+        1024,
+        leaveOpen: true);
+    writer.Write(value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    writer.Flush();
+    stream.Flush(true);
+}
+
 static long ReadHeartbeat(string path)
 {
     if (!File.Exists(path))
         return 0;
-    return long.TryParse(File.ReadAllText(path), out var value) ? value : 0;
+
+    try
+    {
+        using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream, System.Text.Encoding.UTF8, true, 1024, leaveOpen: false);
+        var text = reader.ReadToEnd();
+        return long.TryParse(
+            text,
+            System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out var value)
+            ? value
+            : 0;
+    }
+    catch (IOException)
+    {
+        // Heartbeat is advisory test telemetry. A transient open/create race must
+        // not crash the qualification process; the caller retries until timeout.
+        return 0;
+    }
 }
 
 static bool WaitForHeartbeatAdvance(string path, long baseline, TimeSpan timeout)

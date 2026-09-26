@@ -1,0 +1,99 @@
+RansomGuard Proprietary Source License
+Version 1.0
+
+Copyright (c) 2026 Roman Tishkov. All rights reserved.
+
+This license applies to the RansomGuard source code and other original
+materials in this repository, except for third-party components that are
+identified as being licensed under separate terms.
+
+1. Limited permission
+
+You are granted a limited, revocable, non-exclusive, non-transferable,
+non-sublicensable license to access, download, compile, and run the
+RansomGuard source code solely for:
+
+(a) personal evaluation;
+(b) security research and interoperability testing;
+(c) review and audit of the source code; and
+(d) preparing contributions intended to be submitted to the official
+    RansomGuard repository.
+
+2. Restrictions
+
+Except with prior written permission from the copyright holder, you may not:
+
+(a) use RansomGuard or any substantial portion of it in production,
+    including providing protection, monitoring, recovery, managed security,
+    hosting, or other services to third parties;
+(b) use the source code or binaries for commercial purposes;
+(c) sell, rent, lease, sublicense, redistribute, publish, mirror, or otherwise
+    make copies or derivative distributions available to third parties;
+(d) incorporate the source code or substantial portions of it into another
+    product, service, library, appliance, security tool, or commercial work;
+(e) create or distribute a competing or substantially similar product based
+    on the source code;
+(f) remove, alter, or obscure copyright, license, attribution, security, or
+    provenance notices; or
+(g) use the RansomGuard name, logo, trademarks, or branding in a way that
+    suggests endorsement, sponsorship, or affiliation.
+
+Modifications made solely for local evaluation, security research, testing,
+or preparation of a contribution to the official repository are permitted,
+provided they are not distributed or used in production.
+
+3. Contributions
+
+Unless a separate written agreement applies, by intentionally submitting a
+contribution to the official RansomGuard repository, you grant the copyright
+holder a perpetual, worldwide, irrevocable, non-exclusive, royalty-free
+license to use, reproduce, modify, create derivative works from, sublicense,
+distribute, publicly perform, publicly display, and otherwise exploit that
+contribution as part of RansomGuard under any license terms.
+
+You represent that you have sufficient rights to grant this permission.
+
+4. Third-party software
+
+Third-party libraries, tools, SDKs, samples, generated files, and other
+components remain subject to their respective licenses. This license does
+not replace, restrict, or expand rights granted by those third-party
+licenses.
+
+5. No patent or trademark license
+
+No patent, trademark, service-mark, trade-name, or other intellectual
+property license is granted except for the limited copyright permissions
+expressly stated above.
+
+6. Termination
+
+Any material violation of this license automatically terminates the
+permissions granted under it. Upon termination, you must stop using and
+distributing any copies or modifications for which permission has
+terminated.
+
+7. Disclaimer of warranty
+
+THE SOFTWARE AND SOURCE CODE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND
+NON-INFRINGEMENT.
+
+8. Limitation of liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE COPYRIGHT HOLDER
+SHALL NOT BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN
+AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN
+CONNECTION WITH THE SOFTWARE, SOURCE CODE, OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+9. Commercial licensing
+
+Commercial, production, redistribution, OEM, MSP, enterprise, and other
+rights not granted by this license may be available under a separate written
+commercial license from the copyright holder.
+
+For licensing inquiries, contact the RansomGuard repository owner through
+the official repository:
+https://github.com/EritikWoW/RansomGuard

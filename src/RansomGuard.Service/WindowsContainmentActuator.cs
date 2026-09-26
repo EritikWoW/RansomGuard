@@ -113,7 +113,7 @@ internal sealed class WindowsContainmentProcessActuationLease : IContainmentProc
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (entry.OwnerProcessId == (uint)Process.Pid)
+            if (entry.OwnerProcessId.ToUInt64() == (ulong)(uint)Process.Pid)
             {
                 var thread = TryReadThreadIdentity(entry.ThreadId, out var diagnostic);
                 if (thread is not null)

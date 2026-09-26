@@ -173,46 +173,11 @@ jobs:
             throw "Release inventory source SHA mismatch: $($inventory.sourceSha)"
           }
 
-          $releaseZips=@(Get-ChildItem -LiteralPath $windows -File -Filter '*.zip')
-          if($releaseZips.Count -lt 1){
-            throw 'Downloaded ransomguard-windows artifact contains no release ZIPs.'
-          }
-          foreach($zip in $releaseZips){
-            $bundleName=[IO.Path]::GetFileNameWithoutExtension($zip.Name)
-            $bundleRoot=Join-Path $windows $bundleName
-            if(Test-Path -LiteralPath $bundleRoot){
-              throw "Release bundle extraction target already exists: $bundleRoot"
-            }
-            Expand-Archive -LiteralPath $zip.FullName -DestinationPath $bundleRoot
-          }
-
-          $downloaded=@(Get-ChildItem -LiteralPath $windows -Recurse -File)
-          if($downloaded.Count -ne @($inventory.files).Count){
-            throw "Reconstructed release file count does not match governance inventory. reconstructed=$($downloaded.Count) inventory=$(@($inventory.files).Count)"
-          }
-
-          $byRelative=@{}
-          foreach($file in $downloaded){
-            $relative=[IO.Path]::GetRelativePath($windows,$file.FullName).Replace('\','/')
-            if($byRelative.ContainsKey($relative)){
-              throw "Duplicate reconstructed release path: $relative"
-            }
-            $byRelative[$relative]=$file
-          }
-
-          foreach($item in @($inventory.files)){
-            $relative=([string]$item.path).Replace('\','/')
-            if(-not $byRelative.ContainsKey($relative)){
-              throw "Governed release path is missing from reconstructed release artifact: '$relative'."
-            }
-            $file=$byRelative[$relative]
-            if([long]$file.Length -ne [long]$item.length){throw "Length mismatch for $relative."}
-            $sha=(Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash
-            if(-not [string]::Equals($sha,[string]$item.sha256,[StringComparison]::OrdinalIgnoreCase)){
-              throw "SHA-256 mismatch for $relative."
-            }
-          }
-
+          $reconstructed=Join-Path $root 'release'
+          $sums=(Get-ChildItem -LiteralPath $governance -Recurse -File -Filter 'SHA256SUMS.txt')
+          if(@($sums).Count -ne 1){throw 'Expected exactly one SHA256SUMS.txt.'}
+          .\orchestrator\tools\verify_release_artifact_reconstruction.ps1 -WindowsArtifactDirectory $windows -InventoryPath $inventoryPath.FullName -ReconstructedRoot $reconstructed -ExpectedSourceSha $env:SOURCE_SHA
+          "RG_RECONSTRUCTED_RELEASE=$reconstructed" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $sums=(Get-ChildItem -LiteralPath $governance -Recurse -File -Filter 'SHA256SUMS.txt')
           if(@($sums).Count -ne 1){throw 'Expected exactly one SHA256SUMS.txt.'}
           $sbom=(Get-ChildItem -LiteralPath $governance -Recurse -File -Filter 'ransomguard.spdx.json')
@@ -282,13 +247,18 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           $ErrorActionPreference='Stop'
-          $files=@(Get-ChildItem -LiteralPath .\attestation-input\windows -Recurse -File)
-          foreach($file in $files){
-            gh attestation verify $file.FullName --repo $env:GH_REPO
-            if($LASTEXITCODE -ne 0){throw "Published artifact attestation verification failed: $($file.Name)"}
-          }
-          gh attestation verify .\build-logs\release-identity\release-identity.json --repo $env:GH_REPO
-          if($LASTEXITCODE -ne 0){throw 'Published release identity attestation verification failed.'}
+          $evidence=Join-Path $PWD 'build-logs\release-identity'
+          .\orchestrator\tools\verify_release_attestation_bundle.ps1 `
+            -ReleaseRoot $env:RG_RECONSTRUCTED_RELEASE `
+            -ChecksumsPath (Join-Path $evidence 'SHA256SUMS.txt') `
+            -ArtifactBundlePath (Join-Path $evidence 'release-artifacts.sigstore.json') `
+            -IdentityPath (Join-Path $evidence 'release-identity.json') `
+            -IdentityBundlePath (Join-Path $evidence 'release-identity.sigstore.json') `
+            -Repository $env:GH_REPO `
+            -SignerWorkflow "$env:GH_REPO/.github/workflows/release-identity-attestation.yml" `
+            -SignerDigest $env:RG_ATTESTATION_WORKFLOW_SHA `
+            -ArtifactVerificationOutput (Join-Path $evidence 'release-artifacts.verification.json') `
+            -IdentityVerificationOutput (Join-Path $evidence 'release-identity.verification.json')
 
       - name: Upload release identity attestation evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 node24 pinned

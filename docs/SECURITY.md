@@ -67,6 +67,8 @@ The 0.7.30 qualification campaign materially increases confidence in this LAB bo
 
 Rollback recovery is conservative and copy-out oriented. It verifies evidence and writes to new output paths. Restart observations never fabricate authoritative filesystem completion.
 
+The pre-enable production containment recovery contract is documented in [CONTAINMENT_ACTUATOR_RECOVERY.md](CONTAINMENT_ACTUATOR_RECOVERY.md). Containment recovery is owned-increment only: exact process and thread creation identities must be revalidated, the durable ledger must verify before recovery, and recovery must never normalize arbitrary suspend counts or use whole-process resume shortcuts. Automatic production containment remains disabled until disposable-VM restart/recovery qualification passes.
+
 Crypto recovery is experimental and format-specific. Unknown formats, missing candidates or failed authentication produce unsupported/not-found/failure states rather than guessed plaintext.
 
 Memory dumps, rollback evidence and recovered plaintext can contain sensitive data. Protect them as incident data. Do not commit dumps, private keys or test-signing certificates to the repository.

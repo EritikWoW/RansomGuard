@@ -82,6 +82,8 @@ Write-Host 'Production recovery administration source gate PASSED: UAC/admin-onl
 foreach($required in @(
  'RuleAdministration.DemandAdministrator',
  'StateMaintenanceGate.Acquire',
+ 'Task.Run(',
+ '.GetAwaiter().GetResult()',
  'ProductionRecoveryAdministration.EnsureIdle',
  'ProductionRecoveryAdministration.ValidateStateAndGetRollbackRoot',
  'RollbackSessionLifecycleState.Completed',
@@ -105,6 +107,9 @@ foreach($required in @(
  'SourceOrTopologyMutationPerformed: false'
 )) {
  if(-not $recoveryExecution.Contains($required)){throw "Missing production recovery execution invariant: $required"}
+}
+if($recoveryExecution -match '\bawait\b'){
+ throw 'Production recovery execution must not retain the thread-affine StateMaintenanceGate across await.'
 }
 foreach($pattern in @(
  'File\.Delete\s*\(',

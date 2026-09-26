@@ -107,6 +107,29 @@ try
     Check(!File.ReadAllBytes(cowSource).SequenceEqual(cowOriginal),
         "range COW recovery never overwrites damaged source");
 
+    var expectedCowBeforeDrift = await cow.ComputeExpectedRecoveryAsync(cowSource);
+    await using (var drift = new FileStream(
+        cowSource, FileMode.Open, FileAccess.Write, FileShare.Read | FileShare.Write | FileShare.Delete))
+    {
+        drift.Position = 1024 * 1024 + 8192; // untouched/unpreserved block in this fixture
+        await drift.WriteAsync(Enumerable.Repeat((byte)0x7D, 4096).ToArray());
+        await drift.FlushAsync();
+        drift.Flush(true);
+    }
+    var driftOutput = Path.Combine(root, "cow-drift-recovered");
+    var driftRejected = false;
+    try
+    {
+        _ = await cow.RestoreToNewCopyAsync(
+            cowSource, driftOutput, expectedCowBeforeDrift);
+    }
+    catch (InvalidDataException) { driftRejected = true; }
+    var publishedAfterDrift = Directory.Exists(driftOutput)
+        ? Directory.EnumerateFiles(driftOutput, "*.ransomguard-cow-recovered", SearchOption.TopDirectoryOnly).Any()
+        : false;
+    Check(driftRejected && !publishedAfterDrift,
+        "range recovery source drift is rejected before final copy publication");
+
     var appendSource = Path.Combine(sourceDir, "append.bin");
     var appendOriginal = Encoding.UTF8.GetBytes("APPEND-BASELINE");
     await File.WriteAllBytesAsync(appendSource, appendOriginal);

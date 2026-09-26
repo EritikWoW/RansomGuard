@@ -177,6 +177,8 @@ jobs:
             'containmentHeartbeatGapObserved',
             'stateChangeJournalCompleted',
             'rollbackEvidenceObserved',
+            'exitRaceIncidentPersisted',
+            'exitRaceNoContainment',
             'benignHighIoCompleted',
             'benignNoIncident',
             'benignNoContainment',

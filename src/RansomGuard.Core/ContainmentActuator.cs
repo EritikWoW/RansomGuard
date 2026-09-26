@@ -159,6 +159,11 @@ public sealed class ContainmentActuator
         {
             return FailAndRollback(request.RequestId, ledger, lease, owned, "ActuationTimedOut");
         }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            return FailAndRollback(request.RequestId, ledger, lease, owned, "ActuationPlatformFailed");
+        }
     }
 
     public ContainmentActuationResult ResumeOwned(

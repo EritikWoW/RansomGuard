@@ -11,9 +11,12 @@ if (!OperatingSystem.IsWindows())
 if (args.Length == 4 && string.Equals(args[0], "--fixture", StringComparison.Ordinal))
     return RunFixture(args[1], args[2], args[3]);
 
+if (args.Length == 6 && string.Equals(args[0], "--state-change-helper", StringComparison.Ordinal))
+    return RunStateChangeHelper(args[1], args[2], args[3], args[4], args[5]);
+
 if (args.Length != 3 || !string.Equals(args[0], "--run", StringComparison.Ordinal))
 {
-    Console.Error.WriteLine("Use: --run <results-dir> <expected-sha> | --fixture <ready> <release> <heartbeat>");
+    Console.Error.WriteLine("Use: --run <results-dir> <expected-sha> | --fixture <ready> <release> <heartbeat> | --state-change-helper <pid> <creation-filetime> <ready> <release> <result>");
     return 3;
 }
 
@@ -377,6 +380,65 @@ try
         cancelResult.OwnedSuspendCount == 0 &&
         WaitForHeartbeatAdvance(target.Heartbeat, ReadHeartbeat(target.Heartbeat), TimeSpan.FromSeconds(2));
 
+    var stateChangeApiAvailable = ProcessStateChangeNative.IsAvailable();
+    var stateChangeExplicitResumeRecovered = false;
+    var stateChangeCrashReleaseRecovered = false;
+
+    if (stateChangeApiAvailable)
+    {
+        var explicitHelper = StartStateChangeHelper(exe, targetKey, results, "state-change-explicit");
+        try
+        {
+            if (WaitForFileOrExit(explicitHelper.Ready, explicitHelper.Process, TimeSpan.FromSeconds(10)))
+            {
+                Thread.Sleep(150);
+                var explicitBeatA = ReadHeartbeat(target.Heartbeat);
+                Thread.Sleep(350);
+                var explicitBeatB = ReadHeartbeat(target.Heartbeat);
+                var explicitFrozen = explicitBeatA == explicitBeatB;
+
+                File.WriteAllText(explicitHelper.Release, "resume");
+                var helperExited = explicitHelper.Process.WaitForExit(5000);
+                var helperSucceeded = helperExited && explicitHelper.Process.ExitCode == 0;
+                stateChangeExplicitResumeRecovered =
+                    explicitFrozen &&
+                    helperSucceeded &&
+                    WaitForHeartbeatAdvance(target.Heartbeat, explicitBeatB, TimeSpan.FromSeconds(3));
+            }
+        }
+        finally
+        {
+            StopHelper(explicitHelper);
+        }
+
+        var crashHelper = StartStateChangeHelper(exe, targetKey, results, "state-change-crash");
+        try
+        {
+            if (WaitForFileOrExit(crashHelper.Ready, crashHelper.Process, TimeSpan.FromSeconds(10)))
+            {
+                Thread.Sleep(150);
+                var crashBeatA = ReadHeartbeat(target.Heartbeat);
+                Thread.Sleep(350);
+                var crashBeatB = ReadHeartbeat(target.Heartbeat);
+                var crashFrozen = crashBeatA == crashBeatB;
+
+                if (!crashHelper.Process.HasExited)
+                {
+                    crashHelper.Process.Kill(entireProcessTree: false);
+                    crashHelper.Process.WaitForExit(5000);
+                }
+
+                stateChangeCrashReleaseRecovered =
+                    crashFrozen &&
+                    WaitForHeartbeatAdvance(target.Heartbeat, crashBeatB, TimeSpan.FromSeconds(3));
+            }
+        }
+        finally
+        {
+            StopHelper(crashHelper);
+        }
+    }
+
     var passed =
         successSuspended &&
         exactIdentityBound &&
@@ -398,7 +460,10 @@ try
         partialRecovered &&
         restartRecoveryRecovered &&
         timeoutRecovered &&
-        cancellationRecovered;
+        cancellationRecovered &&
+        stateChangeApiAvailable &&
+        stateChangeExplicitResumeRecovered &&
+        stateChangeCrashReleaseRecovered;
 
     var summary = new
     {
@@ -428,6 +493,10 @@ try
         restartRecoveryRecovered,
         timeoutRecovered,
         cancellationRecovered,
+        stateChangeApiAvailable,
+        stateChangeExplicitResumeRecovered,
+        stateChangeCrashReleaseRecovered,
+        osVersion = Environment.OSVersion.VersionString,
         passed
     };
     File.WriteAllText(
@@ -440,6 +509,176 @@ finally
 {
     StopFixture(target);
     StopFixture(unrelated);
+}
+
+static int RunStateChangeHelper(
+    string pidText,
+    string creationFileTimeText,
+    string ready,
+    string release,
+    string result)
+{
+    ready = Path.GetFullPath(ready);
+    release = Path.GetFullPath(release);
+    result = Path.GetFullPath(result);
+    foreach (var path in new[] { ready, release, result })
+    {
+        var parent = Path.GetDirectoryName(path);
+        if (!string.IsNullOrWhiteSpace(parent))
+            Directory.CreateDirectory(parent);
+        if (File.Exists(path))
+            File.Delete(path);
+    }
+
+    if (!int.TryParse(pidText, out var pid) || pid <= 4 ||
+        !long.TryParse(creationFileTimeText, out var creationFileTime) || creationFileTime <= 0)
+    {
+        File.WriteAllText(result, "invalid-target-identity");
+        return 31;
+    }
+
+    if (!ProcessStateChangeNative.IsAvailable())
+    {
+        File.WriteAllText(result, "process-state-change-api-unavailable");
+        return 32;
+    }
+
+    const uint ProcessSetInformation = 0x0200;
+    using var process = Native.OpenProcess(
+        Native.Query | Native.Synchronize | Native.SuspendResume | ProcessSetInformation,
+        false,
+        pid);
+    if (process.IsInvalid)
+    {
+        File.WriteAllText(result, "open-process-failed:" + System.Runtime.InteropServices.Marshal.GetLastWin32Error());
+        return 33;
+    }
+
+    var live = Native.Identity(process, pid);
+    var expected = new ProcessKey(pid, creationFileTime);
+    if (live is null || live.Value != expected)
+    {
+        File.WriteAllText(result, "process-identity-changed");
+        return 34;
+    }
+
+    var createStatus = ProcessStateChangeNative.NtCreateProcessStateChange(
+        out var stateChange,
+        ProcessStateChangeNative.ProcessStateAllAccess,
+        IntPtr.Zero,
+        process,
+        0);
+    if (createStatus < 0 || stateChange == IntPtr.Zero)
+    {
+        File.WriteAllText(result, $"create-state-change-failed:0x{unchecked((uint)createStatus):X8}");
+        return 35;
+    }
+
+    try
+    {
+        var suspendStatus = ProcessStateChangeNative.NtChangeProcessState(
+            stateChange,
+            process,
+            ProcessStateChangeNative.ProcessStateChangeSuspend,
+            IntPtr.Zero,
+            UIntPtr.Zero,
+            0);
+        if (suspendStatus < 0)
+        {
+            File.WriteAllText(result, $"suspend-state-change-failed:0x{unchecked((uint)suspendStatus):X8}");
+            return 36;
+        }
+
+        File.WriteAllText(
+            ready,
+            $"pid={pid};creationFileTime={creationFileTime};utc={DateTime.UtcNow:O}");
+
+        var deadline = DateTime.UtcNow.AddMinutes(5);
+        while (!File.Exists(release))
+        {
+            if (DateTime.UtcNow >= deadline)
+            {
+                File.WriteAllText(result, "release-timeout");
+                return 37;
+            }
+            Thread.Sleep(25);
+        }
+
+        var resumeStatus = ProcessStateChangeNative.NtChangeProcessState(
+            stateChange,
+            process,
+            ProcessStateChangeNative.ProcessStateChangeResume,
+            IntPtr.Zero,
+            UIntPtr.Zero,
+            0);
+        if (resumeStatus < 0)
+        {
+            File.WriteAllText(result, $"resume-state-change-failed:0x{unchecked((uint)resumeStatus):X8}");
+            return 38;
+        }
+
+        File.WriteAllText(result, "explicit-resume-success");
+        return 0;
+    }
+    finally
+    {
+        if (stateChange != IntPtr.Zero)
+            _ = Native.CloseHandle(stateChange);
+    }
+}
+
+static StateChangeHelper StartStateChangeHelper(
+    string exe,
+    ProcessKey target,
+    string results,
+    string name)
+{
+    var ready = Path.Combine(results, name + ".ready");
+    var release = Path.Combine(results, name + ".release");
+    var result = Path.Combine(results, name + ".result");
+    foreach (var path in new[] { ready, release, result })
+        if (File.Exists(path)) File.Delete(path);
+
+    var start = new ProcessStartInfo(exe) { UseShellExecute = false };
+    start.ArgumentList.Add("--state-change-helper");
+    start.ArgumentList.Add(target.Pid.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    start.ArgumentList.Add(target.CreationFileTimeUtc.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    start.ArgumentList.Add(ready);
+    start.ArgumentList.Add(release);
+    start.ArgumentList.Add(result);
+    var process = Process.Start(start) ?? throw new IOException("Unable to launch process-state-change helper.");
+    return new(process, ready, release, result);
+}
+
+static bool WaitForFileOrExit(string path, Process process, TimeSpan timeout)
+{
+    var deadline = DateTime.UtcNow + timeout;
+    while (DateTime.UtcNow < deadline)
+    {
+        if (File.Exists(path))
+            return true;
+        if (process.HasExited)
+            return false;
+        Thread.Sleep(25);
+    }
+    return false;
+}
+
+static void StopHelper(StateChangeHelper helper)
+{
+    try
+    {
+        if (!helper.Process.HasExited)
+        {
+            helper.Process.Kill(entireProcessTree: false);
+            helper.Process.WaitForExit(3000);
+        }
+    }
+    catch { }
+    finally
+    {
+        helper.Process.Dispose();
+    }
 }
 
 static int RunFixture(string ready, string release, string heartbeat)
@@ -686,6 +925,47 @@ static bool RevalidationRejected(
         return ex.Message.StartsWith("ActuationRevalidationDenied:", StringComparison.Ordinal) ||
                ex.Message is "ActuationValidationBindingMismatch" or "ProcessIdentityChanged";
     }
+}
+
+sealed record StateChangeHelper(Process Process, string Ready, string Release, string Result);
+
+static class ProcessStateChangeNative
+{
+    internal const uint ProcessStateAllAccess = 0x001F0001;
+    internal const int ProcessStateChangeSuspend = 1;
+    internal const int ProcessStateChangeResume = 2;
+
+    internal static bool IsAvailable()
+    {
+        if (!NativeLibrary.TryLoad("ntdll.dll", out var library))
+            return false;
+        try
+        {
+            return NativeLibrary.TryGetExport(library, "NtCreateProcessStateChange", out _) &&
+                   NativeLibrary.TryGetExport(library, "NtChangeProcessState", out _);
+        }
+        finally
+        {
+            NativeLibrary.Free(library);
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("ntdll.dll")]
+    internal static extern int NtCreateProcessStateChange(
+        out IntPtr processStateChangeHandle,
+        uint desiredAccess,
+        IntPtr objectAttributes,
+        ProcessHandle processHandle,
+        uint reserved);
+
+    [System.Runtime.InteropServices.DllImport("ntdll.dll")]
+    internal static extern int NtChangeProcessState(
+        IntPtr processStateChangeHandle,
+        ProcessHandle processHandle,
+        int stateChangeType,
+        IntPtr extendedInformation,
+        UIntPtr extendedInformationLength,
+        uint reserved);
 }
 
 sealed record Fixture(Process Process, string Ready, string Release, string Heartbeat);

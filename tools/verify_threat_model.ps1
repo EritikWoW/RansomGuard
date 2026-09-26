@@ -77,6 +77,8 @@ foreach($required in @(
     '`Eligible` means only that the evidence snapshot satisfied the policy contract; it is not evidence that an actuator ran',
     'The ordinary response path records `ActuationAttempted=false` and returns before the LAB-only actuator path.',
     'The first actuator milestone adds only a **non-actuating binding/revalidation contract**.',
+    '`ContainmentActuationLedger` durably consumes one authorization id into one immutable request',
+    'The ledger itself contains no Win32/NT suspension, resume or termination primitive',
     'The current `GuardWorker` is source-gated against referencing this actuation policy or any production suspend/kill primitive',
     'No LAB fast-path threshold or `Eligible` authorization result may be promoted directly into a production blocking action.',
     'one synchronous communication handle',

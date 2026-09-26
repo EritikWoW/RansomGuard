@@ -933,8 +933,8 @@ sealed record StateChangeHelper(Process Process, string Ready, string Release, s
 static class ProcessStateChangeNative
 {
     internal const uint ProcessStateAllAccess = 0x001F0001;
-    internal const int ProcessStateChangeSuspend = 1;
-    internal const int ProcessStateChangeResume = 2;
+    internal const int ProcessStateChangeSuspend = 0;
+    internal const int ProcessStateChangeResume = 1;
 
     internal static bool IsAvailable()
     {

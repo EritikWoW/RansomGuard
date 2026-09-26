@@ -127,6 +127,14 @@ internal sealed class ProcessCatalog
         public string? ExactPath { get; set; }
         public DateTime LastTouchedUtc { get; set; }
     }
+    private sealed record EtwLifetimeSnapshot(
+        int Pid,
+        ulong UniqueProcessKey,
+        string Name,
+        DateTime StartUtc,
+        DateTime? StopUtc,
+        ProcessKey? ExactKey,
+        string? ExactPath);
 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<int,ProcessInfo> _cache=new();
     private readonly object _lifecycleGate=new();
@@ -216,7 +224,6 @@ internal sealed class ProcessCatalog
 
         var historical=FindLifetime(pid,eventUtc);
         if(historical is null)return null;
-        historical.LastTouchedUtc=now;
         if(historical.ExactKey is ProcessKey exact)
             return new(exact,historical.Name,historical.ExactPath,now,true,historical.UniqueProcessKey,historical.StartUtc);
 
@@ -230,24 +237,40 @@ internal sealed class ProcessCatalog
             historical.StartUtc);
     }
 
-    private EtwLifetime? FindLifetime(int pid,DateTime eventUtc)
+    private EtwLifetimeSnapshot? FindLifetime(int pid,DateTime eventUtc)
     {
         lock(_lifecycleGate)
         {
             if(!_lifetimes.TryGetValue(pid,out var list))return null;
-            TrimLifetimes(list,DateTime.UtcNow);
-            return list
-                .Where(x=>x.StartUtc<=eventUtc && (x.StopUtc is null || eventUtc<=x.StopUtc.Value.AddMilliseconds(250)))
+            var now=DateTime.UtcNow;
+            TrimLifetimes(list,now);
+            var lifetime=list
+                .Where(x=>x.StartUtc<=eventUtc && (x.StopUtc is null || eventUtc<=x.StopUtc.Value))
                 .OrderByDescending(x=>x.StartUtc)
                 .FirstOrDefault();
+            if(lifetime is null)return null;
+            lifetime.LastTouchedUtc=now;
+            return new(
+                lifetime.Pid,
+                lifetime.UniqueProcessKey,
+                lifetime.Name,
+                lifetime.StartUtc,
+                lifetime.StopUtc,
+                lifetime.ExactKey,
+                lifetime.ExactPath);
         }
     }
 
-    private void RememberExact(EtwLifetime? lifetime,ProcessKey key,string? path,DateTime now)
+    private void RememberExact(EtwLifetimeSnapshot? snapshot,ProcessKey key,string? path,DateTime now)
     {
-        if(lifetime is null)return;
+        if(snapshot is null)return;
         lock(_lifecycleGate)
         {
+            if(!_lifetimes.TryGetValue(snapshot.Pid,out var list))return;
+            var lifetime=list.LastOrDefault(x=>
+                x.UniqueProcessKey==snapshot.UniqueProcessKey &&
+                x.StartUtc==snapshot.StartUtc);
+            if(lifetime is null)return;
             lifetime.ExactKey=key;
             lifetime.ExactPath=path;
             lifetime.LastTouchedUtc=now;

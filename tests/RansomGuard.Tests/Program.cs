@@ -201,6 +201,48 @@ Check(!containmentDecision.Eligible&&containmentDecision.Reasons.Contains("Reque
       containmentDecision.Reasons.Contains("ProtectionStateNotProtected"),
     "Audit protection state cannot authorize production containment");
 
+var containmentStartingMachine=new ProtectionStateMachine("Enforce");
+containmentDecision=ContainmentAuthorizationPolicy.Evaluate(ContainmentInput(protection:containmentStartingMachine.Snapshot()));
+Check(!containmentDecision.Eligible&&containmentDecision.Reasons.Contains("ProtectionStateNotProtected")&&
+      containmentDecision.Reasons.Contains("RollbackStoreNotReady"),
+    "EnforceStarting cannot authorize detector-driven containment");
+
+var containmentKernelConnectedMachine=new ProtectionStateMachine("Enforce");
+containmentKernelConnectedMachine.MarkRollbackReady();
+containmentKernelConnectedMachine.BeginKernelStartup();
+containmentKernelConnectedMachine.MarkKernelConnected();
+containmentDecision=ContainmentAuthorizationPolicy.Evaluate(ContainmentInput(protection:containmentKernelConnectedMachine.Snapshot()));
+Check(!containmentDecision.Eligible&&containmentDecision.Reasons.Contains("ProtectionStateNotProtected"),
+    "KernelConnected pre-activation state cannot authorize detector-driven containment");
+
+var containmentUnavailableMachine=new ProtectionStateMachine("Enforce");
+containmentUnavailableMachine.MarkUnavailable("test");
+containmentDecision=ContainmentAuthorizationPolicy.Evaluate(ContainmentInput(protection:containmentUnavailableMachine.Snapshot()));
+Check(!containmentDecision.Eligible&&containmentDecision.Reasons.Contains("ProtectionStateNotProtected"),
+    "EnforceUnavailable cannot authorize detector-driven containment");
+
+var containmentMaintenanceMachine=new ProtectionStateMachine("Enforce");
+containmentMaintenanceMachine.MarkRollbackReady();
+containmentMaintenanceMachine.BeginKernelStartup();
+containmentMaintenanceMachine.MarkKernelConnected();
+containmentMaintenanceMachine.MarkProtected();
+containmentMaintenanceMachine.BeginMaintenance("test");
+containmentDecision=ContainmentAuthorizationPolicy.Evaluate(ContainmentInput(protection:containmentMaintenanceMachine.Snapshot()));
+Check(!containmentDecision.Eligible&&containmentDecision.Reasons.Contains("ProtectionStateNotProtected"),
+    "Maintenance cannot authorize detector-driven containment");
+
+var containmentFailedMachine=new ProtectionStateMachine("Enforce");
+containmentFailedMachine.MarkFailed("test");
+containmentDecision=ContainmentAuthorizationPolicy.Evaluate(ContainmentInput(protection:containmentFailedMachine.Snapshot()));
+Check(!containmentDecision.Eligible&&containmentDecision.Reasons.Contains("ProtectionStateNotProtected"),
+    "Failed protection state cannot authorize detector-driven containment");
+
+var containmentStoppedMachine=new ProtectionStateMachine("Enforce");
+containmentStoppedMachine.MarkStopped();
+containmentDecision=ContainmentAuthorizationPolicy.Evaluate(ContainmentInput(protection:containmentStoppedMachine.Snapshot()));
+Check(!containmentDecision.Eligible&&containmentDecision.Reasons.Contains("ProtectionStateNotProtected"),
+    "Stopped protection state cannot authorize detector-driven containment");
+
 var containmentDegradedMachine=new ProtectionStateMachine("Enforce");
 containmentDegradedMachine.MarkRollbackReady();
 containmentDegradedMachine.BeginKernelStartup();

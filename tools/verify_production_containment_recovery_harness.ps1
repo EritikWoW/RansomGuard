@@ -118,7 +118,7 @@ if($lease.IndexOf('_stateChangeHandle.Dispose()', [StringComparison]::Ordinal) -
 foreach($required in @(
     '/run-production-containment-recovery-vm ',
     'production-containment-recovery-vm.yml',
-    'RansomGuard production containment crash recovery VM qualification'
+    'Dispatched production containment crash recovery VM qualification for exact SHA'
 )){
     if($dispatcher -notmatch [regex]::Escape($required)){
         throw "Production containment recovery dispatcher invariant missing: $required"

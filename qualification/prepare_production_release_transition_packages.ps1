@@ -2,6 +2,9 @@
 param(
     [Parameter(Mandatory=$true)][ValidatePattern('^[A-Fa-f0-9]{40}$')][string]$ExpectedCommit,
     [Parameter(Mandatory=$true)][ValidatePattern('^[A-Fa-f0-9]{40}$')][string]$CertificateThumbprint,
+    [Parameter(Mandatory=$true)][string]$CurrentNormalReleaseDirectory,
+    [Parameter(Mandatory=$true)][string]$CurrentLabReleaseDirectory,
+    [Parameter(Mandatory=$true)][string]$DriverPackageDirectory,
     [Parameter(Mandatory=$true)][string]$OutputRoot,
     [string]$OldVersion='0.8.6.0'
 )
@@ -87,17 +90,37 @@ $serviceProject=Join-Path $repoRoot 'src\RansomGuard.Service\RansomGuard.Service
 $gateProject=Join-Path $repoRoot 'src\RansomGuard.GateClient\RansomGuard.GateClient.csproj'
 $helperProject=Join-Path $repoRoot 'qualification\RansomGuard.UpdaterQualification\RansomGuard.UpdaterQualification.csproj'
 $failureProject=Join-Path $repoRoot 'qualification\RansomGuard.UpdaterFailureFixture\RansomGuard.UpdaterFailureFixture.csproj'
-$appSettings=Join-Path $repoRoot 'src\RansomGuard.Service\appsettings.json'
 $prepareLifecycle=Join-Path $repoRoot 'minifilter-tools\prepare_production_lifecycle_qualification_package.ps1'
-$prepareDriver=Join-Path $repoRoot 'minifilter-tools\prepare_runtime_driver_package.ps1'
-foreach($required in @($serviceProject,$gateProject,$helperProject,$failureProject,$appSettings,$prepareLifecycle,$prepareDriver)){
+foreach($required in @($serviceProject,$gateProject,$helperProject,$failureProject,$prepareLifecycle)){
     if(-not(Test-Path -LiteralPath $required -PathType Leaf)){throw "Required transition source missing: $required"}
 }
 
-$driverPackage=Join-Path $OutputRoot 'driver'
-& $prepareDriver -CertificateThumbprint $CertificateThumbprint -OutputDirectory $driverPackage
-if($LASTEXITCODE -ne 0){throw 'Exact-source runtime driver package preparation failed.'}
-$driverProv=Get-Content -LiteralPath (Join-Path $driverPackage 'runtime-package.json') -Raw | ConvertFrom-Json
+$CurrentNormalReleaseDirectory=[IO.Path]::GetFullPath($CurrentNormalReleaseDirectory)
+$CurrentLabReleaseDirectory=[IO.Path]::GetFullPath($CurrentLabReleaseDirectory)
+$DriverPackageDirectory=[IO.Path]::GetFullPath($DriverPackageDirectory)
+foreach($pair in @(
+    @($CurrentNormalReleaseDirectory,'CurrentNormalReleaseDirectory'),
+    @($CurrentLabReleaseDirectory,'CurrentLabReleaseDirectory'),
+    @($DriverPackageDirectory,'DriverPackageDirectory')
+)){
+    if(-not(Test-Path -LiteralPath $pair[0] -PathType Container)){throw "$($pair[1]) missing: $($pair[0])"}
+    Assert-NoReparsePath $pair[0] $pair[1]
+}
+$currentReleaseService=Join-Path $CurrentNormalReleaseDirectory 'RansomGuard.Service.exe'
+$currentReleaseSettings=Join-Path $CurrentNormalReleaseDirectory 'appsettings.json'
+$currentReleaseGate=Join-Path $CurrentLabReleaseDirectory 'MinifilterLab\GateClient\RansomGuard.GateClient.exe'
+foreach($required in @($currentReleaseService,$currentReleaseSettings,$currentReleaseGate)){
+    if(-not(Test-Path -LiteralPath $required -PathType Leaf)){throw "Current release input missing: $required"}
+    Assert-NoReparsePath $required 'Current release input'
+}
+foreach($exe in @($currentReleaseService,$currentReleaseGate)){
+    $fileVersion=(Get-Item -LiteralPath $exe).VersionInfo.FileVersion
+    if(-not [string]::Equals($fileVersion,$currentVersionText,[StringComparison]::Ordinal)){
+        throw "Current release executable version mismatch: $exe expected=$currentVersionText actual=$fileVersion"
+    }
+}
+
+$driverProv=Get-Content -LiteralPath (Join-Path $DriverPackageDirectory 'runtime-package.json') -Raw | ConvertFrom-Json
 if(-not [string]::Equals([string]$driverProv.commit,$ExpectedCommit,[StringComparison]::OrdinalIgnoreCase)){
     throw "Driver package source '$($driverProv.commit)' does not match '$ExpectedCommit'."
 }
@@ -119,22 +142,28 @@ foreach($entry in @(
     $family="transition-$label"
     $root=Join-Path $OutputRoot $label
     $normal=Join-Path $root 'normal'
-    $labGate=Join-Path $root 'lab\MinifilterLab\GateClient'
+    $labRoot=Join-Path $root 'lab'
+    $labGate=Join-Path $labRoot 'MinifilterLab\GateClient'
     $helper=Join-Path $root 'helper'
     New-Item -ItemType Directory -Path $normal,$labGate,$helper -Force | Out-Null
 
-    $serviceOut=Join-Path $root 'service-publish'
-    Publish-VersionedProject ([string]$entry.ServiceProject) $version $family $serviceOut
-    $sourceExe=if($label -eq 'future'){
-        Join-Path $serviceOut 'RansomGuard.UpdaterFailureFixture.exe'
+    if($label -eq 'current'){
+        Copy-Item -LiteralPath $currentReleaseService -Destination (Join-Path $normal 'RansomGuard.Service.exe')
+        Copy-Item -LiteralPath $currentReleaseSettings -Destination (Join-Path $normal 'appsettings.json')
+        Copy-Item -LiteralPath $currentReleaseGate -Destination (Join-Path $labGate 'RansomGuard.GateClient.exe')
     }else{
-        Join-Path $serviceOut 'RansomGuard.Service.exe'
+        $serviceOut=Join-Path $root 'service-publish'
+        Publish-VersionedProject ([string]$entry.ServiceProject) $version $family $serviceOut
+        $sourceExe=if($label -eq 'future'){
+            Join-Path $serviceOut 'RansomGuard.UpdaterFailureFixture.exe'
+        }else{
+            Join-Path $serviceOut 'RansomGuard.Service.exe'
+        }
+        if(-not(Test-Path -LiteralPath $sourceExe -PathType Leaf)){throw "Versioned service fixture missing: $sourceExe"}
+        Copy-Item -LiteralPath $sourceExe -Destination (Join-Path $normal 'RansomGuard.Service.exe')
+        Copy-Item -LiteralPath $currentReleaseSettings -Destination (Join-Path $normal 'appsettings.json')
+        Publish-VersionedProject $gateProject $version "$family-gate" $labGate
     }
-    if(-not(Test-Path -LiteralPath $sourceExe -PathType Leaf)){throw "Versioned service fixture missing: $sourceExe"}
-    Copy-Item -LiteralPath $sourceExe -Destination (Join-Path $normal 'RansomGuard.Service.exe')
-    Copy-Item -LiteralPath $appSettings -Destination (Join-Path $normal 'appsettings.json')
-
-    Publish-VersionedProject $gateProject $version "$family-gate" $labGate
     Publish-VersionedProject $helperProject $version "$family-helper" $helper
 
     $serviceVersion=(Get-Item -LiteralPath (Join-Path $normal 'RansomGuard.Service.exe')).VersionInfo.FileVersion
@@ -148,9 +177,9 @@ foreach($entry in @(
 
     $package=Join-Path $root 'package'
     if($label -eq 'current'){
-        & $prepareLifecycle -NormalReleaseDirectory $normal -LabReleaseDirectory (Join-Path $root 'lab') -DriverPackageDirectory $driverPackage -CertificateThumbprint $CertificateThumbprint -OutputDirectory $package
+        & $prepareLifecycle -NormalReleaseDirectory $normal -LabReleaseDirectory $labRoot -DriverPackageDirectory $DriverPackageDirectory -CertificateThumbprint $CertificateThumbprint -OutputDirectory $package
     }else{
-        & $prepareLifecycle -NormalReleaseDirectory $normal -LabReleaseDirectory (Join-Path $root 'lab') -DriverPackageDirectory $driverPackage -CertificateThumbprint $CertificateThumbprint -OutputDirectory $package -ProductVersionOverride $version
+        & $prepareLifecycle -NormalReleaseDirectory $normal -LabReleaseDirectory $labRoot -DriverPackageDirectory $DriverPackageDirectory -CertificateThumbprint $CertificateThumbprint -OutputDirectory $package -ProductVersionOverride $version
     }
     if($LASTEXITCODE -ne 0){throw "$label production lifecycle qualification package preparation failed."}
 
@@ -205,6 +234,8 @@ $summary=[ordered]@{
     currentVersion=$currentVersionText
     futureFailureVersion=$futureVersionText
     driverPackageCommit=[string]$driverProv.commit
+    currentReleaseServiceSha256=(Get-FileHash -LiteralPath $currentReleaseService -Algorithm SHA256).Hash
+    currentReleaseGateClientSha256=(Get-FileHash -LiteralPath $currentReleaseGate -Algorithm SHA256).Hash
     driverSysSha256=[string]$current.driverSysSha256
     qualificationAltitude=[string]$current.altitude
     old=$old

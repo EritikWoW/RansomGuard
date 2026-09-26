@@ -78,27 +78,46 @@ function Get-UpdateRecord([string]$TransactionId){
     }
     return $matches[0]
 }
-function Get-AuditEntries {
+function Get-AuditPaths {
     $root=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)) 'RansomGuardV03'
-    $paths=@(
+    return @(
         (Join-Path $root 'audit.jsonl'),
         (Join-Path $root 'audit.1.jsonl'),
         (Join-Path $root 'audit.2.jsonl'),
         (Join-Path $root 'audit.3.jsonl')
     )
-    $items=@()
-    foreach($path in $paths){
+}
+function Get-ExactAuditEvidence(
+    [Parameter(Mandatory=$true)][string]$Event,
+    [Parameter(Mandatory=$true)][ValidatePattern('^[A-Fa-f0-9]{32}$')][string]$TransactionId,
+    [Parameter(Mandatory=$true)][string]$EvidenceLabel
+){
+    $rawMatches=@()
+    $parsedMatches=@()
+    foreach($path in @(Get-AuditPaths)){
         if(-not(Test-Path -LiteralPath $path -PathType Leaf)){continue}
         Assert-NoReparsePath $path 'Audit evidence'
-        foreach($line in Get-Content -LiteralPath $path -ErrorAction SilentlyContinue){
+        $lineNumber=0
+        foreach($line in Get-Content -LiteralPath $path -ErrorAction Stop){
+            $lineNumber++
             if([string]::IsNullOrWhiteSpace($line)){continue}
-            try{
-                $item=$line | ConvertFrom-Json
-                if($item.PSObject.Properties['Utc']){[void][DateTimeOffset]::Parse([string]$item.Utc);$items += $item}
-            }catch{}
+            if($line.IndexOf($TransactionId,[StringComparison]::OrdinalIgnoreCase) -lt 0){continue}
+            $rawMatches += [pscustomobject]@{
+                file=[IO.Path]::GetFileName($path)
+                line=$lineNumber
+                text=$line
+            }
+            try{$item=$line | ConvertFrom-Json -Depth 50}catch{continue}
+            if(-not $item.PSObject.Properties['Event'] -or -not $item.PSObject.Properties['Transaction']){continue}
+            if([string]$item.Event -ne $Event){continue}
+            if(-not [string]::Equals([string]$item.Transaction,$TransactionId,[StringComparison]::OrdinalIgnoreCase)){continue}
+            if(-not $item.PSObject.Properties['Utc']){throw "Exact $Event audit entry has no Utc field."}
+            $parsedMatches += $item
         }
     }
-    return @($items | Sort-Object {[DateTimeOffset]::Parse([string]$_.Utc)})
+    $rawPath=Join-Path $ResultsDirectory ($EvidenceLabel+'-raw-lines.json')
+    @($rawMatches) | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $rawPath -Encoding utf8
+    return @($parsedMatches)
 }
 
 Assert-Administrator
@@ -192,11 +211,9 @@ try{
     # Capture exact forward-update audit evidence before uninstall. Uninstall intentionally
     # removes the product data root, so deferring this check until the rollback scenario
     # would turn valid cleanup semantics into a false qualification failure.
-    $forwardAudit=@(Get-AuditEntries)
-    $forwardAuditEvidence=@($forwardAudit | Where-Object {
-        $_.Event -eq 'ServiceUpdateCompleted' -and
-        [string]::Equals([string]$_.Transaction,[string]$summary.forwardTransactionId,[StringComparison]::OrdinalIgnoreCase)
-    })
+    $forwardAuditEvidence=@(
+        Get-ExactAuditEvidence -Event 'ServiceUpdateCompleted' -TransactionId ([string]$summary.forwardTransactionId) -EvidenceLabel 'forward-completed-audit'
+    )
     if($forwardAuditEvidence.Count -lt 1){throw 'Exact ServiceUpdateCompleted audit evidence missing before uninstall.'}
     $summary.completionAuditObserved=$true
     $forwardAuditEvidence | ConvertTo-Json -Depth 30 |
@@ -246,11 +263,9 @@ try{
     $summary.rollbackJournalTerminal=$true
     $records | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'updater-transactions.json') -Encoding utf8
 
-    $rollbackAudit=@(Get-AuditEntries)
-    $rollbackAuditEvidence=@($rollbackAudit | Where-Object {
-        $_.Event -eq 'ServiceUpdateRolledBack' -and
-        [string]::Equals([string]$_.Transaction,[string]$summary.rollbackTransactionId,[StringComparison]::OrdinalIgnoreCase)
-    })
+    $rollbackAuditEvidence=@(
+        Get-ExactAuditEvidence -Event 'ServiceUpdateRolledBack' -TransactionId ([string]$summary.rollbackTransactionId) -EvidenceLabel 'rollback-audit'
+    )
     if($rollbackAuditEvidence.Count -lt 1){throw 'Exact ServiceUpdateRolledBack audit evidence missing.'}
     $summary.rollbackAuditObserved=$true
 

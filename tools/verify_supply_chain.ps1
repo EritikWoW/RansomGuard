@@ -102,6 +102,7 @@ $expectedPins=@{
     'actions/cache'='55cc8345863c7cc4c66a329aec7e433d2d1c52a9'
     'microsoft/setup-msbuild'='30375c66a4eea26614e0d39710365f22f8b0af57'
     'NuGet/setup-nuget'='fd55a6f3b34392fa83fde1454582407d8c714123'
+    'actions/attest'='a1948c3f048ba23858d222213b7c278aabede763'
 }
 
 foreach($workflow in $workflows){

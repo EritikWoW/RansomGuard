@@ -30,6 +30,36 @@ try
             Print(new { command, image, hash });
             return 0;
         }
+        case "install-production":
+        {
+            if (args.Length != 3) throw new ArgumentException("install-production <packageRoot> <protectedRoot>");
+            var hash = HashService(args[1]);
+            var root = Path.GetFullPath(args[2]);
+            var review = ServiceAdministration.ReviewInstallInput(args[1], hash, new[] { root }, productionEnforce: true);
+            if (!string.Equals(review.Mode, "Enforce", StringComparison.Ordinal) || !review.ProductionProtection)
+                throw new InvalidOperationException("Production install review did not bind Enforce to a verified Protection package.");
+            var image = ServiceAdministration.Install(
+                args[1], hash, new[] { root }, automatic: false, productionEnforce: true, confirmation: "INSTALL");
+            Print(new { command, image, hash, review.Mode, review.ProductionProtection, review.Altitude, protectedRoot = root });
+            return 0;
+        }
+        case "start":
+        {
+            if (args.Length != 1) throw new ArgumentException("start");
+            ServiceAdministration.Execute("start", "START");
+            Print(ServiceAdministration.Query());
+            return 0;
+        }
+        case "stop":
+        {
+            if (args.Length != 1) throw new ArgumentException("stop");
+            var before = ServiceAdministration.Query();
+            if (!before.QuerySucceeded) throw new IOException(before.Error);
+            if (before.Installed && !string.Equals(before.State, "Stopped", StringComparison.Ordinal))
+                ServiceAdministration.Execute("stop", "STOP");
+            Print(ServiceAdministration.Query());
+            return 0;
+        }
         case "review-update":
         {
             if (args.Length != 2) throw new ArgumentException("review-update <packageRoot>");

@@ -17,8 +17,9 @@ $windowsCiPath=Join-Path $root '.github\workflows\windows-ci.yml'
 $readinessPath=Join-Path $root 'src\RansomGuard.Service\ProductionContainmentReadiness.cs'
 $leasePath=Join-Path $root 'src\RansomGuard.Service\WindowsProcessStateChangeLease.cs'
 $serviceProgramPath=Join-Path $root 'src\RansomGuard.Service\Program.cs'
+$coordinatorPath=Join-Path $root 'src\RansomGuard.Service\ProductionContainmentCoordinator.cs'
 
-foreach($path in @($workflowPath,$harnessPath,$fixturePath,$dispatcherPath,$windowsCiPath,$readinessPath,$leasePath,$serviceProgramPath)){
+foreach($path in @($workflowPath,$harnessPath,$fixturePath,$dispatcherPath,$windowsCiPath,$readinessPath,$leasePath,$serviceProgramPath,$coordinatorPath)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){
         throw "Production containment recovery qualification source missing: $path"
     }
@@ -31,6 +32,7 @@ $windowsCi=Get-Content -LiteralPath $windowsCiPath -Raw
 $readiness=Get-Content -LiteralPath $readinessPath -Raw
 $lease=Get-Content -LiteralPath $leasePath -Raw
 $serviceProgram=Get-Content -LiteralPath $serviceProgramPath -Raw
+$coordinator=Get-Content -LiteralPath $coordinatorPath -Raw
 
 foreach($required in @(
     'RansomGuard production containment crash recovery VM qualification',
@@ -141,6 +143,31 @@ if($lease.IndexOf('_stateChangeHandle.Dispose()', [StringComparison]::Ordinal) -
     throw 'Process state-change handle must be released before the process handle.'
 }
 
+# Invalid durable journal data can be discovered after the exact process instance
+# has already been suspended. That failure must enter the same handled recovery
+# path as I/O/Win32 failures and must explicitly resume before relying on the
+# process-state-change handle release safety backstop.
+$handledFailurePattern='(?s)catch\s*\(Exception ex\)\s*when\s*\(\s*ex is IOException or\s*UnauthorizedAccessException or\s*InvalidDataException or\s*Win32Exception or\s*InvalidOperationException or\s*PlatformNotSupportedException\)'
+if($coordinator -notmatch $handledFailurePattern){
+    throw 'Production containment handled-failure recovery must include InvalidDataException after a real suspend.'
+}
+
+foreach($required in @(
+    'RecoveryResumeEvidenceFailed',
+    'Explicit state-change resume succeeded for request={RequestId}, but durable resume evidence failed; automatic containment remains fail-closed.',
+    'HandledFailureAfterResume',
+    'HandledFailureCrashRelease'
+)){
+    if($coordinator -notmatch [regex]::Escape($required)){
+        throw "Production containment explicit-resume recovery invariant missing: $required"
+    }
+}
+
+$resumeEvidencePattern='(?s)lease\.Resume\(\);.*?_journal\.RecordExplicitResumeApplied\(requestId\).*?catch\s*\(Exception ex\)\s*when\s*\(.*?UnauthorizedAccessException.*?InvalidDataException.*?InvalidOperationException.*?\).*?return true;'
+if($coordinator -notmatch $resumeEvidencePattern){
+    throw 'A durable resume-evidence failure must be contained after the physical exact-process resume and still report the explicit resume as applied.'
+}
+
 $journalInit=$serviceProgram.IndexOf('stateChangeJournal=new ContainmentStateChangeJournal', [StringComparison]::Ordinal)
 $journalVerify=$serviceProgram.IndexOf('stateChangeJournal.VerifyAll()', [StringComparison]::Ordinal)
 $lifecycleRegistration=$serviceProgram.IndexOf('builder.Services.AddHostedService(sp=>new ProductionProtectionLifecycle', [StringComparison]::Ordinal)
@@ -163,4 +190,4 @@ if($windowsCi -notmatch [regex]::Escape('.\tools\verify_production_containment_r
     throw 'Windows required CI does not execute the production containment recovery source gate.'
 }
 
-Write-Host 'Production containment fault/recovery qualification source gate passed: handled cancellation during SuspendApplied must explicitly resume into Abnormal (never Completed) and cleanly re-admit automatic containment before the separate hard-crash/incomplete-session recovery campaign.'
+Write-Host 'Production containment fault/recovery qualification source gate passed: handled cancellation and durable-journal data failures after SuspendApplied preserve exact-process explicit-resume safety, never fabricate Completed, and keep automatic containment fail-closed when recovery evidence cannot be persisted.'

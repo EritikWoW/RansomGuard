@@ -193,6 +193,7 @@ foreach($required in @(
 
 foreach($required in @(
     '_catalog.ObserveStart(',
+    'checked((int)e.ProcessId)',
     '(ulong)e.UniqueProcessKey',
     '_catalog.ObserveStop('
 )){

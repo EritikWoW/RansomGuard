@@ -59,6 +59,7 @@ public static class ContainmentActuationPolicy
             reasons.Add("CaseIdMissing");
         if (binding.EvaluatedUtc.Kind != DateTimeKind.Utc ||
             binding.ExpiresUtc.Kind != DateTimeKind.Utc ||
+            binding.ProtectionObservedUtc.Kind != DateTimeKind.Utc ||
             input.NowUtc.Kind != DateTimeKind.Utc)
             reasons.Add("TimestampNotUtc");
         if (binding.ExpiresUtc <= binding.EvaluatedUtc ||
@@ -72,6 +73,7 @@ public static class ContainmentActuationPolicy
         if (binding.Authorization is null ||
             !binding.Authorization.Eligible ||
             !string.Equals(binding.Authorization.State, ContainmentAuthorizationState.Eligible.ToString(), StringComparison.Ordinal) ||
+            binding.Authorization.Reasons is null ||
             binding.Authorization.Reasons.Length != 0)
             reasons.Add("AuthorizationNotEligible");
 

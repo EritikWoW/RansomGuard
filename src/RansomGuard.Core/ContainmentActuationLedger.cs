@@ -173,16 +173,16 @@ public sealed class ContainmentActuationLedger
         lock (_gate)
         {
             var prepared = RequirePrepared(requestId);
-            EnsureNoPhase(requestId, ContainmentActuationLedgerPhase.ResumeCompleted, "RequestAlreadyResumed");
-            EnsureNoPhase(requestId, ContainmentActuationLedgerPhase.Failed, "RequestAlreadyFailed");
-            EnsureNoPhase(requestId, ContainmentActuationLedgerPhase.SuspendCompleted, "SuspendAlreadyCompleted");
-
             var existing = _records.FirstOrDefault(x =>
                 x.Phase == ContainmentActuationLedgerPhase.SuspendOwned &&
                 RequestEquals(x, requestId) &&
                 x.ThreadId == threadId);
             if (existing is not null)
                 return existing;
+
+            EnsureNoPhase(requestId, ContainmentActuationLedgerPhase.ResumeCompleted, "RequestAlreadyResumed");
+            EnsureNoPhase(requestId, ContainmentActuationLedgerPhase.Failed, "RequestAlreadyFailed");
+            EnsureNoPhase(requestId, ContainmentActuationLedgerPhase.SuspendCompleted, "SuspendAlreadyCompleted");
 
             if (_records.Any(x =>
                 x.Phase == ContainmentActuationLedgerPhase.ResumeOwned &&
@@ -205,14 +205,14 @@ public sealed class ContainmentActuationLedger
         lock (_gate)
         {
             var prepared = RequirePrepared(requestId);
-            EnsureNoPhase(requestId, ContainmentActuationLedgerPhase.ResumeCompleted, "RequestAlreadyResumed");
-            EnsureNoPhase(requestId, ContainmentActuationLedgerPhase.Failed, "RequestAlreadyFailed");
-
             var existing = _records.FirstOrDefault(x =>
                 x.Phase == ContainmentActuationLedgerPhase.SuspendCompleted &&
                 RequestEquals(x, requestId));
             if (existing is not null)
                 return existing;
+
+            EnsureNoPhase(requestId, ContainmentActuationLedgerPhase.ResumeCompleted, "RequestAlreadyResumed");
+            EnsureNoPhase(requestId, ContainmentActuationLedgerPhase.Failed, "RequestAlreadyFailed");
 
             if (!_records.Any(x =>
                 x.Phase == ContainmentActuationLedgerPhase.SuspendOwned &&
@@ -241,6 +241,13 @@ public sealed class ContainmentActuationLedger
         lock (_gate)
         {
             var prepared = RequirePrepared(requestId);
+            var existing = _records.FirstOrDefault(x =>
+                x.Phase == ContainmentActuationLedgerPhase.ResumeOwned &&
+                RequestEquals(x, requestId) &&
+                x.ThreadId == threadId);
+            if (existing is not null)
+                return existing;
+
             EnsureNoPhase(requestId, ContainmentActuationLedgerPhase.ResumeCompleted, "RequestAlreadyResumed");
 
             var mayResume =
@@ -254,13 +261,6 @@ public sealed class ContainmentActuationLedger
                 RequestEquals(x, requestId) &&
                 x.ThreadId == threadId)
                 ?? throw new InvalidOperationException("SuspendIncrementNotOwned");
-
-            var existing = _records.FirstOrDefault(x =>
-                x.Phase == ContainmentActuationLedgerPhase.ResumeOwned &&
-                RequestEquals(x, requestId) &&
-                x.ThreadId == threadId);
-            if (existing is not null)
-                return existing;
 
             return Append(
                 ContainmentActuationLedgerPhase.ResumeOwned,
@@ -317,8 +317,6 @@ public sealed class ContainmentActuationLedger
         lock (_gate)
         {
             var prepared = RequirePrepared(requestId);
-            EnsureNoPhase(requestId, ContainmentActuationLedgerPhase.ResumeCompleted, "RequestAlreadyResumed");
-
             var existing = _records.FirstOrDefault(x =>
                 x.Phase == ContainmentActuationLedgerPhase.Failed &&
                 RequestEquals(x, requestId));
@@ -328,6 +326,8 @@ public sealed class ContainmentActuationLedger
                     return existing;
                 throw new InvalidDataException("Conflicting containment actuation failure reason.");
             }
+
+            EnsureNoPhase(requestId, ContainmentActuationLedgerPhase.ResumeCompleted, "RequestAlreadyResumed");
 
             return Append(
                 ContainmentActuationLedgerPhase.Failed,

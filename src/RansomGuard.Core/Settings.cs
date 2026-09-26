@@ -29,6 +29,8 @@ public sealed class GuardSettings
         if (Enforce is null)
             throw new InvalidOperationException("Enforce settings are required even when Audit mode is selected.");
         Enforce.ValidateFoundation();
+        if (string.Equals(Mode, "Audit", StringComparison.Ordinal) && Enforce.AutomaticContainment)
+            throw new InvalidOperationException("AutomaticContainment requires Mode=Enforce.");
         if (WindowSeconds is < 2 or > 60 || RiskThreshold is < 50 or > 300 ||
             QueueCapacity is < 128 or > 32768 || MaxProcesses is < 8 or > 1024 ||
             MaxEventsPerProcess is < 32 or > 2048 || IncidentCooldownSeconds is < 10 or > 600 ||
@@ -61,13 +63,12 @@ public sealed class EnforceSettings
     public long RollbackMaxStoreMiB { get; set; } = 8192;
     public long RollbackMinFreeMiB { get; set; } = 2048;
     public int ReconnectDelaySeconds { get; set; } = 2;
+    public int ContainmentHoldMilliseconds { get; set; } = 1000;
 
     public void ValidateFoundation()
     {
         if (!RequireSignedDriver)
             throw new InvalidOperationException("Enforce cannot disable the signed-driver requirement.");
-        if (AutomaticContainment)
-            throw new InvalidOperationException("AutomaticContainment remains disabled until production detector-to-containment policy is separately qualified.");
         if (StartupTimeoutSeconds is < 10 or > 120)
             throw new InvalidOperationException("Enforce StartupTimeoutSeconds must be between 10 and 120 seconds.");
         if (GateWorkers is < 1 or > 8)
@@ -76,6 +77,8 @@ public sealed class EnforceSettings
             throw new InvalidOperationException("Enforce rollback storage limits must be between 64 and 1048576 MiB.");
         if (ReconnectDelaySeconds is < 1 or > 30)
             throw new InvalidOperationException("Enforce ReconnectDelaySeconds must be between 1 and 30 seconds.");
+        if (ContainmentHoldMilliseconds is < 100 or > 5000)
+            throw new InvalidOperationException("Enforce ContainmentHoldMilliseconds must be between 100 and 5000 milliseconds.");
     }
 }
 public static class WinPaths

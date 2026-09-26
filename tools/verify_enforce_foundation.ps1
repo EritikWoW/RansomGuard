@@ -513,7 +513,7 @@ foreach($required in @(
     'ThreadSuspendResume',
     'ThreadQueryLimitedInformation',
     'SnapThread',
-    'UIntPtr OwnerProcessId',
+    'uint OwnerProcessId',
     'OpenThread',
     'SuspendThread',
     'ResumeThread',

@@ -45,6 +45,8 @@ if (expectedSha.Length != 40 || !expectedSha.All(Uri.IsHexDigit))
 }
 Directory.CreateDirectory(results);
 
+var threadEntry32LayoutValid = Marshal.SizeOf<ThreadEntry32>() == 28;
+
 var exe = Environment.ProcessPath ?? throw new InvalidOperationException("Qualification executable path unavailable.");
 var target = StartFixture(exe, results, "target");
 var unrelated = StartFixture(exe, results, "unrelated");
@@ -441,6 +443,7 @@ try
     }
 
     var passed =
+        threadEntry32LayoutValid &&
         successSuspended &&
         exactIdentityBound &&
         unrelatedUnaffected &&
@@ -471,6 +474,7 @@ try
         schema = 1,
         expectedSha = expectedSha.ToLowerInvariant(),
         target = new { targetKey.Pid, targetKey.CreationFileTimeUtc, path = targetPath, sha256 = targetHash },
+        threadEntry32LayoutValid,
         successArtifactState,
         successResumeState,
         successSuspended,

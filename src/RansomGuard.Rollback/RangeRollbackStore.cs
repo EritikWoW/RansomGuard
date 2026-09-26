@@ -202,7 +202,6 @@ public sealed class RangeRollbackStore
             .ToDictionary(x => x.BlockOffset);
 
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var buffer = new byte[_blockSize];
         for (long offset = 0; offset < baseline.OriginalLength; offset = checked(offset + _blockSize))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -226,8 +225,9 @@ public sealed class RangeRollbackStore
             }
 
             input.Position = offset;
-            await ReadExactlyAsync(input, buffer.AsMemory(0, length), cancellationToken).ConfigureAwait(false);
-            hash.AppendData(buffer, 0, length);
+            var currentBytes = new byte[length];
+            await ReadExactlyAsync(input, currentBytes, cancellationToken).ConfigureAwait(false);
+            hash.AppendData(currentBytes);
         }
 
         return new RangeRollbackRecoveryExpectation(

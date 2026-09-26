@@ -145,6 +145,8 @@ foreach($required in @(
 foreach($pattern in @(
  'RollbackRecoveryExecutor',
  'ExecuteReadyAsync',
+ 'ProductionRecoveryExecutionAdministration',
+ 'ExecuteCopyOutAsync',
  'ServiceAdministration\.Execute',
  'File\.Move\s*\(',
  'File\.Delete\s*\(',
@@ -155,6 +157,9 @@ foreach($pattern in @(
  'Directory\.Delete\s*\('
 )) {
  if($recoveryPane -match $pattern){throw "Elevated recovery review must remain read-only: forbidden pattern '$pattern'"}
+}
+if($window -match 'ProductionRecoveryExecutionAdministration|ExecuteCopyOutAsync'){
+ throw 'Current elevated review window must not expose production copy-out execution before a separately reviewed UI slice.'
 }
 if($recoveryPane -notmatch 'if \(_preview\)' -or $recoveryPane -notmatch 'Synthetic scene only'){
  throw 'Recovery review preview must remain synthetic-only and branch before production administration calls.'

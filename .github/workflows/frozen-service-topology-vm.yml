@@ -126,6 +126,7 @@ jobs:
           $ErrorActionPreference='Stop'
           $helper=Join-Path $env:RG_LAB_RELEASE 'MinifilterLab\RuntimeHarness\RansomGuard.Minifilter.RuntimeHarness.exe'
           $results=Join-Path $env:RUNNER_TEMP 'ransomguard-service-topology-results'
+          "RG_TOPOLOGY_RESULTS=$results" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           .\orchestrator\qualification\run_service_topology_adversarial.ps1 `
             -QualificationDirectory $env:RG_LIFECYCLE_PACKAGE `
             -RuntimeHelperExe $helper `
@@ -147,8 +148,6 @@ jobs:
           )){
             if($summary.$name -ne $true){throw "Service topology invariant '$name' was not true."}
           }
-          "RG_TOPOLOGY_RESULTS=$results" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
       - name: Upload service topology evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 node24 pinned

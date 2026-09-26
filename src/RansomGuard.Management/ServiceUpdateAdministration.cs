@@ -50,6 +50,17 @@ public static partial class ServiceAdministration
 
         using var target = OpenVerifiedUpdateSource(packageRoot, expectedServiceHash, out var targetVersion, out _);
         RequireForwardVersion(current.Version, targetVersion);
+
+        var currentFolder = Path.GetDirectoryName(Path.GetFullPath(before.ImagePath))
+            ?? throw new IOException("Installed service folder is unavailable.");
+        var currentSettings = ReadUpdateSettings(Path.Combine(currentFolder, "appsettings.json"));
+        var targetProtection = InspectUpdateProtectionPackage(packageRoot, targetVersion);
+        ValidateUpdateProtectionTransition(
+            currentSettings,
+            currentFolder,
+            current.Version,
+            targetProtection);
+
         return targetVersion;
     }
 
@@ -102,6 +113,14 @@ public static partial class ServiceAdministration
         if (new FileInfo(previousConfig).Length > 65536)
             throw new IOException("Installed configuration exceeds the update migration bound.");
 
+        var previousSettings = ReadUpdateSettings(previousConfig);
+        var targetProtection = InspectUpdateProtectionPackage(packageRoot, targetVersion);
+        ValidateUpdateProtectionTransition(
+            previousSettings,
+            previousFolder,
+            previous.Version,
+            targetProtection);
+
         EnsureNoIncompleteUpdate(store);
 
         EnsureInstallDirectory(InstallRoot);
@@ -148,16 +167,11 @@ public static partial class ServiceAdministration
                 CopyNewAndFlush(sourceConfig, targetConfig);
             SetInstallFileAcl(targetConfig);
 
-            using (var config = new FileStream(targetConfig, FileMode.Open, FileAccess.Read, FileShare.Read))
-            {
-                if (config.Length > 65536)
-                    throw new IOException("Staged configuration exceeds the update migration bound.");
-                var parsed = JsonSerializer.Deserialize<GuardSettings>(config)
-                    ?? throw new IOException("Staged configuration is missing.");
-                parsed.Validate();
-                if (parsed.ProtectedRoots.Length == 0)
-                    throw new IOException("Staged configuration lost explicit protected roots.");
-            }
+            var stagedSettings = ReadUpdateSettings(targetConfig);
+            if (!string.Equals(stagedSettings.Mode, previousSettings.Mode, StringComparison.Ordinal))
+                throw new IOException("Staged configuration changed protection mode during migration.");
+
+            StageUpdateProtectionPackage(targetProtection, targetFolder);
 
             WriteNew(targetInstallRecord, new InstallRecord(1, targetVersion, targetHash, DateTime.UtcNow));
             record = PersistUpdate(store, journalPath, record, "Prepared", null);
@@ -170,7 +184,10 @@ public static partial class ServiceAdministration
                 PreviousVersion = previous.Version,
                 TargetImage = targetImage,
                 TargetVersion = targetVersion,
-                TargetSha256 = targetHash
+                TargetSha256 = targetHash,
+                ProtectionTransition = targetProtection is null
+                    ? "None"
+                    : "VersionBoundCompatible"
             });
 
             ChangeServiceImage(service, targetImage);
@@ -236,7 +253,13 @@ public static partial class ServiceAdministration
             if (!scmCommitted)
             {
                 PersistUpdate(store, journalPath, record, "AbortedBeforeCommit", updateError.Message);
-                CleanupUncommittedStaging(targetDirectoryCreated, targetFolder, targetImage, targetConfig, targetInstallRecord);
+                CleanupStagedProtectionPackage(targetFolder);
+                CleanupUncommittedStaging(
+                    targetDirectoryCreated,
+                    targetFolder,
+                    targetImage,
+                    targetConfig,
+                    targetInstallRecord);
                 throw new IOException("Update failed before the SCM commit point; the previous installation remains selected. " + updateError.Message, updateError);
             }
 

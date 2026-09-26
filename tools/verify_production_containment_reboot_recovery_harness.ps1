@@ -54,7 +54,7 @@ if($workflow -match '(?im)^\s*continue-on-error\s*:\s*true\s*$'){
 if($workflow -match '(?m)^\s*push\s*:'){
     throw 'Containment reboot-recovery workflow must remain manual-only.'
 }
-if($workflow -notmatch [regex]::Escape("if: ${{ inputs.phase == 'arm' }}")){
+if($workflow -notmatch [regex]::Escape('if: ${{ inputs.phase == ''arm'' }}')){
     throw 'Persistent qualification package must be created only during ARM.'
 }
 

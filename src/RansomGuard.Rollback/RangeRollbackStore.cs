@@ -174,6 +174,68 @@ public sealed class RangeRollbackStore
     }
 
     /// <summary>
+    /// Computes the exact byte length and SHA-256 that a range-COW recovery copy must have.
+    /// The digest is derived before output creation from the current live base plus every
+    /// verified committed original block, and therefore detects source drift during copy-out.
+    /// </summary>
+    public async Task<RangeRollbackRecoveryExpectation> ComputeExpectedRecoveryAsync(
+        string damagedPath,
+        CancellationToken cancellationToken = default)
+    {
+        var full = NormalizeSource(damagedPath);
+        if (!_baselines.TryGetValue(full, out var baseline))
+            throw new InvalidOperationException("No range rollback baseline exists for this path.");
+        if (!File.Exists(full))
+            throw new FileNotFoundException("Damaged source is missing; range reconstruction cannot use it as the base.", full);
+        RejectReparse(full);
+
+        using var input = new FileStream(
+            full, FileMode.Open, FileAccess.Read,
+            FileShare.Read | FileShare.Write | FileShare.Delete,
+            _blockSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        if (input.Length < baseline.OriginalLength)
+            throw new InvalidDataException(
+                "Damaged source is shorter than the recorded original length. Use a full pre-image/transaction recovery path.");
+
+        var blocks = _blocks.Values
+            .Where(x => x.OriginalPath.Equals(full, StringComparison.OrdinalIgnoreCase))
+            .ToDictionary(x => x.BlockOffset);
+
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[_blockSize];
+        for (long offset = 0; offset < baseline.OriginalLength; offset = checked(offset + _blockSize))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var length = checked((int)Math.Min(_blockSize, baseline.OriginalLength - offset));
+
+            if (blocks.TryGetValue(offset, out var block))
+            {
+                if (block.BlockLength != length)
+                    throw new InvalidDataException("Range rollback block length does not match the original file segment.");
+                var snapshot = SafeSnapshotPath(block.SnapshotRelativePath);
+                if (!File.Exists(snapshot))
+                    throw new FileNotFoundException("Range rollback block is missing.", snapshot);
+                var bytes = await File.ReadAllBytesAsync(snapshot, cancellationToken).ConfigureAwait(false);
+                if (bytes.Length != block.BlockLength)
+                    throw new InvalidDataException("Range rollback block length mismatch.");
+                var blockSha = Hex(SHA256.HashData(bytes));
+                if (!blockSha.Equals(block.SnapshotSha256, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("Range rollback block SHA-256 mismatch.");
+                hash.AppendData(bytes);
+                continue;
+            }
+
+            input.Position = offset;
+            await ReadExactlyAsync(input, buffer.AsMemory(0, length), cancellationToken).ConfigureAwait(false);
+            hash.AppendData(buffer, 0, length);
+        }
+
+        return new RangeRollbackRecoveryExpectation(
+            baseline.OriginalLength,
+            Hex(hash.GetHashAndReset()));
+    }
+
+    /// <summary>
     /// Reconstructs a write-damaged file into a new copy by overlaying captured original blocks
     /// and restoring the original file length. This method never overwrites the damaged source.
     /// </summary>
@@ -449,6 +511,8 @@ public sealed class RangeRollbackStore
         try { if (File.Exists(path)) File.Delete(path); } catch { }
     }
 }
+
+public sealed record RangeRollbackRecoveryExpectation(long ExpectedLength, string ExpectedSha256);
 
 public sealed record RangeRollbackBaseline(
     long Sequence,

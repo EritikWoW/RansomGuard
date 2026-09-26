@@ -114,11 +114,11 @@ jobs:
         run: |
           $ErrorActionPreference='Stop'
           $project='.\qualification\RansomGuard.UpdaterQualification\RansomGuard.UpdaterQualification.csproj'
-          dotnet restore $project --locked-mode -r win-x64 -p:BaseIntermediateOutputPath=obj\installer\
+          dotnet restore $project --locked-mode -r win-x64
           if($LASTEXITCODE -ne 0){throw 'Installer administration helper restore failed.'}
           $out=Join-Path $env:RUNNER_TEMP 'ransomguard-production-installer-helper'
           if(Test-Path -LiteralPath $out){Remove-Item -LiteralPath $out -Recurse -Force}
-          dotnet publish $project -c Release -r win-x64 --self-contained true --no-restore -p:BaseIntermediateOutputPath=obj\installer\ -p:BaseOutputPath=bin\installer\ -o $out
+          dotnet publish $project -c Release -r win-x64 --self-contained true --no-restore -o $out
           if($LASTEXITCODE -ne 0){throw 'Installer administration helper publish failed.'}
           $exe=Join-Path $out 'RansomGuard.UpdaterQualification.exe'
           if(-not(Test-Path -LiteralPath $exe -PathType Leaf)){throw 'Installer administration helper executable missing.'}

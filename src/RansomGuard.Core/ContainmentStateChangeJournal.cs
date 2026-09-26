@@ -295,7 +295,7 @@ public sealed class ContainmentStateChangeJournal
         if (_records.Count >= MaxJournalRecords)
             throw new IOException("ContainmentStateChangeJournalQuotaReached: record limit reached.");
 
-        var sequence = checked(++_nextSequence);
+        var sequence = checked(_nextSequence + 1);
         var payload = new ContainmentStateChangeJournalPayload(
             sequence,
             observedUtc,
@@ -334,6 +334,7 @@ public sealed class ContainmentStateChangeJournal
             recordHash);
 
         AppendLine(line);
+        _nextSequence = sequence;
         _lastRecordHash = recordHash;
         var record = line.ToEntry();
         _records.Add(record);

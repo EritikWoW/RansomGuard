@@ -68,7 +68,7 @@ if ($immutable.Count -eq 0) {
 $creation = @(
     $tagRulesets | Where-Object {
         $types = @($_.rules | ForEach-Object { [string]$_.type })
-        $bypass = @($_.bypass_actors)
+        $bypass = @(Get-BypassActors $_)
         $types -contains 'creation' -and $bypass.Count -ge 1
     }
 )

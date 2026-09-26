@@ -272,14 +272,14 @@ function Quarantine-ExistingQualificationState([string]$StateRoot,[string]$Purpo
 function Get-ExactServicePid([string]$ServiceName,[string]$ExpectedExecutable){
     $svc=Get-CimInstance Win32_Service -Filter "Name='$ServiceName'" -ErrorAction Stop
     if(-not $svc -or [int]$svc.ProcessId -le 4){throw 'SCM did not expose a valid service process id.'}
-    $pid=[int]$svc.ProcessId
-    $process=Get-CimInstance Win32_Process -Filter "ProcessId=$pid" -ErrorAction Stop
-    if(-not $process){throw "Unable to inspect service process $pid."}
+    $serviceProcessId=[int]$svc.ProcessId
+    $process=Get-CimInstance Win32_Process -Filter "ProcessId=$serviceProcessId" -ErrorAction Stop
+    if(-not $process){throw "Unable to inspect service process $serviceProcessId."}
     $actual=[IO.Path]::GetFullPath([string]$process.ExecutablePath)
     if(-not [string]::Equals($actual,[IO.Path]::GetFullPath($ExpectedExecutable),[StringComparison]::OrdinalIgnoreCase)){
-        throw "REFUSED: SCM service pid $pid points to unexpected image '$actual'."
+        throw "REFUSED: SCM service pid $serviceProcessId points to unexpected image '$actual'."
     }
-    return $pid
+    return $serviceProcessId
 }
 
 Assert-Administrator

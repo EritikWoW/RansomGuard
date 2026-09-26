@@ -181,6 +181,8 @@ foreach($required in @(
     'void ObserveStop',
     'UniqueProcessKey',
     'StopUtc',
+    'EtwLifetimeSnapshot',
+    'eventUtc<=x.StopUtc.Value',
     'new ProcessKey(pid,0)',
     'ExactIdentity:false',
     'TimeSpan.FromSeconds(30)'
@@ -188,6 +190,10 @@ foreach($required in @(
     if($native -notmatch [regex]::Escape($required)){
         throw "ProcessCatalog ETW lifecycle invariant missing: $required"
     }
+}
+
+if($native -match [regex]::Escape('AddMilliseconds(250)')){
+    throw 'ETW process attribution must not extend a stopped PID lifetime beyond the exact ProcessStop timestamp.'
 }
 
 foreach($required in @(

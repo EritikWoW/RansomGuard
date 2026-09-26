@@ -14,6 +14,7 @@ $containmentActuationPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\Contai
 $containmentActuatorPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\ContainmentActuator.cs'
 $containmentActuationLedgerPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\ContainmentActuationLedger.cs'
 $windowsContainmentActuatorPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\WindowsContainmentActuator.cs'
+$windowsStateChangeActuatorPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\WindowsProcessStateChangeLease.cs'
 $nativePath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\Native.cs'
 $localApiPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\LocalApi.cs'
 $serviceRuntimePath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\RuntimeState.cs'
@@ -24,7 +25,7 @@ $lifecyclePath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\ProductionProt
 $appSettingsPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\appsettings.json'
 $driverPath=Join-Path $RepositoryRoot 'driver\RansomGuard.Minifilter\RansomGuardMinifilter.c'
 $buildPath=Join-Path $RepositoryRoot 'build_windows.ps1'
-foreach($path in @($settingsPath,$runtimePath,$containmentAuthorizationPath,$containmentActuationPath,$containmentActuatorPath,$containmentActuationLedgerPath,$windowsContainmentActuatorPath,$nativePath,$localApiPath,$serviceRuntimePath,$guardWorkerPath,$programPath,$bootstrapPath,$lifecyclePath,$appSettingsPath,$driverPath,$buildPath)){
+foreach($path in @($settingsPath,$runtimePath,$containmentAuthorizationPath,$containmentActuationPath,$containmentActuatorPath,$containmentActuationLedgerPath,$windowsContainmentActuatorPath,$windowsStateChangeActuatorPath,$nativePath,$localApiPath,$serviceRuntimePath,$guardWorkerPath,$programPath,$bootstrapPath,$lifecyclePath,$appSettingsPath,$driverPath,$buildPath)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Production Enforce lifecycle file missing: $path"}
 }
 
@@ -35,6 +36,7 @@ $containmentActuation=Get-Content -LiteralPath $containmentActuationPath -Raw
 $containmentActuator=Get-Content -LiteralPath $containmentActuatorPath -Raw
 $containmentActuationLedger=Get-Content -LiteralPath $containmentActuationLedgerPath -Raw
 $windowsContainmentActuator=Get-Content -LiteralPath $windowsContainmentActuatorPath -Raw
+$windowsStateChangeActuator=Get-Content -LiteralPath $windowsStateChangeActuatorPath -Raw
 $native=Get-Content -LiteralPath $nativePath -Raw
 $localApi=Get-Content -LiteralPath $localApiPath -Raw
 $serviceRuntime=Get-Content -LiteralPath $serviceRuntimePath -Raw
@@ -476,6 +478,38 @@ foreach($forbidden in @(
 }
 
 foreach($required in @(
+    'WindowsProcessStateChangeLease',
+    'ProcessStateChangeHandle',
+    'NtCreateProcessStateChange',
+    'NtChangeProcessState',
+    'ProcessStateChangeSuspend',
+    'ProcessStateChangeResume',
+    'IsSupported()',
+    'ProcessIdentityChanged',
+    'Native.IsProcessCritical',
+    'freshImageSha256',
+    'ImageSha256',
+    'The state-change handle is deliberately released before the process'
+)){
+    if($windowsStateChangeActuator -notmatch [regex]::Escape($required)){
+        throw "Windows crash-safe state-change backend invariant missing: $required"
+    }
+}
+
+foreach($forbidden in @(
+    'SuspendThread',
+    'ResumeThread',
+    'NtSuspendProcess',
+    'NtResumeProcess',
+    'TerminateProcess',
+    '.Kill('
+)){
+    if($windowsStateChangeActuator -match [regex]::Escape($forbidden)){
+        throw "Crash-safe state-change backend must not fall back to a crash-unsafe process/thread primitive: $forbidden"
+    }
+}
+
+foreach($required in @(
     'ThreadSuspendResume',
     'ThreadQueryLimitedInformation',
     'SnapThread',
@@ -498,6 +532,9 @@ if($containmentActuationLedger -notmatch [regex]::Escape('ThreadIdentityChangedF
 
 foreach($forbidden in @(
     'ContainmentActuationPolicy.Evaluate',
+    'WindowsProcessStateChangeLease',
+    'NtCreateProcessStateChange',
+    'NtChangeProcessState',
     'NtSuspendProcess',
     'NtResumeProcess',
     'SuspendThread',
@@ -526,6 +563,21 @@ $labActuator=$guardWorker.IndexOf('using var freeze=LabFreeze.OpenAuthorized',$o
 if($authorizationEval -lt 0 -or $ordinaryBranch -lt 0 -or $ordinaryReturn -lt 0 -or $labActuator -lt 0 -or
    $authorizationEval -gt $ordinaryBranch -or $ordinaryBranch -gt $ordinaryReturn -or $ordinaryReturn -gt $labActuator){
     throw 'Ordinary incident handling must persist/evaluate containment authorization and return before the LAB-only actuator path.'
+}
+
+foreach($source in @(
+    @{Name='Program';Content=$program},
+    @{Name='WindowsServiceBootstrap';Content=$bootstrap}
+)){
+    foreach($forbidden in @(
+        'WindowsProcessStateChangeLease',
+        'NtCreateProcessStateChange',
+        'NtChangeProcessState'
+    )){
+        if($source.Content -match [regex]::Escape($forbidden)){
+            throw "$($source.Name) must not wire the state-change actuator before exact-SHA VM qualification: $forbidden"
+        }
+    }
 }
 
 $app=($appSettings | ConvertFrom-Json)

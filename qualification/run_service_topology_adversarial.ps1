@@ -158,14 +158,25 @@ function Reset-StateRoot {
 }
 
 function Cleanup-OwnedState([string]$ProtectedRoot){
+    $serviceKey='HKLM:\SYSTEM\CurrentControlSet\Services\RansomGuardV03'
+    if(Test-Path -LiteralPath $serviceKey){
+        $props=Get-ItemProperty -LiteralPath $serviceKey
+        $image=[string]$props.ImagePath
+        $expected=[IO.Path]::GetFullPath($serviceExe)
+        $normalized=$image.Trim().Trim('"')
+        if(-not [string]::Equals($normalized,$expected,[StringComparison]::OrdinalIgnoreCase)){
+            throw "REFUSED: existing RansomGuardV03 service is not owned by this qualification package. image='$image' expected='$expected'"
+        }
+    }
+
     $svc=Get-Service -Name 'RansomGuardV03' -ErrorAction SilentlyContinue
     if($svc -and $svc.Status -ne 'Stopped'){
         try{Invoke-Sc @('stop','RansomGuardV03') -AllowNonZero | Out-Null}catch{}
         try{Wait-ServiceState 'Stopped' 30}catch{}
     }
-    if(Test-Path -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\RansomGuardV03'){
+    if(Test-Path -LiteralPath $serviceKey){
         Invoke-Sc @('delete','RansomGuardV03') -AllowNonZero | Out-Null
-        for($i=0;$i -lt 30 -and (Test-Path -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\RansomGuardV03');$i++){Start-Sleep -Milliseconds 100}
+        for($i=0;$i -lt 30 -and (Test-Path -LiteralPath $serviceKey);$i++){Start-Sleep -Milliseconds 100}
     }
 
     $filters=(& fltmc filters 2>$null | Out-String)

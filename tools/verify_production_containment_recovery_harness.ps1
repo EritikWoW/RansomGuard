@@ -56,6 +56,14 @@ foreach($required in @(
     '$config.Enforce.AutomaticContainment=$true',
     '$config.Enforce.ContainmentHoldMilliseconds=5000',
     'Wait-JournalPhaseForProcess',
+    'cancellationStopIssued',
+    'ActuationCancelledAfterResume',
+    'cancellationExplicitResumeRecorded',
+    'cancellationAbnormalRecorded',
+    'cancellationCompletedAbsent',
+    'cancellationHeartbeatRecovered',
+    'cancellationAutomaticContainmentReady',
+    'Handled cancellation request fabricated a Completed terminal phase.',
     'Stop-Process -Id $servicePid -Force',
     'kernelFailSafeRetained',
     'Wait-HeartbeatAdvance',
@@ -155,4 +163,4 @@ if($windowsCi -notmatch [regex]::Escape('.\tools\verify_production_containment_r
     throw 'Windows required CI does not execute the production containment recovery source gate.'
 }
 
-Write-Host 'Production containment crash/restart recovery qualification source gate passed.'
+Write-Host 'Production containment fault/recovery qualification source gate passed: handled cancellation during SuspendApplied must explicitly resume into Abnormal (never Completed) and cleanly re-admit automatic containment before the separate hard-crash/incomplete-session recovery campaign.'

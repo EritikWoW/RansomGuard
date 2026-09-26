@@ -318,15 +318,17 @@ if(-not [string]::Equals([string]$package.commit,$ExpectedCommit,[StringComparis
 $root=Join-Path $RootBase "containment-recovery-$stamp"
 New-Item -ItemType Directory -Path $root -Force | Out-Null
 Assert-NoReparsePath $root 'ProtectedRoot'
+$cancelCanary=Join-Path $root 'cancel-canary.bin'
 $crashCanary=Join-Path $root 'crash-canary.bin'
 $blockedCanary=Join-Path $root 'post-restart-canary.bin'
+[IO.File]::WriteAllText($cancelCanary,'ransomguard-cancel-canary-original',[Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText($crashCanary,'ransomguard-crash-canary-original',[Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText($blockedCanary,'ransomguard-restart-canary-original',[Text.UTF8Encoding]::new($false))
 
 $config=Get-Content -LiteralPath $appSettings -Raw | ConvertFrom-Json
 $config.Mode='Enforce'
 $config.ProtectedRoots=@($root)
-$config.CanaryFiles=@($crashCanary,$blockedCanary)
+$config.CanaryFiles=@($cancelCanary,$crashCanary,$blockedCanary)
 $config.Enforce.RequireSignedDriver=$true
 $config.Enforce.AutomaticContainment=$true
 $config.Enforce.ContainmentHoldMilliseconds=5000
@@ -358,6 +360,20 @@ $summary=[ordered]@{
     priorStateQuarantine=$null
     stateGenerationMarkerReady=$false
     initialProtectionReady=$false
+    cancellationFixturePid=0
+    cancellationFixtureCreationFileTimeUtc=0
+    cancellationRequestId=$null
+    cancellationSuspendApplied=$false
+    cancellationStopIssued=$false
+    cancellationExplicitResumeRecorded=$false
+    cancellationAbnormalRecorded=$false
+    cancellationCompletedAbsent=$false
+    cancellationHeartbeatRecovered=$false
+    cancellationFixtureCompleted=$false
+    cancellationMaintenanceStop=$false
+    cancellationDriverUnloaded=$false
+    cancellationRestarted=$false
+    cancellationAutomaticContainmentReady=$false
     crashFixturePid=0
     crashFixtureCreationFileTimeUtc=0
     crashRequestId=$null
@@ -429,6 +445,94 @@ try{
 
     $fixtureRoot=Join-Path $ResultsDirectory 'fixture'
     New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
+
+    # Fault-injection case 1: request a normal SCM stop while a real production
+    # containment lease is suspended. The coordinator must take its handled
+    # cancellation path: explicit resume -> Abnormal terminal evidence, never
+    # Completed. A subsequent clean restart must admit automatic containment
+    # again because this session is terminal rather than incomplete.
+    $cancelHeartbeat=Join-Path $fixtureRoot 'cancel-heartbeat.txt'
+    $cancelReadyPath=Join-Path $fixtureRoot 'cancel-ready.json'
+    $cancelResult=Join-Path $fixtureRoot 'cancel-result.json'
+    $cancelFixture=Start-Process -FilePath $FixtureExecutable -ArgumentList @(
+        '--malicious',$cancelCanary,$cancelHeartbeat,$cancelReadyPath,$cancelResult
+    ) -PassThru -WindowStyle Hidden
+    $cancelReady=Wait-JsonFile $cancelReadyPath 10
+    if([int]$cancelReady.pid -ne $cancelFixture.Id -or [long]$cancelReady.creationFileTimeUtc -le 0){
+        throw 'Cancellation fixture ready identity mismatch.'
+    }
+    $summary.cancellationFixturePid=[int]$cancelReady.pid
+    $summary.cancellationFixtureCreationFileTimeUtc=[long]$cancelReady.creationFileTimeUtc
+
+    $cancelSuspend=Wait-JournalPhaseForProcess $journalPath ([int]$cancelReady.pid) ([long]$cancelReady.creationFileTimeUtc) 2 20
+    $summary.cancellationSuspendApplied=$true
+    $summary.cancellationRequestId=[string]$cancelSuspend.requestId
+
+    $cancelHeartbeatBefore=''
+    if(Test-Path -LiteralPath $cancelHeartbeat -PathType Leaf){
+        try{$cancelHeartbeatBefore=Get-Content -LiteralPath $cancelHeartbeat -Raw}catch{}
+    }
+
+    $cancelStopUtc=[DateTimeOffset]::UtcNow
+    Invoke-Sc @('stop',$serviceName) | Out-Null
+    $summary.cancellationStopIssued=$true
+    Wait-ServiceState $serviceName 'Stopped' 60
+
+    [void](Wait-HeartbeatAdvance $cancelHeartbeat $cancelHeartbeatBefore 8)
+    $summary.cancellationHeartbeatRecovered=$true
+    if(-not $cancelFixture.WaitForExit(20000)){
+        try{$cancelFixture.Kill($true)}catch{}
+        throw 'Cancellation fixture did not finish after explicit resume.'
+    }
+    if($cancelFixture.ExitCode -ne 0){throw "Cancellation fixture failed exit=$($cancelFixture.ExitCode)."}
+    [void](Wait-JsonFile $cancelResult 3)
+    $summary.cancellationFixtureCompleted=$true
+
+    $cancelRecords=@(Get-JournalRecordsForProcess $journalPath ([int]$cancelReady.pid) ([long]$cancelReady.creationFileTimeUtc))
+    $cancelPhases=@($cancelRecords | ForEach-Object {[int]$_.phase})
+    foreach($requiredPhase in @(1,2,3,5)){
+        if($cancelPhases -notcontains $requiredPhase){
+            throw "Handled cancellation request is missing durable journal phase $requiredPhase."
+        }
+    }
+    if($cancelPhases -contains 4){
+        throw 'Handled cancellation request fabricated a Completed terminal phase.'
+    }
+    $cancelAbnormal=@($cancelRecords | Where-Object {[int]$_.phase -eq 5})
+    if($cancelAbnormal.Count -ne 1 -or
+       [string]$cancelAbnormal[0].reasonCode -ne 'ActuationCancelledAfterResume'){
+        throw 'Handled cancellation did not preserve the exact ActuationCancelledAfterResume terminal evidence.'
+    }
+    $summary.cancellationExplicitResumeRecorded=$true
+    $summary.cancellationAbnormalRecorded=$true
+    $summary.cancellationCompletedAbsent=$true
+
+    $cancelMaintenance=Wait-Audit 'Type' 'ProductionProtectionMaintenanceStop' $cancelStopUtc 20 -AllowStopped
+    if([string]$cancelMaintenance.Protection.State -ne 'Maintenance'){
+        throw 'Handled cancellation service stop did not publish Maintenance.'
+    }
+    $summary.cancellationMaintenanceStop=$true
+
+    $filtersAfterCancellation=(& fltmc filters 2>$null | Out-String)
+    if($LASTEXITCODE -ne 0 -or $filtersAfterCancellation -match '(?m)^\s*RansomGuardMinifilter\b'){
+        throw 'Handled cancellation left RansomGuardMinifilter loaded after clean service stop.'
+    }
+    $summary.cancellationDriverUnloaded=$true
+
+    $cancelRestartUtc=[DateTimeOffset]::UtcNow
+    Invoke-Sc @('start',$serviceName) | Out-Null
+    Wait-ServiceState $serviceName 'Running' 30
+    $cancelActivation=Wait-Audit 'Type' 'ProductionProtectionActivated' $cancelRestartUtc 90
+    $cancelReadyAudit=Wait-Audit 'Type' 'AutomaticContainmentReady' $cancelRestartUtc 30
+    if([string]$cancelActivation.Protection.State -ne 'Protected' -or
+       $cancelActivation.Protection.KernelEnforcementActive -ne $true -or
+       $cancelReadyAudit.Protection.AutomaticContainmentActive -ne $true){
+        throw 'Handled cancellation restart did not restore fully active automatic containment.'
+    }
+    $summary.cancellationRestarted=$true
+    $summary.cancellationAutomaticContainmentReady=$true
+    $summary.gatePid=[int]$cancelActivation.GateClientPid
+
     $crashHeartbeat=Join-Path $fixtureRoot 'crash-heartbeat.txt'
     $crashReadyPath=Join-Path $fixtureRoot 'crash-ready.json'
     $crashResult=Join-Path $fixtureRoot 'crash-result.json'

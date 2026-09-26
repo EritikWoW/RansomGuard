@@ -30,10 +30,14 @@ internal sealed class ImageInspector
             if(f.Length>512L*1024*1024) throw new IOException("Image exceeds hashing size limit.");
             var final=Native.FinalFilePath(f.SafeFileHandle);
             if(!WinPaths.Equal(path,final)) throw new IOException("Final opened-file path differs from reported image path.");
+            var fileIdentity=Native.FileIdentity(f.SafeFileHandle);
             var hash=Convert.ToHexString(SHA256.HashData(f));
             f.Position=0;
             var signature=Authenticode.Check(f,path);
-            var evidence=new ImageEvidence(path,hash,f.Length,"Hashed",signature,Lookup(hash),now,null);
+            var evidence=new ImageEvidence(path,hash,f.Length,"Hashed",signature,Lookup(hash),now,null)
+            {
+                FileIdentity=fileIdentity
+            };
             if(_cache.Count>=256) _cache.Remove(_cache.MinBy(x=>x.Value.ObservedUtc).Key);
             _cache[path]=evidence;
             if(!_seen.TryGetValue(hash,out var prev))prev=new(hash,now,now,0);

@@ -476,10 +476,13 @@ try
     Check(inProgress.State==ContainmentActuationResultState.InProgress.ToString()&&inProgress.OwnedSuspendCount==2,
         "actuation result exposes outstanding owned suspend increments");
 
-    ledger.RecordSuspendCompleted(ledgerRequestId);
+    var suspendCompletedRecord=ledger.RecordSuspendCompleted(ledgerRequestId);
     var suspended=ledger.ResultFor(ledgerRequestId);
     Check(suspended.State==ContainmentActuationResultState.Suspended.ToString()&&suspended.OwnedSuspendCount==2,
         "suspend completion remains bound to the owned increments");
+    Check(ledger.RecordSuspendOwned(ledgerRequestId,9001).Sequence==owned1.Sequence&&
+          ledger.RecordSuspendCompleted(ledgerRequestId).Sequence==suspendCompletedRecord.Sequence,
+        "suspend records remain idempotent after suspend completion");
 
     rejected=false;try{ledger.RecordSuspendOwned(ledgerRequestId,9003);}catch(InvalidOperationException){rejected=true;}
     Check(rejected,"no new suspend increment can be added after suspend completion");
@@ -491,11 +494,13 @@ try
     rejected=false;try{ledger.RecordResumeCompleted(ledgerRequestId);}catch(InvalidOperationException){rejected=true;}
     Check(rejected,"resume completion refuses stranded owned increments");
 
-    ledger.RecordResumeOwned(ledgerRequestId,9002);
+    var resumedOwned2=ledger.RecordResumeOwned(ledgerRequestId,9002);
     ledger.RecordResumeCompleted(ledgerRequestId);
     var resumed=ledger.ResultFor(ledgerRequestId);
     Check(resumed.State==ContainmentActuationResultState.Resumed.ToString()&&resumed.OwnedSuspendCount==0,
         "resume completion proves every owned suspend increment was released");
+    Check(ledger.RecordResumeOwned(ledgerRequestId,9002).Sequence==resumedOwned2.Sequence,
+        "owned resume retry stays idempotent after resume completion");
 
     var failureAuthorizationId=Guid.NewGuid().ToString("N");
     var failureRequestId=Guid.NewGuid().ToString("N");
@@ -510,9 +515,11 @@ try
         new ContainmentActuationRequest(failureRequestId,failureBinding,now.AddSeconds(1)),
         failureValidation);
     ledger.RecordSuspendOwned(failureRequestId,9101);
-    ledger.RecordFailed(failureRequestId,"SyntheticPartialFailure");
+    var failureRecord=ledger.RecordFailed(failureRequestId,"SyntheticPartialFailure");
     ledger.RecordResumeOwned(failureRequestId,9101);
     ledger.RecordResumeCompleted(failureRequestId);
+    Check(ledger.RecordFailed(failureRequestId,"SyntheticPartialFailure").Sequence==failureRecord.Sequence,
+        "failure record retry stays idempotent after owned recovery");
     var recoveredFailure=ledger.ResultFor(failureRequestId);
     Check(recoveredFailure.State==ContainmentActuationResultState.FailedRecovered.ToString()&&
           recoveredFailure.OwnedSuspendCount==0&&

@@ -13,8 +13,11 @@ $containmentAuthorizationPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\Co
 $containmentActuationPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\ContainmentActuation.cs'
 $containmentActuatorPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\ContainmentActuator.cs'
 $containmentActuationLedgerPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\ContainmentActuationLedger.cs'
+$containmentStateChangeJournalPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\ContainmentStateChangeJournal.cs'
 $windowsContainmentActuatorPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\WindowsContainmentActuator.cs'
 $windowsStateChangeActuatorPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\WindowsProcessStateChangeLease.cs'
+$productionContainmentReadinessPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\ProductionContainmentReadiness.cs'
+$productionContainmentCoordinatorPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\ProductionContainmentCoordinator.cs'
 $nativePath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\Native.cs'
 $localApiPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\LocalApi.cs'
 $serviceRuntimePath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\RuntimeState.cs'
@@ -25,7 +28,7 @@ $lifecyclePath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\ProductionProt
 $appSettingsPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\appsettings.json'
 $driverPath=Join-Path $RepositoryRoot 'driver\RansomGuard.Minifilter\RansomGuardMinifilter.c'
 $buildPath=Join-Path $RepositoryRoot 'build_windows.ps1'
-foreach($path in @($settingsPath,$runtimePath,$containmentAuthorizationPath,$containmentActuationPath,$containmentActuatorPath,$containmentActuationLedgerPath,$windowsContainmentActuatorPath,$windowsStateChangeActuatorPath,$nativePath,$localApiPath,$serviceRuntimePath,$guardWorkerPath,$programPath,$bootstrapPath,$lifecyclePath,$appSettingsPath,$driverPath,$buildPath)){
+foreach($path in @($settingsPath,$runtimePath,$containmentAuthorizationPath,$containmentActuationPath,$containmentActuatorPath,$containmentActuationLedgerPath,$containmentStateChangeJournalPath,$windowsContainmentActuatorPath,$windowsStateChangeActuatorPath,$productionContainmentReadinessPath,$productionContainmentCoordinatorPath,$nativePath,$localApiPath,$serviceRuntimePath,$guardWorkerPath,$programPath,$bootstrapPath,$lifecyclePath,$appSettingsPath,$driverPath,$buildPath)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Production Enforce lifecycle file missing: $path"}
 }
 
@@ -35,8 +38,11 @@ $containmentAuthorization=Get-Content -LiteralPath $containmentAuthorizationPath
 $containmentActuation=Get-Content -LiteralPath $containmentActuationPath -Raw
 $containmentActuator=Get-Content -LiteralPath $containmentActuatorPath -Raw
 $containmentActuationLedger=Get-Content -LiteralPath $containmentActuationLedgerPath -Raw
+$containmentStateChangeJournal=Get-Content -LiteralPath $containmentStateChangeJournalPath -Raw
 $windowsContainmentActuator=Get-Content -LiteralPath $windowsContainmentActuatorPath -Raw
 $windowsStateChangeActuator=Get-Content -LiteralPath $windowsStateChangeActuatorPath -Raw
+$productionContainmentReadiness=Get-Content -LiteralPath $productionContainmentReadinessPath -Raw
+$productionContainmentCoordinator=Get-Content -LiteralPath $productionContainmentCoordinatorPath -Raw
 $native=Get-Content -LiteralPath $nativePath -Raw
 $localApi=Get-Content -LiteralPath $localApiPath -Raw
 $serviceRuntime=Get-Content -LiteralPath $serviceRuntimePath -Raw
@@ -57,10 +63,21 @@ foreach($required in @(
     'RollbackMaxStoreMiB',
     'RollbackMinFreeMiB',
     'ReconnectDelaySeconds',
+    'ContainmentHoldMilliseconds',
+    'AutomaticContainment requires Mode=Enforce.',
     '0.8.0 Enforce foundation requires exactly one explicit ProtectedRoot',
     'Enforce ProtectedRoot cannot be an entire drive.'
 )){
     if($settings -notmatch [regex]::Escape($required)){throw "Enforce settings invariant missing: $required"}
+}
+
+foreach($required in @(
+    'EnableAutomaticContainment',
+    'DisableAutomaticContainment',
+    'Automatic containment may be active only in a healthy Enforce/Protected state.',
+    'Automatic containment can be enabled only after healthy Protected activation.'
+)){
+    if($runtime -notmatch [regex]::Escape($required)){throw "Automatic containment runtime invariant missing: $required"}
 }
 
 foreach($required in @(
@@ -365,6 +382,7 @@ foreach($required in @(
     'ProtectionStateNotProtected',
     'RollbackStoreNotReady',
     'KernelEnforcementNotActive',
+    'AutomaticContainmentNotActive',
     'MonitorNotRunning',
     'IncidentNotPersisted',
     'ProcessIdentityNotVerified',
@@ -392,6 +410,7 @@ foreach($required in @(
     'ImagePathChanged',
     'ImageHashChanged',
     'ProtectionSnapshotChanged',
+    'AutomaticContainmentNotActive',
     'TelemetryNoLongerHealthy',
     'CriticalStateUnknown',
     'CriticalProcess',
@@ -399,6 +418,39 @@ foreach($required in @(
     'ProtectedServiceProcess'
 )){
     if($containmentActuation -notmatch [regex]::Escape($required)){throw "Containment actuation binding invariant missing: $required"}
+}
+
+foreach($required in @(
+    'ContainmentStateChangeJournal',
+    'ContainmentStateChangeJournalPhase',
+    'Prepared',
+    'SuspendApplied',
+    'ExplicitResumeApplied',
+    'Completed',
+    'Abnormal',
+    'FileOptions.WriteThrough',
+    'fs.Flush(true)',
+    'AuthorizationAlreadyConsumed',
+    'BindingFingerprint',
+    'IncompleteRequests',
+    'VerifyAll',
+    'RejectReparseChain'
+)){
+    if($containmentStateChangeJournal -notmatch [regex]::Escape($required)){
+        throw "Crash-safe state-change journal invariant missing: $required"
+    }
+}
+
+foreach($forbidden in @(
+    'SuspendThread',
+    'ResumeThread',
+    'NtSuspendProcess',
+    'NtResumeProcess',
+    'TerminateProcess'
+)){
+    if($containmentStateChangeJournal -match [regex]::Escape($forbidden)){
+        throw "State-change journal must remain evidence-only: $forbidden"
+    }
 }
 
 foreach($required in @(
@@ -531,17 +583,17 @@ if($containmentActuationLedger -notmatch [regex]::Escape('ThreadIdentityChangedF
 }
 
 foreach($forbidden in @(
-    'ContainmentActuationPolicy.Evaluate',
     'WindowsProcessStateChangeLease',
     'NtCreateProcessStateChange',
     'NtChangeProcessState',
     'NtSuspendProcess',
     'NtResumeProcess',
     'SuspendThread',
+    'ResumeThread',
     'TerminateProcess'
 )){
     if($guardWorker -match [regex]::Escape($forbidden)){
-        throw "Ordinary GuardWorker must not wire a production actuator before VM qualification: $forbidden"
+        throw "GuardWorker must use the reviewed production coordinator instead of a direct process primitive: $forbidden"
     }
 }
 
@@ -549,34 +601,105 @@ foreach($required in @(
     'BuildContainmentAuthorizationInput',
     'ContainmentAuthorizationPolicy.Evaluate(authorizationInput)',
     'authorization.json',
-    'ActuationAttempted=false',
-    'Authorization evidence only. No ordinary-process containment actuator is wired in this milestone.',
-    'Automatic response to ordinary processes is disabled; authorization evidence does not execute an action.'
+    'Authorization evidence is persisted before any production actuation attempt.',
+    'ProductionContainmentCoordinator',
+    'AttemptAsync(',
+    'CaptureProductionContainmentLiveState',
+    'fresh:isLab||_settings.Enforce.AutomaticContainment',
+    'Production containment authorization is not eligible or runtime containment is not active.'
 )){
-    if($guardWorker -notmatch [regex]::Escape($required)){throw "GuardWorker containment evidence invariant missing: $required"}
+    if($guardWorker -notmatch [regex]::Escape($required)){throw "GuardWorker production containment invariant missing: $required"}
 }
 
 $authorizationEval=$guardWorker.IndexOf('ContainmentAuthorizationPolicy.Evaluate(authorizationInput)')
-$ordinaryBranch=$guardWorker.IndexOf('if(!isLab||_lab!.ResponseClaimed)',$authorizationEval)
-$ordinaryReturn=$guardWorker.IndexOf('return;',$ordinaryBranch)
+$ordinaryBranch=$guardWorker.IndexOf('if(!isLab)',$authorizationEval)
+$productionAttempt=$guardWorker.IndexOf('_productionContainment.AttemptAsync(',$ordinaryBranch)
+$ordinaryReturn=$guardWorker.IndexOf('return;',$productionAttempt)
 $labActuator=$guardWorker.IndexOf('using var freeze=LabFreeze.OpenAuthorized',$ordinaryReturn)
-if($authorizationEval -lt 0 -or $ordinaryBranch -lt 0 -or $ordinaryReturn -lt 0 -or $labActuator -lt 0 -or
-   $authorizationEval -gt $ordinaryBranch -or $ordinaryBranch -gt $ordinaryReturn -or $ordinaryReturn -gt $labActuator){
-    throw 'Ordinary incident handling must persist/evaluate containment authorization and return before the LAB-only actuator path.'
+if($authorizationEval -lt 0 -or $ordinaryBranch -lt 0 -or $productionAttempt -lt 0 -or $ordinaryReturn -lt 0 -or $labActuator -lt 0 -or
+   $authorizationEval -gt $ordinaryBranch -or $ordinaryBranch -gt $productionAttempt -or $productionAttempt -gt $ordinaryReturn -or $ordinaryReturn -gt $labActuator){
+    throw 'Ordinary production containment must occur only after authorization and return before the LAB-only actuator path.'
+}
+
+foreach($required in @(
+    'ContainmentActuationBindingFactory.Create',
+    'WindowsProcessStateChangeLease.Open',
+    'ContainmentActuationPolicy.Evaluate',
+    '_journal.Prepare',
+    'lease.Suspend()',
+    '_journal.RecordSuspendApplied',
+    'lease.Resume()',
+    '_journal.RecordExplicitResumeApplied',
+    '_journal.RecordCompleted',
+    'ContainmentHoldMilliseconds',
+    'IsProtectedRansomGuardProcess',
+    'HandledFailureCrashRelease'
+)){
+    if($productionContainmentCoordinator -notmatch [regex]::Escape($required)){
+        throw "Production containment coordinator invariant missing: $required"
+    }
+}
+
+foreach($forbidden in @(
+    'SuspendThread',
+    'ResumeThread',
+    'NtSuspendProcess',
+    'NtResumeProcess',
+    'TerminateProcess',
+    '.Kill('
+)){
+    if($productionContainmentCoordinator -match [regex]::Escape($forbidden)){
+        throw "Production coordinator must not contain a crash-unsafe fallback: $forbidden"
+    }
+}
+
+foreach($required in @(
+    'ProductionContainmentReadiness',
+    'WindowsProcessStateChangeLease.IsSupported()',
+    'journal.VerifyAll()',
+    'journal.IncompleteRequests()',
+    'IncompleteStateChangeSessionsRequireReview',
+    'QualifiedStateChangeBackendReady'
+)){
+    if($productionContainmentReadiness -notmatch [regex]::Escape($required)){
+        throw "Production containment readiness invariant missing: $required"
+    }
 }
 
 foreach($source in @(
     @{Name='Program';Content=$program},
     @{Name='WindowsServiceBootstrap';Content=$bootstrap}
 )){
+    foreach($required in @(
+        'ContainmentStateChangeJournal',
+        'ProductionContainmentCoordinator',
+        'settings.Enforce.AutomaticContainment'
+    )){
+        if($source.Content -notmatch [regex]::Escape($required)){
+            throw "$($source.Name) production containment host wiring invariant missing: $required"
+        }
+    }
     foreach($forbidden in @(
-        'WindowsProcessStateChangeLease',
         'NtCreateProcessStateChange',
-        'NtChangeProcessState'
+        'NtChangeProcessState',
+        'SuspendThread',
+        'NtSuspendProcess'
     )){
         if($source.Content -match [regex]::Escape($forbidden)){
-            throw "$($source.Name) must not wire the state-change actuator before exact-SHA VM qualification: $forbidden"
+            throw "$($source.Name) must not bypass the production containment coordinator: $forbidden"
         }
+    }
+}
+
+foreach($required in @(
+    'ApplyAutomaticContainmentReadiness',
+    'ProductionContainmentReadiness.Evaluate',
+    '_protection.EnableAutomaticContainment',
+    'AutomaticContainmentUnavailable',
+    'AutomaticContainmentReadinessFailed'
+)){
+    if($lifecycle -notmatch [regex]::Escape($required)){
+        throw "Production lifecycle containment-readiness invariant missing: $required"
     }
 }
 
@@ -589,6 +712,9 @@ if($app.Enforce.RequireSignedDriver -ne $true -or $app.Enforce.AutomaticContainm
 }
 if([int]$app.Enforce.GateWorkers -lt 1 -or [int]$app.Enforce.GateWorkers -gt 8){
     throw 'Default Enforce GateWorkers must stay within the qualified 1..8 bound.'
+}
+if([int]$app.Enforce.ContainmentHoldMilliseconds -lt 100 -or [int]$app.Enforce.ContainmentHoldMilliseconds -gt 5000){
+    throw 'Default containment hold must stay within the qualified 100..5000 ms bound.'
 }
 
 foreach($required in @(

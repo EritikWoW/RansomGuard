@@ -131,7 +131,7 @@ foreach($required in @(
     'Exact-SHA disposable-VM run `36225304884` qualified source:',
     '`8983455fde991a2a85682058a45ed9f8773fc03d`',
     '`sha256:6f73539191cb6bd466a210fc2774c16ff81710f1e5ab2656958376bc57b14a26`',
-    'Automatic production containment is still disabled.'
+    'production automatic containment is still disabled.'
 )){
     if(-not $containmentRecovery.Contains($required)){
         throw "Containment recovery runbook is missing required safety statement: $required"

@@ -252,8 +252,8 @@ containmentDecision=ContainmentAuthorizationPolicy.Evaluate(ContainmentInput(
 Check(!containmentDecision.Eligible&&containmentDecision.Reasons.Contains("ProtectionSnapshotInvalid"),
     "internally inconsistent protection snapshot fails containment authorization closed");
 
-containmentDecision=ContainmentAuthorizationPolicy.Evaluate(ContainmentInput(
-    protection:null!));
+containmentDecision=ContainmentAuthorizationPolicy.Evaluate(
+    ContainmentInput() with { Protection = null! });
 Check(!containmentDecision.Eligible&&containmentDecision.Reasons.Contains("ProtectionSnapshotInvalid"),
     "missing protection snapshot fails containment authorization closed without throwing");
 

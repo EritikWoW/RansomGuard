@@ -121,6 +121,8 @@ jobs:
             'selfRejected',
             'protectedServiceRejected',
             'partialRecovered',
+            'restartRecoveryRecovered',
+            'timeoutRecovered',
             'cancellationRecovered',
             'passed'
           )){

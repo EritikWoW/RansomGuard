@@ -105,23 +105,158 @@ internal sealed class DevicePaths
         return new(null,category); // Never guess a drive, UNC location, or match a canary basename.
     }
 }
-internal sealed record ProcessInfo(ProcessKey Key,string Name,string? Path,DateTime CheckedUtc);
+internal sealed record ProcessInfo(
+    ProcessKey Key,
+    string Name,
+    string? Path,
+    DateTime CheckedUtc,
+    bool ExactIdentity,
+    ulong EtwUniqueProcessKey,
+    DateTime? EtwProcessStartUtc);
+
 internal sealed class ProcessCatalog
 {
+    private sealed class EtwLifetime
+    {
+        public required int Pid { get; init; }
+        public required ulong UniqueProcessKey { get; init; }
+        public required string Name { get; set; }
+        public required DateTime StartUtc { get; init; }
+        public DateTime? StopUtc { get; set; }
+        public ProcessKey? ExactKey { get; set; }
+        public string? ExactPath { get; set; }
+        public DateTime LastTouchedUtc { get; set; }
+    }
+
     private readonly System.Collections.Concurrent.ConcurrentDictionary<int,ProcessInfo> _cache=new();
+    private readonly object _lifecycleGate=new();
+    private readonly Dictionary<int,List<EtwLifetime>> _lifetimes=new();
+
+    public void ObserveStart(int pid,ulong uniqueProcessKey,string? imageFileName,DateTime startUtc)
+    {
+        if(pid<=4)return;
+        _cache.TryRemove(pid,out _);
+        lock(_lifecycleGate)
+        {
+            if(!_lifetimes.TryGetValue(pid,out var list))_lifetimes[pid]=list=new();
+            list.Add(new EtwLifetime{
+                Pid=pid,
+                UniqueProcessKey=uniqueProcessKey,
+                Name=string.IsNullOrWhiteSpace(imageFileName)?$"pid-{pid}":Path.GetFileName(imageFileName),
+                StartUtc=startUtc,
+                LastTouchedUtc=DateTime.UtcNow
+            });
+            TrimLifetimes(list,DateTime.UtcNow);
+        }
+    }
+
+    public void ObserveStop(int pid,ulong uniqueProcessKey,DateTime stopUtc)
+    {
+        if(pid<=4)return;
+        lock(_lifecycleGate)
+        {
+            if(!_lifetimes.TryGetValue(pid,out var list))return;
+            EtwLifetime? lifetime=null;
+            if(uniqueProcessKey!=0)
+                lifetime=list.LastOrDefault(x=>x.UniqueProcessKey==uniqueProcessKey && x.StopUtc is null);
+            lifetime??=list.LastOrDefault(x=>x.StopUtc is null);
+            if(lifetime is not null)
+            {
+                lifetime.StopUtc=stopUtc;
+                lifetime.LastTouchedUtc=DateTime.UtcNow;
+            }
+            TrimLifetimes(list,DateTime.UtcNow);
+        }
+        // Do not discard a recently resolved exact identity here. File-I/O callbacks can
+        // already be queued when ProcessStop is observed. A later ProcessStart for a reused
+        // PID clears the live cache before that new process can be attributed.
+    }
+
     public void Invalidate(int pid)=>_cache.TryRemove(pid,out _);
+
     public ProcessInfo? Get(int pid,DateTime eventUtc)
     {
         var now=DateTime.UtcNow;
         if(_cache.TryGetValue(pid,out var old) && (now-old.CheckedUtc).TotalSeconds<2)
-            return eventUtc.ToFileTimeUtc()>=old.Key.CreationFileTimeUtc?old:null;
-        using var h=Native.OpenProcess(Native.Query|Native.Synchronize,false,pid);
-        var key=Native.Identity(h,pid);
-        if(key is null || eventUtc.ToFileTimeUtc()<key.Value.CreationFileTimeUtc) {Invalidate(pid);return null;}
-        var path=Native.ImagePath(h);
-        var p=new ProcessInfo(key.Value,path is null?$"pid-{pid}":Path.GetFileName(path),path,now);
-        if(_cache.Count>1024) foreach(var entry in _cache.Where(x=>(now-x.Value.CheckedUtc).TotalSeconds>10).Take(512)) Invalidate(entry.Key);
-        if(_cache.Count<2048) _cache[pid]=p;
-        return p;
+        {
+            if(old.Key.CreationFileTimeUtc>0 && eventUtc.ToFileTimeUtc()>=old.Key.CreationFileTimeUtc)
+                return old;
+        }
+
+        try
+        {
+            using var h=Native.OpenProcess(Native.Query|Native.Synchronize,false,pid);
+            var key=Native.Identity(h,pid);
+            if(key is not null && eventUtc.ToFileTimeUtc()>=key.Value.CreationFileTimeUtc)
+            {
+                var path=Native.ImagePath(h);
+                var lifecycle=FindLifetime(pid,eventUtc);
+                var p=new ProcessInfo(
+                    key.Value,
+                    path is null?$"pid-{pid}":Path.GetFileName(path),
+                    path,
+                    now,
+                    ExactIdentity:true,
+                    lifecycle?.UniqueProcessKey??0,
+                    lifecycle?.StartUtc);
+                RememberExact(lifecycle,key.Value,path,now);
+                if(_cache.Count>1024)
+                    foreach(var entry in _cache.Where(x=>(now-x.Value.CheckedUtc).TotalSeconds>10).Take(512))
+                        Invalidate(entry.Key);
+                if(_cache.Count<2048)_cache[pid]=p;
+                return p;
+            }
+        }
+        catch(System.ComponentModel.Win32Exception)
+        {
+            // The process may have exited before delayed real-time ETW file I/O was consumed.
+            // Fall through to the ETW lifecycle tombstone; it is evidence-only and never an
+            // exact actuation identity.
+        }
+
+        var historical=FindLifetime(pid,eventUtc);
+        if(historical is null)return null;
+        historical.LastTouchedUtc=now;
+        if(historical.ExactKey is ProcessKey exact)
+            return new(exact,historical.Name,historical.ExactPath,now,true,historical.UniqueProcessKey,historical.StartUtc);
+
+        return new(
+            new ProcessKey(pid,0),
+            historical.Name,
+            null,
+            now,
+            ExactIdentity:false,
+            historical.UniqueProcessKey,
+            historical.StartUtc);
+    }
+
+    private EtwLifetime? FindLifetime(int pid,DateTime eventUtc)
+    {
+        lock(_lifecycleGate)
+        {
+            if(!_lifetimes.TryGetValue(pid,out var list))return null;
+            TrimLifetimes(list,DateTime.UtcNow);
+            return list
+                .Where(x=>x.StartUtc<=eventUtc && (x.StopUtc is null || eventUtc<=x.StopUtc.Value.AddMilliseconds(250)))
+                .OrderByDescending(x=>x.StartUtc)
+                .FirstOrDefault();
+        }
+    }
+
+    private void RememberExact(EtwLifetime? lifetime,ProcessKey key,string? path,DateTime now)
+    {
+        if(lifetime is null)return;
+        lock(_lifecycleGate)
+        {
+            lifetime.ExactKey=key;
+            lifetime.ExactPath=path;
+            lifetime.LastTouchedUtc=now;
+        }
+    }
+
+    private static void TrimLifetimes(List<EtwLifetime> list,DateTime now)
+    {
+        list.RemoveAll(x=>x.StopUtc is DateTime stop && now-stop>TimeSpan.FromSeconds(30));
+        if(list.Count>16)list.RemoveRange(0,list.Count-16);
     }
 }

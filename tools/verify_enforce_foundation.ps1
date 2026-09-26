@@ -11,6 +11,7 @@ $settingsPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\Settings.cs'
 $runtimePath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\ProtectionRuntime.cs'
 $containmentAuthorizationPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\ContainmentAuthorization.cs'
 $containmentActuationPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\ContainmentActuation.cs'
+$containmentActuationLedgerPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\ContainmentActuationLedger.cs'
 $localApiPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\LocalApi.cs'
 $serviceRuntimePath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\RuntimeState.cs'
 $guardWorkerPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\GuardWorker.cs'
@@ -20,7 +21,7 @@ $lifecyclePath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\ProductionProt
 $appSettingsPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\appsettings.json'
 $driverPath=Join-Path $RepositoryRoot 'driver\RansomGuard.Minifilter\RansomGuardMinifilter.c'
 $buildPath=Join-Path $RepositoryRoot 'build_windows.ps1'
-foreach($path in @($settingsPath,$runtimePath,$containmentAuthorizationPath,$containmentActuationPath,$localApiPath,$serviceRuntimePath,$guardWorkerPath,$programPath,$bootstrapPath,$lifecyclePath,$appSettingsPath,$driverPath,$buildPath)){
+foreach($path in @($settingsPath,$runtimePath,$containmentAuthorizationPath,$containmentActuationPath,$containmentActuationLedgerPath,$localApiPath,$serviceRuntimePath,$guardWorkerPath,$programPath,$bootstrapPath,$lifecyclePath,$appSettingsPath,$driverPath,$buildPath)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Production Enforce lifecycle file missing: $path"}
 }
 
@@ -28,6 +29,7 @@ $settings=Get-Content -LiteralPath $settingsPath -Raw
 $runtime=Get-Content -LiteralPath $runtimePath -Raw
 $containmentAuthorization=Get-Content -LiteralPath $containmentAuthorizationPath -Raw
 $containmentActuation=Get-Content -LiteralPath $containmentActuationPath -Raw
+$containmentActuationLedger=Get-Content -LiteralPath $containmentActuationLedgerPath -Raw
 $localApi=Get-Content -LiteralPath $localApiPath -Raw
 $serviceRuntime=Get-Content -LiteralPath $serviceRuntimePath -Raw
 $guardWorker=Get-Content -LiteralPath $guardWorkerPath -Raw
@@ -387,6 +389,34 @@ foreach($required in @(
     'ProtectedServiceProcess'
 )){
     if($containmentActuation -notmatch [regex]::Escape($required)){throw "Containment actuation binding invariant missing: $required"}
+}
+
+foreach($required in @(
+    'ContainmentActuationLedger',
+    'ContainmentActuationRequest',
+    'ContainmentActuationResult',
+    'ContainmentActuationLedgerPhase',
+    'AuthorizationAlreadyConsumed',
+    'SuspendIncrementOwned',
+    'OwnedSuspendIncrementResumed',
+    'FileOptions.WriteThrough',
+    'fs.Flush(true)',
+    'RejectReparseChain',
+    'VerifyAll'
+)){
+    if($containmentActuationLedger -notmatch [regex]::Escape($required)){throw "Containment actuation ledger invariant missing: $required"}
+}
+foreach($forbidden in @(
+    'DllImport',
+    'NtSuspendProcess',
+    'NtResumeProcess',
+    'SuspendThread',
+    'ResumeThread',
+    'TerminateProcess'
+)){
+    if($containmentActuationLedger -match [regex]::Escape($forbidden)){
+        throw "Containment actuation ledger must remain non-actuating evidence/state code: $forbidden"
+    }
 }
 
 foreach($forbidden in @(

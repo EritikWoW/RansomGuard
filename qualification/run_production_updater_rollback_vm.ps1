@@ -101,6 +101,28 @@ function Get-AuditEntries {
     return @($items | Sort-Object {[DateTimeOffset]::Parse([string]$_.Utc)})
 }
 
+function Export-AuditSnapshot([string]$Prefix,[object[]]$ParsedEntries,[string]$TransactionId){
+    $root=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)) 'RansomGuardV03'
+    foreach($path in @(
+        (Join-Path $root 'audit.jsonl'),
+        (Join-Path $root 'audit.1.jsonl'),
+        (Join-Path $root 'audit.2.jsonl'),
+        (Join-Path $root 'audit.3.jsonl')
+    )){
+        if(-not(Test-Path -LiteralPath $path -PathType Leaf)){continue}
+        Assert-NoReparsePath $path 'Audit evidence snapshot'
+        $name=[IO.Path]::GetFileName($path)
+        Copy-Item -LiteralPath $path -Destination (Join-Path $ResultsDirectory ($Prefix+'-raw-'+$name)) -Force
+    }
+    @($ParsedEntries) | ConvertTo-Json -Depth 30 |
+        Set-Content -LiteralPath (Join-Path $ResultsDirectory ($Prefix+'-parsed.json')) -Encoding utf8
+    @($ParsedEntries | Where-Object {
+        $_.Event -like 'ServiceUpdate*' -or
+        [string]::Equals([string]$_.Transaction,$TransactionId,[StringComparison]::OrdinalIgnoreCase)
+    }) | ConvertTo-Json -Depth 30 |
+        Set-Content -LiteralPath (Join-Path $ResultsDirectory ($Prefix+'-candidates.json')) -Encoding utf8
+}
+
 Assert-Administrator
 $vm=Assert-DisposableVm
 
@@ -197,7 +219,10 @@ try{
         $_.Event -eq 'ServiceUpdateCompleted' -and
         [string]::Equals([string]$_.Transaction,[string]$summary.forwardTransactionId,[StringComparison]::OrdinalIgnoreCase)
     })
-    if($forwardAuditEvidence.Count -lt 1){throw 'Exact ServiceUpdateCompleted audit evidence missing before uninstall.'}
+    if($forwardAuditEvidence.Count -lt 1){
+        Export-AuditSnapshot 'forward-audit-miss' $forwardAudit ([string]$summary.forwardTransactionId)
+        throw 'Exact ServiceUpdateCompleted audit evidence missing before uninstall.'
+    }
     $summary.completionAuditObserved=$true
     $forwardAuditEvidence | ConvertTo-Json -Depth 30 |
         Set-Content -LiteralPath (Join-Path $ResultsDirectory 'forward-completed-audit.json') -Encoding utf8
@@ -251,7 +276,10 @@ try{
         $_.Event -eq 'ServiceUpdateRolledBack' -and
         [string]::Equals([string]$_.Transaction,[string]$summary.rollbackTransactionId,[StringComparison]::OrdinalIgnoreCase)
     })
-    if($rollbackAuditEvidence.Count -lt 1){throw 'Exact ServiceUpdateRolledBack audit evidence missing.'}
+    if($rollbackAuditEvidence.Count -lt 1){
+        Export-AuditSnapshot 'rollback-audit-miss' $rollbackAudit ([string]$summary.rollbackTransactionId)
+        throw 'Exact ServiceUpdateRolledBack audit evidence missing.'
+    }
     $summary.rollbackAuditObserved=$true
 
     @($forwardAuditEvidence + $rollbackAuditEvidence) |

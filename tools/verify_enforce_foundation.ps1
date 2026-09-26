@@ -641,7 +641,13 @@ foreach($required in @(
     '_journal.RecordCompleted',
     'ContainmentHoldMilliseconds',
     'IsProtectedRansomGuardProcess',
-    'HandledFailureCrashRelease'
+    'HandledFailureCrashRelease',
+    'VerifyJournalOrTrip',
+    'JournalPrepareOrTrip',
+    'JournalTransitionOrTrip',
+    'AutomaticContainmentAdmissionTripped',
+    'AutomaticContainmentActive = false',
+    'AutomaticContainment = false'
 )){
     if($productionContainmentCoordinator -notmatch [regex]::Escape($required)){
         throw "Production containment coordinator invariant missing: $required"

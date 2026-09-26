@@ -35,6 +35,7 @@ public sealed record ContainmentStateChangeJournalEntry(
 public sealed class ContainmentStateChangeJournal
 {
     private const string JournalName = "containment-state-change-journal.jsonl";
+    private const string HeadName = "containment-state-change-journal.head.json";
     private const long MaxJournalBytes = 64L * 1024 * 1024;
     private const int MaxJournalRecords = 100_000;
     private const string PreparedReason = "ValidationReady";
@@ -44,6 +45,7 @@ public sealed class ContainmentStateChangeJournal
 
     private readonly string _root;
     private readonly string _journal;
+    private readonly string _head;
     private readonly object _gate = new();
     private readonly List<ContainmentStateChangeJournalEntry> _records = new();
     private readonly JsonSerializerOptions _json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -69,6 +71,7 @@ public sealed class ContainmentStateChangeJournal
 
         _root = Path.GetFullPath(root);
         _journal = Path.Combine(_root, JournalName);
+        _head = Path.Combine(_root, HeadName);
         RejectReparseChain(_root);
 
         if (createIfMissing)
@@ -78,6 +81,7 @@ public sealed class ContainmentStateChangeJournal
 
         RejectReparseChain(_root);
         RejectReparseChain(_journal);
+        RejectReparseChain(_head);
         LoadAndValidateJournal();
     }
 
@@ -334,6 +338,7 @@ public sealed class ContainmentStateChangeJournal
             recordHash);
 
         AppendLine(line);
+        PersistHead(sequence, recordHash);
         _nextSequence = sequence;
         _lastRecordHash = recordHash;
         var record = line.ToEntry();
@@ -345,6 +350,11 @@ public sealed class ContainmentStateChangeJournal
     {
         if (!File.Exists(_journal))
         {
+            if (File.Exists(_head))
+                throw new InvalidDataException("Containment state-change journal head exists but journal data is missing.");
+            if (!rebuildState && (_records.Count != 0 || _nextSequence != 0))
+                throw new InvalidDataException("Containment state-change journal disappeared after initialization.");
+
             if (rebuildState)
             {
                 _records.Clear();
@@ -355,6 +365,9 @@ public sealed class ContainmentStateChangeJournal
         }
 
         RejectReparseChain(_journal);
+        RejectReparseChain(_head);
+        if (!File.Exists(_head))
+            throw new InvalidDataException("Containment state-change journal head is missing.");
         if (new FileInfo(_journal).Length > MaxJournalBytes)
             throw new InvalidDataException("Containment state-change journal exceeds the maximum qualified size.");
 
@@ -417,6 +430,7 @@ public sealed class ContainmentStateChangeJournal
         }
 
         ValidateReplay(rebuilt);
+        ValidateHead(expectedSequence - 1, expectedPrevious);
 
         if (rebuildState)
         {
@@ -506,6 +520,75 @@ public sealed class ContainmentStateChangeJournal
         fs.Write(bytes);
         fs.Flush(true);
         RejectReparseChain(_journal);
+    }
+
+    private void PersistHead(long sequence, string recordSha256)
+    {
+        if (sequence <= 0 || !IsSha256(recordSha256))
+            throw new InvalidDataException("Containment state-change journal head is invalid.");
+
+        RejectReparseChain(_root);
+        RejectReparseChain(_head);
+
+        var head = new ContainmentStateChangeJournalHead(
+            SchemaVersion: 1,
+            Sequence: sequence,
+            RecordSha256: recordSha256.ToUpperInvariant());
+
+        var tmp = _head + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            RejectReparseChain(tmp);
+            var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(head, _json));
+            using (var fs = new FileStream(
+                tmp,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                4096,
+                FileOptions.WriteThrough))
+            {
+                fs.Write(bytes);
+                fs.Flush(true);
+            }
+
+            RejectReparseChain(tmp);
+            File.Move(tmp, _head, true);
+            RejectReparseChain(_head);
+        }
+        finally
+        {
+            if (File.Exists(tmp))
+                File.Delete(tmp);
+        }
+    }
+
+    private void ValidateHead(long expectedSequence, string expectedRecordSha256)
+    {
+        if (expectedSequence <= 0 || !IsSha256(expectedRecordSha256))
+            throw new InvalidDataException("Containment state-change journal cannot validate an empty head.");
+
+        RejectReparseChain(_head);
+        if (new FileInfo(_head).Length > 4096)
+            throw new InvalidDataException("Containment state-change journal head exceeds its size bound.");
+
+        ContainmentStateChangeJournalHead head;
+        try
+        {
+            head = JsonSerializer.Deserialize<ContainmentStateChangeJournalHead>(
+                File.ReadAllText(_head, Encoding.UTF8),
+                _json) ?? throw new InvalidDataException("Invalid containment state-change journal head.");
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidDataException("Invalid containment state-change journal head JSON.", ex);
+        }
+
+        if (head.SchemaVersion != 1 ||
+            head.Sequence != expectedSequence ||
+            !IsSha256(head.RecordSha256) ||
+            !head.RecordSha256.Equals(expectedRecordSha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Containment state-change journal head does not match the durable journal tail.");
     }
 
     private static ContainmentActuationRequest NormalizeRequest(ContainmentActuationRequest request)
@@ -633,6 +716,11 @@ public sealed class ContainmentStateChangeJournal
         }
     }
 }
+
+internal sealed record ContainmentStateChangeJournalHead(
+    int SchemaVersion,
+    long Sequence,
+    string RecordSha256);
 
 internal sealed record ContainmentStateChangeJournalPayload(
     long Sequence,

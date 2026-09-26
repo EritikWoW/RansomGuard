@@ -46,8 +46,15 @@ internal sealed class EtwMonitor:IDisposable
                 KernelTraceEventParser.Keywords.FileIOInit | KernelTraceEventParser.Keywords.Process);
             var source = session.Source;
             var p = new KernelTraceEventParser(source);
-            p.ProcessStart += e => _catalog.Invalidate(e.ProcessID);
-            p.ProcessStop += e => _catalog.Invalidate(e.ProcessID);
+            p.ProcessStart += e => _catalog.ObserveStart(
+                e.ProcessID,
+                (ulong)e.UniqueProcessKey,
+                e.ImageFileName,
+                e.TimeStamp.ToUniversalTime());
+            p.ProcessStop += e => _catalog.ObserveStop(
+                e.ProcessID,
+                (ulong)e.UniqueProcessKey,
+                e.TimeStamp.ToUniversalTime());
             p.FileIOWrite += e => Emit(e.ProcessID, e.FileName, FileKind.Write, e.TimeStamp.ToUniversalTime());
             p.FileIORename += e => Emit(e.ProcessID, e.FileName, FileKind.Rename, e.TimeStamp.ToUniversalTime());
             p.FileIODelete += e => Emit(e.ProcessID, e.FileName, FileKind.Delete, e.TimeStamp.ToUniversalTime());

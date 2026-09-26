@@ -182,6 +182,12 @@ internal static class UiSmokeTest
                         Save(dialog,Path.Combine(directory,$"{theme}-recovery-review-plan.png"));
                         captures.Add(language+"/"+$"{theme}-recovery-review-plan.png");
 
+                        recovery.SetPreviewScenario("execute");
+                        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle); dialog.UpdateLayout();
+                        refinements[$"{language}-{theme}-recovery-review-execute"] = recovery.AssertPreviewLayout();
+                        Save(dialog,Path.Combine(directory,$"{theme}-recovery-review-execute.png"));
+                        captures.Add(language+"/"+$"{theme}-recovery-review-execute.png");
+
                         recovery.SetPreviewScenario("active");
                         await Dispatcher.Yield(DispatcherPriority.ApplicationIdle); dialog.UpdateLayout();
                         refinements[$"{language}-{theme}-recovery-review-active"] = recovery.AssertPreviewLayout();

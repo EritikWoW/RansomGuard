@@ -23,7 +23,7 @@ $protectionPackage=Get-Content -LiteralPath (Join-Path $RepositoryRoot 'docs\PRO
 foreach($required in @(
     @('README',"# RansomGuard $version",$readme),
     @('README release path',"RansomGuard-v$version-<timestamp>",$readme),
-    @('README recovery administration','0.8.7.0 starts the production recovery administration layer',$readme),
+    @('README recovery administration','0.8.7.0 adds a short-lived UAC-elevated production recovery surface',$readme),
     @('Guided setup',"# RansomGuard $version - guided setup",$guided),
     @('Audit quick start',"RansomGuard $version - audit-only quick start",$quick),
     @('Changelog',"# RansomGuard $version",$changelog),
@@ -42,7 +42,7 @@ foreach($required in @(
     @('Product target mutating FSCTL policy','0.8.4 closes the reviewed data-mutating FSCTL class while retaining protocol v18',$target),
     @('Product target GateClient identity','0.8.5 hardens the GateClient trust boundary while retaining protocol v18',$target),
     @('Product target production lifecycle','0.8.6 adds the first normal-service Production Enforce lifecycle above the admitted protocol-v18 ProductionProtection package',$target),
-    @('Product target recovery administration','0.8.7 starts the production recovery administration layer without weakening the copy-out-only rollback boundary',$target),
+    @('Product target recovery administration','0.8.7 adds a production recovery administration layer without weakening the copy-out-only rollback boundary',$target),
     @('Protection package document','Version 0.8.6 retains the cryptographically bound ProductionProtection package and adds the first normal-service Production Enforce driver/GateClient lifecycle above protocol v18',$protectionPackage),
     @('Protection lifecycle readiness','Only then does the service publish `Protected` / `KernelEnforcementActive=true`.',$protectionPackage),
     @('Protection package catalog membership','The driver SYS and INF must each verify as members of the supplied signed CAT',$protectionPackage)
@@ -65,4 +65,4 @@ foreach($stale in @(
     }
 }
 
-Write-Host "Documentation consistency gate PASSED: operator docs, product target, README and changelog match version $version, current protocol v18, qualified 0.7.x kernel milestones, 0.8.0 Enforce foundation, 0.8.1 package admission, 0.8.2 ProductionGate separation, 0.8.3 hard-link alias policy, 0.8.4 mutating-FSCTL mediation, 0.8.5 GateClient process identity hardening, the 0.8.6 admitted production lifecycle and the 0.8.7 read-only production recovery administration foundation."
+Write-Host "Documentation consistency gate PASSED: operator docs, product target, README and changelog match version $version, current protocol v18, qualified 0.7.x kernel milestones, 0.8.0 Enforce foundation, 0.8.1 package admission, 0.8.2 ProductionGate separation, 0.8.3 hard-link alias policy, 0.8.4 mutating-FSCTL mediation, 0.8.5 GateClient process identity hardening, the 0.8.6 admitted production lifecycle and the 0.8.7 reviewed production recovery copy-out administration boundary."

@@ -103,7 +103,9 @@ try
         suspended.State == ContainmentActuationResultState.Suspended.ToString() &&
         suspended.OwnedSuspendCount > 0 &&
         targetBeatA == targetBeatB;
-    unrelatedUnaffected = unrelatedBeatB > unrelatedBeatA;
+    unrelatedUnaffected =
+        unrelatedBeatB > unrelatedBeatA ||
+        WaitForHeartbeatAdvance(unrelated.Heartbeat, unrelatedBeatA, TimeSpan.FromSeconds(1));
 
     var resumed = actuator.ResumeOwned(successRequest, successLedger);
     successResumeState = resumed.State;
@@ -755,32 +757,37 @@ static void WriteHeartbeat(string path, long value)
 
 static long ReadHeartbeat(string path)
 {
-    if (!File.Exists(path))
-        return 0;
+    for (var attempt = 0; attempt < 8; attempt++)
+    {
+        if (File.Exists(path))
+        {
+            try
+            {
+                using var stream = new FileStream(
+                    path,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream, System.Text.Encoding.UTF8, true, 1024, leaveOpen: false);
+                var text = reader.ReadToEnd();
+                if (long.TryParse(
+                        text,
+                        System.Globalization.NumberStyles.Integer,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out var value) &&
+                    value > 0)
+                    return value;
+            }
+            catch (IOException)
+            {
+                // Writer may be between truncate/create and durable flush.
+            }
+        }
 
-    try
-    {
-        using var stream = new FileStream(
-            path,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete);
-        using var reader = new StreamReader(stream, System.Text.Encoding.UTF8, true, 1024, leaveOpen: false);
-        var text = reader.ReadToEnd();
-        return long.TryParse(
-            text,
-            System.Globalization.NumberStyles.Integer,
-            System.Globalization.CultureInfo.InvariantCulture,
-            out var value)
-            ? value
-            : 0;
+        Thread.Sleep(5);
     }
-    catch (IOException)
-    {
-        // Heartbeat is advisory test telemetry. A transient open/create race must
-        // not crash the qualification process; the caller retries until timeout.
-        return 0;
-    }
+
+    return 0;
 }
 
 static bool WaitForHeartbeatAdvance(string path, long baseline, TimeSpan timeout)

@@ -234,14 +234,16 @@ function Cleanup-Scenario {
 }
 
 function Start-Scenario([string]$Name,[int]$Salt){
-    Cleanup-Scenario
+    # Prevent nested helper/script output from becoming part of this function's return value.
+    # Start-Scenario must emit exactly one scenario object so StrictMode property access is deterministic.
+    Cleanup-Scenario | Write-Host
     $root=Join-Path $RootBase $Name
     New-Item -ItemType Directory -Path $root -Force | Out-Null
     $target=Join-Path $root 'target.bin'
     New-TestFile $target $Salt
     $originalHash=(Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
 
-    & $installScript -Volume $volume -PackageDirectory $DriverPackageDirectory -Confirmation 'LAB-MINIFILTER'
+    & $installScript -Volume $volume -PackageDirectory $DriverPackageDirectory -Confirmation 'LAB-MINIFILTER' | Write-Host
     $script:installed=$true
 
     $session=$Name+'-'+(Get-Date -Format 'yyyyMMddHHmmssfff')

@@ -316,7 +316,7 @@ internal sealed class RecoveryReviewPane : UserControl
             L.T("RecoveryReview.CopyOutSafety"),
             _currentPlan.ReadyCount > 0 ? "SuccessBrush" : "WarningBrush"));
 
-        if (_currentPlan.ReadyCount <= 0)
+        if (_currentPlan.ReadyCount <= 0 || _currentPlan.ActionsTruncated)
         {
             _executionBody.Children.Add(Card(
                 L.T("RecoveryReview.CopyOutUnavailable"),
@@ -343,7 +343,7 @@ internal sealed class RecoveryReviewPane : UserControl
         _plan.IsEnabled = !IsBusy &&
             _sessions.SelectedItem is ProductionRecoverySessionSummary { CanPlan: true };
         var canExecute = !IsBusy &&
-            _currentPlan is { ReadyCount: > 0 } &&
+            _currentPlan is { ReadyCount: > 0, ActionsTruncated: false } &&
             _sessions.SelectedItem is ProductionRecoverySessionSummary { CanPlan: true } selected &&
             _currentPlan.SessionId.Equals(selected.SessionId, StringComparison.Ordinal);
         _outputRoot.IsEnabled = canExecute;
@@ -472,7 +472,7 @@ internal sealed class RecoveryReviewPane : UserControl
             nativeStateQueries = false,
             nativeExecutionCalls = false,
             sourceMutationControls = false,
-            copyOutControls = _currentPlan is { ReadyCount: > 0 },
+            copyOutControls = _currentPlan is { ReadyCount: > 0, ActionsTruncated: false },
             planEnabled = _plan.IsEnabled,
             executeEnabled = _execute.IsEnabled
         };

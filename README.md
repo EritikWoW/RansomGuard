@@ -209,3 +209,15 @@ Bounded concurrent gate admission/workers are now implemented with a kernel cap 
 Restart evidence for pending/missing CREATE/RENAME/TRUNCATE completion events and unsettled DELETE lifecycle transactions is durable and conservative; authoritative completion is never inferred from a restart or topology probe. DELETE cleanup is handle-lifecycle evidence only, while pathname state is observed separately. The recovery planner may expose exact, fully consistent evidence as `Review` only, while cleanup-only, ambiguous, indeterminate or conflicting evidence stays `Blocked`. Paging writes on streams opened through the LAB gate are visible as durable evidence without synchronously blocking the paging path.
 
 Remaining core work includes runtime qualification of the new GateClient-loss fail-safe, identity-based resolution of ambiguous protected scope, production Enforce/service lifecycle integration, self-protection, production detector-to-containment authorization/policy, process-state capture, production recovery orchestration, driver signing and a Microsoft-assigned production altitude.
+
+## License
+
+RansomGuard is **source-available proprietary software**, not open-source software.
+
+The repository may be reviewed, audited, tested, and used for security research
+under the terms in [LICENSE](LICENSE). Commercial use, production deployment,
+redistribution, incorporation into another product, and derivative distribution
+require prior written permission from the copyright holder.
+
+Third-party components remain subject to their own licenses.
+

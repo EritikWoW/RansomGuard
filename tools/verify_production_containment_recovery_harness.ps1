@@ -52,7 +52,7 @@ if($workflow -match '(?im)^\s*continue-on-error\s*:\s*true\s*$'){
 foreach($required in @(
     '$config.Mode=''Enforce''',
     '$config.Enforce.AutomaticContainment=$true',
-    '$config.Enforce.ContainmentHoldMilliseconds=10000',
+    '$config.Enforce.ContainmentHoldMilliseconds=5000',
     'Wait-JournalPhaseForProcess',
     'Stop-Process -Id $servicePid -Force',
     'kernelFailSafeRetained',
@@ -73,6 +73,15 @@ foreach($required in @(
     if($harness -notmatch [regex]::Escape($required)){
         throw "Production containment recovery harness invariant missing: $required"
     }
+}
+
+$holdMatch=[regex]::Match($harness,'\$config\.Enforce\.ContainmentHoldMilliseconds\s*=\s*([0-9]+)')
+if(-not $holdMatch.Success){
+    throw 'Crash recovery harness containment hold assignment is missing.'
+}
+$holdMilliseconds=[int]$holdMatch.Groups[1].Value
+if($holdMilliseconds -lt 100 -or $holdMilliseconds -gt 5000){
+    throw "Crash recovery harness containment hold is outside the product-qualified 100..5000ms range: $holdMilliseconds"
 }
 
 foreach($forbidden in @(

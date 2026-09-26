@@ -33,3 +33,7 @@ The signed artifact inventory must therefore be generated or re-verified again a
 Security qualification evidence remains bound to the exact candidate and package described by the candidate issue. Adding or changing release-governance automation must not rewrite or silently re-label an already-qualified frozen candidate.
 
 Any change to driver, GateClient protocol, ProductionGate semantics, production lifecycle, preservation/rollback behavior, package admission or package bytes invalidates the affected candidate evidence and requires a new qualification record.
+
+## Release identity
+
+Release tag naming, preflight, signing and immutable-tag requirements are defined in [RELEASE_TAG_POLICY.md](RELEASE_TAG_POLICY.md).

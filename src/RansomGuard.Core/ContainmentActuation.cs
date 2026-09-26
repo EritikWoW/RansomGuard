@@ -192,6 +192,8 @@ public static class ContainmentActuationPolicy
                 reasons.Add("KernelChannelNotConnected");
             if (!input.CurrentProtection.KernelEnforcementActive)
                 reasons.Add("KernelEnforcementNotActive");
+            if (!input.CurrentProtection.AutomaticContainmentActive)
+                reasons.Add("AutomaticContainmentNotActive");
             if (input.CurrentProtection.ObservedUtc != binding.ProtectionObservedUtc)
                 reasons.Add("ProtectionSnapshotChanged");
         }

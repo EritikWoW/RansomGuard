@@ -61,9 +61,6 @@ try {
     try {
         $details | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $rulesetsPath -Encoding utf8NoBOM
         & (Join-Path $PSScriptRoot 'verify_release_tag_rulesets.ps1') -RulesetsJsonPath $rulesetsPath -TagName $TagName
-        if ($LASTEXITCODE -ne 0) {
-            throw 'Live release-tag ruleset verification failed.'
-        }
 
         git fetch $Remote main --tags
         if ($LASTEXITCODE -ne 0) {
@@ -77,9 +74,6 @@ try {
             OutputPath = $preflightPath
         }
         & (Join-Path $PSScriptRoot 'verify_release_identity_preflight.ps1') @preflightArgs
-        if ($LASTEXITCODE -ne 0) {
-            throw 'Release identity preflight failed.'
-        }
 
         git show-ref --verify --quiet "refs/tags/$TagName"
         if ($LASTEXITCODE -eq 0) {

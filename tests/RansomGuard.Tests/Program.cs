@@ -189,6 +189,7 @@ ContainmentAuthorizationInput ContainmentInput(
 var containmentDecision=ContainmentAuthorizationPolicy.Evaluate(ContainmentInput());
 Check(containmentDecision.Eligible&&containmentDecision.State=="Eligible"&&containmentDecision.Reasons.Length==0,
     "containment policy can identify a fully evidenced eligible decision without actuating");
+var containmentEligibleDecision=containmentDecision;
 
 containmentDecision=ContainmentAuthorizationPolicy.Evaluate(ContainmentInput(configured:false));
 Check(!containmentDecision.Eligible&&containmentDecision.State=="DisabledByConfiguration"&&
@@ -299,6 +300,119 @@ containmentDecision=ContainmentAuthorizationPolicy.Evaluate(
 Check(!containmentDecision.Eligible&&containmentDecision.Reasons.Contains("ProtectionSnapshotInvalid"),
     "missing protection snapshot fails containment authorization closed without throwing");
 
+var actuationProcess=new ProcessKey(4242,now.AddMinutes(-1).ToFileTimeUtc());
+var actuationPath=@"C:\Apps\RansomGuard-Actuation-Fixture.exe";
+var actuationHash=new string('B',64);
+ContainmentActuationBinding ActuationBinding(
+    string authorizationId="0123456789abcdef0123456789abcdef",
+    string caseId="case-actuation-001",
+    DateTime? evaluatedUtc=null,
+    DateTime? expiresUtc=null,
+    ProcessKey? process=null,
+    string? imagePath=null,
+    string? imageSha256=null,
+    DateTime? protectionObservedUtc=null,
+    ContainmentAuthorizationDecision? authorization=null)
+    =>new(
+        authorizationId,
+        caseId,
+        evaluatedUtc??now,
+        expiresUtc??now.AddSeconds(5),
+        process??actuationProcess,
+        imagePath??actuationPath,
+        imageSha256??actuationHash,
+        protectionObservedUtc??containmentProtected.ObservedUtc,
+        authorization??containmentEligibleDecision);
+
+ContainmentActuationValidationInput ActuationInput(
+    ContainmentActuationBinding? binding=null,
+    DateTime? nowUtc=null,
+    ProcessKey? liveProcess=null,
+    string? liveImagePath=null,
+    string? liveImageSha256=null,
+    ProtectionStatusDto? currentProtection=null,
+    bool telemetryHealthy=true,
+    bool criticalStateKnown=true,
+    bool isCritical=false,
+    bool isSelf=false,
+    bool isProtectedServiceProcess=false,
+    bool authorizationConsumed=false)
+    =>new(
+        binding??ActuationBinding(),
+        nowUtc??now.AddSeconds(1),
+        liveProcess??actuationProcess,
+        liveImagePath??actuationPath,
+        liveImageSha256??actuationHash,
+        currentProtection??containmentProtected,
+        telemetryHealthy,
+        criticalStateKnown,
+        isCritical,
+        isSelf,
+        isProtectedServiceProcess,
+        authorizationConsumed);
+
+var actuationDecision=ContainmentActuationPolicy.Evaluate(ActuationInput());
+Check(actuationDecision.Ready&&actuationDecision.State=="Ready"&&actuationDecision.Reasons.Length==0,
+    "actuation binding becomes Ready only for the same short-lived process/image/protection snapshot");
+
+actuationDecision=ContainmentActuationPolicy.Evaluate(ActuationInput(nowUtc:now.AddSeconds(6)));
+Check(!actuationDecision.Ready&&actuationDecision.Reasons.Contains("AuthorizationExpired"),
+    "expired containment authorization cannot be replayed for actuation");
+
+actuationDecision=ContainmentActuationPolicy.Evaluate(ActuationInput(authorizationConsumed:true));
+Check(!actuationDecision.Ready&&actuationDecision.Reasons.Contains("AuthorizationAlreadyConsumed"),
+    "one-shot containment authorization cannot be consumed twice");
+
+actuationDecision=ContainmentActuationPolicy.Evaluate(ActuationInput(
+    liveProcess:actuationProcess with{CreationFileTimeUtc=actuationProcess.CreationFileTimeUtc+1}));
+Check(!actuationDecision.Ready&&actuationDecision.Reasons.Contains("ProcessIdentityChanged"),
+    "PID reuse or creation-time drift invalidates containment actuation");
+
+actuationDecision=ContainmentActuationPolicy.Evaluate(ActuationInput(liveImagePath:@"C:\Apps\replacement.exe"));
+Check(!actuationDecision.Ready&&actuationDecision.Reasons.Contains("ImagePathChanged"),
+    "image-path drift invalidates containment actuation");
+
+actuationDecision=ContainmentActuationPolicy.Evaluate(ActuationInput(liveImageSha256:new string('C',64)));
+Check(!actuationDecision.Ready&&actuationDecision.Reasons.Contains("ImageHashChanged"),
+    "image-hash drift invalidates containment actuation");
+
+actuationDecision=ContainmentActuationPolicy.Evaluate(ActuationInput(
+    currentProtection:containmentProtected with{ObservedUtc=containmentProtected.ObservedUtc.AddTicks(1)}));
+Check(!actuationDecision.Ready&&actuationDecision.Reasons.Contains("ProtectionSnapshotChanged"),
+    "a later protection snapshot invalidates the actuation binding even when it is Protected");
+
+actuationDecision=ContainmentActuationPolicy.Evaluate(ActuationInput(
+    currentProtection:containmentDegradedMachine.Snapshot()));
+Check(!actuationDecision.Ready&&actuationDecision.Reasons.Contains("ProtectionStateNotProtected")&&
+      actuationDecision.Reasons.Contains("ProtectionSnapshotChanged"),
+    "DegradedProtected transition invalidates containment actuation");
+
+actuationDecision=ContainmentActuationPolicy.Evaluate(ActuationInput(telemetryHealthy:false));
+Check(!actuationDecision.Ready&&actuationDecision.Reasons.Contains("TelemetryNoLongerHealthy"),
+    "telemetry degradation after authorization fails actuation closed");
+
+actuationDecision=ContainmentActuationPolicy.Evaluate(ActuationInput(criticalStateKnown:false));
+Check(!actuationDecision.Ready&&actuationDecision.Reasons.Contains("CriticalStateUnknown"),
+    "unknown critical-process state fails actuation closed");
+
+actuationDecision=ContainmentActuationPolicy.Evaluate(ActuationInput(isCritical:true));
+Check(!actuationDecision.Ready&&actuationDecision.Reasons.Contains("CriticalProcess"),
+    "critical process cannot be containment-actuated");
+
+actuationDecision=ContainmentActuationPolicy.Evaluate(ActuationInput(isSelf:true,isProtectedServiceProcess:true));
+Check(!actuationDecision.Ready&&actuationDecision.Reasons.Contains("SelfProcess")&&
+      actuationDecision.Reasons.Contains("ProtectedServiceProcess"),
+    "RansomGuard self/protected service processes cannot be containment-actuated");
+
+actuationDecision=ContainmentActuationPolicy.Evaluate(ActuationInput(
+    binding:ActuationBinding(expiresUtc:now.AddSeconds(ContainmentActuationPolicy.MaxAuthorizationLifetime.TotalSeconds+1))));
+Check(!actuationDecision.Ready&&actuationDecision.Reasons.Contains("AuthorizationLifetimeInvalid"),
+    "actuation authorization lifetime is explicitly bounded");
+
+actuationDecision=ContainmentActuationPolicy.Evaluate(ActuationInput(
+    binding:ActuationBinding(authorization:new("Denied",false,new[]{"test"}))));
+Check(!actuationDecision.Ready&&actuationDecision.Reasons.Contains("AuthorizationNotEligible"),
+    "a bare or denied authorization decision cannot become an actuator capability");
 
 var productionHash=new string('A',64);
 var productionPackage=new ProtectionPackageDescriptor(

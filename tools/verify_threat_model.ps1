@@ -76,6 +76,8 @@ foreach($required in @(
     '0.8.7 adds an **authorization-only** production contract.',
     '`Eligible` means only that the evidence snapshot satisfied the policy contract; it is not evidence that an actuator ran',
     'The ordinary response path records `ActuationAttempted=false` and returns before the LAB-only actuator path.',
+    'The first actuator milestone adds only a **non-actuating binding/revalidation contract**.',
+    'The current `GuardWorker` is source-gated against referencing this actuation policy or any production suspend/kill primitive',
     'No LAB fast-path threshold or `Eligible` authorization result may be promoted directly into a production blocking action.',
     'one synchronous communication handle',
     'reply-required preservation is deliberately serialized',

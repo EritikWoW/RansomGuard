@@ -295,6 +295,7 @@ internal sealed class ProductionContainmentCoordinator
         catch (Exception ex) when (
             ex is IOException or
             UnauthorizedAccessException or
+            InvalidDataException or
             Win32Exception or
             InvalidOperationException or
             PlatformNotSupportedException)
@@ -444,14 +445,10 @@ internal sealed class ProductionContainmentCoordinator
         try
         {
             lease.Resume();
-            if (prepared)
-                JournalTransitionOrTrip(
-                    () => _journal.RecordExplicitResumeApplied(requestId),
-                    "RecoveryResumeEvidenceFailed");
-            return true;
         }
         catch (Exception ex) when (
             ex is IOException or
+            UnauthorizedAccessException or
             Win32Exception or
             InvalidOperationException)
         {
@@ -461,6 +458,33 @@ internal sealed class ProductionContainmentCoordinator
                 requestId);
             return false;
         }
+
+        // The exact process instance is already resumed at this point. Durable evidence
+        // failure must trip future admission, but it must not misreport the physical
+        // recovery as a crash-release-only outcome or allow an evidence exception to
+        // escape past the handled-failure recovery path.
+        if (prepared)
+        {
+            try
+            {
+                JournalTransitionOrTrip(
+                    () => _journal.RecordExplicitResumeApplied(requestId),
+                    "RecoveryResumeEvidenceFailed");
+            }
+            catch (Exception ex) when (
+                ex is IOException or
+                UnauthorizedAccessException or
+                InvalidDataException or
+                InvalidOperationException)
+            {
+                _log.LogCritical(
+                    ex,
+                    "Explicit state-change resume succeeded for request={RequestId}, but durable resume evidence failed; automatic containment remains fail-closed.",
+                    requestId);
+            }
+        }
+
+        return true;
     }
 
     private void TryRecordAbnormal(string requestId, string reasonCode)

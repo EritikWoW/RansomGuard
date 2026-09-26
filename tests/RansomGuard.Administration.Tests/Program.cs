@@ -8,7 +8,7 @@ void Reject(Action action, string name)
     Check(rejected, name);
 }
 string id = Guid.NewGuid().ToString("N"), hash = new string('A', 64);
-foreach (var action in new[] { "rules", "add", "edit", "disable", "remove", "install", "start", "stop", "restart", "uninstall", "state-repair", "recovery-review" })
+foreach (var action in new[] { "rules", "add", "edit", "disable", "remove", "install", "update", "start", "stop", "restart", "uninstall", "state-repair", "recovery-review" })
 {
     Check(AdminContract.IsAction(action), "recognized UI action " + action);
     AdminContract.ValidateIntent(action, AdminContract.NeedsRuleId(action) ? id : null);
@@ -22,9 +22,9 @@ foreach (var action in new[] { "edit", "disable", "remove" })
     Reject(() => AdminContract.ValidateIntent(action, "../rules.json"), action + " rejects path");
     Reject(() => AdminContract.ValidateIntent(action, "RansomGuardV03"), action + " rejects service-name-as-id");
 }
-foreach (var action in new[] { "rules", "add", "install", "start", "stop", "restart", "uninstall", "state-repair", "recovery-review" })
+foreach (var action in new[] { "rules", "add", "install", "update", "start", "stop", "restart", "uninstall", "state-repair", "recovery-review" })
     Reject(() => AdminContract.ValidateIntent(action, id), action + " rejects unrelated id");
-foreach (var action in new[] { "install", "start", "stop", "restart", "uninstall", "state-repair", "disable", "remove" })
+foreach (var action in new[] { "install", "update", "start", "stop", "restart", "uninstall", "state-repair", "disable", "remove" })
 {
     AdminContract.CheckConfirmation(action, AdminContract.Confirmation(action));
     Check(true, "exact confirmation " + action);
@@ -36,6 +36,11 @@ Reject(() => AdminContract.Confirmation("add", new string('A', 32)), "MD5 cannot
 Reject(() => AdminContract.Confirmation("add", null), "missing hash cannot approve rule");
 Reject(() => AdminContract.CheckConfirmation("edit", "TRUST BBBBBBBBBBBB", hash), "mismatched hash confirmation rejected");
 Check(AdminContract.ServiceName == "RansomGuardV03", "single fixed own service name");
+Check(ServiceUpdatePolicy.IsForwardVersion("0.8.7.0", "0.9.0.0"), "forward update version accepted");
+Check(!ServiceUpdatePolicy.IsForwardVersion("0.8.7.0", "0.8.7.0"), "same-version replay rejected");
+Check(!ServiceUpdatePolicy.IsForwardVersion("0.9.0.0", "0.8.7.0"), "downgrade rejected");
+Check(!ServiceUpdatePolicy.IsForwardVersion("invalid", "0.9.0.0"), "invalid installed version rejected");
+Check(!ServiceUpdatePolicy.IsForwardVersion("0.8.7.0", "invalid"), "invalid target version rejected");
 Check(!AdminContract.NeedsRuleId("recovery-review"), "recovery review never accepts a rule id");
 Reject(() => AdminContract.Confirmation("recovery-review"), "recovery review has no mutation confirmation verb");
 

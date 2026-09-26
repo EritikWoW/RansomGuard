@@ -116,6 +116,14 @@ Repository owner procedure:
 
 The creation template binds the bypass actor to GitHub user id `116751610` (EritikWoW). If GitHub's import UI asks to remap that actor, select only the repository owner and do not add an immutable-ruleset bypass.
 
+After both rulesets are active, create the annotated immutable tag with:
+
+```powershell
+.\tools\create_release_tag.ps1 -TagName v0.8.7 -SourceSha <exact-main-sha>
+```
+
+The helper verifies the live tag rulesets, reruns release identity preflight, refuses any existing local/remote tag of the same name, creates an annotated tag at the exact source SHA, and pushes only that tag ref. It never moves or deletes a remote release tag.
+
 ## GitHub/Sigstore release identity attestation
 
 The alternative cryptographic identity route is:

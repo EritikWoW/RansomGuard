@@ -4,7 +4,7 @@ namespace RansomGuard.Core;
 public static class AdminContract
 {
     public const string ServiceName = "RansomGuardV03";
-    private static readonly string[] Actions = ["rules", "add", "edit", "disable", "remove", "install", "start", "stop", "restart", "uninstall", "state-repair"];
+    private static readonly string[] Actions = ["rules", "add", "edit", "disable", "remove", "install", "start", "stop", "restart", "uninstall", "state-repair", "recovery-review"];
     public static bool IsAction(string? value) => value is not null && Actions.Contains(value, StringComparer.Ordinal);
     public static bool NeedsRuleId(string action) => action is "edit" or "disable" or "remove";
     public static void ValidateIntent(string action, string? ruleId)

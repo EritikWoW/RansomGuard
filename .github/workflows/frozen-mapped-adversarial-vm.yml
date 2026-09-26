@@ -134,6 +134,7 @@ jobs:
         run: |
           $ErrorActionPreference='Stop'
           $results=Join-Path $env:RUNNER_TEMP 'ransomguard-mapped-adversarial-results'
+          "RG_MAPPED_RESULTS=$results" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           .\orchestrator\qualification\run_mapped_adversarial_matrix.ps1 `
             -CandidateRoot (Resolve-Path .).Path `
             -LabReleaseDirectory $env:RG_LAB_RELEASE `
@@ -154,8 +155,6 @@ jobs:
           )){
             if($summary.$name -ne $true){throw "Mapped adversarial invariant '$name' was not true."}
           }
-          "RG_MAPPED_RESULTS=$results" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
       - name: Upload mapped adversarial evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 node24 pinned

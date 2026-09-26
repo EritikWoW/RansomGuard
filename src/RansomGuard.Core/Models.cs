@@ -5,12 +5,21 @@ public sealed record FileSignal(DateTime EventUtc, DateTime ReceivedUtc, Process
     string ProcessName, string? ImagePath, string Path, FileKind Kind, bool CanaryCandidate = false)
 {
     public string? DestinationPath { get; init; } // Unknown for existing ETW rename events; never guessed.
+    // ExactIdentity=true means Process.CreationFileTimeUtc came from a live process handle and
+    // may participate in production containment authorization. ETW-only attribution is retained
+    // for incident evidence after process exit, but must never be treated as an actuation identity.
+    public bool ProcessIdentityExact { get; init; } = true;
+    public ulong EtwUniqueProcessKey { get; init; }
+    public DateTime? EtwProcessStartUtc { get; init; }
 }
 public sealed record RiskSignal(ProcessKey Process, string Name, string? ImagePath, DateTime DetectedUtc,
     DateTime LastEventUtc, double DeliveryLagMs, int Score, int Writes, int Renames, int Deletes,
     int DistinctFiles, bool CanaryCandidate, bool TruncatedWindow, string[] Reasons,
     FileSignal[] Evidence)
 {
+    public bool ProcessIdentityExact { get; init; } = true;
+    public ulong EtwUniqueProcessKey { get; init; }
+    public DateTime? EtwProcessStartUtc { get; init; }
     public DateTime? FirstEvidenceEventUtc => Evidence.Length == 0 ? null : Evidence.Min(e => e.EventUtc);
     public DateTime? FirstEvidenceReceivedUtc => Evidence.Length == 0 ? null : Evidence.Min(e => e.ReceivedUtc);
     public double FirstEvidenceToDecisionMs => FirstEvidenceEventUtc is DateTime first

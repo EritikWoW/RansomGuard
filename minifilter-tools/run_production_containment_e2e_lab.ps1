@@ -123,7 +123,14 @@ function Wait-JsonFile([string]$Path,[int]$Seconds){
     throw "Timed out waiting for JSON file: $Path"
 }
 
-function Find-IncidentForProcess([int]$ProcessId,[long]$CreationFileTimeUtc,[string[]]$BaselineCases,[int]$Seconds){
+function Find-IncidentForProcess(
+    [int]$ProcessId,
+    [long]$CreationFileTimeUtc,
+    [string[]]$BaselineCases,
+    [int]$Seconds,
+    [string]$ExpectedEvidencePath='',
+    [switch]$AllowEtwOnly
+){
     $cases=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)) 'RansomGuardV03\Incidents'
     $baseline=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach($path in $BaselineCases){[void]$baseline.Add([IO.Path]::GetFullPath($path))}
@@ -135,8 +142,22 @@ function Find-IncidentForProcess([int]$ProcessId,[long]$CreationFileTimeUtc,[str
             if(-not(Test-Path -LiteralPath $incidentPath -PathType Leaf)){continue}
             try{
                 $incident=Get-Content -LiteralPath $incidentPath -Raw | ConvertFrom-Json -Depth 100
-                if([int]$incident.Risk.Process.Pid -eq $ProcessId -and
-                   [long]$incident.Risk.Process.CreationFileTimeUtc -eq $CreationFileTimeUtc){
+                if([int]$incident.Risk.Process.Pid -ne $ProcessId){continue}
+                if([long]$incident.Risk.Process.CreationFileTimeUtc -eq $CreationFileTimeUtc){
+                    return [pscustomobject]@{Directory=$dir.FullName;Incident=$incident}
+                }
+                if(-not $AllowEtwOnly){continue}
+                $etwOnly=
+                    $incident.Risk.ProcessIdentityExact -ne $true -and
+                    [long]$incident.Risk.Process.CreationFileTimeUtc -eq 0 -and
+                    [UInt64]$incident.Risk.EtwUniqueProcessKey -gt 0 -and
+                    -not [string]::IsNullOrWhiteSpace([string]$incident.Risk.EtwProcessStartUtc)
+                if(-not $etwOnly){continue}
+                if([string]::IsNullOrWhiteSpace($ExpectedEvidencePath)){continue}
+                $evidenceMatch=@($incident.Risk.Evidence | Where-Object {
+                    [string]::Equals([string]$_.Path,$ExpectedEvidencePath,[StringComparison]::OrdinalIgnoreCase)
+                }).Count -gt 0
+                if($evidenceMatch){
                     return [pscustomobject]@{Directory=$dir.FullName;Incident=$incident}
                 }
             }catch{}
@@ -322,6 +343,8 @@ $summary=[ordered]@{
     exitRaceCaseId=$null
     exitRaceIncidentPersisted=$false
     exitRaceProcessIdentityDenied=$false
+    exitRaceEtwOnlyIdentity=$false
+    exitRaceEtwUniqueProcessKey=0
     exitRaceNoContainment=$false
     exitRaceOutcome=$null
     benignPid=0
@@ -525,10 +548,15 @@ try{
     }
     if($exitRace.ExitCode -ne 0){throw "Process-exit fixture failed exit=$($exitRace.ExitCode)."}
 
-    $exitCase=Find-IncidentForProcess -ProcessId ([int]$exitReadyObject.pid) -CreationFileTimeUtc ([long]$exitReadyObject.creationFileTimeUtc) -BaselineCases $casesBeforeExitRace -Seconds 12
+    $exitCase=Find-IncidentForProcess -ProcessId ([int]$exitReadyObject.pid) -CreationFileTimeUtc ([long]$exitReadyObject.creationFileTimeUtc) -BaselineCases $casesBeforeExitRace -Seconds 12 -ExpectedEvidencePath $exitRaceCanary -AllowEtwOnly
     if($null -eq $exitCase){throw 'No persisted incident was found for the short-lived malicious process.'}
     $summary.exitRaceIncidentPersisted=$true
     $summary.exitRaceCaseId=Split-Path -Leaf $exitCase.Directory
+    $summary.exitRaceEtwOnlyIdentity=$exitCase.Incident.Risk.ProcessIdentityExact -ne $true
+    $summary.exitRaceEtwUniqueProcessKey=[UInt64]$exitCase.Incident.Risk.EtwUniqueProcessKey
+    if(-not $summary.exitRaceEtwOnlyIdentity -or $summary.exitRaceEtwUniqueProcessKey -eq 0){
+        throw 'Short-lived process incident did not retain the expected ETW-only lifecycle identity.'
+    }
 
     $exitAuthorization=Wait-JsonFile (Join-Path $exitCase.Directory 'authorization.json') 5
     $exitResponse=Wait-JsonFile (Join-Path $exitCase.Directory 'response.json') 5
@@ -545,9 +573,14 @@ try{
     if(-not $identityDenied -and -not $failedClosedBeforeCompletion){
         throw "Short-lived process was not denied/fail-closed by exact live identity. auth=$($exitAuthorization.Decision.State) action=$($exitResponse.Action)"
     }
-    $exitJournal=@(Get-JournalRecordsForProcess $journalPath ([int]$exitReadyObject.pid) ([long]$exitReadyObject.creationFileTimeUtc))
-    if(@($exitJournal | Where-Object {[int]$_.phase -eq 4}).Count -ne 0){
-        throw 'Short-lived process unexpectedly reached Completed containment journal state.'
+    $exitJournal=@(
+        Get-Content -LiteralPath $journalPath -ErrorAction SilentlyContinue |
+            Where-Object {-not [string]::IsNullOrWhiteSpace($_)} |
+            ForEach-Object {try{$_ | ConvertFrom-Json}catch{$null}} |
+            Where-Object {$null -ne $_ -and [int]$_.processId -eq [int]$exitReadyObject.pid}
+    )
+    if($exitJournal.Count -ne 0){
+        throw 'Short-lived ETW-only process unexpectedly reached containment journal actuation.'
     }
     $summary.exitRaceProcessIdentityDenied=$identityDenied
     $summary.exitRaceNoContainment=$true

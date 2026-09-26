@@ -73,8 +73,14 @@ internal sealed class GuardWorker:BackgroundService
             await foreach (var e in monitor.Reader.ReadAllAsync(pipelineToken))
             {
                 var proc = _catalog.Get(e.Pid, e.EventUtc); if (proc is null) continue;
-                var labFastPath = _lab?.Identity?.Process == proc.Key;
-                var decision = _engine.Evaluate(new(e.EventUtc, e.ReceivedUtc, proc.Key, proc.Name, proc.Path, e.Path, e.Kind), labFastPath);
+                var labFastPath = proc.ExactIdentity && _lab?.Identity?.Process == proc.Key;
+                var signal = new FileSignal(e.EventUtc, e.ReceivedUtc, proc.Key, proc.Name, proc.Path, e.Path, e.Kind)
+                {
+                    ProcessIdentityExact = proc.ExactIdentity,
+                    EtwUniqueProcessKey = proc.EtwUniqueProcessKey,
+                    EtwProcessStartUtc = proc.EtwProcessStartUtc
+                };
+                var decision = _engine.Evaluate(signal, labFastPath);
                 if (decision is not null && !_incidents.Writer.TryWrite(decision)) Interlocked.Increment(ref _incidentDrops);
                 if (++_events % 1024 == 0) _engine.Expire(DateTime.UtcNow);
             }
@@ -232,7 +238,7 @@ internal sealed class GuardWorker:BackgroundService
     {
         var protection=_runtime.Protection();
         var monitorState=_runtime.Monitor();
-        var processIdentityVerified=VerifyLiveProcessIdentity(risk);
+        var processIdentityVerified=risk.ProcessIdentityExact && VerifyLiveProcessIdentity(risk);
         var freshImageIdentityVerified=
             string.Equals(image.Status,"Hashed",StringComparison.Ordinal) &&
             WinPaths.Equal(image.Path,risk.ImagePath) &&

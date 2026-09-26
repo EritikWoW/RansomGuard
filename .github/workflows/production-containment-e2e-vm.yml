@@ -178,6 +178,8 @@ jobs:
             'stateChangeJournalCompleted',
             'rollbackEvidenceObserved',
             'exitRaceIncidentPersisted',
+            'exitRaceProcessIdentityDenied',
+            'exitRaceEtwOnlyIdentity',
             'exitRaceNoContainment',
             'benignHighIoCompleted',
             'benignNoIncident',
@@ -191,6 +193,9 @@ jobs:
           }
           if([double]$summary.maliciousMaxHeartbeatGapMs -lt 700){
             throw 'Malicious fixture did not retain the expected state-change suspension gap evidence.'
+          }
+          if([UInt64]$summary.exitRaceEtwUniqueProcessKey -eq 0){
+            throw 'Short-lived process did not retain a nonzero ETW lifecycle identity.'
           }
           "RG_E2E_RESULTS=$results" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 

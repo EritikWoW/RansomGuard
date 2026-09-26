@@ -479,6 +479,7 @@ foreach($required in @(
     'ThreadSuspendResume',
     'ThreadQueryLimitedInformation',
     'SnapThread',
+    'UIntPtr OwnerProcessId',
     'OpenThread',
     'SuspendThread',
     'ResumeThread',

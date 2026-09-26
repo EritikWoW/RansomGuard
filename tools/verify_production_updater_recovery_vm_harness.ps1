@@ -163,11 +163,11 @@ foreach($required in @(
     'campaign_sha',
     'repair_source_sha',
     'runs-on: [self-hosted, Windows, X64, ransomguard-lab-vm]',
-    'ref: \${{ inputs.repair_source_sha }}',
+    'ref: ${{ inputs.repair_source_sha }}',
     'git rev-parse HEAD',
     'verify_production_updater_recovery_vm_harness.ps1',
     'quarantine_production_updater_recovery_vm.ps1',
-    'ransomguard-production-updater-recovery-quarantine-\${{ inputs.campaign_sha }}-\${{ inputs.repair_source_sha }}'
+    'ransomguard-production-updater-recovery-quarantine-${{ inputs.campaign_sha }}-${{ inputs.repair_source_sha }}'
 )){
     if($quarantineWorkflow -notmatch [regex]::Escape($required)){throw "Updater recovery quarantine workflow invariant missing: $required"}
 }

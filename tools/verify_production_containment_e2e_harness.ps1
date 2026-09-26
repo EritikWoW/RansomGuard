@@ -15,11 +15,15 @@ $fixturePath=Join-Path $root 'qualification\RansomGuard.ProductionContainmentE2E
 $dispatcherPath=Join-Path $root '.github\workflows\vm-lab-dispatcher.yml'
 $repairPath=Join-Path $root 'tools\repair_state_store.ps1'
 $guardWorkerPath=Join-Path $root 'src\RansomGuard.Service\GuardWorker.cs'
+$modelsPath=Join-Path $root 'src\RansomGuard.Core\Models.cs'
+$riskEnginePath=Join-Path $root 'src\RansomGuard.Core\RiskEngine.cs'
+$nativePath=Join-Path $root 'src\RansomGuard.Service\Native.cs'
+$etwMonitorPath=Join-Path $root 'src\RansomGuard.Service\EtwMonitor.cs'
 $authorizationPath=Join-Path $root 'src\RansomGuard.Core\ContainmentAuthorization.cs'
 $leasePath=Join-Path $root 'src\RansomGuard.Service\WindowsProcessStateChangeLease.cs'
 $actuatorQualificationPath=Join-Path $root 'qualification\RansomGuard.ContainmentActuatorQualification\Program.cs'
 
-foreach($path in @($workflowPath,$harnessPath,$fixturePath,$dispatcherPath,$repairPath,$guardWorkerPath,$authorizationPath,$leasePath,$actuatorQualificationPath)){
+foreach($path in @($workflowPath,$harnessPath,$fixturePath,$dispatcherPath,$repairPath,$guardWorkerPath,$modelsPath,$riskEnginePath,$nativePath,$etwMonitorPath,$authorizationPath,$leasePath,$actuatorQualificationPath)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){
         throw "Production containment E2E qualification source missing: $path"
     }
@@ -31,6 +35,10 @@ $fixture=Get-Content -LiteralPath $fixturePath -Raw
 $dispatcher=Get-Content -LiteralPath $dispatcherPath -Raw
 $repair=Get-Content -LiteralPath $repairPath -Raw
 $guardWorker=Get-Content -LiteralPath $guardWorkerPath -Raw
+$models=Get-Content -LiteralPath $modelsPath -Raw
+$riskEngine=Get-Content -LiteralPath $riskEnginePath -Raw
+$native=Get-Content -LiteralPath $nativePath -Raw
+$etwMonitor=Get-Content -LiteralPath $etwMonitorPath -Raw
 $authorization=Get-Content -LiteralPath $authorizationPath -Raw
 $lease=Get-Content -LiteralPath $leasePath -Raw
 $actuatorQualification=Get-Content -LiteralPath $actuatorQualificationPath -Raw
@@ -45,7 +53,10 @@ foreach($required in @(
     'RansomGuard.ProductionContainmentE2EFixture',
     'run_production_containment_e2e_lab.ps1',
     '''exitRaceIncidentPersisted''',
+    '''exitRaceProcessIdentityDenied''',
+    '''exitRaceEtwOnlyIdentity''',
     '''exitRaceNoContainment''',
+    'exitRaceEtwUniqueProcessKey'
     'ransomguard-production-containment-e2e-${{ inputs.expected_sha }}'
 )){
     if($workflow -notmatch [regex]::Escape($required)){
@@ -82,6 +93,14 @@ foreach($required in @(
     '''ProcessIdentityNotVerified''',
     'exitRaceIncidentPersisted',
     'exitRaceProcessIdentityDenied',
+    'exitRaceEtwOnlyIdentity',
+    'exitRaceEtwUniqueProcessKey',
+    '''ProcessIdentityExact''',
+    '''EtwUniqueProcessKey''',
+    '''EtwProcessStartUtc''',
+    '-AllowEtwOnly',
+    '-ExpectedEvidencePath $exitRaceCanary',
+    'Short-lived ETW-only process unexpectedly reached containment journal actuation.',
     'exitRaceNoContainment',
     '$_.phase -eq 4',
     '''authorization.json''',
@@ -137,6 +156,56 @@ foreach($required in @(
 }
 
 foreach($required in @(
+    'public bool ProcessIdentityExact { get; init; } = true;',
+    'public ulong EtwUniqueProcessKey { get; init; }',
+    'public DateTime? EtwProcessStartUtc { get; init; }'
+)){
+    if($models -notmatch [regex]::Escape($required)){
+        throw "Process-attribution model invariant missing: $required"
+    }
+}
+
+foreach($required in @(
+    'record struct WindowKey',
+    'if(input.ProcessIdentityExact && input.Process.CreationFileTimeUtc>0)',
+    'if(!input.ProcessIdentityExact && input.EtwUniqueProcessKey!=0',
+    'ProcessIdentityExact=e.ProcessIdentityExact',
+    'EtwUniqueProcessKey=e.EtwUniqueProcessKey'
+)){
+    if($riskEngine -notmatch [regex]::Escape($required)){
+        throw "RiskEngine process-attribution invariant missing: $required"
+    }
+}
+
+foreach($required in @(
+    'void ObserveStart',
+    'void ObserveStop',
+    'UniqueProcessKey',
+    'StopUtc',
+    'new ProcessKey(pid,0)',
+    'ExactIdentity:false',
+    'TimeSpan.FromSeconds(30)'
+)){
+    if($native -notmatch [regex]::Escape($required)){
+        throw "ProcessCatalog ETW lifecycle invariant missing: $required"
+    }
+}
+
+foreach($required in @(
+    '_catalog.ObserveStart(',
+    '(ulong)e.UniqueProcessKey',
+    '_catalog.ObserveStop('
+)){
+    if($etwMonitor -notmatch [regex]::Escape($required)){
+        throw "ETW process-lifecycle capture invariant missing: $required"
+    }
+}
+
+if($guardWorker -notmatch [regex]::Escape('var processIdentityVerified=risk.ProcessIdentityExact && VerifyLiveProcessIdentity(risk);')){
+    throw 'ETW-only process attribution must never satisfy production live-process identity authorization.'
+}
+
+foreach($required in @(
     'current==risk.Process',
     'WinPaths.Equal(imagePath,risk.ImagePath)'
 )){
@@ -177,4 +246,4 @@ foreach($required in @(
     }
 }
 
-Write-Host 'Production containment E2E qualification source gate passed: ordinary service-path malicious/benign coverage plus exact PID+CreationFileTime short-lived-process fail-closed race and lower-level PID-reuse rejection.'
+Write-Host 'Production containment E2E qualification source gate passed: ordinary service-path malicious/benign coverage plus bounded ETW lifecycle attribution for exited processes, mandatory live-identity denial before actuation, and lower-level PID-reuse rejection.'

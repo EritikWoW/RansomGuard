@@ -71,7 +71,8 @@ public sealed record IncidentSummaryDto(
     string LocalDisposition,
     string Action,
     string[] Reasons,
-    ScopedTrustDecision? ScopedTrust = null);
+    ScopedTrustDecision? ScopedTrust = null,
+    ContainmentAuthorizationDecision? ContainmentAuthorization = null);
 
 public sealed record DiagnosticsDto(
     string Version,
@@ -84,7 +85,8 @@ public sealed record DiagnosticsDto(
     string[] Notes,
     MonitoringHealthDto? Monitor = null,
     ScopedRuleSetDto? ScopedRules = null,
-    ProtectionStatusDto? Protection = null);
+    ProtectionStatusDto? Protection = null,
+    ContainmentAuthorizationDecision? ContainmentAuthorization = null);
 
 // No key material, memory addresses or arbitrary write commands are sent to the UI.
 public sealed record RecoverySummaryDto(string State, string? Algorithm, bool KeyRecovered,

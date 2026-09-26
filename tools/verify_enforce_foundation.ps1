@@ -9,20 +9,26 @@ $RepositoryRoot=[IO.Path]::GetFullPath($RepositoryRoot)
 
 $settingsPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\Settings.cs'
 $runtimePath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\ProtectionRuntime.cs'
+$containmentAuthorizationPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\ContainmentAuthorization.cs'
+$localApiPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\LocalApi.cs'
 $serviceRuntimePath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\RuntimeState.cs'
+$guardWorkerPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\GuardWorker.cs'
 $programPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\Program.cs'
 $bootstrapPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\WindowsServiceBootstrap.cs'
 $lifecyclePath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\ProductionProtectionLifecycle.cs'
 $appSettingsPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\appsettings.json'
 $driverPath=Join-Path $RepositoryRoot 'driver\RansomGuard.Minifilter\RansomGuardMinifilter.c'
 $buildPath=Join-Path $RepositoryRoot 'build_windows.ps1'
-foreach($path in @($settingsPath,$runtimePath,$serviceRuntimePath,$programPath,$bootstrapPath,$lifecyclePath,$appSettingsPath,$driverPath,$buildPath)){
+foreach($path in @($settingsPath,$runtimePath,$containmentAuthorizationPath,$localApiPath,$serviceRuntimePath,$guardWorkerPath,$programPath,$bootstrapPath,$lifecyclePath,$appSettingsPath,$driverPath,$buildPath)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Production Enforce lifecycle file missing: $path"}
 }
 
 $settings=Get-Content -LiteralPath $settingsPath -Raw
 $runtime=Get-Content -LiteralPath $runtimePath -Raw
+$containmentAuthorization=Get-Content -LiteralPath $containmentAuthorizationPath -Raw
+$localApi=Get-Content -LiteralPath $localApiPath -Raw
 $serviceRuntime=Get-Content -LiteralPath $serviceRuntimePath -Raw
+$guardWorker=Get-Content -LiteralPath $guardWorkerPath -Raw
 $program=Get-Content -LiteralPath $programPath -Raw
 $bootstrap=Get-Content -LiteralPath $bootstrapPath -Raw
 $lifecycle=Get-Content -LiteralPath $lifecyclePath -Raw
@@ -330,9 +336,56 @@ foreach($required in @(
     '_protection.State',
     'ProtectionStateMachine.ValidateSnapshot(protection)',
     'ProtectionStateMachine.ValidateSnapshot(value)',
-    'A connected UI or SCM Running state is not proof of kernel enforcement'
+    'A connected UI or SCM Running state is not proof of kernel enforcement',
+    '_containmentAuthorization',
+    'UpdateContainmentAuthorization',
+    'Containment authorization is read-only policy evidence; it does not imply that an actuator ran.'
 )){
     if($serviceRuntime -notmatch [regex]::Escape($required)){throw "Runtime status invariant missing: $required"}
+}
+
+foreach($required in @(
+    'ContainmentAuthorizationState',
+    'DisabledByConfiguration',
+    'Denied',
+    'Eligible',
+    'ProtectionSnapshotInvalid',
+    'ProtectionStateNotProtected',
+    'RollbackStoreNotReady',
+    'KernelEnforcementNotActive',
+    'MonitorNotRunning',
+    'IncidentNotPersisted',
+    'ProcessIdentityNotVerified',
+    'FreshImageIdentityNotVerified',
+    'ProtectedScopeUnresolved',
+    'LabIdentityNotEligible',
+    'ScopedTrustVeto'
+)){
+    if($containmentAuthorization -notmatch [regex]::Escape($required)){throw "Containment authorization invariant missing: $required"}
+}
+
+if($localApi -notmatch [regex]::Escape('ContainmentAuthorizationDecision? ContainmentAuthorization = null')){
+    throw 'Read-only Local API must expose the latest containment authorization decision.'
+}
+
+foreach($required in @(
+    'BuildContainmentAuthorizationInput',
+    'ContainmentAuthorizationPolicy.Evaluate(authorizationInput)',
+    'authorization.json',
+    'ActuationAttempted=false',
+    'Authorization evidence only. No ordinary-process containment actuator is wired in this milestone.',
+    'Automatic response to ordinary processes is disabled; authorization evidence does not execute an action.'
+)){
+    if($guardWorker -notmatch [regex]::Escape($required)){throw "GuardWorker containment evidence invariant missing: $required"}
+}
+
+$authorizationEval=$guardWorker.IndexOf('ContainmentAuthorizationPolicy.Evaluate(authorizationInput)')
+$ordinaryBranch=$guardWorker.IndexOf('if(!isLab||_lab!.ResponseClaimed)',$authorizationEval)
+$ordinaryReturn=$guardWorker.IndexOf('return;',$ordinaryBranch)
+$labActuator=$guardWorker.IndexOf('using var freeze=LabFreeze.OpenAuthorized',$ordinaryReturn)
+if($authorizationEval -lt 0 -or $ordinaryBranch -lt 0 -or $ordinaryReturn -lt 0 -or $labActuator -lt 0 -or
+   $authorizationEval -gt $ordinaryBranch -or $ordinaryBranch -gt $ordinaryReturn -or $ordinaryReturn -gt $labActuator){
+    throw 'Ordinary incident handling must persist/evaluate containment authorization and return before the LAB-only actuator path.'
 }
 
 $app=($appSettings | ConvertFrom-Json)

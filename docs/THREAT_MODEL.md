@@ -180,13 +180,17 @@ This model does not justify treating an arbitrary pre-existing mapping as safe. 
 
 ETW/RiskEngine is a trigger and evidence source, not the preservation guarantee.
 
-The current normal service does not authorize detector-driven containment for ordinary applications, including suspicious/canary cases. Audit mode stays non-blocking. Enforce mode in 0.8.6 can activate the admitted preservation lifecycle, but `AutomaticContainment=true` is still rejected. The existing containment primitive is LAB-only and can bind one explicitly authorized process to a referenced kernel process object. Production detector-to-containment orchestration remains unimplemented.
+The normal service does not actuate detector-driven containment for ordinary applications, including suspicious/canary cases. Audit mode stays non-blocking. Production Enforce can activate the admitted preservation lifecycle, but `AutomaticContainment=true` remains rejected. The existing suspend primitive is LAB-only and can bind one explicitly authorized process to a referenced kernel process object.
 
-Before production containment is enabled, the authorization chain must prove at least:
+0.8.7 adds an **authorization-only** production contract. After the incident archive is successfully created, the service evaluates an immutable containment-authorization snapshot and durably writes `authorization.json`. The decision is also exposed through read-only runtime/incident diagnostics as exactly `Eligible`, `Denied`, or `DisabledByConfiguration` with explicit veto reasons. `Eligible` means only that the evidence snapshot satisfied the policy contract; it is not evidence that an actuator ran and it does not authorize the current build to suspend, kill, quarantine, or otherwise mutate an ordinary process. The ordinary response path records `ActuationAttempted=false` and returns before the LAB-only actuator path.
 
-`incident evidence -> live process identity -> preservation health -> containment request -> exact kernel receipt -> post-containment audit -> safe deactivation/recovery`
+Authorization is fail-closed unless the snapshot proves Enforce + Protected, rollback readiness, active kernel enforcement, a Running monitor, zero telemetry/queue/window-loss counters, durable incident persistence, stable live process identity, fresh valid SHA-256 image inspection, resolved protected scope, non-LAB identity, no scoped-trust veto, and the configured risk criterion. Startup, pre-activation, degraded, maintenance, failed, stopped, invalid or ambiguous states deny authorization.
 
-No LAB fast-path threshold should be promoted directly into a production blocking rule.
+Before production containment actuation is enabled, the chain must be extended and separately qualified end-to-end:
+
+`incident evidence -> live process identity -> preservation health -> authorization decision -> separately qualified actuator -> exact kernel/user-mode receipt -> post-containment audit -> safe deactivation/recovery`
+
+No LAB fast-path threshold or `Eligible` authorization result may be promoted directly into a production blocking action.
 
 ## Recovery boundary
 

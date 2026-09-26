@@ -15,7 +15,7 @@
         "type": "Project",
         "dependencies": {
           "RansomGuard.Core": "[0.7.27, )",
-          "RansomGuard.Rollback": "[0.8.6, )"
+          "RansomGuard.Rollback": "[0.8.7, )"
         }
       },
       "ransomguard.rollback": {

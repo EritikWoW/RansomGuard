@@ -11,7 +11,10 @@ $settingsPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\Settings.cs'
 $runtimePath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\ProtectionRuntime.cs'
 $containmentAuthorizationPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\ContainmentAuthorization.cs'
 $containmentActuationPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\ContainmentActuation.cs'
+$containmentActuatorPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\ContainmentActuator.cs'
 $containmentActuationLedgerPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\ContainmentActuationLedger.cs'
+$windowsContainmentActuatorPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\WindowsContainmentActuator.cs'
+$nativePath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\Native.cs'
 $localApiPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\LocalApi.cs'
 $serviceRuntimePath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\RuntimeState.cs'
 $guardWorkerPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\GuardWorker.cs'
@@ -21,7 +24,7 @@ $lifecyclePath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\ProductionProt
 $appSettingsPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\appsettings.json'
 $driverPath=Join-Path $RepositoryRoot 'driver\RansomGuard.Minifilter\RansomGuardMinifilter.c'
 $buildPath=Join-Path $RepositoryRoot 'build_windows.ps1'
-foreach($path in @($settingsPath,$runtimePath,$containmentAuthorizationPath,$containmentActuationPath,$containmentActuationLedgerPath,$localApiPath,$serviceRuntimePath,$guardWorkerPath,$programPath,$bootstrapPath,$lifecyclePath,$appSettingsPath,$driverPath,$buildPath)){
+foreach($path in @($settingsPath,$runtimePath,$containmentAuthorizationPath,$containmentActuationPath,$containmentActuatorPath,$containmentActuationLedgerPath,$windowsContainmentActuatorPath,$nativePath,$localApiPath,$serviceRuntimePath,$guardWorkerPath,$programPath,$bootstrapPath,$lifecyclePath,$appSettingsPath,$driverPath,$buildPath)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Production Enforce lifecycle file missing: $path"}
 }
 
@@ -29,7 +32,10 @@ $settings=Get-Content -LiteralPath $settingsPath -Raw
 $runtime=Get-Content -LiteralPath $runtimePath -Raw
 $containmentAuthorization=Get-Content -LiteralPath $containmentAuthorizationPath -Raw
 $containmentActuation=Get-Content -LiteralPath $containmentActuationPath -Raw
+$containmentActuator=Get-Content -LiteralPath $containmentActuatorPath -Raw
 $containmentActuationLedger=Get-Content -LiteralPath $containmentActuationLedgerPath -Raw
+$windowsContainmentActuator=Get-Content -LiteralPath $windowsContainmentActuatorPath -Raw
+$native=Get-Content -LiteralPath $nativePath -Raw
 $localApi=Get-Content -LiteralPath $localApiPath -Raw
 $serviceRuntime=Get-Content -LiteralPath $serviceRuntimePath -Raw
 $guardWorker=Get-Content -LiteralPath $guardWorkerPath -Raw
@@ -420,6 +426,74 @@ foreach($forbidden in @(
     if($containmentActuationLedger -match [regex]::Escape($forbidden)){
         throw "Containment actuation ledger must remain non-actuating evidence/state code: $forbidden"
     }
+}
+
+
+foreach($required in @(
+    'IContainmentProcessActuationLease',
+    'IContainmentProcessActuationPlatform',
+    'ContainmentActuatorOptions',
+    'ContainmentActuator',
+    'MaxThreads',
+    'MaxPasses',
+    'ThreadSetUnstable',
+    'SuspendThreadFailed',
+    'ActuationCancelled',
+    'ActuationTimedOut',
+    'ActuationPlatformFailed',
+    'RecordSuspendOwned',
+    'RecordResumeOwned',
+    'ResumeOwned'
+)){
+    if($containmentActuator -notmatch [regex]::Escape($required)){throw "Containment actuator executor invariant missing: $required"}
+}
+
+foreach($required in @(
+    'WindowsContainmentActuationPlatform',
+    'WindowsContainmentProcessActuationLease',
+    'CreateToolhelp32Snapshot',
+    'Thread32First',
+    'Thread32Next',
+    'GetProcessIdOfThread',
+    'GetThreadTimes',
+    'SuspendThread',
+    'ResumeThread',
+    'ThreadIdentityChanged',
+    'OwnedSuspendIncrementMissing'
+)){
+    if($windowsContainmentActuator -notmatch [regex]::Escape($required)){throw "Windows containment actuator invariant missing: $required"}
+}
+
+foreach($forbidden in @(
+    'NtSuspendProcess',
+    'NtResumeProcess',
+    'TerminateProcess',
+    '.Kill('
+)){
+    if($windowsContainmentActuator -match [regex]::Escape($forbidden)){
+        throw "Production containment actuator must remain reversible single-thread increment ownership only: $forbidden"
+    }
+}
+
+foreach($required in @(
+    'ThreadSuspendResume',
+    'ThreadQueryLimitedInformation',
+    'SnapThread',
+    'UIntPtr OwnerProcessId',
+    'OpenThread',
+    'SuspendThread',
+    'ResumeThread',
+    'GetThreadTimes',
+    'GetProcessIdOfThread'
+)){
+    if($native -notmatch [regex]::Escape($required)){throw "Native containment primitive missing: $required"}
+}
+
+if($containmentActuationLedger -notmatch [regex]::Escape('ThreadCreationFileTimeUtc')){
+    throw 'Containment actuation ledger must bind owned increments to exact thread creation identity.'
+}
+if($containmentActuationLedger -notmatch [regex]::Escape('ThreadIdentityChangedForOwnedSuspend')){
+    throw 'Containment actuation ledger must reject TID reuse for suspend ownership.'
 }
 
 foreach($forbidden in @(

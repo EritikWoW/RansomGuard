@@ -37,6 +37,10 @@ public sealed record ContainmentActuationResult(
     int OwnedSuspendCount,
     string[] ReasonCodes);
 
+public readonly record struct ContainmentActuationThreadKey(
+    uint ThreadId,
+    long CreationFileTimeUtc);
+
 public sealed record ContainmentActuationLedgerEntry(
     long Sequence,
     DateTime ObservedUtc,
@@ -52,6 +56,7 @@ public sealed record ContainmentActuationLedgerEntry(
     string ImageSha256,
     DateTime ProtectionObservedUtc,
     uint ThreadId,
+    long ThreadCreationFileTimeUtc,
     string ReasonCode,
     string PreviousRecordSha256,
     string RecordSha256);
@@ -160,15 +165,18 @@ public sealed class ContainmentActuationLedger
                 normalized.RequestId,
                 normalized.Binding,
                 0,
+                0,
                 PreparedReason,
                 normalized.RequestedUtc);
         }
     }
 
-    public ContainmentActuationLedgerEntry RecordSuspendOwned(string requestId, uint threadId)
+    public ContainmentActuationLedgerEntry RecordSuspendOwned(
+        string requestId,
+        uint threadId,
+        long threadCreationFileTimeUtc)
     {
-        if (threadId == 0)
-            throw new ArgumentOutOfRangeException(nameof(threadId));
+        ValidateThreadIdentity(threadId, threadCreationFileTimeUtc);
 
         lock (_gate)
         {
@@ -176,9 +184,17 @@ public sealed class ContainmentActuationLedger
             var existing = _records.FirstOrDefault(x =>
                 x.Phase == ContainmentActuationLedgerPhase.SuspendOwned &&
                 RequestEquals(x, requestId) &&
-                x.ThreadId == threadId);
+                x.ThreadId == threadId &&
+                x.ThreadCreationFileTimeUtc == threadCreationFileTimeUtc);
             if (existing is not null)
                 return existing;
+
+            if (_records.Any(x =>
+                x.Phase == ContainmentActuationLedgerPhase.SuspendOwned &&
+                RequestEquals(x, requestId) &&
+                x.ThreadId == threadId &&
+                x.ThreadCreationFileTimeUtc != threadCreationFileTimeUtc))
+                throw new InvalidOperationException("ThreadIdentityChangedForOwnedSuspend");
 
             EnsureNoPhase(requestId, ContainmentActuationLedgerPhase.ResumeCompleted, "RequestAlreadyResumed");
             EnsureNoPhase(requestId, ContainmentActuationLedgerPhase.Failed, "RequestAlreadyFailed");
@@ -187,7 +203,8 @@ public sealed class ContainmentActuationLedger
             if (_records.Any(x =>
                 x.Phase == ContainmentActuationLedgerPhase.ResumeOwned &&
                 RequestEquals(x, requestId) &&
-                x.ThreadId == threadId))
+                x.ThreadId == threadId &&
+                x.ThreadCreationFileTimeUtc == threadCreationFileTimeUtc))
                 throw new InvalidOperationException("ThreadOwnershipAlreadyReleased");
 
             return Append(
@@ -195,6 +212,7 @@ public sealed class ContainmentActuationLedger
                 prepared.RequestId,
                 BindingFrom(prepared),
                 threadId,
+                threadCreationFileTimeUtc,
                 SuspendOwnedReason,
                 DateTime.UtcNow);
         }
@@ -228,15 +246,18 @@ public sealed class ContainmentActuationLedger
                 prepared.RequestId,
                 BindingFrom(prepared),
                 0,
+                0,
                 SuspendCompletedReason,
                 DateTime.UtcNow);
         }
     }
 
-    public ContainmentActuationLedgerEntry RecordResumeOwned(string requestId, uint threadId)
+    public ContainmentActuationLedgerEntry RecordResumeOwned(
+        string requestId,
+        uint threadId,
+        long threadCreationFileTimeUtc)
     {
-        if (threadId == 0)
-            throw new ArgumentOutOfRangeException(nameof(threadId));
+        ValidateThreadIdentity(threadId, threadCreationFileTimeUtc);
 
         lock (_gate)
         {
@@ -244,9 +265,17 @@ public sealed class ContainmentActuationLedger
             var existing = _records.FirstOrDefault(x =>
                 x.Phase == ContainmentActuationLedgerPhase.ResumeOwned &&
                 RequestEquals(x, requestId) &&
-                x.ThreadId == threadId);
+                x.ThreadId == threadId &&
+                x.ThreadCreationFileTimeUtc == threadCreationFileTimeUtc);
             if (existing is not null)
                 return existing;
+
+            if (_records.Any(x =>
+                x.Phase == ContainmentActuationLedgerPhase.ResumeOwned &&
+                RequestEquals(x, requestId) &&
+                x.ThreadId == threadId &&
+                x.ThreadCreationFileTimeUtc != threadCreationFileTimeUtc))
+                throw new InvalidOperationException("ThreadIdentityChangedForOwnedResume");
 
             EnsureNoPhase(requestId, ContainmentActuationLedgerPhase.ResumeCompleted, "RequestAlreadyResumed");
 
@@ -259,7 +288,8 @@ public sealed class ContainmentActuationLedger
             var owned = _records.FirstOrDefault(x =>
                 x.Phase == ContainmentActuationLedgerPhase.SuspendOwned &&
                 RequestEquals(x, requestId) &&
-                x.ThreadId == threadId)
+                x.ThreadId == threadId &&
+                x.ThreadCreationFileTimeUtc == threadCreationFileTimeUtc)
                 ?? throw new InvalidOperationException("SuspendIncrementNotOwned");
 
             return Append(
@@ -267,6 +297,7 @@ public sealed class ContainmentActuationLedger
                 prepared.RequestId,
                 BindingFrom(owned),
                 threadId,
+                threadCreationFileTimeUtc,
                 ResumeOwnedReason,
                 DateTime.UtcNow);
         }
@@ -305,6 +336,7 @@ public sealed class ContainmentActuationLedger
                 prepared.RequestId,
                 BindingFrom(prepared),
                 0,
+                0,
                 ResumeCompletedReason,
                 DateTime.UtcNow);
         }
@@ -334,6 +366,7 @@ public sealed class ContainmentActuationLedger
                 prepared.RequestId,
                 BindingFrom(prepared),
                 0,
+                0,
                 reasonCode,
                 DateTime.UtcNow);
         }
@@ -346,9 +379,9 @@ public sealed class ContainmentActuationLedger
             var prepared = RequirePrepared(requestId);
             var requestRecords = _records.Where(x => RequestEquals(x, prepared.RequestId)).OrderBy(x => x.Sequence).ToArray();
             var owned = requestRecords.Where(x => x.Phase == ContainmentActuationLedgerPhase.SuspendOwned)
-                .Select(x => x.ThreadId).Distinct().ToHashSet();
+                .Select(x => new ContainmentActuationThreadKey(x.ThreadId, x.ThreadCreationFileTimeUtc)).Distinct().ToHashSet();
             var resumed = requestRecords.Where(x => x.Phase == ContainmentActuationLedgerPhase.ResumeOwned)
-                .Select(x => x.ThreadId).Distinct().ToHashSet();
+                .Select(x => new ContainmentActuationThreadKey(x.ThreadId, x.ThreadCreationFileTimeUtc)).Distinct().ToHashSet();
             var outstanding = owned.Count(x => !resumed.Contains(x));
             var failed = requestRecords.Where(x => x.Phase == ContainmentActuationLedgerPhase.Failed).ToArray();
             var resumeCompleted = requestRecords.Any(x => x.Phase == ContainmentActuationLedgerPhase.ResumeCompleted);
@@ -404,6 +437,7 @@ public sealed class ContainmentActuationLedger
         string requestId,
         ContainmentActuationBinding binding,
         uint threadId,
+        long threadCreationFileTimeUtc,
         string reasonCode,
         DateTime observedUtc)
     {
@@ -430,6 +464,7 @@ public sealed class ContainmentActuationLedger
             binding.ImageSha256.ToUpperInvariant(),
             binding.ProtectionObservedUtc,
             threadId,
+            threadCreationFileTimeUtc,
             reasonCode,
             _lastRecordHash);
         var recordHash = HashPayload(payload);
@@ -448,6 +483,7 @@ public sealed class ContainmentActuationLedger
             payload.ImageSha256,
             payload.ProtectionObservedUtc,
             payload.ThreadId,
+            payload.ThreadCreationFileTimeUtc,
             payload.ReasonCode,
             payload.PreviousRecordSha256,
             recordHash);
@@ -508,7 +544,7 @@ public sealed class ContainmentActuationLedger
                 WinPaths.Normalize(line.ImagePath) is null ||
                 !DecisionPolicy.HashEqual(line.ImageSha256, line.ImageSha256) ||
                 line.ProtectionObservedUtc.Kind != DateTimeKind.Utc ||
-                !ValidThreadField(line.Phase, line.ThreadId) ||
+                !ValidThreadField(line.Phase, line.ThreadId, line.ThreadCreationFileTimeUtc) ||
                 !IsReasonCode(line.ReasonCode) ||
                 !IsSha256(line.PreviousRecordSha256) ||
                 !IsSha256(line.RecordSha256))
@@ -556,8 +592,8 @@ public sealed class ContainmentActuationLedger
             if (first.ThreadId != 0 || !string.Equals(first.ReasonCode, PreparedReason, StringComparison.Ordinal))
                 throw new InvalidDataException("Invalid Prepared actuation ledger record.");
 
-            var owned = new HashSet<uint>();
-            var resumed = new HashSet<uint>();
+            var owned = new HashSet<ContainmentActuationThreadKey>();
+            var resumed = new HashSet<ContainmentActuationThreadKey>();
             var suspendCompleted = false;
             var resumeCompleted = false;
             var failed = false;
@@ -574,7 +610,8 @@ public sealed class ContainmentActuationLedger
                     case ContainmentActuationLedgerPhase.Prepared:
                         throw new InvalidDataException("Duplicate Prepared actuation ledger record.");
                     case ContainmentActuationLedgerPhase.SuspendOwned:
-                        if (failed || suspendCompleted || !owned.Add(record.ThreadId) ||
+                        if (failed || suspendCompleted ||
+                            !owned.Add(new ContainmentActuationThreadKey(record.ThreadId, record.ThreadCreationFileTimeUtc)) ||
                             !string.Equals(record.ReasonCode, SuspendOwnedReason, StringComparison.Ordinal))
                             throw new InvalidDataException("Invalid SuspendOwned transition.");
                         break;
@@ -586,8 +623,8 @@ public sealed class ContainmentActuationLedger
                         break;
                     case ContainmentActuationLedgerPhase.ResumeOwned:
                         if ((!suspendCompleted && !failed) ||
-                            !owned.Contains(record.ThreadId) ||
-                            !resumed.Add(record.ThreadId) ||
+                            !owned.Contains(new ContainmentActuationThreadKey(record.ThreadId, record.ThreadCreationFileTimeUtc)) ||
+                            !resumed.Add(new ContainmentActuationThreadKey(record.ThreadId, record.ThreadCreationFileTimeUtc)) ||
                             !string.Equals(record.ReasonCode, ResumeOwnedReason, StringComparison.Ordinal))
                             throw new InvalidDataException("Invalid ResumeOwned transition.");
                         break;
@@ -716,10 +753,21 @@ public sealed class ContainmentActuationLedger
     private string HashPayload(ContainmentActuationLedgerPayload payload) =>
         Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(payload, _json)));
 
-    private static bool ValidThreadField(ContainmentActuationLedgerPhase phase, uint threadId) =>
+    private static bool ValidThreadField(
+        ContainmentActuationLedgerPhase phase,
+        uint threadId,
+        long threadCreationFileTimeUtc) =>
         phase is ContainmentActuationLedgerPhase.SuspendOwned or ContainmentActuationLedgerPhase.ResumeOwned
-            ? threadId != 0
-            : threadId == 0;
+            ? threadId != 0 && threadCreationFileTimeUtc > 0
+            : threadId == 0 && threadCreationFileTimeUtc == 0;
+
+    private static void ValidateThreadIdentity(uint threadId, long threadCreationFileTimeUtc)
+    {
+        if (threadId == 0)
+            throw new ArgumentOutOfRangeException(nameof(threadId));
+        if (threadCreationFileTimeUtc <= 0)
+            throw new ArgumentOutOfRangeException(nameof(threadCreationFileTimeUtc));
+    }
 
     private static void ValidateReasonCode(string value)
     {
@@ -774,6 +822,7 @@ internal sealed record ContainmentActuationLedgerPayload(
     string ImageSha256,
     DateTime ProtectionObservedUtc,
     uint ThreadId,
+    long ThreadCreationFileTimeUtc,
     string ReasonCode,
     string PreviousRecordSha256);
 
@@ -792,6 +841,7 @@ internal sealed record ContainmentActuationLedgerLine(
     string ImageSha256,
     DateTime ProtectionObservedUtc,
     uint ThreadId,
+    long ThreadCreationFileTimeUtc,
     string ReasonCode,
     string PreviousRecordSha256,
     string RecordSha256)
@@ -811,6 +861,7 @@ internal sealed record ContainmentActuationLedgerLine(
         ImageSha256,
         ProtectionObservedUtc,
         ThreadId,
+        ThreadCreationFileTimeUtc,
         ReasonCode,
         PreviousRecordSha256);
 
@@ -829,6 +880,7 @@ internal sealed record ContainmentActuationLedgerLine(
         ImageSha256,
         ProtectionObservedUtc,
         ThreadId,
+        ThreadCreationFileTimeUtc,
         ReasonCode,
         PreviousRecordSha256,
         RecordSha256);

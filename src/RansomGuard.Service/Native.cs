@@ -9,10 +9,40 @@ internal sealed class ProcessHandle : SafeHandleZeroOrMinusOneIsInvalid
     public ProcessHandle():base(true) { }
     protected override bool ReleaseHandle()=>Native.CloseHandle(handle);
 }
+internal sealed class ThreadHandle : SafeHandleZeroOrMinusOneIsInvalid
+{
+    public ThreadHandle():base(true) { }
+    protected override bool ReleaseHandle()=>Native.CloseHandle(handle);
+}
+internal sealed class SnapshotHandle : SafeHandleZeroOrMinusOneIsInvalid
+{
+    public SnapshotHandle():base(true) { }
+    protected override bool ReleaseHandle()=>Native.CloseHandle(handle);
+}
+[StructLayout(LayoutKind.Sequential)]
+internal struct ThreadEntry32
+{
+    internal uint Size;
+    internal uint Usage;
+    internal uint ThreadId;
+    internal UIntPtr OwnerProcessId;
+    internal int BasePriority;
+    internal int DeltaPriority;
+    internal uint Flags;
+}
 internal static class Native
 {
     public const uint Query=0x1000, Synchronize=0x100000, SuspendResume=0x0800;
+    public const uint ThreadSuspendResume=0x0002, ThreadQueryLimitedInformation=0x0800, SnapThread=0x00000004;
     [DllImport("kernel32.dll",SetLastError=true)] internal static extern ProcessHandle OpenProcess(uint rights,bool inherit,int pid);
+    [DllImport("kernel32.dll",SetLastError=true)] internal static extern ThreadHandle OpenThread(uint rights,bool inherit,uint threadId);
+    [DllImport("kernel32.dll",SetLastError=true)] internal static extern SnapshotHandle CreateToolhelp32Snapshot(uint flags,uint processId);
+    [DllImport("kernel32.dll",SetLastError=true)] internal static extern bool Thread32First(SnapshotHandle snapshot,ref ThreadEntry32 entry);
+    [DllImport("kernel32.dll",SetLastError=true)] internal static extern bool Thread32Next(SnapshotHandle snapshot,ref ThreadEntry32 entry);
+    [DllImport("kernel32.dll",SetLastError=true)] internal static extern uint GetProcessIdOfThread(ThreadHandle thread);
+    [DllImport("kernel32.dll",SetLastError=true)] internal static extern bool GetThreadTimes(ThreadHandle thread,out long created,out long exited,out long kernel,out long user);
+    [DllImport("kernel32.dll",SetLastError=true)] internal static extern uint SuspendThread(ThreadHandle thread);
+    [DllImport("kernel32.dll",SetLastError=true)] internal static extern uint ResumeThread(ThreadHandle thread);
     [DllImport("kernel32.dll",SetLastError=true)] internal static extern bool CloseHandle(IntPtr handle);
     [DllImport("kernel32.dll",SetLastError=true)] internal static extern bool GetProcessTimes(ProcessHandle p,out long created,out long exited,out long kernel,out long user);
     [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] internal static extern bool QueryFullProcessImageName(ProcessHandle h,int flags,StringBuilder path,ref int len);

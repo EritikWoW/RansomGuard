@@ -463,14 +463,17 @@ try
     catch(InvalidOperationException ex) when(ex.Message=="AuthorizationAlreadyConsumed"){rejected=true;}
     Check(rejected,"one authorization id cannot prepare two actuation requests");
 
-    rejected=false;try{ledger.RecordResumeOwned(ledgerRequestId,9001);}catch(InvalidOperationException){rejected=true;}
+    rejected=false;try{ledger.RecordResumeOwned(ledgerRequestId,9001,100001);}catch(InvalidOperationException){rejected=true;}
     Check(rejected,"resume cannot claim ownership before suspend completion or failure");
 
-    var owned1=ledger.RecordSuspendOwned(ledgerRequestId,9001);
-    var owned1Again=ledger.RecordSuspendOwned(ledgerRequestId,9001);
-    var owned2=ledger.RecordSuspendOwned(ledgerRequestId,9002);
+    var owned1=ledger.RecordSuspendOwned(ledgerRequestId,9001,100001);
+    var owned1Again=ledger.RecordSuspendOwned(ledgerRequestId,9001,100001);
+    var owned2=ledger.RecordSuspendOwned(ledgerRequestId,9002,100002);
     Check(owned1.Sequence==owned1Again.Sequence&&owned2.Sequence>owned1.Sequence,
         "owned suspend increments are durable and exact retries are idempotent");
+
+    rejected=false;try{ledger.RecordSuspendOwned(ledgerRequestId,9001,100999);}catch(InvalidOperationException ex) when(ex.Message=="ThreadIdentityChangedForOwnedSuspend"){rejected=true;}
+    Check(rejected,"owned suspend identity refuses TID reuse with a different creation FILETIME");
 
     var inProgress=ledger.ResultFor(ledgerRequestId);
     Check(inProgress.State==ContainmentActuationResultState.InProgress.ToString()&&inProgress.OwnedSuspendCount==2,
@@ -480,26 +483,30 @@ try
     var suspended=ledger.ResultFor(ledgerRequestId);
     Check(suspended.State==ContainmentActuationResultState.Suspended.ToString()&&suspended.OwnedSuspendCount==2,
         "suspend completion remains bound to the owned increments");
-    Check(ledger.RecordSuspendOwned(ledgerRequestId,9001).Sequence==owned1.Sequence&&
+    Check(ledger.RecordSuspendOwned(ledgerRequestId,9001,100001).Sequence==owned1.Sequence&&
           ledger.RecordSuspendCompleted(ledgerRequestId).Sequence==suspendCompletedRecord.Sequence,
         "suspend records remain idempotent after suspend completion");
 
-    rejected=false;try{ledger.RecordSuspendOwned(ledgerRequestId,9003);}catch(InvalidOperationException){rejected=true;}
+    rejected=false;try{ledger.RecordSuspendOwned(ledgerRequestId,9003,100003);}catch(InvalidOperationException){rejected=true;}
     Check(rejected,"no new suspend increment can be added after suspend completion");
 
-    rejected=false;try{ledger.RecordResumeOwned(ledgerRequestId,9999);}catch(InvalidOperationException){rejected=true;}
+    rejected=false;try{ledger.RecordResumeOwned(ledgerRequestId,9999,109999);}catch(InvalidOperationException){rejected=true;}
     Check(rejected,"resume cannot decrement an unowned thread suspension");
 
-    ledger.RecordResumeOwned(ledgerRequestId,9001);
+    ledger.RecordResumeOwned(ledgerRequestId,9001,100001);
     rejected=false;try{ledger.RecordResumeCompleted(ledgerRequestId);}catch(InvalidOperationException){rejected=true;}
     Check(rejected,"resume completion refuses stranded owned increments");
 
-    var resumedOwned2=ledger.RecordResumeOwned(ledgerRequestId,9002);
+
+    rejected=false;try{ledger.RecordResumeOwned(ledgerRequestId,9002,100999);}catch(InvalidOperationException ex) when(ex.Message=="SuspendIncrementNotOwned"){rejected=true;}
+    Check(rejected,"owned resume requires the exact thread creation identity, not only a reused TID");
+
+    var resumedOwned2=ledger.RecordResumeOwned(ledgerRequestId,9002,100002);
     ledger.RecordResumeCompleted(ledgerRequestId);
     var resumed=ledger.ResultFor(ledgerRequestId);
     Check(resumed.State==ContainmentActuationResultState.Resumed.ToString()&&resumed.OwnedSuspendCount==0,
         "resume completion proves every owned suspend increment was released");
-    Check(ledger.RecordResumeOwned(ledgerRequestId,9002).Sequence==resumedOwned2.Sequence,
+    Check(ledger.RecordResumeOwned(ledgerRequestId,9002,100002).Sequence==resumedOwned2.Sequence,
         "owned resume retry stays idempotent after resume completion");
 
     var failureAuthorizationId=Guid.NewGuid().ToString("N");
@@ -514,9 +521,9 @@ try
     ledger.Prepare(
         new ContainmentActuationRequest(failureRequestId,failureBinding,now.AddSeconds(1)),
         failureValidation);
-    ledger.RecordSuspendOwned(failureRequestId,9101);
+    ledger.RecordSuspendOwned(failureRequestId,9101,110101);
     var failureRecord=ledger.RecordFailed(failureRequestId,"SyntheticPartialFailure");
-    ledger.RecordResumeOwned(failureRequestId,9101);
+    ledger.RecordResumeOwned(failureRequestId,9101,110101);
     ledger.RecordResumeCompleted(failureRequestId);
     Check(ledger.RecordFailed(failureRequestId,"SyntheticPartialFailure").Sequence==failureRecord.Sequence,
         "failure record retry stays idempotent after owned recovery");
@@ -543,6 +550,138 @@ finally
 {
     if(Directory.Exists(actuationLedgerRoot))
         Directory.Delete(actuationLedgerRoot,true);
+}
+
+
+var actuatorRoot=Path.Combine(Path.GetTempPath(),"RansomGuard-Actuator-"+Guid.NewGuid().ToString("N"));
+try
+{
+    var execAuthorizationId=Guid.NewGuid().ToString("N");
+    var execRequestId=Guid.NewGuid().ToString("N");
+    var execBinding=ActuationBinding(
+        authorizationId:execAuthorizationId,
+        caseId:"case-actuator-success",
+        evaluatedUtc:now,
+        expiresUtc:now.AddSeconds(5));
+    var execValidation=ContainmentActuationPolicy.Evaluate(
+        ActuationInput(binding:execBinding,nowUtc:now.AddSeconds(1)));
+    var threadA=new ContainmentActuationThreadKey(12001,220001);
+    var threadB=new ContainmentActuationThreadKey(12002,220002);
+    var successLease=new FakeContainmentActuationLease(
+        execBinding.Process,
+        execBinding.ImagePath,
+        execBinding.ImageSha256,
+        new[]{new[]{threadA,threadB},new[]{threadA,threadB}});
+    var successActuator=new ContainmentActuator(new FakeContainmentActuationPlatform(successLease));
+    var successLedger=new ContainmentActuationLedger(Path.Combine(actuatorRoot,"success"));
+    var successRequest=new ContainmentActuationRequest(execRequestId,execBinding,now.AddSeconds(1));
+    var suspendedResult=successActuator.Suspend(
+        successRequest,
+        successLedger,
+        _=>execValidation,
+        new ContainmentActuatorOptions(8,3,TimeSpan.FromSeconds(2)));
+    Check(suspendedResult.State==ContainmentActuationResultState.Suspended.ToString()&&
+          suspendedResult.OwnedSuspendCount==2&&
+          successLease.Suspended.SequenceEqual(new[]{threadA,threadB}),
+        "bounded actuator suspends only exact enumerated thread identities after durable prepare");
+
+    var resumedResult=successActuator.ResumeOwned(successRequest,successLedger);
+    Check(resumedResult.State==ContainmentActuationResultState.Resumed.ToString()&&
+          resumedResult.OwnedSuspendCount==0&&
+          successLease.Resumed.ToHashSet().SetEquals(new[]{threadA,threadB}),
+        "actuator resume releases exactly one increment for every owned thread identity");
+
+    var failureAuthorizationId=Guid.NewGuid().ToString("N");
+    var failureRequestId2=Guid.NewGuid().ToString("N");
+    var failureBinding2=ActuationBinding(
+        authorizationId:failureAuthorizationId,
+        caseId:"case-actuator-partial",
+        evaluatedUtc:now,
+        expiresUtc:now.AddSeconds(5));
+    var failureValidation2=ContainmentActuationPolicy.Evaluate(
+        ActuationInput(binding:failureBinding2,nowUtc:now.AddSeconds(1)));
+    var failureThreadA=new ContainmentActuationThreadKey(12101,221001);
+    var failureThreadB=new ContainmentActuationThreadKey(12102,221002);
+    var partialLease=new FakeContainmentActuationLease(
+        failureBinding2.Process,
+        failureBinding2.ImagePath,
+        failureBinding2.ImageSha256,
+        new[]{new[]{failureThreadA,failureThreadB}});
+    partialLease.SuspendFailures.Add(failureThreadB);
+    var partialActuator=new ContainmentActuator(new FakeContainmentActuationPlatform(partialLease));
+    var partialLedger=new ContainmentActuationLedger(Path.Combine(actuatorRoot,"partial"));
+    var partialResult=partialActuator.Suspend(
+        new ContainmentActuationRequest(failureRequestId2,failureBinding2,now.AddSeconds(1)),
+        partialLedger,
+        _=>failureValidation2,
+        new ContainmentActuatorOptions(8,2,TimeSpan.FromSeconds(2)));
+    Check(partialResult.State==ContainmentActuationResultState.FailedRecovered.ToString()&&
+          partialResult.OwnedSuspendCount==0&&
+          partialLease.Suspended.SequenceEqual(new[]{failureThreadA})&&
+          partialLease.Resumed.SequenceEqual(new[]{failureThreadA})&&
+          partialResult.ReasonCodes.Contains("SuspendThreadFailed",StringComparer.Ordinal),
+        "partial thread suspension failure durably rolls back only increments owned by RansomGuard");
+
+    var reuseAuthorizationId=Guid.NewGuid().ToString("N");
+    var reuseRequestId=Guid.NewGuid().ToString("N");
+    var reuseBinding=ActuationBinding(
+        authorizationId:reuseAuthorizationId,
+        caseId:"case-actuator-reuse",
+        evaluatedUtc:now,
+        expiresUtc:now.AddSeconds(5));
+    var reuseValidation=ContainmentActuationPolicy.Evaluate(
+        ActuationInput(binding:reuseBinding,nowUtc:now.AddSeconds(1)));
+    var reusedTidOld=new ContainmentActuationThreadKey(12201,222001);
+    var reusedTidNew=new ContainmentActuationThreadKey(12201,222999);
+    var reuseLease=new FakeContainmentActuationLease(
+        reuseBinding.Process,
+        reuseBinding.ImagePath,
+        reuseBinding.ImageSha256,
+        new[]{new[]{reusedTidOld},new[]{reusedTidNew}});
+    var reuseActuator=new ContainmentActuator(new FakeContainmentActuationPlatform(reuseLease));
+    var reuseLedger=new ContainmentActuationLedger(Path.Combine(actuatorRoot,"reuse"));
+    var reuseResult=reuseActuator.Suspend(
+        new ContainmentActuationRequest(reuseRequestId,reuseBinding,now.AddSeconds(1)),
+        reuseLedger,
+        _=>reuseValidation,
+        new ContainmentActuatorOptions(8,2,TimeSpan.FromSeconds(2)));
+    Check(reuseResult.State==ContainmentActuationResultState.FailedRecovered.ToString()&&
+          reuseResult.OwnedSuspendCount==0&&
+          reuseResult.ReasonCodes.Contains("ThreadIdentityChanged",StringComparer.Ordinal),
+        "bounded actuator fails closed and recovers when a TID is reused with a different creation identity");
+
+    var deniedAuthorizationId=Guid.NewGuid().ToString("N");
+    var deniedRequestId=Guid.NewGuid().ToString("N");
+    var deniedBinding=ActuationBinding(
+        authorizationId:deniedAuthorizationId,
+        caseId:"case-actuator-denied",
+        evaluatedUtc:now,
+        expiresUtc:now.AddSeconds(5));
+    var deniedLease=new FakeContainmentActuationLease(
+        deniedBinding.Process,
+        deniedBinding.ImagePath,
+        deniedBinding.ImageSha256,
+        new[]{new[]{new ContainmentActuationThreadKey(12301,223001)}});
+    var deniedActuator=new ContainmentActuator(new FakeContainmentActuationPlatform(deniedLease));
+    var deniedLedger=new ContainmentActuationLedger(Path.Combine(actuatorRoot,"denied"));
+    rejected=false;try
+    {
+        deniedActuator.Suspend(
+            new ContainmentActuationRequest(deniedRequestId,deniedBinding,now.AddSeconds(1)),
+            deniedLedger,
+            _=>new(ContainmentActuationValidationState.Denied.ToString(),false,new[]{"TelemetryNoLongerHealthy"},""),
+            new ContainmentActuatorOptions(8,2,TimeSpan.FromSeconds(2)));
+    }
+    catch(InvalidOperationException ex) when(ex.Message.StartsWith("ActuationRevalidationDenied:",StringComparison.Ordinal)){rejected=true;}
+    Check(rejected&&
+          !deniedLedger.IsAuthorizationConsumed(deniedAuthorizationId)&&
+          deniedLease.Suspended.Count==0,
+        "actuator revalidation denial happens before durable consume or intervention");
+}
+finally
+{
+    if(Directory.Exists(actuatorRoot))
+        Directory.Delete(actuatorRoot,true);
 }
 
 var productionHash=new string('A',64);
@@ -633,3 +772,66 @@ var healthRoundTrip = System.Text.Json.JsonSerializer.Deserialize<MonitoringHeal
     System.Text.Json.JsonSerializer.Serialize(etwFailure));
 Check(healthRoundTrip == etwFailure, "ETW failed status round-trips without losing error identity");
 Console.WriteLine($"All {count} policy tests passed. These are not Windows ETW/Authenticode integration tests.");
+
+sealed class FakeContainmentActuationPlatform : IContainmentProcessActuationPlatform
+{
+    private readonly FakeContainmentActuationLease _lease;
+    public FakeContainmentActuationPlatform(FakeContainmentActuationLease lease)=>_lease=lease;
+    public IContainmentProcessActuationLease Open(ProcessKey expectedProcess)
+    {
+        if(_lease.Process!=expectedProcess)throw new InvalidOperationException("ProcessIdentityChanged");
+        return _lease;
+    }
+}
+
+sealed class FakeContainmentActuationLease : IContainmentProcessActuationLease
+{
+    private readonly Queue<IReadOnlyList<ContainmentActuationThreadKey>> _snapshots;
+    private IReadOnlyList<ContainmentActuationThreadKey> _last=Array.Empty<ContainmentActuationThreadKey>();
+    public ProcessKey Process {get;}
+    public string? ImagePath {get;}
+    public string? ImageSha256 {get;}
+    public bool CriticalStateKnown {get;set;}=true;
+    public bool IsCritical {get;set;}
+    public HashSet<ContainmentActuationThreadKey> SuspendFailures {get;}=new();
+    public HashSet<ContainmentActuationThreadKey> ResumeFailures {get;}=new();
+    public List<ContainmentActuationThreadKey> Suspended {get;}=new();
+    public List<ContainmentActuationThreadKey> Resumed {get;}=new();
+
+    public FakeContainmentActuationLease(
+        ProcessKey process,
+        string? imagePath,
+        string? imageSha256,
+        IEnumerable<IReadOnlyList<ContainmentActuationThreadKey>> snapshots)
+    {
+        Process=process;
+        ImagePath=imagePath;
+        ImageSha256=imageSha256;
+        _snapshots=new Queue<IReadOnlyList<ContainmentActuationThreadKey>>(snapshots);
+    }
+
+    public IReadOnlyList<ContainmentActuationThreadKey> EnumerateThreads(
+        int maxThreads,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if(_snapshots.Count>0)_last=_snapshots.Dequeue();
+        if(_last.Count>maxThreads)throw new InvalidOperationException("ThreadLimitExceeded");
+        return _last;
+    }
+
+    public bool TrySuspendThread(ContainmentActuationThreadKey thread,out string diagnostic)
+    {
+        if(SuspendFailures.Contains(thread)){diagnostic="synthetic suspend failure";return false;}
+        Suspended.Add(thread);diagnostic="";return true;
+    }
+
+    public bool TryResumeThread(ContainmentActuationThreadKey thread,out string diagnostic)
+    {
+        if(ResumeFailures.Contains(thread)){diagnostic="synthetic resume failure";return false;}
+        Resumed.Add(thread);diagnostic="";return true;
+    }
+
+    public void Dispose(){ }
+}
+

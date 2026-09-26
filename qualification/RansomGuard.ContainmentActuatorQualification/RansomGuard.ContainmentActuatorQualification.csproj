@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>RansomGuard.ContainmentActuatorQualification</AssemblyName>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/RansomGuard.Core/RansomGuard.Core.csproj" />
+    <Compile Include="../../src/RansomGuard.Service/Native.cs" Link="Service/Native.cs" />
+    <Compile Include="../../src/RansomGuard.Service/WindowsContainmentActuator.cs" Link="Service/WindowsContainmentActuator.cs" />
+  </ItemGroup>
+</Project>

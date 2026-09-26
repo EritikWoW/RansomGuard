@@ -96,6 +96,8 @@ foreach($required in @(
  'MaxExecutionActions = 200',
  'Path.IsPathFullyQualified',
  'Network recovery destinations are not supported',
+ 'DriveType.Network',
+ 'DriveType.NoRootDirectory',
  'Recovery output root already exists',
  'Recovery output root must remain outside RansomGuard private state',
  'FileMode.CreateNew',

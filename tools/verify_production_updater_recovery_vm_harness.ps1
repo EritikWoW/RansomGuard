@@ -70,6 +70,17 @@ foreach($required in @(
     if($workflow -notmatch [regex]::Escape($required)){throw "Updater recovery phase-cleanup invariant missing: $required"}
 }
 
+$oldServiceCleanup=$workflow.IndexOf("Remove-QualificationBuildFamily 'updater-recovery-old-service'",[StringComparison]::Ordinal)
+$oldHelperRestore=$workflow.IndexOf('dotnet restore $helper --locked-mode -r win-x64 -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj\updater-recovery-old-helper\',[StringComparison]::Ordinal)
+$currentServiceCleanup=$workflow.IndexOf("Remove-QualificationBuildFamily 'updater-recovery-current-service'",[StringComparison]::Ordinal)
+$currentHelperRestore=$workflow.IndexOf('dotnet restore $helper --locked-mode -r win-x64 -p:BaseIntermediateOutputPath=obj\updater-recovery-current-helper\',[StringComparison]::Ordinal)
+if($oldServiceCleanup -lt 0 -or $oldHelperRestore -lt 0 -or $oldServiceCleanup -ge $oldHelperRestore){
+    throw 'Old updater-recovery service build family must be removed before building the old helper.'
+}
+if($currentServiceCleanup -lt 0 -or $currentHelperRestore -lt 0 -or $currentServiceCleanup -ge $currentHelperRestore){
+    throw 'Current updater-recovery service build family must be removed before building the current helper.'
+}
+
 foreach($required in @(
     "ValidateSet('arm','resume','verify')",
     'Write-InterruptedRecord',

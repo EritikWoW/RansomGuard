@@ -189,6 +189,19 @@ try{
     $completedRecord | ConvertTo-Json -Depth 20 |
         Set-Content -LiteralPath (Join-Path $ResultsDirectory 'forward-completed-transaction.json') -Encoding utf8
 
+    # Capture exact forward-update audit evidence before uninstall. Uninstall intentionally
+    # removes the product data root, so deferring this check until the rollback scenario
+    # would turn valid cleanup semantics into a false qualification failure.
+    $forwardAudit=@(Get-AuditEntries $startedUtc)
+    $forwardAuditEvidence=@($forwardAudit | Where-Object {
+        $_.Event -eq 'ServiceUpdateCompleted' -and
+        [string]::Equals([string]$_.Transaction,[string]$summary.forwardTransactionId,[StringComparison]::OrdinalIgnoreCase)
+    })
+    if($forwardAuditEvidence.Count -lt 1){throw 'Exact ServiceUpdateCompleted audit evidence missing before uninstall.'}
+    $summary.completionAuditObserved=$true
+    $forwardAuditEvidence | ConvertTo-Json -Depth 30 |
+        Set-Content -LiteralPath (Join-Path $ResultsDirectory 'forward-completed-audit.json') -Encoding utf8
+
     $afterUpdate=Invoke-Helper $CurrentAdminHelper @('query')
     if($afterUpdate.State -ne 'Stopped'){throw "Successful update did not leave service Stopped: $($afterUpdate.State)"}
     if([string]::Equals([IO.Path]::GetFullPath([string]$afterUpdate.ImagePath),$oldImage1,[StringComparison]::OrdinalIgnoreCase)){
@@ -233,18 +246,17 @@ try{
     $summary.rollbackJournalTerminal=$true
     $records | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'updater-transactions.json') -Encoding utf8
 
-    $audit=@(Get-AuditEntries $startedUtc)
-    if(@($audit | Where-Object {
-        $_.Event -eq 'ServiceUpdateCompleted' -and
-        [string]::Equals([string]$_.Transaction,[string]$summary.forwardTransactionId,[StringComparison]::OrdinalIgnoreCase)
-    }).Count -lt 1){throw 'Exact ServiceUpdateCompleted audit evidence missing.'}
-    if(@($audit | Where-Object {
+    $rollbackAudit=@(Get-AuditEntries $startedUtc)
+    $rollbackAuditEvidence=@($rollbackAudit | Where-Object {
         $_.Event -eq 'ServiceUpdateRolledBack' -and
         [string]::Equals([string]$_.Transaction,[string]$summary.rollbackTransactionId,[StringComparison]::OrdinalIgnoreCase)
-    }).Count -lt 1){throw 'Exact ServiceUpdateRolledBack audit evidence missing.'}
-    $summary.completionAuditObserved=$true
+    })
+    if($rollbackAuditEvidence.Count -lt 1){throw 'Exact ServiceUpdateRolledBack audit evidence missing.'}
     $summary.rollbackAuditObserved=$true
-    $audit | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'updater-audit.json') -Encoding utf8
+
+    @($forwardAuditEvidence + $rollbackAuditEvidence) |
+        ConvertTo-Json -Depth 30 |
+        Set-Content -LiteralPath (Join-Path $ResultsDirectory 'updater-audit.json') -Encoding utf8
 
     [void](Invoke-Helper $CurrentAdminHelper @('uninstall'))
     $summary.finalUninstallPassed=$true

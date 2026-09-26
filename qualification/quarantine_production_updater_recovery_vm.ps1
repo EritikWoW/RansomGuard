@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory=$true)][ValidatePattern('^[A-Fa-f0-9]{40}$')][string]$ExpectedCampaignCommit,
     [Parameter(Mandatory=$true)][ValidatePattern('^[A-Fa-f0-9]{40}$')][string]$RepairSourceCommit,
     [Parameter(Mandatory=$true)][string]$AdminHelper,
-    [string]$RootBase='C:\\RansomGuard-VM-UpdaterRecovery',
+    [string]$RootBase='C:\RansomGuard-VM-UpdaterRecovery',
     [string]$ResultsDirectory=''
 )
 
@@ -32,8 +32,8 @@ function Assert-NoReparsePath([string]$Path,[string]$Label){
     $full=[IO.Path]::GetFullPath($Path)
     $root=[IO.Path]::GetPathRoot($full)
     if([string]::IsNullOrWhiteSpace($root)){throw "$Label has no filesystem root: $full"}
-    $cursor=$root.TrimEnd('\\')
-    foreach($segment in $full.Substring($root.Length).Split([char[]]@('\\','/'),[StringSplitOptions]::RemoveEmptyEntries)){
+    $cursor=$root.TrimEnd('\')
+    foreach($segment in $full.Substring($root.Length).Split([char[]]@('\','/'),[StringSplitOptions]::RemoveEmptyEntries)){
         $cursor=Join-Path $cursor $segment
         if(-not(Test-Path -LiteralPath $cursor)){break}
         $item=Get-Item -LiteralPath $cursor -Force
@@ -62,7 +62,7 @@ $vm=Assert-DisposableVm
 $AdminHelper=Require-Path $AdminHelper 'AdminHelper'
 $RootBase=[IO.Path]::GetFullPath($RootBase)
 if($RootBase -notmatch '(?i)RansomGuard'){throw 'RootBase must contain RansomGuard.'}
-if($RootBase -eq [IO.Path]::GetPathRoot($RootBase).TrimEnd('\\')){throw 'RootBase cannot be an entire drive.'}
+if($RootBase -eq [IO.Path]::GetPathRoot($RootBase).TrimEnd('\')){throw 'RootBase cannot be an entire drive.'}
 Assert-NoReparsePath $RootBase 'RootBase'
 
 $active=[IO.Path]::GetFullPath([IO.Path]::Combine($RootBase,'Active'))

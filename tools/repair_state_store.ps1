@@ -2,6 +2,7 @@
 $adminSidObj=[Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
 $systemSidObj=[Security.Principal.SecurityIdentifier]::new('S-1-5-18')
 $root=Join-Path $env:ProgramData 'RansomGuardV03'
+$generationMarkerName='.ransomguard-state-v1'
 function Is-Admin {
     $me=[Security.Principal.WindowsIdentity]::GetCurrent()
     return ([Security.Principal.WindowsPrincipal]$me).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -74,6 +75,15 @@ function Create-FreshStore {
     if(Test-Path -LiteralPath $root){throw "Fresh state root unexpectedly exists: $root"}
     $di=[IO.DirectoryInfo]::new($root)
     $di.Create((New-PrivateDirectoryAcl))
+
+    # SecureStore refuses every pre-existing state generation that does not carry this marker.
+    # The repair path must therefore create the same durable generation marker as first-run startup.
+    $marker=Join-Path $root $generationMarkerName
+    $bytes=[Text.UTF8Encoding]::new($false).GetBytes('RansomGuard state generation v1')
+    $fs=[IO.FileStream]::new($marker,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::Read)
+    try {$fs.Write($bytes,0,$bytes.Length);$fs.Flush($true)} finally {$fs.Dispose()}
+    Set-PrivateFile $marker
+
     $inc=Join-Path $root 'Incidents'
     $idi=[IO.DirectoryInfo]::new($inc)
     $idi.Create((New-PrivateDirectoryAcl))

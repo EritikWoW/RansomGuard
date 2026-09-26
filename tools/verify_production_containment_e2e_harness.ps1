@@ -13,8 +13,9 @@ $workflowPath=Join-Path $root '.github\workflows\production-containment-e2e-vm.y
 $harnessPath=Join-Path $root 'minifilter-tools\run_production_containment_e2e_lab.ps1'
 $fixturePath=Join-Path $root 'qualification\RansomGuard.ProductionContainmentE2EFixture\Program.cs'
 $dispatcherPath=Join-Path $root '.github\workflows\vm-lab-dispatcher.yml'
+$repairPath=Join-Path $root 'tools\repair_state_store.ps1'
 
-foreach($path in @($workflowPath,$harnessPath,$fixturePath,$dispatcherPath)){
+foreach($path in @($workflowPath,$harnessPath,$fixturePath,$dispatcherPath,$repairPath)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){
         throw "Production containment E2E qualification source missing: $path"
     }
@@ -24,6 +25,7 @@ $workflow=Get-Content -LiteralPath $workflowPath -Raw
 $harness=Get-Content -LiteralPath $harnessPath -Raw
 $fixture=Get-Content -LiteralPath $fixturePath -Raw
 $dispatcher=Get-Content -LiteralPath $dispatcherPath -Raw
+$repair=Get-Content -LiteralPath $repairPath -Raw
 
 foreach($required in @(
     'RansomGuard production containment E2E VM qualification',
@@ -49,6 +51,11 @@ foreach($required in @(
     '$config.Mode=''Enforce''',
     '$config.Enforce.AutomaticContainment=$true',
     '$config.Enforce.ContainmentHoldMilliseconds=1200',
+    'Quarantine-ExistingQualificationState',
+    'QUALIFICATION-QUARANTINE',
+    '''.ransomguard-state-v1''',
+    'priorStateQuarantine',
+    'stateGenerationMarkerReady',
     'Wait-Audit ''Type'' ''ProductionProtectionActivated''',
     'Wait-Audit ''Type'' ''AutomaticContainmentReady''',
     'Wait-Audit ''Event'' ''Startup''',
@@ -57,7 +64,8 @@ foreach($required in @(
     '''authorization.json''',
     '''response.json''',
     '''StateChangeContained''',
-    '''Prepared'',''SuspendApplied'',''ExplicitResumeApplied'',''Completed''',
+    '$requiredPhase in @(1,2,3,4)',
+    '$phases -contains 5',
     'range-journal.jsonl',
     'benignNoIncident',
     'benignNoContainment',
@@ -65,6 +73,17 @@ foreach($required in @(
 )){
     if($harness -notmatch [regex]::Escape($required)){
         throw "Production containment E2E harness invariant missing: $required"
+    }
+}
+
+foreach($required in @(
+    '$generationMarkerName=''.ransomguard-state-v1''',
+    "RansomGuard state generation v1",
+    'Set-PrivateFile $marker',
+    '$fs.Flush($true)'
+)){
+    if($repair -notmatch [regex]::Escape($required)){
+        throw "State-store repair invariant missing: $required"
     }
 }
 

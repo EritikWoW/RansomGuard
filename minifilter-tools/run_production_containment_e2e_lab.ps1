@@ -100,7 +100,7 @@ function Wait-Audit([string]$Property,[string]$Value,[DateTimeOffset]$SinceUtc,[
         if($matches.Count -gt 0){return $matches[-1]}
         $svc=Get-Service -Name 'RansomGuardV03' -ErrorAction SilentlyContinue
         if($null -eq $svc -or [string]$svc.Status -ne 'Running'){
-            throw "Service left Running while waiting for audit $Property='$Value'."
+            throw "Service left the Running state while waiting for audit $Property='$Value'."
         }
         Start-Sleep -Milliseconds 200
     }
@@ -159,6 +159,27 @@ function Get-RansomGuardPublishedInfNames {
             } |
             Select-Object -ExpandProperty Name
     )
+}
+
+function Quarantine-ExistingQualificationState([string]$StateRoot){
+    if(-not(Test-Path -LiteralPath $StateRoot)){return $null}
+    $item=Get-Item -LiteralPath $StateRoot -Force
+    if(-not $item.PSIsContainer){throw "REFUSED: qualification state path is not a directory: $StateRoot"}
+    if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){
+        throw "REFUSED: qualification state root is a reparse point: $StateRoot"
+    }
+    $running=@(Get-CimInstance Win32_Process -Filter "Name='RansomGuard.Service.exe'" -ErrorAction SilentlyContinue)
+    if($running.Count -gt 0){
+        throw "REFUSED: RansomGuard.Service.exe is still running while preparing isolated qualification state. pids=$($running.ProcessId -join ',')"
+    }
+    $parent=Split-Path -Parent $StateRoot
+    $leaf=Split-Path -Leaf $StateRoot
+    $quarantine=Join-Path $parent ("{0}.QUALIFICATION-QUARANTINE.{1}.{2}" -f $leaf,(Get-Date -Format 'yyyyMMdd-HHmmss'),[Guid]::NewGuid().ToString('N').Substring(0,8))
+    if(Test-Path -LiteralPath $quarantine){throw "Qualification state quarantine unexpectedly exists: $quarantine"}
+    Move-Item -LiteralPath $StateRoot -Destination $quarantine
+    if(Test-Path -LiteralPath $StateRoot){throw 'Qualification state root still exists after quarantine rename.'}
+    Write-Warning "Prior disposable-VM RansomGuard state was preserved, not reused: $quarantine"
+    return $quarantine
 }
 
 function Remove-StaleQualificationState {
@@ -260,7 +281,7 @@ $programData=[Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApp
 $stateRoot=Join-Path $programData 'RansomGuardV03'
 $casesRoot=Join-Path $stateRoot 'Incidents'
 $journalPath=Join-Path $stateRoot 'ContainmentStateChange\containment-state-change-journal.jsonl'
-$baselineCases=if(Test-Path -LiteralPath $casesRoot){@(Get-ChildItem -LiteralPath $casesRoot -Directory | Select-Object -ExpandProperty FullName)}else{@()}
+$baselineCases=@()
 
 $serviceName='RansomGuardV03'
 $startedUtc=[DateTimeOffset]::UtcNow
@@ -272,6 +293,8 @@ $summary=[ordered]@{
     vm=$vm
     protectedRoot=$root
     canary=$canary
+    priorStateQuarantine=$null
+    stateGenerationMarkerReady=$false
     productionSession=$null
     maliciousPid=0
     maliciousProcessCreationFileTimeUtc=0
@@ -305,6 +328,8 @@ $serviceCreated=$false
 
 try{
     Remove-StaleQualificationState
+    $summary.priorStateQuarantine=Quarantine-ExistingQualificationState $stateRoot
+    $baselineCases=@()
 
     $binPath='"'+$serviceExe+'"'
     Invoke-Sc @('create',$serviceName,'binPath=',$binPath,'start=','demand','obj=','LocalSystem') | Out-Null
@@ -312,6 +337,20 @@ try{
     Invoke-Sc @('start',$serviceName) | Out-Null
     Wait-ServiceState $serviceName 'Running' 30
     $summary.serviceStarted=$true
+
+    $generationMarker=Join-Path $stateRoot '.ransomguard-state-v1'
+    $markerDeadline=(Get-Date).AddSeconds(10)
+    while((Get-Date) -lt $markerDeadline -and -not(Test-Path -LiteralPath $generationMarker -PathType Leaf)){
+        $svc=Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+        if($null -eq $svc -or [string]$svc.Status -ne 'Running'){
+            throw 'Service left the Running state before creating the trusted state generation marker.'
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    if(-not(Test-Path -LiteralPath $generationMarker -PathType Leaf)){
+        throw 'Timed out waiting for the trusted state generation marker.'
+    }
+    $summary.stateGenerationMarkerReady=$true
 
     $rollbackReady=Wait-Audit 'Type' 'RollbackStoreReady' $startedUtc 75
     if([string]$rollbackReady.RequestedMode -ne 'Enforce' -or $rollbackReady.ProtectionPackage.ReadyForLifecycle -ne $true){
@@ -405,11 +444,13 @@ try{
             ForEach-Object {$_ | ConvertFrom-Json} |
             Where-Object {[string]$_.requestId -eq $requestId}
     )
-    $phases=@($journalRecords | ForEach-Object {[string]$_.phase})
-    foreach($requiredPhase in @('Prepared','SuspendApplied','ExplicitResumeApplied','Completed')){
-        if($phases -notcontains $requiredPhase){throw "State-change journal missing phase '$requiredPhase' for request '$requestId'."}
+    # System.Text.Json serializes ContainmentStateChangeJournalPhase as its numeric enum value.
+    # Bind the evidence check to the durable wire representation instead of PowerShell enum names.
+    $phases=@($journalRecords | ForEach-Object {[int]$_.phase})
+    foreach($requiredPhase in @(1,2,3,4)){
+        if($phases -notcontains $requiredPhase){throw "State-change journal missing numeric phase '$requiredPhase' for request '$requestId'."}
     }
-    if($phases -contains 'Abnormal'){throw 'State-change journal unexpectedly recorded an Abnormal terminal phase.'}
+    if($phases -contains 5){throw 'State-change journal unexpectedly recorded an Abnormal terminal phase.'}
     $summary.stateChangeJournalCompleted=$true
 
     $rangeJournal=Join-Path $stateRoot "Rollback\Sessions\$($summary.productionSession)\write-cow\range-journal.jsonl"

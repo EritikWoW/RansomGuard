@@ -257,7 +257,11 @@ function Run-StartupRejectionScenario([string]$Kind,[string]$Root,[string]$File)
     }finally{
         New-Item -ItemType File -Path $release -Force | Out-Null
         if(-not $holder.WaitForExit(15000)){Stop-ProcessHard $holder "$Kind holder"}
-        if($holder.HasExited -and $holder.ExitCode -ne 0){throw "$Kind holder failed exit=$($holder.ExitCode)."}
+        if($holder.HasExited -and $holder.ExitCode -ne 0){
+            $holderOut=if(Test-Path -LiteralPath $out -PathType Leaf){(Get-Content -LiteralPath $out -Raw -ErrorAction SilentlyContinue).Trim()}else{''}
+            $holderErr=if(Test-Path -LiteralPath $err -PathType Leaf){(Get-Content -LiteralPath $err -Raw -ErrorAction SilentlyContinue).Trim()}else{''}
+            throw "$Kind holder failed exit=$($holder.ExitCode). stdout='$holderOut' stderr='$holderErr'"
+        }
         Cleanup-OwnedState $Root
     }
 }

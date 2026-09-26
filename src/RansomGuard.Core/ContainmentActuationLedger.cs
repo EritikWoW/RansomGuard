@@ -44,6 +44,8 @@ public sealed record ContainmentActuationLedgerEntry(
     string RequestId,
     string AuthorizationId,
     string CaseId,
+    DateTime AuthorizationEvaluatedUtc,
+    DateTime AuthorizationExpiresUtc,
     int ProcessId,
     long ProcessCreationFileTimeUtc,
     string ImagePath,
@@ -401,6 +403,8 @@ public sealed class ContainmentActuationLedger
             requestId.ToLowerInvariant(),
             binding.AuthorizationId.ToLowerInvariant(),
             binding.CaseId,
+            binding.EvaluatedUtc,
+            binding.ExpiresUtc,
             binding.Process.Pid,
             binding.Process.CreationFileTimeUtc,
             normalizedPath,
@@ -474,6 +478,10 @@ public sealed class ContainmentActuationLedger
                 !IsGuidN(line.RequestId) ||
                 !IsGuidN(line.AuthorizationId) ||
                 string.IsNullOrWhiteSpace(line.CaseId) ||
+                line.AuthorizationEvaluatedUtc.Kind != DateTimeKind.Utc ||
+                line.AuthorizationExpiresUtc.Kind != DateTimeKind.Utc ||
+                line.AuthorizationExpiresUtc <= line.AuthorizationEvaluatedUtc ||
+                line.AuthorizationExpiresUtc - line.AuthorizationEvaluatedUtc > ContainmentActuationPolicy.MaxAuthorizationLifetime ||
                 line.ProcessId <= 4 ||
                 line.ProcessCreationFileTimeUtc <= 0 ||
                 WinPaths.Normalize(line.ImagePath) is null ||
@@ -638,8 +646,8 @@ public sealed class ContainmentActuationLedger
         new(
             entry.AuthorizationId,
             entry.CaseId,
-            entry.ObservedUtc,
-            entry.ObservedUtc.AddSeconds(1),
+            entry.AuthorizationEvaluatedUtc,
+            entry.AuthorizationExpiresUtc,
             new ProcessKey(entry.ProcessId, entry.ProcessCreationFileTimeUtc),
             entry.ImagePath,
             entry.ImageSha256,
@@ -649,6 +657,8 @@ public sealed class ContainmentActuationLedger
     private static bool SameBinding(ContainmentActuationLedgerEntry entry, ContainmentActuationBinding binding) =>
         string.Equals(entry.AuthorizationId, binding.AuthorizationId, StringComparison.OrdinalIgnoreCase) &&
         string.Equals(entry.CaseId, binding.CaseId, StringComparison.Ordinal) &&
+        entry.AuthorizationEvaluatedUtc == binding.EvaluatedUtc &&
+        entry.AuthorizationExpiresUtc == binding.ExpiresUtc &&
         entry.ProcessId == binding.Process.Pid &&
         entry.ProcessCreationFileTimeUtc == binding.Process.CreationFileTimeUtc &&
         WinPaths.Equal(entry.ImagePath, binding.ImagePath) &&
@@ -659,6 +669,8 @@ public sealed class ContainmentActuationLedger
         string.Equals(left.RequestId, right.RequestId, StringComparison.OrdinalIgnoreCase) &&
         string.Equals(left.AuthorizationId, right.AuthorizationId, StringComparison.OrdinalIgnoreCase) &&
         string.Equals(left.CaseId, right.CaseId, StringComparison.Ordinal) &&
+        left.AuthorizationEvaluatedUtc == right.AuthorizationEvaluatedUtc &&
+        left.AuthorizationExpiresUtc == right.AuthorizationExpiresUtc &&
         left.ProcessId == right.ProcessId &&
         left.ProcessCreationFileTimeUtc == right.ProcessCreationFileTimeUtc &&
         WinPaths.Equal(left.ImagePath, right.ImagePath) &&
@@ -721,6 +733,8 @@ internal sealed record ContainmentActuationLedgerPayload(
     string RequestId,
     string AuthorizationId,
     string CaseId,
+    DateTime AuthorizationEvaluatedUtc,
+    DateTime AuthorizationExpiresUtc,
     int ProcessId,
     long ProcessCreationFileTimeUtc,
     string ImagePath,
@@ -754,6 +768,8 @@ internal sealed record ContainmentActuationLedgerLine(
         RequestId,
         AuthorizationId,
         CaseId,
+        AuthorizationEvaluatedUtc,
+        AuthorizationExpiresUtc,
         ProcessId,
         ProcessCreationFileTimeUtc,
         ImagePath,

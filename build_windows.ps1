@@ -31,6 +31,8 @@ try {
     $gateClient = 'src\RansomGuard.GateClient\RansomGuard.GateClient.csproj'
     $runtimeHarness = 'tests\RansomGuard.Minifilter.RuntimeHarness\RansomGuard.Minifilter.RuntimeHarness.csproj'
     $containmentQualification = 'qualification\RansomGuard.ContainmentActuatorQualification\RansomGuard.ContainmentActuatorQualification.csproj'
+    $updaterQualification = 'qualification\RansomGuard.UpdaterQualification\RansomGuard.UpdaterQualification.csproj'
+    $updaterFailureFixture = 'qualification\RansomGuard.UpdaterFailureFixture\RansomGuard.UpdaterFailureFixture.csproj'
     $ui = 'src\RansomGuard.Ui\RansomGuard.Ui.csproj'
     $recovery = 'src\RansomGuard.RecoveryCli\RansomGuard.RecoveryCli.csproj'
     $rollbackRecovery = 'src\RansomGuard.RollbackRecoveryCli\RansomGuard.RollbackRecoveryCli.csproj'
@@ -138,13 +140,15 @@ try {
     & (Join-Path $PSScriptRoot 'tools\verify_recovery_boundary.ps1')
     Write-Host '[2/6] Restore Windows projects. Known package vulnerabilities/audit failures block this build.'
     $projects=@($svc,$ui,$recovery)
-    if($IncludeLab){$projects+=@($sim,$filterClient,$gateClient,$runtimeHarness,$containmentQualification,$rollbackRecovery,$rollbackMaintenance)}
+    if($IncludeLab){$projects+=@($sim,$filterClient,$gateClient,$runtimeHarness,$containmentQualification,$updaterQualification,$updaterFailureFixture,$rollbackRecovery,$rollbackMaintenance)}
     foreach ($project in $projects) {
         Run-Dotnet -Arguments @('restore',$project,'--locked-mode','-r','win-x64','-p:SelfContained=true',$auditErrors)
     }
     if($IncludeLab){
         # Qualification-only compile gate. Do not publish or copy this executable into release bundles.
         Run-Dotnet -Arguments @('build',$containmentQualification,'-c','Release','--no-restore','-r','win-x64','-p:SelfContained=true')
+        Run-Dotnet -Arguments @('build',$updaterQualification,'-c','Release','--no-restore','-r','win-x64','-p:SelfContained=true')
+        Run-Dotnet -Arguments @('build',$updaterFailureFixture,'-c','Release','--no-restore','-r','win-x64','-p:SelfContained=true')
     }
     $auditPath = Join-Path $logs "dependencies-$stamp.json"
     $json = & dotnet list $svc package --include-transitive --vulnerable --format json --no-restore

@@ -193,4 +193,3 @@ internal sealed record ContainmentActuationBindingFingerprintPayload(
     string AuthorizationState,
     bool AuthorizationEligible,
     string[] AuthorizationReasons);
-}

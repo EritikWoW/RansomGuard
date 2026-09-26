@@ -6,6 +6,7 @@ $launch=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Ui\Administra
 $window=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Ui\Administration\AdminWindow.cs') -Raw
 $rules=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\RuleAdministration.cs') -Raw
 $service=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\ServiceAdministration.cs') -Raw
+$updater=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\ServiceUpdateAdministration.cs') -Raw
 $core=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Core\AdminContract.cs') -Raw
 $recovery=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\ProductionRecoveryAdministration.cs') -Raw
 $recoveryExecution=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\ProductionRecoveryExecutionAdministration.cs') -Raw
@@ -19,6 +20,47 @@ foreach($required in @('DemandAdministrator','AdminContract.CheckConfirmation','
 foreach($required in @('DemandAdministrator','AdminContract.CheckConfirmation','AdminContract.ServiceName','VerifyRegistration','FileMode.CreateNew','FileShare.Read','MatchesInstalledPeer','expectedServiceHash','WaitFor(service, 1)','TimeSpan.FromSeconds(30)','IsSha256Hex(record.ImageSha256)','value.All(char.IsAsciiHexDigit)')) {
  if(-not$service.Contains($required)){throw "Missing own-service control invariant: $required"}
 }
+
+foreach($required in @(
+ 'ReviewUpdateInput',
+ 'AdminContract.CheckConfirmation("update", confirmation)',
+ 'StateMaintenanceGate.Acquire',
+ 'EnsureNoIncompleteUpdate',
+ 'ServiceUpdatePolicy.IsForwardVersion',
+ 'FileMode.CreateNew',
+ 'Flush(true)',
+ '"Prepared"',
+ '"ScmCommitted"',
+ '"TargetStarted"',
+ '"TargetVerifiedStopped"',
+ '"Completed"',
+ '"RollbackStarting"',
+ '"RollbackScmCommitted"',
+ '"RolledBack"',
+ '"RollbackFailed"',
+ 'ChangeServiceConfigW',
+ 'VerifyInstalledImage(previousImage)',
+ 'Update replay/downgrade rejected',
+ 'Do not retry blindly'
+)) {
+ if(-not$updater.Contains($required)){throw "Missing transactional updater invariant: $required"}
+}
+foreach($pattern in @(
+ 'Process\.Kill\s*\(',
+ 'TerminateProcess\s*\(',
+ 'FileMode\.Create\b',
+ 'FileMode\.OpenOrCreate',
+ 'FileMode\.Truncate',
+ 'Restart-Computer',
+ 'shutdown\.exe'
+)) {
+ if($updater -match $pattern){throw "Forbidden updater primitive: $pattern"}
+}
+if($core -notmatch '"update"' -or $core -notmatch '"update" => "UPDATE"'){
+ throw 'Updater must be an explicit closed-list administrator intent with exact UPDATE confirmation.'
+}
+Write-Host 'Transactional service updater source gate PASSED: immutable staging, explicit SCM commit point, startup verification, durable rollback phases, downgrade/replay rejection.'
+
 if($service.Contains('DecisionPolicy.HashEqual(record.ImageSha256, record.ImageSha256)')){
  throw 'Install record validation must not use a self-comparison as a SHA-256 format check.'
 }

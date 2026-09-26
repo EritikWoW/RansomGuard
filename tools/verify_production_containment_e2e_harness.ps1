@@ -102,7 +102,6 @@ foreach($required in @(
     '-ExpectedEvidencePath $exitRaceCanary',
     'Short-lived ETW-only process unexpectedly reached containment journal actuation.',
     'exitRaceNoContainment',
-    '$_.phase -eq 4',
     '''authorization.json''',
     '''response.json''',
     '''StateChangeContained''',

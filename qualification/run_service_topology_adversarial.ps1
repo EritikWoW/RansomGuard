@@ -246,6 +246,7 @@ function Run-StartupRejectionScenario([string]$Kind,[string]$Root,[string]$File)
     $holder=Start-LoggedProcess $RuntimeHelperExe @(
         $command,'--file',(Quote-Arg $File),'--ready',(Quote-Arg $ready),'--release',(Quote-Arg $release)
     ) $out $err
+    $scenarioFailure=$null
     try{
         Wait-Path $ready 20 "$Kind holder readiness"
         $started=[DateTimeOffset]::UtcNow
@@ -254,13 +255,17 @@ function Run-StartupRejectionScenario([string]$Kind,[string]$Root,[string]$File)
         if([string]::IsNullOrWhiteSpace([string]$failure.Session)){throw "$Kind startup failure did not retain a session id."}
         Assert-NoActivation $started $Kind
         Wait-ServiceState 'Stopped' 30
+    }catch{
+        $scenarioFailure=$_
+        throw
     }finally{
         New-Item -ItemType File -Path $release -Force | Out-Null
         if(-not $holder.WaitForExit(15000)){Stop-ProcessHard $holder "$Kind holder"}
         if($holder.HasExited -and $holder.ExitCode -ne 0){
             $holderOut=if(Test-Path -LiteralPath $out -PathType Leaf){(Get-Content -LiteralPath $out -Raw -ErrorAction SilentlyContinue).Trim()}else{''}
             $holderErr=if(Test-Path -LiteralPath $err -PathType Leaf){(Get-Content -LiteralPath $err -Raw -ErrorAction SilentlyContinue).Trim()}else{''}
-            throw "$Kind holder failed exit=$($holder.ExitCode). stdout='$holderOut' stderr='$holderErr'"
+            $holderFailure="$Kind holder failed exit=$($holder.ExitCode). stdout='$holderOut' stderr='$holderErr'"
+            if($null -ne $scenarioFailure){Write-Warning $holderFailure}else{throw $holderFailure}
         }
         Cleanup-OwnedState $Root
     }
@@ -351,6 +356,7 @@ try{
     $holder=Start-LoggedProcess $RuntimeHelperExe @(
         'hold-map','--file',(Quote-Arg $reconnectFile),'--ready',(Quote-Arg $ready),'--release',(Quote-Arg $release)
     ) $holderOut $holderErr
+    $reconnectFailure=$null
     try{
         Wait-Path $ready 20 'reconnect writable mapping'
         $failure=Wait-AuditType 'ProductionLifecycleStartupFailed' (Convert-AuditUtc $lost.Utc) 45 $session
@@ -376,10 +382,18 @@ try{
             throw 'Protected content changed while reconnect remained blocked in DegradedProtected.'
         }
         $summary.degradedMutationPreservedHash=$true
+    }catch{
+        $reconnectFailure=$_
+        throw
     }finally{
         New-Item -ItemType File -Path $release -Force | Out-Null
         if(-not $holder.WaitForExit(15000)){Stop-ProcessHard $holder 'reconnect map holder'}
-        if($holder.HasExited -and $holder.ExitCode -ne 0){throw "Reconnect map holder failed exit=$($holder.ExitCode)."}
+        if($holder.HasExited -and $holder.ExitCode -ne 0){
+            $reconnectOut=if(Test-Path -LiteralPath $holderOut -PathType Leaf){(Get-Content -LiteralPath $holderOut -Raw -ErrorAction SilentlyContinue).Trim()}else{''}
+            $reconnectErr=if(Test-Path -LiteralPath $holderErr -PathType Leaf){(Get-Content -LiteralPath $holderErr -Raw -ErrorAction SilentlyContinue).Trim()}else{''}
+            $holderFailure="Reconnect map holder failed exit=$($holder.ExitCode). stdout='$reconnectOut' stderr='$reconnectErr'"
+            if($null -ne $reconnectFailure){Write-Warning $holderFailure}else{throw $holderFailure}
+        }
     }
 
     $second=Wait-AuditType 'ProductionProtectionActivated' (Convert-AuditUtc $lost.Utc) 75 $session

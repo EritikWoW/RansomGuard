@@ -159,6 +159,18 @@ foreach($required in @(
 if($harness -match [regex]::Escape('Get-UpdateRecords $startedUtc')){
     throw 'Updater qualification evidence must bind to exact transaction IDs, not a timestamp-only journal window.'
 }
+foreach($forbiddenAuditWindow in @(
+    'function Get-AuditEntries([DateTimeOffset]$SinceUtc)',
+    '-ge $SinceUtc',
+    'Get-AuditEntries $startedUtc'
+)){
+    if($harness -match [regex]::Escape($forbiddenAuditWindow)){
+        throw "Updater audit evidence must bind to exact transaction IDs without a VM-clock window: $forbiddenAuditWindow"
+    }
+}
+if($harness -notmatch [regex]::Escape('function Get-AuditEntries {')){
+    throw 'Updater audit evidence reader must remain transaction-driven and clock-independent.'
+}
 if($windowsCi -notmatch [regex]::Escape('verify_production_updater_vm_harness.ps1')){
     throw 'Windows CI must run the updater rollback source gate.'
 }

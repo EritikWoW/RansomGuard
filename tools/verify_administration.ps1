@@ -7,6 +7,7 @@ $window=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Ui\Administra
 $rules=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\RuleAdministration.cs') -Raw
 $service=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\ServiceAdministration.cs') -Raw
 $updater=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\ServiceUpdateAdministration.cs') -Raw
+$updaterRecovery=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\ServiceUpdateRecoveryAdministration.cs') -Raw
 $core=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Core\AdminContract.cs') -Raw
 $recovery=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\ProductionRecoveryAdministration.cs') -Raw
 $recoveryExecution=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\ProductionRecoveryExecutionAdministration.cs') -Raw
@@ -66,6 +67,40 @@ if($changeIndex -lt 0 -or $commitIndex -le $changeIndex -or $readbackIndex -le $
  throw 'Updater must mark the SCM commit point immediately after the successful image switch and before any fallible read-back.'
 }
 Write-Host 'Transactional service updater source gate PASSED: immutable staging, explicit SCM commit point, startup verification, durable rollback phases, downgrade/replay rejection.'
+
+foreach($required in @(
+ 'ReviewInterruptedUpdate',
+ 'RecoverInterruptedUpdate',
+ 'AdminContract.CheckConfirmation("update-recovery", confirmation)',
+ 'ReadSingleIncompleteUpdate',
+ 'Multiple incomplete update transactions exist',
+ 'SCM ImagePath is neither side of the recorded update transaction',
+ 'SCM ImagePath changed while update recovery was acquiring a stable stopped state',
+ 'VerifyRecordedPreviousImage',
+ '"AbortedBeforeCommit"',
+ '"RollbackScmCommitted"',
+ '"RolledBack"',
+ '"RollbackFailed"',
+ 'ServiceUpdateRecoveryCompleted',
+ 'ServiceUpdateRecoveryFailed',
+ 'StopServiceForUpdateRecovery'
+)) {
+ if(-not$updaterRecovery.Contains($required)){throw "Missing interrupted updater recovery invariant: $required"}
+}
+foreach($pattern in @(
+ 'Process\.Kill\s*\(',
+ 'TerminateProcess\s*\(',
+ 'Stop-Process',
+ 'taskkill',
+ 'Restart-Computer',
+ 'shutdown\.exe'
+)) {
+ if($updaterRecovery -match $pattern){throw "Forbidden interrupted updater recovery primitive: $pattern"}
+}
+if($core -notmatch '"update-recovery"' -or $core -notmatch '"update-recovery" => "ROLLBACK UPDATE"'){
+ throw 'Interrupted updater recovery must be an explicit closed-list administrator intent with exact ROLLBACK UPDATE confirmation.'
+}
+Write-Host 'Interrupted updater recovery source gate PASSED: one durable transaction, exact SCM side reconciliation, verified previous image, clean-stop-only recovery and fail-closed ambiguous state handling.'
 
 if($service.Contains('DecisionPolicy.HashEqual(record.ImageSha256, record.ImageSha256)')){
  throw 'Install record validation must not use a self-comparison as a SHA-256 format check.'

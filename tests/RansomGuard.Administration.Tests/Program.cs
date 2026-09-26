@@ -8,7 +8,7 @@ void Reject(Action action, string name)
     Check(rejected, name);
 }
 string id = Guid.NewGuid().ToString("N"), hash = new string('A', 64);
-foreach (var action in new[] { "rules", "add", "edit", "disable", "remove", "install", "update", "start", "stop", "restart", "uninstall", "state-repair", "recovery-review" })
+foreach (var action in new[] { "rules", "add", "edit", "disable", "remove", "install", "update", "update-recovery", "start", "stop", "restart", "uninstall", "state-repair", "recovery-review" })
 {
     Check(AdminContract.IsAction(action), "recognized UI action " + action);
     AdminContract.ValidateIntent(action, AdminContract.NeedsRuleId(action) ? id : null);
@@ -22,9 +22,9 @@ foreach (var action in new[] { "edit", "disable", "remove" })
     Reject(() => AdminContract.ValidateIntent(action, "../rules.json"), action + " rejects path");
     Reject(() => AdminContract.ValidateIntent(action, "RansomGuardV03"), action + " rejects service-name-as-id");
 }
-foreach (var action in new[] { "rules", "add", "install", "update", "start", "stop", "restart", "uninstall", "state-repair", "recovery-review" })
+foreach (var action in new[] { "rules", "add", "install", "update", "update-recovery", "start", "stop", "restart", "uninstall", "state-repair", "recovery-review" })
     Reject(() => AdminContract.ValidateIntent(action, id), action + " rejects unrelated id");
-foreach (var action in new[] { "install", "update", "start", "stop", "restart", "uninstall", "state-repair", "disable", "remove" })
+foreach (var action in new[] { "install", "update", "update-recovery", "start", "stop", "restart", "uninstall", "state-repair", "disable", "remove" })
 {
     AdminContract.CheckConfirmation(action, AdminContract.Confirmation(action));
     Check(true, "exact confirmation " + action);

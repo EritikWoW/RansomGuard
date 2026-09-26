@@ -1,8 +1,14 @@
-# RansomGuard 0.8.6.0
+# RansomGuard 0.8.7.0
 
 RansomGuard is a Windows **anti-encryption and recovery layer**, not a general antivirus.
 Its target is to preserve original data before destructive mutation, contain continued encryption,
 and recover data through rollback plus adaptive crypto analysis.
+
+## Production recovery administration foundation
+
+0.8.7.0 starts the production recovery administration layer without adding a privileged command to the ordinary read-only UI pipe. A short-lived UAC-elevated administration component can inspect only the fixed private RansomGuard state store, enumerate validated `production-*` rollback sessions while the service/audit engine is stopped, and build bounded deterministic recovery-plan summaries for terminal Completed/Faulted sessions. Active or legacy-unmanaged sessions remain ineligible for operator recovery planning.
+
+This foundation is deliberately read-only. It does not invoke the recovery executor, create recovery state, overwrite live files, copy data, rename/delete paths, mutate topology, or change service/driver state. The existing verified executor remains copy-out-only and is not exposed by this milestone; a later separately reviewed slice may add explicit copy-out to a new output directory with stale-plan refusal.
 
 ## Production Enforce lifecycle
 
@@ -10,7 +16,7 @@ and recover data through rollback plus adaptive crypto analysis.
 
 A live process or loaded driver is not a protection claim. Initial activation publishes `Protected` only after the ProductionGate readiness handshake. Unexpected GateClient loss leaves the kernel protection latch in `DegradedProtected`; the service retries the same ProductionGate/root profile and returns to `Protected` only after a new activation preflight completes. Service shutdown uses a private redirected-stdin control path; driver detach/unload is attempted only after GateClient durably closes its session and the kernel confirms whole-gate `Maintenance` deactivation. If graceful shutdown fails, the service does not unload the driver and retains the fail-safe protection claim.
 
-Automatic detector-to-containment remains disabled in 0.8.6. Self-protection against local Administrator/SYSTEM tampering, production recovery orchestration, controlled production signing, and a Microsoft-assigned altitude remain separate release requirements. This lifecycle implementation is not by itself a production-certification claim; exact-head disposable-VM qualification remains required before merge/release.
+Automatic detector-to-containment remains disabled. Self-protection against local Administrator/SYSTEM tampering, production recovery execution/operator restore workflow, controlled production signing, and a Microsoft-assigned altitude remain separate release requirements. The 0.8.6 lifecycle qualification remains historical evidence for that frozen candidate and is not a production-certification claim for 0.8.7.
 
 ## GateClient process identity boundary
 

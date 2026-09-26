@@ -113,6 +113,7 @@ foreach($pair in @(
 
 $before=Invoke-Helper $AdminHelper @('query')
 $before | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'service-before.json') -Encoding utf8
+if($before.QuerySucceeded -ne $true){throw "Unable to query RansomGuardV03 before stale-campaign quarantine: $($before.Error)"}
 
 $crashJournal=[IO.Path]::GetFullPath([string]$state.crashJournal)
 $crashBefore=Get-Content -LiteralPath $crashJournal -Raw | ConvertFrom-Json -Depth 50
@@ -187,6 +188,12 @@ if($before.Installed -eq $true){
     $incompleteJournalQuarantined=$true
 
     [void](Invoke-Helper $AdminHelper @('expect-recovery-review-failure','No interrupted service update transaction exists'))
+}
+
+$finalService=Invoke-Helper $AdminHelper @('query')
+$finalService | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'service-final.json') -Encoding utf8
+if($finalService.QuerySucceeded -ne $true -or $finalService.Installed -eq $true){
+    throw 'Stale updater campaign quarantine did not leave RansomGuardV03 absent.'
 }
 
 $quarantinedActive=Join-Path $ResultsDirectory 'Active-quarantined'

@@ -59,6 +59,12 @@ foreach($pattern in @(
 if($core -notmatch '"update"' -or $core -notmatch '"update" => "UPDATE"'){
  throw 'Updater must be an explicit closed-list administrator intent with exact UPDATE confirmation.'
 }
+$changeIndex=$updater.IndexOf('ChangeServiceImage(service, targetImage);',[StringComparison]::Ordinal)
+$commitIndex=$updater.IndexOf('scmCommitted = true;',[StringComparison]::Ordinal)
+$readbackIndex=$updater.IndexOf('var committedRegistration = Configuration(service);',[StringComparison]::Ordinal)
+if($changeIndex -lt 0 -or $commitIndex -le $changeIndex -or $readbackIndex -le $commitIndex){
+ throw 'Updater must mark the SCM commit point immediately after the successful image switch and before any fallible read-back.'
+}
 Write-Host 'Transactional service updater source gate PASSED: immutable staging, explicit SCM commit point, startup verification, durable rollback phases, downgrade/replay rejection.'
 
 if($service.Contains('DecisionPolicy.HashEqual(record.ImageSha256, record.ImageSha256)')){

@@ -31,7 +31,9 @@ public partial class MainWindow
         try
         {
             bool changed = await AdminLauncher.OpenAsync(action, id, _vm.ThemeChoice, _vm.LanguageChoice);
-            _vm.Toast = changed ? L.T("Admin.Applied") : L.T("Admin.Cancelled");
+            _vm.Toast = action == "recovery-review"
+                ? L.T("RecoveryReview.Closed")
+                : changed ? L.T("Admin.Applied") : L.T("Admin.Cancelled");
             await RefreshManagedService();
             await _vm.RefreshAsync();
         }

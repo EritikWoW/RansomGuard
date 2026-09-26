@@ -59,6 +59,15 @@ foreach($required in @(
 }
 
 foreach($required in @(
+    'function Remove-QualificationBuildFamily',
+    "Remove-QualificationBuildFamily 'updater-old'",
+    "Remove-QualificationBuildFamily 'updater-current'",
+    "Get-ChildItem -LiteralPath '.\src','.\qualification' -Directory -Recurse -Force"
+)){
+    if($workflow -notmatch [regex]::Escape($required)){throw "Updater phase-cleanup invariant missing: $required"}
+}
+
+foreach($required in @(
     'expect-review-failure',
     'bytes do not match',
     'review-update',

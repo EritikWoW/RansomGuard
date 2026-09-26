@@ -168,21 +168,57 @@ try
 
     var degradedProtection = ProtectedSnapshot();
     var degradedBinding = Binding(targetKey, targetPath, targetHash, degradedProtection, "degraded");
-    var degradedCurrent = new ProtectionStatusDto(
-        RequestedProtectionMode.Enforce.ToString(),
-        ProtectionPhase.DegradedProtected.ToString(),
-        true,
-        false,
-        true,
-        false,
-        "qualification degraded",
-        degradedBinding.ProtectionObservedUtc);
+    var degradedCurrent = TransitionSnapshot(
+        ProtectionPhase.DegradedProtected,
+        degradedBinding.ProtectionObservedUtc.AddTicks(1));
     var degradedLedger = new ContainmentActuationLedger(Path.Combine(results, "ledger-degraded"));
     var degradedRejected = RevalidationRejected(
         actuator,
         new ContainmentActuationRequest(Guid.NewGuid().ToString("N"), degradedBinding, DateTime.UtcNow),
         degradedLedger,
         lease => Validate(degradedBinding, lease, degradedCurrent, true, degradedLedger));
+
+    var maintenanceProtection = ProtectedSnapshot();
+    var maintenanceBinding = Binding(targetKey, targetPath, targetHash, maintenanceProtection, "maintenance");
+    var maintenanceLedger = new ContainmentActuationLedger(Path.Combine(results, "ledger-maintenance"));
+    var maintenanceRejected = RevalidationRejected(
+        actuator,
+        new ContainmentActuationRequest(Guid.NewGuid().ToString("N"), maintenanceBinding, DateTime.UtcNow),
+        maintenanceLedger,
+        lease => Validate(
+            maintenanceBinding,
+            lease,
+            TransitionSnapshot(ProtectionPhase.Maintenance, maintenanceBinding.ProtectionObservedUtc.AddTicks(1)),
+            true,
+            maintenanceLedger));
+
+    var failedProtection = ProtectedSnapshot();
+    var failedBinding = Binding(targetKey, targetPath, targetHash, failedProtection, "failed");
+    var failedLedger = new ContainmentActuationLedger(Path.Combine(results, "ledger-failed"));
+    var failedRejected = RevalidationRejected(
+        actuator,
+        new ContainmentActuationRequest(Guid.NewGuid().ToString("N"), failedBinding, DateTime.UtcNow),
+        failedLedger,
+        lease => Validate(
+            failedBinding,
+            lease,
+            TransitionSnapshot(ProtectionPhase.Failed, failedBinding.ProtectionObservedUtc.AddTicks(1)),
+            true,
+            failedLedger));
+
+    var stoppedProtection = ProtectedSnapshot();
+    var stoppedBinding = Binding(targetKey, targetPath, targetHash, stoppedProtection, "stopped");
+    var stoppedLedger = new ContainmentActuationLedger(Path.Combine(results, "ledger-stopped"));
+    var stoppedRejected = RevalidationRejected(
+        actuator,
+        new ContainmentActuationRequest(Guid.NewGuid().ToString("N"), stoppedBinding, DateTime.UtcNow),
+        stoppedLedger,
+        lease => Validate(
+            stoppedBinding,
+            lease,
+            TransitionSnapshot(ProtectionPhase.Stopped, stoppedBinding.ProtectionObservedUtc.AddTicks(1)),
+            true,
+            stoppedLedger));
 
     var telemetryProtection = ProtectedSnapshot();
     var telemetryBinding = Binding(targetKey, targetPath, targetHash, telemetryProtection, "telemetry-loss");
@@ -192,6 +228,67 @@ try
         new ContainmentActuationRequest(Guid.NewGuid().ToString("N"), telemetryBinding, DateTime.UtcNow),
         telemetryLedger,
         lease => Validate(telemetryBinding, lease, telemetryProtection, false, telemetryLedger));
+
+    var unknownCriticalProtection = ProtectedSnapshot();
+    var unknownCriticalBinding = Binding(targetKey, targetPath, targetHash, unknownCriticalProtection, "critical-unknown");
+    var unknownCriticalLedger = new ContainmentActuationLedger(Path.Combine(results, "ledger-critical-unknown"));
+    var unknownCriticalRejected = RevalidationRejected(
+        actuator,
+        new ContainmentActuationRequest(Guid.NewGuid().ToString("N"), unknownCriticalBinding, DateTime.UtcNow),
+        unknownCriticalLedger,
+        lease => Validate(
+            unknownCriticalBinding,
+            lease,
+            unknownCriticalProtection,
+            true,
+            unknownCriticalLedger,
+            criticalStateKnownOverride: false));
+
+    var criticalProtection = ProtectedSnapshot();
+    var criticalBinding = Binding(targetKey, targetPath, targetHash, criticalProtection, "critical");
+    var criticalLedger = new ContainmentActuationLedger(Path.Combine(results, "ledger-critical"));
+    var criticalRejected = RevalidationRejected(
+        actuator,
+        new ContainmentActuationRequest(Guid.NewGuid().ToString("N"), criticalBinding, DateTime.UtcNow),
+        criticalLedger,
+        lease => Validate(
+            criticalBinding,
+            lease,
+            criticalProtection,
+            true,
+            criticalLedger,
+            criticalStateKnownOverride: true,
+            isCriticalOverride: true));
+
+    var selfProtection = ProtectedSnapshot();
+    var selfBinding = Binding(targetKey, targetPath, targetHash, selfProtection, "self");
+    var selfLedger = new ContainmentActuationLedger(Path.Combine(results, "ledger-self"));
+    var selfRejected = RevalidationRejected(
+        actuator,
+        new ContainmentActuationRequest(Guid.NewGuid().ToString("N"), selfBinding, DateTime.UtcNow),
+        selfLedger,
+        lease => Validate(
+            selfBinding,
+            lease,
+            selfProtection,
+            true,
+            selfLedger,
+            isSelf: true));
+
+    var serviceProtection = ProtectedSnapshot();
+    var serviceBinding = Binding(targetKey, targetPath, targetHash, serviceProtection, "protected-service");
+    var serviceLedger = new ContainmentActuationLedger(Path.Combine(results, "ledger-protected-service"));
+    var protectedServiceRejected = RevalidationRejected(
+        actuator,
+        new ContainmentActuationRequest(Guid.NewGuid().ToString("N"), serviceBinding, DateTime.UtcNow),
+        serviceLedger,
+        lease => Validate(
+            serviceBinding,
+            lease,
+            serviceProtection,
+            true,
+            serviceLedger,
+            isProtectedServiceProcess: true));
 
     var partialProtection = ProtectedSnapshot();
     var partialBinding = Binding(targetKey, targetPath, targetHash, partialProtection, "partial");
@@ -235,7 +332,14 @@ try
         hashDriftRejected &&
         expiryRejected &&
         degradedRejected &&
+        maintenanceRejected &&
+        failedRejected &&
+        stoppedRejected &&
         telemetryRejected &&
+        unknownCriticalRejected &&
+        criticalRejected &&
+        selfRejected &&
+        protectedServiceRejected &&
         partialRecovered &&
         cancellationRecovered;
 
@@ -255,7 +359,14 @@ try
         hashDriftRejected,
         expiryRejected,
         degradedRejected,
+        maintenanceRejected,
+        failedRejected,
+        stoppedRejected,
         telemetryRejected,
+        unknownCriticalRejected,
+        criticalRejected,
+        selfRejected,
+        protectedServiceRejected,
         partialRecovered,
         cancellationRecovered,
         passed
@@ -406,6 +517,48 @@ static ProtectionStatusDto ProtectedSnapshot(DateTime? observedUtc = null) =>
         "containment actuator qualification",
         observedUtc ?? DateTime.UtcNow);
 
+static ProtectionStatusDto TransitionSnapshot(ProtectionPhase phase, DateTime observedUtc) =>
+    phase switch
+    {
+        ProtectionPhase.DegradedProtected => new(
+            RequestedProtectionMode.Enforce.ToString(),
+            phase.ToString(),
+            true,
+            false,
+            true,
+            false,
+            "qualification degraded",
+            observedUtc),
+        ProtectionPhase.Maintenance => new(
+            RequestedProtectionMode.Enforce.ToString(),
+            phase.ToString(),
+            true,
+            false,
+            false,
+            false,
+            "qualification maintenance",
+            observedUtc),
+        ProtectionPhase.Failed => new(
+            RequestedProtectionMode.Enforce.ToString(),
+            phase.ToString(),
+            true,
+            false,
+            false,
+            false,
+            "qualification failed",
+            observedUtc),
+        ProtectionPhase.Stopped => new(
+            RequestedProtectionMode.Enforce.ToString(),
+            phase.ToString(),
+            false,
+            false,
+            false,
+            false,
+            "qualification stopped",
+            observedUtc),
+        _ => throw new ArgumentOutOfRangeException(nameof(phase), phase, "Unsupported qualification transition.")
+    };
+
 static ContainmentActuationBinding Binding(
     ProcessKey process,
     string imagePath,
@@ -434,7 +587,11 @@ static ContainmentActuationValidationDecision Validate(
     IContainmentProcessActuationLease lease,
     ProtectionStatusDto protection,
     bool telemetryHealthy,
-    ContainmentActuationLedger ledger) =>
+    ContainmentActuationLedger ledger,
+    bool? criticalStateKnownOverride = null,
+    bool? isCriticalOverride = null,
+    bool isSelf = false,
+    bool isProtectedServiceProcess = false) =>
     ContainmentActuationPolicy.Evaluate(
         new(
             binding,
@@ -444,10 +601,10 @@ static ContainmentActuationValidationDecision Validate(
             lease.ImageSha256,
             protection,
             telemetryHealthy,
-            lease.CriticalStateKnown,
-            lease.IsCritical,
-            false,
-            false,
+            criticalStateKnownOverride ?? lease.CriticalStateKnown,
+            isCriticalOverride ?? lease.IsCritical,
+            isSelf,
+            isProtectedServiceProcess,
             ledger.IsAuthorizationConsumed(binding.AuthorizationId)));
 
 static bool RevalidationRejected(

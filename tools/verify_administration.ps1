@@ -8,6 +8,7 @@ $rules=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\Rul
 $service=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\ServiceAdministration.cs') -Raw
 $core=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Core\AdminContract.cs') -Raw
 $recovery=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\ProductionRecoveryAdministration.cs') -Raw
+$recoveryPane=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Ui\Administration\RecoveryReviewPane.cs') -Raw
 foreach($required in @('Environment.ProcessPath','Verb = "runas"','AdminContract.ValidateIntent','child.WaitForExitAsync','1223')) {
  if(-not$launch.Contains($required)){throw "Missing elevation boundary: $required"}
 }
@@ -76,6 +77,36 @@ if($recovery -notmatch 'Rollback Sessions directory does not exist; read-only re
  throw 'Production recovery administration must refuse a missing Sessions directory instead of creating state.'
 }
 Write-Host 'Production recovery administration source gate PASSED: UAC/admin-only, fixed private store, stopped-service boundary, terminal-session deterministic planning, bounded summaries, no execution verbs.'
+
+foreach($required in @(
+ 'recovery-review',
+ 'ProductionRecoveryAdministration.ListSessions',
+ 'ProductionRecoveryAdministration.BuildPlan',
+ 'SetPreviewScenario',
+ 'nativeStateQueries = false',
+ 'mutationControls = false'
+)) {
+ $source=if($required -eq 'recovery-review'){$core}else{$recoveryPane}
+ if(-not $source.Contains($required)){throw "Missing elevated recovery review invariant: $required"}
+}
+foreach($pattern in @(
+ 'RollbackRecoveryExecutor',
+ 'ExecuteReadyAsync',
+ 'ServiceAdministration\.Execute',
+ 'File\.Move\s*\(',
+ 'File\.Delete\s*\(',
+ 'File\.Copy\s*\(',
+ 'WriteAllBytes\s*\(',
+ 'WriteAllText\s*\(',
+ 'Directory\.CreateDirectory\s*\(',
+ 'Directory\.Delete\s*\('
+)) {
+ if($recoveryPane -match $pattern){throw "Elevated recovery review must remain read-only: forbidden pattern '$pattern'"}
+}
+if($recoveryPane -notmatch 'if \(_preview\)' -or $recoveryPane -notmatch 'Synthetic scene only'){
+ throw 'Recovery review preview must remain synthetic-only and branch before production administration calls.'
+}
+Write-Host 'Elevated recovery review source gate PASSED: explicit admin intent, synthetic preview, bounded read-only plan rendering, no executor/filesystem/service mutation.'
 
 
 if($window -match 'new AdminWindow\("state-repair"' -or $window -match 'TextBox _confirm') {throw 'Do not nest administrative recovery windows or require command tokens in the GUI.'}

@@ -116,7 +116,7 @@ public static class RollbackRecoveryExecutor
                         expectedLength = expectation.ExpectedLength;
                         expectedSha256 = expectation.ExpectedSha256;
                         recoveredPath = await range.RestoreToNewCopyAsync(
-                            action.PrimaryPath, actionDirectory, cancellationToken).ConfigureAwait(false);
+                            action.PrimaryPath, actionDirectory, expectation, cancellationToken).ConfigureAwait(false);
                         break;
                     }
 

@@ -15,6 +15,7 @@ internal sealed class RuntimeState
     private RecoverySummaryDto _recovery = new("NotStarted",null,false,0,0,0,
         "Offline recovery needs a dump and a supported encrypted file format. Ordinary processes remain audit-only.",DateTime.UtcNow);
     private ScopedRuleSetDto? _scopedRules;
+    private ContainmentAuthorizationDecision? _containmentAuthorization;
     private long _revision, _telemetryRevision, _incidentRevision, _recoveryRevision;
     public RuntimeState(ProtectionStatusDto protection)
     {
@@ -57,6 +58,18 @@ internal sealed class RuntimeState
         _pulse.Signal();
     }
     public ProtectionStatusDto Protection() { lock(_gate) return _protection; }
+    public MonitoringHealthDto Monitor() { lock(_gate) return _monitor; }
+    public void UpdateContainmentAuthorization(ContainmentAuthorizationDecision value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        lock (_gate)
+        {
+            _containmentAuthorization=value;
+            _revision++;
+            _telemetryRevision++;
+        }
+        _pulse.Signal();
+    }
     public void RefreshDriverStatus()
     {
         var result=DriverServiceProbe.Query("RansomGuardMinifilter");
@@ -98,7 +111,8 @@ internal sealed class RuntimeState
         _telemetry,new[]{"Live UI does not remove ETW delivery delay.",
         "The durable rollback repository must validate before production kernel startup may begin.",
         "No key material is sent to the UI. Reconnect receives only the latest 50 incident summaries; the protected archive is separate.",
-        "A connected UI or SCM Running state is not proof of kernel enforcement; use the explicit protection state."},_monitor,_scopedRules,_protection);
+        "Containment authorization is read-only policy evidence; it does not imply that an actuator ran.",
+        "A connected UI or SCM Running state is not proof of kernel enforcement; use the explicit protection state."},_monitor,_scopedRules,_protection,_containmentAuthorization);
     public DiagnosticsDto Diagnostics() {lock(_gate)return DiagnosticsLocked();}
     public LiveFrame Frame(GuardSettings settings,long sequence,bool full,ref long telemetrySeen,
         ref long incidentSeen,ref long recoverySeen,ref long stateSeen)

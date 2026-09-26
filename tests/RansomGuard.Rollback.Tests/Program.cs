@@ -1875,6 +1875,88 @@ try
           rangeExecution.RecoveredSha256.Length == 64,
         "recovery executor persists plan/report and output SHA-256 evidence");
 
+    Check(fullExecution.ExpectedLength == fullOriginalBytes.Length &&
+          fullExecution.RecoveredLength == fullExecution.ExpectedLength &&
+          fullExecution.ExpectedSha256 == Convert.ToHexString(SHA256.HashData(fullOriginalBytes)) &&
+          fullExecution.RecoveredSha256 == fullExecution.ExpectedSha256 &&
+          rangeExecution.ExpectedLength == rangeOriginalBytes.Length &&
+          rangeExecution.RecoveredLength == rangeExecution.ExpectedLength &&
+          rangeExecution.ExpectedSha256 == Convert.ToHexString(SHA256.HashData(rangeOriginalBytes)) &&
+          rangeExecution.RecoveredSha256 == rangeExecution.ExpectedSha256,
+        "recovery output length and SHA-256 match evidence expectations");
+
+    var existingOutput = Path.Combine(root, "existing-recovery-output");
+    Directory.CreateDirectory(existingOutput);
+    var existingSentinel = Path.Combine(existingOutput, "do-not-overwrite.txt");
+    await File.WriteAllTextAsync(existingSentinel, "preserve");
+    var existingOutputRejected = false;
+    try
+    {
+        _ = await RollbackRecoveryExecutor.ExecuteReadyAsync(
+            planRepoRoot, recoveryPlan, existingOutput);
+    }
+    catch (IOException) { existingOutputRejected = true; }
+    Check(existingOutputRejected &&
+          File.ReadAllText(existingSentinel) == "preserve" &&
+          !File.Exists(Path.Combine(existingOutput, "recovery-plan.json")),
+        "existing recovery output root refuses overwrite");
+
+    var reparseTarget = Path.Combine(root, "reparse-target");
+    var reparseLink = Path.Combine(root, "reparse-link");
+    Directory.CreateDirectory(reparseTarget);
+    var reparseReady = false;
+    try
+    {
+        Directory.CreateSymbolicLink(reparseLink, reparseTarget);
+        reparseReady = true;
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            const string compatibilityJunction = @"C:\Documents and Settings";
+            try
+            {
+                if (Directory.Exists(compatibilityJunction) &&
+                    (File.GetAttributes(compatibilityJunction) & FileAttributes.ReparsePoint) != 0)
+                {
+                    reparseLink = compatibilityJunction;
+                    reparseReady = true;
+                }
+            }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+    if (!reparseReady)
+        throw new InvalidOperationException("Test environment could not create or locate a reparse-point directory.");
+    var reparseRejected = false;
+    try
+    {
+        _ = await RollbackRecoveryExecutor.ExecuteReadyAsync(
+            planRepoRoot,
+            recoveryPlan,
+            Path.Combine(reparseLink, "RansomGuard-Recovery-" + Guid.NewGuid().ToString("N")));
+    }
+    catch (IOException) { reparseRejected = true; }
+    Check(reparseRejected,
+        "reparse recovery destination is refused");
+
+    // Force the second Ready action (range-COW) to fail after the full pre-image copy
+    // succeeds. The executor must retain/report the completed copy and never claim rollback.
+    File.Delete(rangeOnlyPath);
+    var partialOutput = Path.Combine(root, "partial-recovery-output");
+    var partial = await RollbackRecoveryExecutor.ExecuteReadyAsync(
+        planRepoRoot, recoveryPlan, partialOutput);
+    Check(!partial.Succeeded &&
+          partial.SucceededActions == 1 &&
+          partial.FailedActions == 1 &&
+          partial.Items.Count == 2 &&
+          partial.Items[0].State == RollbackRecoveryExecutionState.Succeeded &&
+          partial.Items[1].State == RollbackRecoveryExecutionState.Failed &&
+          File.Exists(partial.Items[0].RecoveredPath) &&
+          File.Exists(Path.Combine(partialOutput, "recovery-execution.json")),
+        "partial recovery failure is reported without undoing completed copies");
+
     _ = await planCreateOps.RecordCompletionAsync(
         9002, CreateCompletionState.Failed, 0xC0000001, 0, null, null);
     var staleRejected = false;

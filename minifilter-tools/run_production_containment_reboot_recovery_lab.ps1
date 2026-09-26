@@ -292,7 +292,10 @@ function Cleanup-Qualification([string]$Volume){
     $filters=(& fltmc filters 2>$null | Out-String)
     if($LASTEXITCODE -eq 0 -and $filters -match '(?m)^\s*RansomGuardMinifilter\b'){
         & (Join-Path $PSScriptRoot 'unload_minifilter_lab.ps1') -Volume $Volume
-        if($LASTEXITCODE -ne 0){throw 'Unable to unload RansomGuardMinifilter during campaign cleanup.'}
+        $filtersAfterUnload=(& fltmc filters 2>$null | Out-String)
+        if($LASTEXITCODE -ne 0 -or $filtersAfterUnload -match '(?m)^\s*RansomGuardMinifilter\b'){
+            throw 'Unable to verify RansomGuardMinifilter unload during campaign cleanup.'
+        }
     }
 
     $serviceKey='HKLM:\SYSTEM\CurrentControlSet\Services\RansomGuardV03'

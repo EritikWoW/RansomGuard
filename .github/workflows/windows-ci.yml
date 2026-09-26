@@ -34,6 +34,7 @@ jobs:
           .\tools\verify_driver_verifier_vm_harness.ps1
           .\tools\verify_production_containment_e2e_harness.ps1
           .\tools\verify_production_containment_recovery_harness.ps1
+          .\tools\verify_production_containment_reboot_recovery_harness.ps1
           .\tools\verify_production_updater_vm_harness.ps1
           .\tools\verify_production_updater_recovery_vm_harness.ps1
           .\tools\test_release_artifact_reconstruction.ps1

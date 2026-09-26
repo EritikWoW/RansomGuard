@@ -55,7 +55,12 @@ internal sealed class GuardWorker:BackgroundService
             RequestedMode=_settings.Mode, Protection=protection,
             Lab=_lab is not null, Roots=_settings.ProtectedRoots, monitor.SessionName });
 
-        using var pipeline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        // ApplicationStopping is raised before individual hosted services are stopped.
+        // Link it explicitly so an in-flight production containment attempt is cancelled
+        // and physically resumed before ProductionProtectionLifecycle begins Gate maintenance.
+        using var pipeline = CancellationTokenSource.CreateLinkedTokenSource(
+            token,
+            _life.ApplicationStopping);
         var pipelineToken = pipeline.Token;
         var response = Task.Run(() => RespondLoop(monitor, pipelineToken), pipelineToken);
         var metrics = Task.Run(() => Metrics(monitor, pipelineToken), pipelineToken);
@@ -76,10 +81,10 @@ internal sealed class GuardWorker:BackgroundService
         {
             var ended = await Task.WhenAny(consumer, monitor.Completion, response, metrics);
             await ended;
-            if (!token.IsCancellationRequested)
+            if (!pipelineToken.IsCancellationRequested)
                 throw new IOException("ETW monitoring/processing pipeline exited unexpectedly. Monitoring is unavailable.");
         }
-        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (OperationCanceledException) when (pipelineToken.IsCancellationRequested) { }
         catch (Exception ex) when (MonitoringHealth.IsOperationalFailure(ex) || ex is ChannelClosedException)
         {
             pipelineError = ex;
@@ -97,7 +102,9 @@ internal sealed class GuardWorker:BackgroundService
             }
             catch (Exception ex) { _log.LogDebug(ex, "Monitoring pipeline shutdown"); }
         }
-        if (pipelineError is not null && !token.IsCancellationRequested)
+        if (pipelineError is not null &&
+            !token.IsCancellationRequested &&
+            !_life.ApplicationStopping.IsCancellationRequested)
             await WaitForManualRestart(token);
         else
             _runtime.UpdateMonitor(new("Stopped", DateTime.UtcNow, monitor.SessionName));

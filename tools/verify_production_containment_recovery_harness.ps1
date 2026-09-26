@@ -18,8 +18,9 @@ $readinessPath=Join-Path $root 'src\RansomGuard.Service\ProductionContainmentRea
 $leasePath=Join-Path $root 'src\RansomGuard.Service\WindowsProcessStateChangeLease.cs'
 $serviceProgramPath=Join-Path $root 'src\RansomGuard.Service\Program.cs'
 $coordinatorPath=Join-Path $root 'src\RansomGuard.Service\ProductionContainmentCoordinator.cs'
+$guardWorkerPath=Join-Path $root 'src\RansomGuard.Service\GuardWorker.cs'
 
-foreach($path in @($workflowPath,$harnessPath,$fixturePath,$dispatcherPath,$windowsCiPath,$readinessPath,$leasePath,$serviceProgramPath,$coordinatorPath)){
+foreach($path in @($workflowPath,$harnessPath,$fixturePath,$dispatcherPath,$windowsCiPath,$readinessPath,$leasePath,$serviceProgramPath,$coordinatorPath,$guardWorkerPath)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){
         throw "Production containment recovery qualification source missing: $path"
     }
@@ -33,6 +34,7 @@ $readiness=Get-Content -LiteralPath $readinessPath -Raw
 $lease=Get-Content -LiteralPath $leasePath -Raw
 $serviceProgram=Get-Content -LiteralPath $serviceProgramPath -Raw
 $coordinator=Get-Content -LiteralPath $coordinatorPath -Raw
+$guardWorker=Get-Content -LiteralPath $guardWorkerPath -Raw
 
 foreach($required in @(
     'RansomGuard production containment crash recovery VM qualification',
@@ -199,6 +201,23 @@ foreach($required in @(
 $resumeEvidencePattern='(?s)lease\.Resume\(\);.*?_journal\.RecordExplicitResumeApplied\(requestId\).*?catch\s*\(Exception ex\)\s*when\s*\(.*?UnauthorizedAccessException.*?InvalidDataException.*?InvalidOperationException.*?\).*?return true;'
 if($coordinator -notmatch $resumeEvidencePattern){
     throw 'A durable resume-evidence failure must be contained after the physical exact-process resume and still report the explicit resume as applied.'
+}
+
+foreach($required in @(
+    'CancellationTokenSource.CreateLinkedTokenSource(',
+    '_life.ApplicationStopping',
+    'catch (OperationCanceledException) when (pipelineToken.IsCancellationRequested)'
+)){
+    if($guardWorker -notmatch [regex]::Escape($required)){
+        throw "Production containment shutdown ordering invariant missing from GuardWorker: $required"
+    }
+}
+$linkedStop=$guardWorker.IndexOf('CancellationTokenSource.CreateLinkedTokenSource(', [StringComparison]::Ordinal)
+$appStopping=$guardWorker.IndexOf('_life.ApplicationStopping', [StringComparison]::Ordinal)
+$respondStart=$guardWorker.IndexOf('Task.Run(() => RespondLoop(monitor, pipelineToken)', [StringComparison]::Ordinal)
+if($linkedStop -lt 0 -or $appStopping -lt 0 -or $respondStart -lt 0 -or
+   $linkedStop -ge $respondStart -or $appStopping -ge $respondStart){
+    throw 'GuardWorker must bind ApplicationStopping into the incident/containment pipeline before RespondLoop starts.'
 }
 
 $journalInit=$serviceProgram.IndexOf('stateChangeJournal=new ContainmentStateChangeJournal', [StringComparison]::Ordinal)

@@ -32,8 +32,26 @@ public sealed record RiskSignal(ProcessKey Process, string Name, string? ImagePa
 public sealed record SignatureEvidence(string Status, string? NativeStatus, string? Publisher,
     string? CertificateThumbprint, string RevocationPolicy = "OfflineCacheOnly",
     string Coverage = "EmbeddedSignatureOnly");
+public readonly record struct FileIdentityEvidence(
+    uint VolumeSerialNumber,
+    ulong FileIndex,
+    long Size,
+    long LastWriteFileTimeUtc);
+
+public static class FileIdentityPolicy
+{
+    public static bool SameFile(FileIdentityEvidence? expected, FileIdentityEvidence? actual)
+        => expected is FileIdentityEvidence left &&
+           actual is FileIdentityEvidence right &&
+           left.VolumeSerialNumber == right.VolumeSerialNumber &&
+           left.FileIndex == right.FileIndex;
+}
+
 public sealed record ImageEvidence(string? Path, string? Sha256, long? Size, string Status,
-    SignatureEvidence Signature, string LocalDisposition, DateTime ObservedUtc, string? Error);
+    SignatureEvidence Signature, string LocalDisposition, DateTime ObservedUtc, string? Error)
+{
+    public FileIdentityEvidence? FileIdentity { get; init; }
+}
 public sealed record LabIdentity(ProcessKey Process, string ImagePath, string Sha256, DateTime ExpiresUtc);
 public sealed record ActionDecision(bool AllowLabSuspend, string Reason);
 public sealed record ContentSample(string Path, string Sha256, double Entropy, string Header,

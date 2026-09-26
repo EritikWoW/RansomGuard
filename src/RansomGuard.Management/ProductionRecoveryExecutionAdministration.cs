@@ -62,7 +62,7 @@ public static class ProductionRecoveryExecutionAdministration
 
         // StateMaintenanceGate is a named Mutex and is deliberately thread-affine.
         // The entire copy-out body therefore stays synchronous on this worker thread;
-        // async I/O is joined here rather than retaining the Mutex across an await.
+        // asynchronous I/O is joined here rather than suspending while the Mutex is owned.
         using var maintenance = StateMaintenanceGate.Acquire();
         ProductionRecoveryAdministration.EnsureIdle();
 

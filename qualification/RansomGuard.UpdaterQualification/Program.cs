@@ -98,11 +98,21 @@ try
             if (!string.Equals(status.State, "Stopped", StringComparison.Ordinal))
                 ServiceAdministration.Execute("stop", "STOP");
             ServiceAdministration.Execute("uninstall", "UNINSTALL");
-            var after = ServiceAdministration.Query();
-            if (!after.QuerySucceeded || after.Installed)
-                throw new IOException("Service registration remained after qualification uninstall.");
-            Print(new { command, removed = true });
-            return 0;
+            var deadline = DateTime.UtcNow.AddSeconds(10);
+            ManagedServiceStatus? after = null;
+            while (DateTime.UtcNow < deadline)
+            {
+                after = ServiceAdministration.Query();
+                if (after.QuerySucceeded && !after.Installed)
+                {
+                    Print(new { command, removed = true });
+                    return 0;
+                }
+                Thread.Sleep(100);
+            }
+            throw new IOException(
+                "Service registration did not disappear after qualification uninstall. Last state: " +
+                JsonSerializer.Serialize(after));
         }
         default:
             throw new ArgumentException("Unknown command: " + command);

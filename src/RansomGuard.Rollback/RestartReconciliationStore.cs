@@ -30,14 +30,22 @@ public sealed class RestartReconciliationStore
         }
     }
 
-    public RestartReconciliationStore(string root)
+    public RestartReconciliationStore(string root, bool createIfMissing = true)
     {
         if (string.IsNullOrWhiteSpace(root))
             throw new ArgumentException("Restart reconciliation root is required.", nameof(root));
 
         _root = Path.GetFullPath(root);
         _journal = Path.Combine(_root, "restart-reconciliation-journal.jsonl");
-        Directory.CreateDirectory(_root);
+        if (createIfMissing)
+        {
+            Directory.CreateDirectory(_root);
+        }
+        else if (!Directory.Exists(_root))
+        {
+            if (File.Exists(_root)) throw new IOException("Restart reconciliation root is not a directory: " + _root);
+            throw new DirectoryNotFoundException("Restart reconciliation root does not exist: " + _root);
+        }
         RejectReparse(_root);
         LoadAndValidateJournal();
     }

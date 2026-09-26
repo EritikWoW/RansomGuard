@@ -56,7 +56,7 @@ public sealed class RenameRollbackStore
         }
     }
 
-    public RenameRollbackStore(string root)
+    public RenameRollbackStore(string root, bool createIfMissing = true)
     {
         if (string.IsNullOrWhiteSpace(root))
             throw new ArgumentException("Rename rollback root is required.", nameof(root));
@@ -64,7 +64,15 @@ public sealed class RenameRollbackStore
         _root = Path.GetFullPath(root);
         _journal = Path.Combine(_root, "rename-journal.jsonl");
         _completionJournal = Path.Combine(_root, "rename-completion-journal.jsonl");
-        Directory.CreateDirectory(_root);
+        if (createIfMissing)
+        {
+            Directory.CreateDirectory(_root);
+        }
+        else if (!Directory.Exists(_root))
+        {
+            if (File.Exists(_root)) throw new IOException("Rename rollback root is not a directory: " + _root);
+            throw new DirectoryNotFoundException("Rename rollback root does not exist: " + _root);
+        }
         RejectReparse(_root);
         LoadAndValidateJournal();
         LoadAndValidateCompletions();

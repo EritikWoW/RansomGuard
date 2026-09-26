@@ -75,7 +75,7 @@ public sealed class DeleteOperationStore
         }
     }
 
-    public DeleteOperationStore(string root)
+    public DeleteOperationStore(string root, bool createIfMissing = true)
     {
         if (string.IsNullOrWhiteSpace(root))
             throw new ArgumentException("Delete operation root is required.", nameof(root));
@@ -84,7 +84,15 @@ public sealed class DeleteOperationStore
         _intentJournal = Path.Combine(_root, "delete-intent-journal.jsonl");
         _completionJournal = Path.Combine(_root, "delete-completion-journal.jsonl");
         _finalizationJournal = Path.Combine(_root, "delete-finalization-journal.jsonl");
-        Directory.CreateDirectory(_root);
+        if (createIfMissing)
+        {
+            Directory.CreateDirectory(_root);
+        }
+        else if (!Directory.Exists(_root))
+        {
+            if (File.Exists(_root)) throw new IOException("Delete operation root is not a directory: " + _root);
+            throw new DirectoryNotFoundException("Delete operation root does not exist: " + _root);
+        }
         RejectReparse(_root);
         LoadAndValidateIntents();
         LoadAndValidateCompletions();

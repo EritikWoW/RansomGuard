@@ -41,6 +41,27 @@ Check(!ServiceUpdatePolicy.IsForwardVersion("0.8.7.0", "0.8.7.0"), "same-version
 Check(!ServiceUpdatePolicy.IsForwardVersion("0.9.0.0", "0.8.7.0"), "downgrade rejected");
 Check(!ServiceUpdatePolicy.IsForwardVersion("invalid", "0.9.0.0"), "invalid installed version rejected");
 Check(!ServiceUpdatePolicy.IsForwardVersion("0.8.7.0", "invalid"), "invalid target version rejected");
+
+var transitionHash = new string('B', 64);
+var transitionCurrent = new ProtectionPackageDescriptor(
+    1, ProtectionPackagePolicy.ProductionProfile, "0.8.9.0",
+    ProtectionPackagePolicy.ProtocolVersion, ProtectionPackagePolicy.ProductionProvider,
+    "385201.42", new string('C', 64), transitionHash, new string('D', 64), new string('E', 64));
+var transitionTarget = transitionCurrent with
+{
+    Version = "0.9.0.0",
+    GateClientSha256 = new string('F', 64),
+    DriverInfSha256 = new string('1', 64),
+    DriverCatSha256 = new string('2', 64)
+};
+Check(ProtectionPackagePolicy.IsInPlaceTransitionCompatible(transitionCurrent, transitionTarget),
+    "service/GateClient refresh may reuse an unchanged registered protection binary");
+Check(!ProtectionPackagePolicy.IsInPlaceTransitionCompatible(
+        transitionCurrent, transitionTarget with { DriverSysSha256 = new string('3', 64) }),
+    "changed protection binary requires a separate maintenance transition");
+Check(!ProtectionPackagePolicy.IsInPlaceTransitionCompatible(
+        transitionCurrent, transitionTarget with { Altitude = "385202.42" }),
+    "changed filter identity cannot be treated as an in-place update");
 Check(!AdminContract.NeedsRuleId("recovery-review"), "recovery review never accepts a rule id");
 Reject(() => AdminContract.Confirmation("recovery-review"), "recovery review has no mutation confirmation verb");
 

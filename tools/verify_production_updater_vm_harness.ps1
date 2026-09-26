@@ -46,6 +46,18 @@ if($workflow -match '(?im)^\s*continue-on-error\s*:\s*true\s*$'){
     throw 'Updater rollback workflow must not continue after qualification failure.'
 }
 
+if($workflow -match [regex]::Escape('BaseIntermediateOutputPath=obj-updater-') -or
+   $workflow -match [regex]::Escape('BaseOutputPath=bin-updater-')){
+    throw 'Updater qualification must not place custom obj/bin roots beside SDK default roots; generated AssemblyInfo can be globbed as source.'
+}
+foreach($required in @(
+    'BaseIntermediateOutputPath=obj\updater-old\',
+    'BaseIntermediateOutputPath=obj\updater-current\',
+    'BaseIntermediateOutputPath=obj\updater-failure\'
+)){
+    if($workflow -notmatch [regex]::Escape($required)){throw "Updater build-isolation invariant missing: $required"}
+}
+
 foreach($required in @(
     'expect-review-failure',
     'bytes do not match',

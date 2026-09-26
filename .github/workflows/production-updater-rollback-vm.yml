@@ -82,30 +82,30 @@ jobs:
           foreach($p in @($old,$current,$failure)){New-Item -ItemType Directory -Path $p -Force | Out-Null}
 
           $oldServiceProject='.\src\RansomGuard.Service\RansomGuard.Service.csproj'
-          dotnet restore $oldServiceProject --locked-mode -r win-x64 -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj-updater-old\
+          dotnet restore $oldServiceProject --locked-mode -r win-x64 -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj\updater-old\
           if($LASTEXITCODE -ne 0){throw 'Old service restore failed.'}
-          dotnet publish $oldServiceProject -c Release -r win-x64 --self-contained true --no-restore -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj-updater-old\ -p:BaseOutputPath=bin-updater-old\ -o (Join-Path $old 'package')
+          dotnet publish $oldServiceProject -c Release -r win-x64 --self-contained true --no-restore -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj\updater-old\ -p:BaseOutputPath=bin\updater-old\ -o (Join-Path $old 'package')
           if($LASTEXITCODE -ne 0){throw 'Old service publish failed.'}
           $helperProject='.\qualification\RansomGuard.UpdaterQualification\RansomGuard.UpdaterQualification.csproj'
-          dotnet restore $helperProject --locked-mode -r win-x64 -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj-updater-old\
+          dotnet restore $helperProject --locked-mode -r win-x64 -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj\updater-old\
           if($LASTEXITCODE -ne 0){throw 'Old administration helper restore failed.'}
-          dotnet publish $helperProject -c Release -r win-x64 --self-contained true --no-restore -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj-updater-old\ -p:BaseOutputPath=bin-updater-old\ -o (Join-Path $old 'helper')
+          dotnet publish $helperProject -c Release -r win-x64 --self-contained true --no-restore -p:Version=0.8.6.0 -p:BaseIntermediateOutputPath=obj\updater-old\ -p:BaseOutputPath=bin\updater-old\ -o (Join-Path $old 'helper')
           if($LASTEXITCODE -ne 0){throw 'Old administration helper publish failed.'}
 
           $currentServiceProject='.\src\RansomGuard.Service\RansomGuard.Service.csproj'
-          dotnet restore $currentServiceProject --locked-mode -r win-x64 -p:BaseIntermediateOutputPath=obj-updater-current\
+          dotnet restore $currentServiceProject --locked-mode -r win-x64 -p:BaseIntermediateOutputPath=obj\updater-current\
           if($LASTEXITCODE -ne 0){throw 'Current service restore failed.'}
-          dotnet publish $currentServiceProject -c Release -r win-x64 --self-contained true --no-restore -p:BaseIntermediateOutputPath=obj-updater-current\ -p:BaseOutputPath=bin-updater-current\ -o (Join-Path $current 'package')
+          dotnet publish $currentServiceProject -c Release -r win-x64 --self-contained true --no-restore -p:BaseIntermediateOutputPath=obj\updater-current\ -p:BaseOutputPath=bin\updater-current\ -o (Join-Path $current 'package')
           if($LASTEXITCODE -ne 0){throw 'Current service publish failed.'}
-          dotnet restore $helperProject --locked-mode -r win-x64 -p:BaseIntermediateOutputPath=obj-updater-current\
+          dotnet restore $helperProject --locked-mode -r win-x64 -p:BaseIntermediateOutputPath=obj\updater-current\
           if($LASTEXITCODE -ne 0){throw 'Current administration helper restore failed.'}
-          dotnet publish $helperProject -c Release -r win-x64 --self-contained true --no-restore -p:BaseIntermediateOutputPath=obj-updater-current\ -p:BaseOutputPath=bin-updater-current\ -o (Join-Path $current 'helper')
+          dotnet publish $helperProject -c Release -r win-x64 --self-contained true --no-restore -p:BaseIntermediateOutputPath=obj\updater-current\ -p:BaseOutputPath=bin\updater-current\ -o (Join-Path $current 'helper')
           if($LASTEXITCODE -ne 0){throw 'Current administration helper publish failed.'}
 
           $failureProject='.\qualification\RansomGuard.UpdaterFailureFixture\RansomGuard.UpdaterFailureFixture.csproj'
-          dotnet restore $failureProject --locked-mode -r win-x64 -p:BaseIntermediateOutputPath=obj-updater-failure\
+          dotnet restore $failureProject --locked-mode -r win-x64 -p:BaseIntermediateOutputPath=obj\updater-failure\
           if($LASTEXITCODE -ne 0){throw 'Failure fixture restore failed.'}
-          dotnet publish $failureProject -c Release -r win-x64 --self-contained true --no-restore -p:BaseIntermediateOutputPath=obj-updater-failure\ -p:BaseOutputPath=bin-updater-failure\ -o $failure
+          dotnet publish $failureProject -c Release -r win-x64 --self-contained true --no-restore -p:BaseIntermediateOutputPath=obj\updater-failure\ -p:BaseOutputPath=bin\updater-failure\ -o $failure
           if($LASTEXITCODE -ne 0){throw 'Failure fixture publish failed.'}
 
           $oldService=Join-Path $old 'package\RansomGuard.Service.exe'

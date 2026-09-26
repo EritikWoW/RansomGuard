@@ -9,6 +9,7 @@ $RepositoryRoot=[IO.Path]::GetFullPath($RepositoryRoot)
 
 $threatPath=Join-Path $RepositoryRoot 'docs\THREAT_MODEL.md'
 $securityPath=Join-Path $RepositoryRoot 'docs\SECURITY.md'
+$containmentRecoveryPath=Join-Path $RepositoryRoot 'docs\CONTAINMENT_ACTUATOR_RECOVERY.md'
 $driverPath=Join-Path $RepositoryRoot 'driver\RansomGuard.Minifilter\RansomGuardMinifilter.c'
 $policyPath=Join-Path $RepositoryRoot 'src\RansomGuard.Core\DecisionPolicy.cs'
 $workerPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\GuardWorker.cs'
@@ -34,7 +35,7 @@ $globalPath=Join-Path $RepositoryRoot 'global.json'
 $supplyGatePath=Join-Path $RepositoryRoot 'tools\verify_supply_chain.ps1'
 $codeOwnersPath=Join-Path $RepositoryRoot '.github\CODEOWNERS'
 
-foreach($path in @($threatPath,$securityPath,$driverPath,$policyPath,$workerPath,$gateClientPath,$lifecyclePath,$protocolPath,$verifierGatePath,$buildPath,$globalPath,$supplyGatePath,$codeOwnersPath)+$workflowPaths){
+foreach($path in @($threatPath,$securityPath,$containmentRecoveryPath,$driverPath,$policyPath,$workerPath,$gateClientPath,$lifecyclePath,$protocolPath,$verifierGatePath,$buildPath,$globalPath,$supplyGatePath,$codeOwnersPath)+$workflowPaths){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){
         throw "Threat-model source missing: $path"
     }
@@ -42,6 +43,7 @@ foreach($path in @($threatPath,$securityPath,$driverPath,$policyPath,$workerPath
 
 $threat=Get-Content -LiteralPath $threatPath -Raw
 $security=Get-Content -LiteralPath $securityPath -Raw
+$containmentRecovery=Get-Content -LiteralPath $containmentRecoveryPath -Raw
 $driver=Get-Content -LiteralPath $driverPath -Raw
 $policy=Get-Content -LiteralPath $policyPath -Raw
 $worker=Get-Content -LiteralPath $workerPath -Raw
@@ -109,6 +111,26 @@ foreach($required in @(
 
 if(-not $security.Contains('[THREAT_MODEL.md](THREAT_MODEL.md)')){
     throw 'SECURITY.md must link to the canonical threat model.'
+}
+if(-not $threat.Contains('[CONTAINMENT_ACTUATOR_RECOVERY.md](CONTAINMENT_ACTUATOR_RECOVERY.md)')){
+    throw 'Threat model must link to the production containment recovery runbook.'
+}
+if(-not $security.Contains('[CONTAINMENT_ACTUATOR_RECOVERY.md](CONTAINMENT_ACTUATOR_RECOVERY.md)')){
+    throw 'SECURITY.md must link to the production containment recovery runbook.'
+}
+foreach($required in @(
+    'The only resumable unit is one durable RansomGuard-owned suspend increment',
+    'Open the existing containment actuation ledger without creating a replacement state root.',
+    'Call `ResumeThread` at most once for each outstanding owned increment.',
+    'Never loop until the suspend count becomes zero.',
+    '`NtResumeProcess` / whole-process resume normalization',
+    'PID-only process identity',
+    'If exact identity cannot be re-established, recovery must fail closed',
+    'Automatic production containment remains disabled until disposable-VM restart/recovery qualification passes.'
+)){
+    if(-not $containmentRecovery.Contains($required)){
+        throw "Containment recovery runbook is missing required safety statement: $required"
+    }
 }
 foreach($required in @(
     'current engineering minifilter/GateClient wire contract is protocol v18',

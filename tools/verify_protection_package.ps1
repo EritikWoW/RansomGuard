@@ -13,8 +13,10 @@ $programPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\Program.cs'
 $lifecyclePath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\ProductionProtectionLifecycle.cs'
 $authPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\Authenticode.cs'
 $catalogTrustPath=Join-Path $RepositoryRoot 'src\RansomGuard.Service\DriverCatalogTrust.cs'
+$updatePath=Join-Path $RepositoryRoot 'src\RansomGuard.Management\ServiceUpdateAdministration.cs'
+$updateTransitionPath=Join-Path $RepositoryRoot 'src\RansomGuard.Management\ServiceUpdateProtectionTransition.cs'
 $buildPath=Join-Path $RepositoryRoot 'build_windows.ps1'
-foreach($path in @($corePath,$verifierPath,$programPath,$lifecyclePath,$authPath,$catalogTrustPath,$buildPath)){
+foreach($path in @($corePath,$verifierPath,$programPath,$lifecyclePath,$authPath,$catalogTrustPath,$updatePath,$updateTransitionPath,$buildPath)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Production package gate source missing: $path"}
 }
 
@@ -24,6 +26,8 @@ $program=Get-Content -LiteralPath $programPath -Raw
 $lifecycle=Get-Content -LiteralPath $lifecyclePath -Raw
 $auth=Get-Content -LiteralPath $authPath -Raw
 $catalogTrust=Get-Content -LiteralPath $catalogTrustPath -Raw
+$update=Get-Content -LiteralPath $updatePath -Raw
+$updateTransition=Get-Content -LiteralPath $updateTransitionPath -Raw
 $build=Get-Content -LiteralPath $buildPath -Raw
 
 if($core -notmatch [regex]::Escape('bool ReadyForLifecycle')){
@@ -41,7 +45,8 @@ foreach($required in @(
     'Protection package version does not match the service.',
     'Protection package protocol does not match the service.',
     'public const int ProtocolVersion = 18;',
-    'Protection package contains an invalid SHA-256 digest.'
+    'Protection package contains an invalid SHA-256 digest.',
+    'IsInPlaceTransitionCompatible'
 )){
     if($core -notmatch [regex]::Escape($required)){throw "Protection package policy invariant missing: $required"}
 }
@@ -138,4 +143,30 @@ foreach($required in @(
     }
 }
 
-Write-Host 'Production protection-package admission gate PASSED: exact layout, running-service signer binding, hashes/version/protocol, LAB identity rejection, Authenticode and SYS/INF catalog-membership verification; lifecycle mutation is permitted only after ReadyForLifecycle.' -ForegroundColor Green
+foreach($required in @(
+    'ValidateUpdateProtectionTransition(',
+    'StageUpdateProtectionPackage(targetProtection, targetFolder)',
+    'CleanupStagedProtectionPackage(targetFolder)',
+    'ProtectionTransition = targetProtection is null'
+)){
+    if($update -notmatch [regex]::Escape($required)){
+        throw "Service updater protection-transition invariant missing: $required"
+    }
+}
+
+foreach($required in @(
+    'InspectUpdateProtectionPackage(',
+    'ProtectionPackagePolicy.IsInPlaceTransitionCompatible',
+    'ReadRegisteredProtectionIdentity()',
+    'target update must carry its own compatible version-bound Protection package.',
+    'requires a separate explicit maintenance transition',
+    'DriverSysSha256',
+    'Staged Protection descriptor changed during the update transition.',
+    'ProtectionPackagePolicy.ValidateDescriptor(descriptor, expectedVersion)'
+)){
+    if($updateTransition -notmatch [regex]::Escape($required)){
+        throw "Protection updater compatibility invariant missing: $required"
+    }
+}
+
+Write-Host 'Production protection-package admission gate PASSED: exact layout, running-service signer binding, hashes/version/protocol, LAB identity rejection, Authenticode and SYS/INF catalog-membership verification; updater transition is version-bound and refuses incompatible in-place filter replacement.' -ForegroundColor Green

@@ -65,6 +65,19 @@ public static class ProtectionPackagePolicy
         }
     }
 
+    public static bool IsInPlaceTransitionCompatible(
+        ProtectionPackageDescriptor current,
+        ProtectionPackageDescriptor target)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        ArgumentNullException.ThrowIfNull(target);
+
+        return current.Protocol == target.Protocol &&
+               string.Equals(current.Provider, target.Provider, StringComparison.Ordinal) &&
+               string.Equals(current.Altitude, target.Altitude, StringComparison.Ordinal) &&
+               string.Equals(current.DriverSysSha256, target.DriverSysSha256, StringComparison.OrdinalIgnoreCase);
+    }
+
     public static void ValidateAltitude(string? altitude)
     {
         if (string.IsNullOrWhiteSpace(altitude) ||

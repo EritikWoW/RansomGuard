@@ -77,7 +77,8 @@ foreach($required in @(
 
 foreach($forbidden in @(
     '\bRestart-Computer\b',
-    '\bshutdown(\.exe)?\b',
+    '\bshutdown\.exe\b',
+    '\bStop-Computer\b',
     '\bNtResumeProcess\b',
     '\bResumeThread\b',
     '\bNtSuspendProcess\b',

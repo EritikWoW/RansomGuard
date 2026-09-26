@@ -16,6 +16,7 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
     private readonly ProtectionPackageAdmission _admission;
     private readonly ProtectionStateMachine _protection;
     private readonly RuntimeState _runtime;
+    private readonly ContainmentStateChangeJournal? _stateChangeJournal;
     private readonly IHostApplicationLifetime _lifetime;
     private readonly string _applicationBase;
     private static readonly TimeSpan GateShutdownSignalTimeout = TimeSpan.FromSeconds(10);
@@ -29,6 +30,7 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
         ProtectionPackageAdmission admission,
         ProtectionStateMachine protection,
         RuntimeState runtime,
+        ContainmentStateChangeJournal? stateChangeJournal,
         IHostApplicationLifetime lifetime,
         string applicationBase)
     {
@@ -38,6 +40,7 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
         _admission = admission;
         _protection = protection;
         _runtime = runtime;
+        _stateChangeJournal = stateChangeJournal;
         _lifetime = lifetime;
         _applicationBase = Path.GetFullPath(applicationBase);
     }
@@ -151,11 +154,13 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
                     _protection.MarkKernelConnected();
                     PublishProtection();
                     _protection.MarkProtected();
+                    ApplyAutomaticContainmentReadiness();
                     firstActivation = false;
                 }
                 else
                 {
                     _protection.MarkReconnectedProtected("ProductionGate reconnected to the retained root/profile and activation preflight completed.");
+                    ApplyAutomaticContainmentReadiness();
                 }
                 PublishProtection();
                 _runtime.RefreshDriverStatus();
@@ -258,6 +263,64 @@ internal sealed class ProductionProtectionLifecycle : BackgroundService
             _log.LogCritical(ex, "Production protection lifecycle failed; Enforce host will stop rather than continue without supervision.");
             Environment.ExitCode = 8;
             _lifetime.StopApplication();
+        }
+    }
+
+    private void ApplyAutomaticContainmentReadiness()
+    {
+        if (!_settings.Enforce.AutomaticContainment)
+            return;
+
+        if (_stateChangeJournal is null)
+        {
+            _log.LogError("Automatic containment requested but durable state-change journal is unavailable.");
+            return;
+        }
+
+        try
+        {
+            var decision = ProductionContainmentReadiness.Evaluate(_settings, _stateChangeJournal);
+            if (decision.Ready)
+            {
+                _protection.EnableAutomaticContainment(
+                    "Kernel enforcement is Protected and the qualified process state-change containment backend is ready.");
+                _store.Audit(new
+                {
+                    Type = "AutomaticContainmentReady",
+                    Utc = DateTime.UtcNow,
+                    decision.Reason,
+                    decision.IncompleteSessions,
+                    Protection = _protection.Snapshot()
+                });
+                return;
+            }
+
+            _log.LogWarning(
+                "Automatic containment remains disabled: {Reason}; incompleteSessions={IncompleteSessions}.",
+                decision.Reason,
+                decision.IncompleteSessions);
+            _store.Audit(new
+            {
+                Type = "AutomaticContainmentUnavailable",
+                Utc = DateTime.UtcNow,
+                decision.Reason,
+                decision.IncompleteSessions,
+                Protection = _protection.Snapshot()
+            });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            _log.LogError(
+                ex,
+                "Automatic containment readiness verification failed closed; kernel protection remains active without process actuation.");
+            _store.Audit(new
+            {
+                Type = "AutomaticContainmentReadinessFailed",
+                Utc = DateTime.UtcNow,
+                Error = ex.GetType().Name,
+                ex.Message,
+                Protection = _protection.Snapshot()
+            });
         }
     }
 

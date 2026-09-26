@@ -69,8 +69,13 @@ public sealed class ProtectionStateMachine
         var expectedKernel = phase is ProtectionPhase.Protected or ProtectionPhase.DegradedProtected;
         if (value.KernelEnforcementActive != expectedKernel)
             throw new InvalidOperationException("KernelEnforcementActive does not match the protection phase.");
-        if (value.AutomaticContainmentActive)
-            throw new InvalidOperationException("Automatic containment cannot be published by the 0.8.0 foundation state contract.");
+        if (value.AutomaticContainmentActive &&
+            (requested != RequestedProtectionMode.Enforce ||
+             phase != ProtectionPhase.Protected ||
+             !value.RollbackStoreReady ||
+             !value.KernelChannelConnected ||
+             !value.KernelEnforcementActive))
+            throw new InvalidOperationException("Automatic containment may be active only in a healthy Enforce/Protected state.");
         if (requested == RequestedProtectionMode.Audit && phase != ProtectionPhase.AuditOnly && phase != ProtectionPhase.Failed && phase != ProtectionPhase.Stopped)
             throw new InvalidOperationException("Audit mode cannot publish an Enforce protection phase.");
         if (requested == RequestedProtectionMode.Enforce && phase == ProtectionPhase.AuditOnly)
@@ -138,6 +143,35 @@ public sealed class ProtectionStateMachine
             _phase = ProtectionPhase.Protected;
             _automaticContainmentActive = false;
             _reason = "Kernel enforcement is active; automatic containment is not enabled.";
+            _observedUtc = DateTime.UtcNow;
+        }
+    }
+
+    public void EnableAutomaticContainment(string reason)
+    {
+        lock (_gate)
+        {
+            RequireEnforce();
+            if (_phase != ProtectionPhase.Protected ||
+                !_rollbackReady ||
+                !_kernelConnected ||
+                string.IsNullOrWhiteSpace(reason))
+                throw new InvalidOperationException("Automatic containment can be enabled only after healthy Protected activation.");
+            _automaticContainmentActive = true;
+            _reason = reason;
+            _observedUtc = DateTime.UtcNow;
+        }
+    }
+
+    public void DisableAutomaticContainment(string reason)
+    {
+        lock (_gate)
+        {
+            RequireEnforce();
+            if (_phase != ProtectionPhase.Protected || string.IsNullOrWhiteSpace(reason))
+                throw new InvalidOperationException("Automatic containment can be disabled in-place only while Protected.");
+            _automaticContainmentActive = false;
+            _reason = reason;
             _observedUtc = DateTime.UtcNow;
         }
     }

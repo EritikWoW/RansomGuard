@@ -67,7 +67,7 @@ The 0.7.30 qualification campaign materially increases confidence in this LAB bo
 
 Rollback recovery is conservative and copy-out oriented. It verifies evidence and writes to new output paths. Restart observations never fabricate authoritative filesystem completion.
 
-The pre-enable production containment recovery contract is documented in [CONTAINMENT_ACTUATOR_RECOVERY.md](CONTAINMENT_ACTUATOR_RECOVERY.md). Containment recovery is owned-increment only: exact process and thread creation identities must be revalidated, the durable ledger must verify before recovery, and recovery must never normalize arbitrary suspend counts or use whole-process resume shortcuts. Automatic production containment remains disabled until disposable-VM restart/recovery qualification passes.
+The production containment recovery contract is documented in [CONTAINMENT_ACTUATOR_RECOVERY.md](CONTAINMENT_ACTUATOR_RECOVERY.md). Production ordinary-process containment uses the qualified Windows process state-change object path: exact process/image identity is revalidated, durable pre/post state-change evidence is hash-chained, normal completion explicitly resumes, and final-handle destruction is the qualified crash-release backstop. There is no production fallback to per-thread suspend-count normalization, `NtSuspendProcess`, kill, or process-tree intervention. The shipped/default configuration remains `AutomaticContainment=false`; an explicitly configured integration must still pass final exact-SHA qualification.
 
 Crypto recovery is experimental and format-specific. Unknown formats, missing candidates or failed authentication produce unsupported/not-found/failure states rather than guessed plaintext.
 

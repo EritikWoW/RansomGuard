@@ -17,6 +17,7 @@ internal sealed class SecureStore
     public string Root {get;}
     public string Cases=>Path.Combine(Root,"Incidents");
     public string Rollback=>Path.Combine(Root,"Rollback");
+    public string ContainmentStateChange=>Path.Combine(Root,"ContainmentStateChange");
     private readonly object _gate=new();
     private static readonly JsonSerializerOptions Json=new(){WriteIndented=true};
     private const string TrustedMarkerName = ".ransomguard-state-v1";
@@ -44,6 +45,7 @@ internal sealed class SecureStore
         }
         EnsureDirectory(Cases);
         EnsureDirectory(Rollback);
+        EnsureDirectory(ContainmentStateChange);
     }
     public static void EnsureDirectory(string path)
     {

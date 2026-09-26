@@ -65,6 +65,8 @@ public static class ContainmentAuthorizationPolicy
                 reasons.Add("KernelChannelNotConnected");
             if (!input.Protection.KernelEnforcementActive)
                 reasons.Add("KernelEnforcementNotActive");
+            if (input.AutomaticContainmentConfigured && !input.Protection.AutomaticContainmentActive)
+                reasons.Add("AutomaticContainmentNotActive");
         }
 
         if (!string.Equals(input.MonitorState, "Running", StringComparison.Ordinal))

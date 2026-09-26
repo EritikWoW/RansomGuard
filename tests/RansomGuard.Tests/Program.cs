@@ -72,8 +72,12 @@ rejected=false;try{new GuardSettings{Mode="Enforce",ProtectedRoots=new[]{@"C:\"}
 Check(rejected,"whole-drive Enforce root rejected");
 rejected=false;try{new GuardSettings{Mode="Enforce",ProtectedRoots=new[]{@"C:\Data"},Enforce=new(){RequireSignedDriver=false}}.Validate();}catch(InvalidOperationException){rejected=true;}
 Check(rejected,"Enforce cannot disable signed-driver requirement");
-rejected=false;try{new GuardSettings{Mode="Enforce",ProtectedRoots=new[]{@"C:\Data"},Enforce=new(){AutomaticContainment=true}}.Validate();}catch(InvalidOperationException){rejected=true;}
-Check(rejected,"automatic containment stays disabled until production policy is qualified");
+new GuardSettings{Mode="Enforce",ProtectedRoots=new[]{@"C:\Data"},Enforce=new(){AutomaticContainment=true}}.Validate();
+Check(true,"qualified automatic containment may be configured only with explicit Enforce mode");
+rejected=false;try{new GuardSettings{Mode="Audit",Enforce=new(){AutomaticContainment=true}}.Validate();}catch(InvalidOperationException){rejected=true;}
+Check(rejected,"Audit mode cannot request automatic containment");
+rejected=false;try{new GuardSettings{Mode="Enforce",ProtectedRoots=new[]{@"C:\Data"},Enforce=new(){ContainmentHoldMilliseconds=5001}}.Validate();}catch(InvalidOperationException){rejected=true;}
+Check(rejected,"production containment hold duration is bounded");
 rejected=false;try{new GuardSettings{Mode="Enforce",ProtectedRoots=new[]{@"C:\Data"},Enforce=new(){GateWorkers=9}}.Validate();}catch(InvalidOperationException){rejected=true;}
 Check(rejected,"production GateClient worker count is bounded");
 rejected=false;try{new GuardSettings{Mode="Enforce",ProtectedRoots=new[]{@"C:\Data"},Enforce=new(){RollbackMinFreeMiB=32}}.Validate();}catch(InvalidOperationException){rejected=true;}
@@ -137,16 +141,29 @@ rejected=false;try{
     ProtectionStateMachine.ValidateSnapshot(new ProtectionStatusDto("Enforce","AuditOnly",true,false,false,false,"invalid downgrade",now));
 }catch(InvalidOperationException){rejected=true;}
 Check(rejected,"Enforce request cannot silently downgrade to AuditOnly");
+var activeContainmentProtection=new ProtectionStateMachine("Enforce");
+activeContainmentProtection.MarkRollbackReady();
+activeContainmentProtection.BeginKernelStartup();
+activeContainmentProtection.MarkKernelConnected();
+activeContainmentProtection.MarkProtected();
+activeContainmentProtection.EnableAutomaticContainment("qualified test backend ready");
+ProtectionStateMachine.ValidateSnapshot(activeContainmentProtection.Snapshot());
+Check(activeContainmentProtection.Snapshot().AutomaticContainmentActive,
+    "healthy Protected state may explicitly publish qualified automatic containment");
+activeContainmentProtection.MarkDegraded("test channel loss");
+Check(!activeContainmentProtection.Snapshot().AutomaticContainmentActive,
+    "DegradedProtected transition always drops automatic containment readiness");
 rejected=false;try{
-    ProtectionStateMachine.ValidateSnapshot(new ProtectionStatusDto("Enforce","Protected",true,true,true,true,"invalid containment claim",now));
+    ProtectionStateMachine.ValidateSnapshot(new ProtectionStatusDto("Enforce","DegradedProtected",true,false,true,true,"invalid active containment",now));
 }catch(InvalidOperationException){rejected=true;}
-Check(rejected,"foundation cannot publish automatic containment even in Protected state");
+Check(rejected,"automatic containment cannot remain active outside healthy Protected state");
 
 var containmentProtectedMachine=new ProtectionStateMachine("Enforce");
 containmentProtectedMachine.MarkRollbackReady();
 containmentProtectedMachine.BeginKernelStartup();
 containmentProtectedMachine.MarkKernelConnected();
 containmentProtectedMachine.MarkProtected();
+containmentProtectedMachine.EnableAutomaticContainment("qualified containment test state");
 var containmentProtected=containmentProtectedMachine.Snapshot();
 
 ContainmentAuthorizationInput ContainmentInput(
@@ -190,6 +207,11 @@ var containmentDecision=ContainmentAuthorizationPolicy.Evaluate(ContainmentInput
 Check(containmentDecision.Eligible&&containmentDecision.State=="Eligible"&&containmentDecision.Reasons.Length==0,
     "containment policy can identify a fully evidenced eligible decision without actuating");
 var containmentEligibleDecision=containmentDecision;
+
+containmentDecision=ContainmentAuthorizationPolicy.Evaluate(ContainmentInput(
+    protection:containmentProtected with{AutomaticContainmentActive=false}));
+Check(!containmentDecision.Eligible&&containmentDecision.Reasons.Contains("AutomaticContainmentNotActive"),
+    "configured containment cannot authorize while runtime containment readiness is inactive");
 
 containmentDecision=ContainmentAuthorizationPolicy.Evaluate(ContainmentInput(configured:false));
 Check(!containmentDecision.Eligible&&containmentDecision.State=="DisabledByConfiguration"&&
@@ -477,6 +499,11 @@ Check(!actuationDecision.Ready&&actuationDecision.Reasons.Contains("ProtectionSt
       actuationDecision.Reasons.Contains("ProtectionSnapshotChanged"),
     "DegradedProtected transition invalidates containment actuation");
 
+actuationDecision=ContainmentActuationPolicy.Evaluate(ActuationInput(
+    currentProtection:containmentProtected with{AutomaticContainmentActive=false}));
+Check(!actuationDecision.Ready&&actuationDecision.Reasons.Contains("AutomaticContainmentNotActive"),
+    "actuation revalidation fails closed when runtime containment readiness drops");
+
 actuationDecision=ContainmentActuationPolicy.Evaluate(ActuationInput(telemetryHealthy:false));
 Check(!actuationDecision.Ready&&actuationDecision.Reasons.Contains("TelemetryNoLongerHealthy"),
     "telemetry degradation after authorization fails actuation closed");
@@ -732,6 +759,62 @@ finally
 {
     if(Directory.Exists(stateChangeJournalRoot))
         Directory.Delete(stateChangeJournalRoot,true);
+}
+
+var stateChangeHeadLossRoot=Path.Combine(Path.GetTempPath(),"RansomGuard-StateChangeHeadLoss-"+Guid.NewGuid().ToString("N"));
+try
+{
+    var binding=ActuationBinding(
+        authorizationId:Guid.NewGuid().ToString("N"),
+        caseId:"case-state-change-head-loss",
+        evaluatedUtc:now,
+        expiresUtc:now.AddSeconds(5));
+    var validation=ContainmentActuationPolicy.Evaluate(
+        ActuationInput(binding:binding,nowUtc:now.AddSeconds(1)));
+    var request=new ContainmentActuationRequest(Guid.NewGuid().ToString("N"),binding,now.AddSeconds(1));
+    var journal=new ContainmentStateChangeJournal(stateChangeHeadLossRoot);
+    journal.Prepare(request,validation);
+    File.Delete(Path.Combine(stateChangeHeadLossRoot,"containment-state-change-journal.head.json"));
+
+    rejected=false;try
+    {
+        _=new ContainmentStateChangeJournal(stateChangeHeadLossRoot,createIfMissing:false);
+    }
+    catch(InvalidDataException){rejected=true;}
+    Check(rejected,"state-change journal fails closed when durable head sentinel is missing");
+}
+finally
+{
+    if(Directory.Exists(stateChangeHeadLossRoot))
+        Directory.Delete(stateChangeHeadLossRoot,true);
+}
+
+var stateChangeDataLossRoot=Path.Combine(Path.GetTempPath(),"RansomGuard-StateChangeDataLoss-"+Guid.NewGuid().ToString("N"));
+try
+{
+    var binding=ActuationBinding(
+        authorizationId:Guid.NewGuid().ToString("N"),
+        caseId:"case-state-change-data-loss",
+        evaluatedUtc:now,
+        expiresUtc:now.AddSeconds(5));
+    var validation=ContainmentActuationPolicy.Evaluate(
+        ActuationInput(binding:binding,nowUtc:now.AddSeconds(1)));
+    var request=new ContainmentActuationRequest(Guid.NewGuid().ToString("N"),binding,now.AddSeconds(1));
+    var journal=new ContainmentStateChangeJournal(stateChangeDataLossRoot);
+    journal.Prepare(request,validation);
+    File.Delete(journal.JournalPath);
+
+    rejected=false;try
+    {
+        _=new ContainmentStateChangeJournal(stateChangeDataLossRoot,createIfMissing:false);
+    }
+    catch(InvalidDataException){rejected=true;}
+    Check(rejected,"state-change journal fails closed when journal data disappears but durable head remains");
+}
+finally
+{
+    if(Directory.Exists(stateChangeDataLossRoot))
+        Directory.Delete(stateChangeDataLossRoot,true);
 }
 
 var actuatorRoot=Path.Combine(Path.GetTempPath(),"RansomGuard-Actuator-"+Guid.NewGuid().ToString("N"));

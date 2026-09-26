@@ -13,14 +13,17 @@ internal sealed class GuardWorker:BackgroundService
     private readonly LabSession? _lab;
     private readonly RuntimeState _runtime;
     private readonly ScopedTrustCoordinator _scopedTrust;
+    private readonly ProductionContainmentCoordinator? _productionContainment;
     private readonly ProcessCatalog _catalog=new();
     private readonly RiskEngine _engine;
     private readonly Channel<RiskSignal> _incidents=Channel.CreateBounded<RiskSignal>(new BoundedChannelOptions(16){SingleReader=true,SingleWriter=true,FullMode=BoundedChannelFullMode.Wait});
     private long _incidentDrops;
     public GuardWorker(ILogger<GuardWorker> log,IHostApplicationLifetime life,GuardSettings settings,SecureStore store,
-        ImageInspector images,ContentSampler samples,LabSession? lab,RuntimeState runtime,ScopedTrustCoordinator scopedTrust)
+        ImageInspector images,ContentSampler samples,LabSession? lab,RuntimeState runtime,ScopedTrustCoordinator scopedTrust,
+        ProductionContainmentCoordinator? productionContainment=null)
     {
         _log=log;_life=life;_settings=settings;_store=store;_images=images;_samples=samples;_lab=lab;_runtime=runtime;_scopedTrust=scopedTrust;
+        _productionContainment=productionContainment;
         _engine=new(settings,settings.ProtectedRoots,settings.CanaryFiles);
     }
     protected override async Task ExecuteAsync(CancellationToken token)
@@ -265,6 +268,20 @@ internal sealed class GuardWorker:BackgroundService
         }
     }
 
+    private ProductionContainmentLiveState CaptureProductionContainmentLiveState(EtwMonitor monitor)
+    {
+        var monitorState=_runtime.Monitor();
+        var healthy=
+            string.Equals(monitorState.State,"Running",StringComparison.Ordinal) &&
+            monitor.EventsLost==0 &&
+            monitor.Dropped==0 &&
+            Interlocked.Read(ref _incidentDrops)==0 &&
+            _engine.WindowEvictions==0 &&
+            _engine.TruncatedWindows==0;
+
+        return new(_runtime.Protection(),healthy);
+    }
+
     private bool EvidenceScopeResolved(RiskSignal risk)
     {
         if(risk.Evidence.Length==0)return false;
@@ -288,7 +305,9 @@ internal sealed class GuardWorker:BackgroundService
     {
         var isLab=_lab?.Identity?.Process==risk.Process;
         // No synchronous signature/hash/content work on the ETW consumer.
-        var image=_images.Inspect(risk.ImagePath,fresh:isLab);
+        var image=_images.Inspect(
+            risk.ImagePath,
+            fresh:isLab||_settings.Enforce.AutomaticContainment);
         var preliminaryChanges=_samples.Compare(risk.Evidence.Select(e=>e.Path));
         var confirmedCanary=preliminaryChanges.Any(c=>c.SampleChanged==true && _settings.CanaryFiles.Any(f=>WinPaths.Equal(f,c.Path)));
         var priority=DecisionPolicy.Priority(risk,image,confirmedCanary);
@@ -320,26 +339,77 @@ internal sealed class GuardWorker:BackgroundService
             LabRunId=isLab?_lab!.RunId:null,Action="RecordedBeforeResponse",Note="No action success is implied by the existence of this file."});
 
         var authorizationInput=BuildContainmentAuthorizationInput(risk,image,monitor,scoped,confirmedCanary,isLab);
+        var authorizationEvaluatedUtc=DateTime.UtcNow;
         var authorization=ContainmentAuthorizationPolicy.Evaluate(authorizationInput);
         _store.WriteJson(Path.Combine(dir,"authorization.json"),new{
-            SchemaVersion=1,Version=ProductInfo.Version,EvaluatedUtc=DateTime.UtcNow,
+            SchemaVersion=2,Version=ProductInfo.Version,EvaluatedUtc=authorizationEvaluatedUtc,
             Input=authorizationInput,Decision=authorization,
             ActuationAttempted=false,
-            Note="Authorization evidence only. No ordinary-process containment actuator is wired in this milestone."
+            Note="Authorization evidence is persisted before any production actuation attempt."
         });
         _runtime.UpdateContainmentAuthorization(authorization);
         _runtime.RecordIncident(new IncidentSummaryDto(caseId,capturedUtc,risk.Process.Pid,risk.Name,risk.Score,priority,risk.DistinctFiles,risk.Writes,risk.Renames,risk.Deletes,
-            image.Signature.Status,image.LocalDisposition,isLab?"LabPending":"AuditOnly",risk.Reasons.Take(8).ToArray(),scoped,authorization));
-        if(!isLab||_lab!.ResponseClaimed)
+            image.Signature.Status,image.LocalDisposition,isLab?"LabPending":authorization.Eligible?"ContainmentPending":"AuditOnly",
+            risk.Reasons.Take(8).ToArray(),scoped,authorization));
+
+        if(!isLab)
         {
+            if(authorization.Eligible && _productionContainment is not null)
+            {
+                var containment=await _productionContainment.AttemptAsync(
+                    dir,
+                    caseId,
+                    risk,
+                    image,
+                    authorizationEvaluatedUtc,
+                    authorizationInput,
+                    authorization,
+                    ()=>CaptureProductionContainmentLiveState(monitor),
+                    token);
+
+                _store.WriteJson(Path.Combine(dir,"response.json"),new{
+                    Action=containment.Action,
+                    SuspendAttempted=containment.Attempted,
+                    ActuationAttempted=containment.Attempted,
+                    ProductionContainment=containment,
+                    ScopedTrust=scoped,
+                    ContainmentAuthorization=authorization
+                });
+                _store.Audit(new{
+                    Utc=DateTime.UtcNow,Event="Incident",Case=caseId,risk.Process,Priority=priority,image.Sha256,image.Signature,
+                    Action=containment.Action,ProductionContainment=containment,ScopedTrust=scoped,ContainmentAuthorization=authorization
+                });
+                _runtime.RecordIncident(new IncidentSummaryDto(caseId,capturedUtc,risk.Process.Pid,risk.Name,risk.Score,priority,risk.DistinctFiles,risk.Writes,risk.Renames,risk.Deletes,
+                    image.Signature.Status,image.LocalDisposition,containment.Completed?"Contained":containment.Action,
+                    risk.Reasons.Take(8).ToArray(),scoped,authorization));
+
+                if(containment.Completed)
+                    _log.LogWarning("PRODUCTION CONTAINMENT completed for exact pid={Pid}; request={RequestId}; case={Case}.",
+                        risk.Process.Pid,containment.RequestId,caseId);
+                else
+                    _log.LogError("PRODUCTION CONTAINMENT failed closed for pid={Pid}; action={Action}; reason={Reason}; case={Case}.",
+                        risk.Process.Pid,containment.Action,containment.Reason,caseId);
+                return;
+            }
+
             _store.WriteJson(Path.Combine(dir,"response.json"),new{Action="AuditOnly",SuspendAttempted=false,ActuationAttempted=false,ScopedTrust=scoped,
                 ContainmentAuthorization=authorization,
-                Reason="Automatic response to ordinary processes is disabled; authorization evidence does not execute an action."});
-            _store.Audit(new{Utc=DateTime.UtcNow,Event="Incident",Case=Path.GetFileName(dir),risk.Process,Priority=priority,image.Sha256,image.Signature,
+                Reason="Production containment authorization is not eligible or runtime containment is not active."});
+            _store.Audit(new{Utc=DateTime.UtcNow,Event="Incident",Case=caseId,risk.Process,Priority=priority,image.Sha256,image.Signature,
                 Action="AuditOnly",ScopedTrust=scoped,ContainmentAuthorization=authorization});
             if(scoped.NotificationQuieted)
                 _log.LogInformation("AUDIT ONLY repeated scoped event; pid={Pid}; rule={Rule}; case={Case}",risk.Process.Pid,scoped.RuleId,dir);
             else _log.LogWarning("AUDIT ONLY pid={Pid}; signature={Signature}; hash={Hash}; case={Case}",risk.Process.Pid,image.Signature.Status,image.Sha256,dir);
+            return;
+        }
+
+        if(_lab!.ResponseClaimed)
+        {
+            _store.WriteJson(Path.Combine(dir,"response.json"),new{Action="AuditOnly",SuspendAttempted=false,ActuationAttempted=false,ScopedTrust=scoped,
+                ContainmentAuthorization=authorization,
+                Reason="LAB response was already claimed by an earlier incident."});
+            _store.Audit(new{Utc=DateTime.UtcNow,Event="Incident",Case=caseId,risk.Process,Priority=priority,image.Sha256,image.Signature,
+                Action="AuditOnly",ScopedTrust=scoped,ContainmentAuthorization=authorization});
             return;
         }
         _lab.ResponseClaimed=true;

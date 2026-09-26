@@ -106,8 +106,11 @@ jobs:
         run: |
           $ErrorActionPreference='Stop'
           $output=Join-Path $env:RUNNER_TEMP 'ransomguard-mapped-probe-helper'
-          dotnet publish .\orchestrator\tests\RansomGuard.Minifilter.RuntimeHarness\RansomGuard.Minifilter.RuntimeHarness.csproj `
-            -c Release -r win-x64 --self-contained true --locked-mode `
+          $project='.\orchestrator\tests\RansomGuard.Minifilter.RuntimeHarness\RansomGuard.Minifilter.RuntimeHarness.csproj'
+          dotnet restore $project --locked-mode -r win-x64 -p:SelfContained=true
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          dotnet publish $project `
+            -c Release -r win-x64 --self-contained true --no-restore `
             -p:PublishSingleFile=true -o $output
           if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
           $helper=Join-Path $output 'RansomGuard.Minifilter.RuntimeHarness.exe'

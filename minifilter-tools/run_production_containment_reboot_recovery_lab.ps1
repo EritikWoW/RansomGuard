@@ -414,7 +414,8 @@ if($Phase -eq 'arm'){
     Assert-FilterAbsent 'ARM preflight'
 
     $driverKey='HKLM:\SYSTEM\CurrentControlSet\Services\RansomGuardMinifilter'
-    if(Test-Path -LiteralPath $driverKey -or @(Get-RansomGuardPublishedInfNames).Count -gt 0){
+    $publishedInfNames=@(Get-RansomGuardPublishedInfNames)
+    if((Test-Path -LiteralPath $driverKey) -or $publishedInfNames.Count -gt 0){
         Cleanup-Qualification $volume
     }
     $priorState=Quarantine-State $stateRoot 'CONTAINMENT-REBOOT-PRIOR'

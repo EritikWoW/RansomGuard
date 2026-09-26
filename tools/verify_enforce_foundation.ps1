@@ -434,7 +434,10 @@ foreach($required in @(
     'BindingFingerprint',
     'IncompleteRequests',
     'VerifyAll',
-    'RejectReparseChain'
+    'RejectReparseChain',
+    'MaxJournalBytes = 64L * 1024 * 1024',
+    'MaxJournalRecords = 100_000',
+    'ContainmentStateChangeJournalQuotaReached'
 )){
     if($containmentStateChangeJournal -notmatch [regex]::Escape($required)){
         throw "Crash-safe state-change journal invariant missing: $required"

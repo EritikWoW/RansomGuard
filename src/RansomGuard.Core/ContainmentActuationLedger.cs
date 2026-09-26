@@ -740,7 +740,7 @@ public sealed class ContainmentActuationLedger
         var full = Path.GetFullPath(path);
         var root = Path.GetPathRoot(full)
             ?? throw new IOException("Path has no filesystem root: " + full);
-        var cursor = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var cursor = root;
         var relative = full[root.Length..];
 
         foreach (var segment in relative.Split(

@@ -47,6 +47,19 @@ if($workflow -match '(?im)^\s*continue-on-error\s*:\s*true\s*$'){
 }
 
 foreach($required in @(
+    'dotnet restore $project --locked-mode -r win-x64',
+    'dotnet publish $project -c Release -r win-x64 --self-contained true --no-restore -o $out',
+    'ransomguard-production-installer-helper'
+)){
+    if($workflow -notmatch [regex]::Escape($required)){
+        throw "Production installer helper publish invariant missing: $required"
+    }
+}
+if($workflow -match [regex]::Escape('-p:BaseIntermediateOutputPath=obj\installer\')){
+    throw 'Production installer helper must not switch BaseIntermediateOutputPath after build_lab; prior generated obj sources would become compile inputs.'
+}
+
+foreach($required in @(
     "Invoke-Helper @('install-production'",
     "Invoke-Helper @('start')",
     "Invoke-Helper @('stop')",

@@ -75,8 +75,13 @@ foreach($required in @(
     }
 }
 
-if($harness -match '\$config\.Enforce\.ContainmentHoldMilliseconds\s*=\s*(?:[5-9][0-9]{3}|[1-9][0-9]{4,})'){
-    throw 'Crash recovery harness containment hold exceeds the product-qualified 5000ms maximum.'
+$holdMatch=[regex]::Match($harness,'\$config\.Enforce\.ContainmentHoldMilliseconds\s*=\s*([0-9]+)')
+if(-not $holdMatch.Success){
+    throw 'Crash recovery harness containment hold assignment is missing.'
+}
+$holdMilliseconds=[int]$holdMatch.Groups[1].Value
+if($holdMilliseconds -lt 100 -or $holdMilliseconds -gt 5000){
+    throw "Crash recovery harness containment hold is outside the product-qualified 100..5000ms range: $holdMilliseconds"
 }
 
 foreach($forbidden in @(

@@ -19,8 +19,10 @@ $leasePath=Join-Path $root 'src\RansomGuard.Service\WindowsProcessStateChangeLea
 $serviceProgramPath=Join-Path $root 'src\RansomGuard.Service\Program.cs'
 $coordinatorPath=Join-Path $root 'src\RansomGuard.Service\ProductionContainmentCoordinator.cs'
 $guardWorkerPath=Join-Path $root 'src\RansomGuard.Service\GuardWorker.cs'
+$etwMonitorPath=Join-Path $root 'src\RansomGuard.Service\EtwMonitor.cs'
+$settingsPath=Join-Path $root 'src\RansomGuard.Core\Settings.cs'
 
-foreach($path in @($workflowPath,$harnessPath,$fixturePath,$dispatcherPath,$windowsCiPath,$readinessPath,$leasePath,$serviceProgramPath,$coordinatorPath,$guardWorkerPath)){
+foreach($path in @($workflowPath,$harnessPath,$fixturePath,$dispatcherPath,$windowsCiPath,$readinessPath,$leasePath,$serviceProgramPath,$coordinatorPath,$guardWorkerPath,$etwMonitorPath,$settingsPath)){
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){
         throw "Production containment recovery qualification source missing: $path"
     }
@@ -35,6 +37,8 @@ $lease=Get-Content -LiteralPath $leasePath -Raw
 $serviceProgram=Get-Content -LiteralPath $serviceProgramPath -Raw
 $coordinator=Get-Content -LiteralPath $coordinatorPath -Raw
 $guardWorker=Get-Content -LiteralPath $guardWorkerPath -Raw
+$etwMonitor=Get-Content -LiteralPath $etwMonitorPath -Raw
+$settings=Get-Content -LiteralPath $settingsPath -Raw
 
 foreach($required in @(
     'RansomGuard production containment crash recovery VM qualification',
@@ -212,6 +216,38 @@ foreach($required in @(
         throw "Production containment shutdown ordering invariant missing from GuardWorker: $required"
     }
 }
+foreach($required in @(
+    'new FileMonitoringScope(_settings.ProtectedRoots,_settings.CanaryFiles)'
+)){
+    if($guardWorker -notmatch [regex]::Escape($required)){
+        throw "Protected-scope ETW admission invariant missing from GuardWorker: $required"
+    }
+}
+foreach($required in @(
+    'private readonly FileMonitoringScope _scope;',
+    'if(!_scope.ContainsNormalized(resolution.Path))return;',
+    '_queue.Writer.TryWrite'
+)){
+    if($etwMonitor -notmatch [regex]::Escape($required)){
+        throw "Protected-scope ETW backpressure invariant missing: $required"
+    }
+}
+foreach($required in @(
+    'public sealed class FileMonitoringScope',
+    'ContainsNormalized',
+    'IsCanaryNormalized',
+    'IsUnderRootNormalized'
+)){
+    if($settings -notmatch [regex]::Escape($required)){
+        throw "Shared monitoring-scope invariant missing: $required"
+    }
+}
+$scopeFilter=$etwMonitor.IndexOf('if(!_scope.ContainsNormalized(resolution.Path))return;', [StringComparison]::Ordinal)
+$queueWrite=$etwMonitor.IndexOf('_queue.Writer.TryWrite', [StringComparison]::Ordinal)
+if($scopeFilter -lt 0 -or $queueWrite -lt 0 -or $scopeFilter -ge $queueWrite){
+    throw 'EtwMonitor must reject out-of-scope system I/O before the bounded analysis queue.'
+}
+
 $linkedStop=$guardWorker.IndexOf('CancellationTokenSource.CreateLinkedTokenSource(', [StringComparison]::Ordinal)
 $appStopping=$guardWorker.IndexOf('_life.ApplicationStopping', [StringComparison]::Ordinal)
 $respondStart=$guardWorker.IndexOf('Task.Run(() => RespondLoop(monitor, pipelineToken)', [StringComparison]::Ordinal)
@@ -242,4 +278,4 @@ if($windowsCi -notmatch [regex]::Escape('.\tools\verify_production_containment_r
     throw 'Windows required CI does not execute the production containment recovery source gate.'
 }
 
-Write-Host 'Production containment fault/recovery qualification source gate passed: handled cancellation, real writer-denied journal I/O failure after SuspendApplied, hard service crash, restart fail-closed behavior and journal corruption all preserve exact-process recovery safety without fabricating Completed.'
+Write-Host 'Production containment fault/recovery qualification source gate passed: protected-scope ETW admission prevents unrelated host I/O from consuming the monitor queue, while handled cancellation, real writer-denied journal I/O failure after SuspendApplied, hard service crash, restart fail-closed behavior and journal corruption preserve exact-process recovery safety without fabricating Completed.'

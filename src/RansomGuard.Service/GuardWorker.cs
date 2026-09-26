@@ -29,7 +29,10 @@ internal sealed class GuardWorker:BackgroundService
     protected override async Task ExecuteAsync(CancellationToken token)
     {
         await Task.Yield();
-        using var monitor = new EtwMonitor(_catalog, _settings.QueueCapacity);
+        using var monitor = new EtwMonitor(
+            _catalog,
+            _settings.QueueCapacity,
+            new FileMonitoringScope(_settings.ProtectedRoots,_settings.CanaryFiles));
         _runtime.UpdateMonitor(new("Starting", DateTime.UtcNow, monitor.SessionName));
         try
         {

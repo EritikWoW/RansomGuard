@@ -7,7 +7,7 @@ using RansomGuard.Management;
 namespace RansomGuard.Ui.Administration;
 
 /// <summary>
-/// Short-lived elevated, read-only production recovery review.
+/// Short-lived elevated production recovery review and explicit verified copy-out surface.
 /// Preview mode is synthetic-only and never queries ProgramData, SCM, rollback evidence, or native state.
 /// </summary>
 internal sealed class RecoveryReviewPane : UserControl

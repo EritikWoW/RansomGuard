@@ -1612,7 +1612,9 @@ try
     var fullCapture = await planSession.CapturePreimageAsync(fullPlanPath, RollbackMutationKind.Delete);
 
     var planRange = new RangeRollbackStore(Path.Combine(planSession.Root, "write-cow"));
-    await planRange.CaptureWritePreimageAsync(fullPlanPath, 0, 64);
+    var planIdentities = new FileIdentityStore(Path.Combine(planSession.Root, "identity-state"));
+    var fullPlanIdentity = await planIdentities.CaptureOrVerifyAsync(fullPlanPath);
+    await planRange.CaptureWritePreimageAsync(fullPlanPath, 0, 64, fullPlanIdentity.Identity);
     using (var mutateFull = new FileStream(fullPlanPath, FileMode.Open, FileAccess.Write, FileShare.Read))
     {
         mutateFull.Position = 128;
@@ -1624,7 +1626,9 @@ try
     var rangeOnlyPath = Path.Combine(planSource, "range-only.bin");
     var rangeOriginalBytes = Enumerable.Range(0, 128 * 1024).Select(x => (byte)((x * 7) % 251)).ToArray();
     await File.WriteAllBytesAsync(rangeOnlyPath, rangeOriginalBytes);
-    await planRange.CaptureWritePreimageAsync(rangeOnlyPath, 4096, 128);
+    var rangeOnlyIdentity = await planIdentities.CaptureOrVerifyAsync(rangeOnlyPath);
+    await planRange.CaptureWritePreimageAsync(
+        rangeOnlyPath, 4096, 128, rangeOnlyIdentity.Identity);
     using (var mutate = new FileStream(rangeOnlyPath, FileMode.Open, FileAccess.Write, FileShare.Read))
     {
         mutate.Position = 4096;
@@ -1907,6 +1911,57 @@ try
           rangeExecution.ExpectedSha256 == Convert.ToHexString(SHA256.HashData(rangeOriginalBytes)) &&
           rangeExecution.RecoveredSha256 == rangeExecution.ExpectedSha256,
         "recovery output length and SHA-256 match evidence expectations");
+
+    // A recovery plan is not authority to follow a pathname to a different file.
+    // Replace the live path after planning and require the executor to fail closed
+    // against the incident-scoped FILE_ID_INFO baseline.
+    var swapRepoRoot = Path.Combine(root, "recovery-identity-swap-repo");
+    var swapRepo = new RollbackRepository(swapRepoRoot);
+    var swapSession = swapRepo.CreateSession("identity_swap");
+    var swapSource = Path.Combine(root, "recovery-identity-swap.bin");
+    var swapOriginalBytes = Enumerable.Range(0, 64 * 1024)
+        .Select(x => (byte)((x * 13) % 251))
+        .ToArray();
+    await File.WriteAllBytesAsync(swapSource, swapOriginalBytes);
+
+    var swapIdentities = new FileIdentityStore(Path.Combine(swapSession.Root, "identity-state"));
+    var swapIdentity = await swapIdentities.CaptureOrVerifyAsync(swapSource);
+    var swapRange = new RangeRollbackStore(Path.Combine(swapSession.Root, "write-cow"));
+    await swapRange.CaptureWritePreimageAsync(
+        swapSource, 2048, 128, swapIdentity.Identity);
+
+    using (var mutateSwap = new FileStream(
+               swapSource, FileMode.Open, FileAccess.Write, FileShare.Read))
+    {
+        mutateSwap.Position = 2048;
+        await mutateSwap.WriteAsync(Enumerable.Repeat((byte)0xD3, 128).ToArray());
+        await mutateSwap.FlushAsync();
+        mutateSwap.Flush(true);
+    }
+
+    var swapPlan = RollbackRecoveryPlanner.Build(swapRepoRoot, "identity_swap");
+    Check(swapPlan.ReadyCount == 1 &&
+          swapPlan.Actions.Single(x => x.State == RecoveryActionState.Ready).Kind ==
+          RecoveryActionKind.RestoreRangeCowCopy,
+        "identity-swap fixture produces one ready range-COW recovery action");
+
+    var movedSwapSource = swapSource + ".incident-file";
+    File.Move(swapSource, movedSwapSource);
+    await File.WriteAllBytesAsync(
+        swapSource,
+        Enumerable.Repeat((byte)0x7E, swapOriginalBytes.Length).ToArray());
+
+    var swapOutput = Path.Combine(root, "recovery-identity-swap-output");
+    var swapExecution = await RollbackRecoveryExecutor.ExecuteReadyAsync(
+        swapRepoRoot, swapPlan, swapOutput);
+    var swapFailure = swapExecution.Items.Single();
+    Check(!swapExecution.Succeeded &&
+          swapExecution.SucceededActions == 0 &&
+          swapExecution.FailedActions == 1 &&
+          swapFailure.State == RollbackRecoveryExecutionState.Failed &&
+          swapFailure.Error.Contains("identity", StringComparison.OrdinalIgnoreCase) &&
+          string.IsNullOrEmpty(swapFailure.RecoveredPath),
+        "range recovery rejects pathname replacement after planning using durable file identity");
 
     var existingOutput = Path.Combine(root, "existing-recovery-output");
     Directory.CreateDirectory(existingOutput);

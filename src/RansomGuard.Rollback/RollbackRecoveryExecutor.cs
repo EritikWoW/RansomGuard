@@ -57,6 +57,12 @@ public static class RollbackRecoveryExecutor
             : null;
         range?.VerifyAll();
 
+        var identityRoot = Path.Combine(store.Root, "identity-state");
+        FileIdentityStore? identities = Directory.Exists(identityRoot)
+            ? new FileIdentityStore(identityRoot, createIfMissing: false)
+            : null;
+        identities?.VerifyAll();
+
         var results = new List<RollbackRecoveryExecutionItem>();
         var startedUtc = DateTime.UtcNow;
         var success = true;
@@ -108,15 +114,25 @@ public static class RollbackRecoveryExecutor
                                 StringComparison.OrdinalIgnoreCase))
                             ?? throw new InvalidDataException(
                                 "Recovery action no longer matches a committed range-COW baseline.");
+                        if (identities is null)
+                            throw new InvalidDataException(
+                                "Range recovery requires the incident file-identity journal.");
+                        if (!identities.TryGet(action.PrimaryPath, out var identityBaseline) ||
+                            identityBaseline is null)
+                            throw new InvalidDataException(
+                                "Range recovery source has no committed incident file identity.");
+
+                        var expectedIdentity = identityBaseline.Identity;
                         var expectation = await range.ComputeExpectedRecoveryAsync(
-                            action.PrimaryPath, cancellationToken).ConfigureAwait(false);
+                            action.PrimaryPath, expectedIdentity, cancellationToken).ConfigureAwait(false);
                         if (expectation.ExpectedLength != baseline.OriginalLength)
                             throw new InvalidDataException(
                                 "Range recovery expectation length does not match the committed baseline.");
                         expectedLength = expectation.ExpectedLength;
                         expectedSha256 = expectation.ExpectedSha256;
                         recoveredPath = await range.RestoreToNewCopyAsync(
-                            action.PrimaryPath, actionDirectory, expectation, cancellationToken).ConfigureAwait(false);
+                            action.PrimaryPath, actionDirectory, expectedIdentity, expectation, cancellationToken)
+                            .ConfigureAwait(false);
                         break;
                     }
 

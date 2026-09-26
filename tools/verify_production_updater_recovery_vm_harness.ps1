@@ -182,11 +182,18 @@ foreach($required in @(
     'Campaign state SHA-256 mismatch.',
     'Only an armed failed campaign may be quarantined',
     'SCM image does not match the stale campaign target image.',
+    'if($before.Installed -eq $true)',
     '''review-recovery''',
     '''RollbackToPrevious''',
     '''recover-update''',
     '''RolledBack''',
     '''uninstall''',
+    '''NotRecoverableServiceAbsent''',
+    '''ServiceUpdates-quarantined''',
+    '''expect-recovery-review-failure''',
+    '$serviceAbsentAtQuarantine=$true',
+    '$incompleteJournalQuarantined=$true',
+    'Move-Item -LiteralPath $crashJournal -Destination $journalDestination',
     'Active-quarantined',
     'UPDATER-RECOVERY-QUARANTINE PASS'
 )){

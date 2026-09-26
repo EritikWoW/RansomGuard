@@ -643,6 +643,97 @@ finally
 }
 
 
+var stateChangeJournalRoot=Path.Combine(Path.GetTempPath(),"RansomGuard-StateChangeJournal-"+Guid.NewGuid().ToString("N"));
+try
+{
+    var stateAuthorizationId=Guid.NewGuid().ToString("N");
+    var stateRequestId=Guid.NewGuid().ToString("N");
+    var stateBinding=ActuationBinding(
+        authorizationId:stateAuthorizationId,
+        caseId:"case-state-change-001",
+        evaluatedUtc:now,
+        expiresUtc:now.AddSeconds(5));
+    var stateValidation=ContainmentActuationPolicy.Evaluate(
+        ActuationInput(binding:stateBinding,nowUtc:now.AddSeconds(1)));
+    var stateRequest=new ContainmentActuationRequest(
+        stateRequestId,
+        stateBinding,
+        now.AddSeconds(1));
+
+    var stateJournal=new ContainmentStateChangeJournal(stateChangeJournalRoot);
+    var statePrepared=stateJournal.Prepare(stateRequest,stateValidation);
+    Check(statePrepared.Phase==ContainmentStateChangeJournalPhase.Prepared&&
+          stateJournal.IsAuthorizationConsumed(stateAuthorizationId)&&
+          DecisionPolicy.HashEqual(
+              statePrepared.BindingFingerprint,
+              ContainmentActuationPolicy.ComputeBindingFingerprint(stateBinding)),
+        "state-change journal durably prepares one exact authorization-bound session");
+
+    Check(stateJournal.Prepare(stateRequest,stateValidation).Sequence==statePrepared.Sequence,
+        "state-change journal exact prepare retry is idempotent");
+
+    rejected=false;try
+    {
+        stateJournal.Prepare(
+            stateRequest with{RequestId=Guid.NewGuid().ToString("N")},
+            stateValidation);
+    }
+    catch(InvalidOperationException ex) when(ex.Message=="AuthorizationAlreadyConsumed"){rejected=true;}
+    Check(rejected,"state-change journal consumes one authorization id only once");
+
+    var stateSuspended=stateJournal.RecordSuspendApplied(stateRequestId);
+    Check(stateSuspended.Phase==ContainmentStateChangeJournalPhase.SuspendApplied&&
+          stateJournal.IncompleteRequests().Any(x=>x.RequestId==stateRequestId),
+        "state-change journal exposes a suspended session as incomplete until explicit resume");
+
+    var stateResumed=stateJournal.RecordExplicitResumeApplied(stateRequestId);
+    var stateCompleted=stateJournal.RecordCompleted(stateRequestId);
+    Check(stateResumed.Phase==ContainmentStateChangeJournalPhase.ExplicitResumeApplied&&
+          stateCompleted.Phase==ContainmentStateChangeJournalPhase.Completed&&
+          stateJournal.IncompleteRequests().Length==0,
+        "state-change journal requires explicit resume before clean completion");
+
+    var incompleteAuthorizationId=Guid.NewGuid().ToString("N");
+    var incompleteRequestId=Guid.NewGuid().ToString("N");
+    var incompleteBinding=ActuationBinding(
+        authorizationId:incompleteAuthorizationId,
+        caseId:"case-state-change-crash",
+        evaluatedUtc:now,
+        expiresUtc:now.AddSeconds(5));
+    var incompleteValidation=ContainmentActuationPolicy.Evaluate(
+        ActuationInput(binding:incompleteBinding,nowUtc:now.AddSeconds(1)));
+    stateJournal.Prepare(
+        new ContainmentActuationRequest(incompleteRequestId,incompleteBinding,now.AddSeconds(1)),
+        incompleteValidation);
+    stateJournal.RecordSuspendApplied(incompleteRequestId);
+    stateJournal.VerifyAll();
+
+    var reopenedStateJournal=new ContainmentStateChangeJournal(stateChangeJournalRoot,createIfMissing:false);
+    reopenedStateJournal.VerifyAll();
+    Check(reopenedStateJournal.IncompleteRequests().Any(x=>x.RequestId==incompleteRequestId),
+        "state-change journal preserves incomplete crash evidence across restart");
+
+    reopenedStateJournal.RecordAbnormal(incompleteRequestId,"ProcessExitCrashReleaseReview");
+    Check(reopenedStateJournal.IncompleteRequests().Length==0,
+        "operator recovery can terminally classify incomplete state-change evidence without fabricating explicit resume");
+
+    var journalText=File.ReadAllText(reopenedStateJournal.JournalPath);
+    File.WriteAllText(
+        reopenedStateJournal.JournalPath,
+        journalText.Replace("StateChangeSuspendApplied","StateChangeSuspendTampered",StringComparison.Ordinal));
+    rejected=false;try
+    {
+        _=new ContainmentStateChangeJournal(stateChangeJournalRoot,createIfMissing:false);
+    }
+    catch(InvalidDataException){rejected=true;}
+    Check(rejected,"state-change journal rejects hash-chain tampering");
+}
+finally
+{
+    if(Directory.Exists(stateChangeJournalRoot))
+        Directory.Delete(stateChangeJournalRoot,true);
+}
+
 var actuatorRoot=Path.Combine(Path.GetTempPath(),"RansomGuard-Actuator-"+Guid.NewGuid().ToString("N"));
 try
 {

@@ -437,7 +437,12 @@ foreach($required in @(
     'RejectReparseChain',
     'MaxJournalBytes = 64L * 1024 * 1024',
     'MaxJournalRecords = 100_000',
-    'ContainmentStateChangeJournalQuotaReached'
+    'ContainmentStateChangeJournalQuotaReached',
+    'containment-state-change-journal.head.json',
+    'PersistHead',
+    'ValidateHead',
+    'journal head exists but journal data is missing',
+    'journal head is missing'
 )){
     if($containmentStateChangeJournal -notmatch [regex]::Escape($required)){
         throw "Crash-safe state-change journal invariant missing: $required"

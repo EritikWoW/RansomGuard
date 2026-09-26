@@ -20,6 +20,75 @@ public sealed record ContainmentActuationBinding(
     DateTime ProtectionObservedUtc,
     ContainmentAuthorizationDecision Authorization);
 
+public static class ContainmentActuationBindingFactory
+{
+    public static ContainmentActuationBinding Create(
+        string authorizationId,
+        string caseId,
+        DateTime evaluatedUtc,
+        TimeSpan lifetime,
+        ProcessKey process,
+        string imagePath,
+        string imageSha256,
+        ProtectionStatusDto protection,
+        ContainmentAuthorizationDecision authorization)
+    {
+        if (!Guid.TryParseExact(authorizationId, "N", out _))
+            throw new InvalidDataException("Authorization id must be a 32-character GUID in N format.");
+        if (string.IsNullOrWhiteSpace(caseId))
+            throw new InvalidDataException("Case id is required.");
+        if (evaluatedUtc.Kind != DateTimeKind.Utc)
+            throw new InvalidDataException("Authorization evaluation timestamp must be UTC.");
+        if (lifetime <= TimeSpan.Zero || lifetime > ContainmentActuationPolicy.MaxAuthorizationLifetime)
+            throw new InvalidDataException("Authorization lifetime is outside the qualified bound.");
+        if (process.Pid <= 4 || process.CreationFileTimeUtc <= 0)
+            throw new InvalidDataException("Bound process identity is invalid.");
+
+        var normalizedPath = WinPaths.Normalize(imagePath)
+            ?? throw new InvalidDataException("Bound image path is invalid.");
+        if (!DecisionPolicy.HashEqual(imageSha256, imageSha256))
+            throw new InvalidDataException("Bound image SHA-256 is invalid.");
+
+        ArgumentNullException.ThrowIfNull(protection);
+        ProtectionStateMachine.ValidateSnapshot(protection);
+        if (protection.ObservedUtc.Kind != DateTimeKind.Utc)
+            throw new InvalidDataException("Protection snapshot timestamp must be UTC.");
+        if (!string.Equals(
+                protection.RequestedMode,
+                RequestedProtectionMode.Enforce.ToString(),
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                protection.State,
+                ProtectionPhase.Protected.ToString(),
+                StringComparison.Ordinal) ||
+            !protection.RollbackStoreReady ||
+            !protection.KernelChannelConnected ||
+            !protection.KernelEnforcementActive)
+            throw new InvalidDataException("Actuation binding requires an exact healthy Protected Enforce snapshot.");
+
+        ArgumentNullException.ThrowIfNull(authorization);
+        if (!authorization.Eligible ||
+            !string.Equals(
+                authorization.State,
+                ContainmentAuthorizationState.Eligible.ToString(),
+                StringComparison.Ordinal) ||
+            authorization.Reasons is null ||
+            authorization.Reasons.Length != 0)
+            throw new InvalidDataException("Actuation binding requires an exact Eligible authorization decision.");
+
+        return new(
+            authorizationId.ToLowerInvariant(),
+            caseId,
+            evaluatedUtc,
+            evaluatedUtc.Add(lifetime),
+            process,
+            normalizedPath,
+            imageSha256.ToUpperInvariant(),
+            protection.ObservedUtc,
+            authorization);
+    }
+}
+
 public sealed record ContainmentActuationValidationInput(
     ContainmentActuationBinding Binding,
     DateTime NowUtc,

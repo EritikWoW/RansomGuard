@@ -351,6 +351,96 @@ ContainmentActuationValidationInput ActuationInput(
         isProtectedServiceProcess,
         authorizationConsumed);
 
+var factoryAuthorizationId=Guid.NewGuid().ToString("N");
+var factoryBinding=ContainmentActuationBindingFactory.Create(
+    factoryAuthorizationId,
+    "case-factory-001",
+    now,
+    TimeSpan.FromSeconds(5),
+    actuationProcess,
+    actuationPath,
+    actuationHash,
+    containmentProtected,
+    containmentEligibleDecision);
+Check(factoryBinding.AuthorizationId==factoryAuthorizationId.ToLowerInvariant()&&
+      factoryBinding.CaseId=="case-factory-001"&&
+      factoryBinding.Process==actuationProcess&&
+      factoryBinding.ExpiresUtc==now.AddSeconds(5)&&
+      WinPaths.Equal(factoryBinding.ImagePath,actuationPath)&&
+      DecisionPolicy.HashEqual(factoryBinding.ImageSha256,actuationHash)&&
+      factoryBinding.ProtectionObservedUtc==containmentProtected.ObservedUtc,
+    "capability factory binds exact authorization/process/image/protection identity with bounded expiry");
+
+rejected=false;try
+{
+    _=ContainmentActuationBindingFactory.Create(
+        Guid.NewGuid().ToString("N"),
+        "case-factory-denied",
+        now,
+        TimeSpan.FromSeconds(5),
+        actuationProcess,
+        actuationPath,
+        actuationHash,
+        containmentProtected,
+        new(ContainmentAuthorizationState.Denied.ToString(),false,new[]{"SyntheticDenied"}));
+}
+catch(InvalidDataException){rejected=true;}
+Check(rejected,"capability factory refuses a denied or bare authorization decision");
+
+rejected=false;try
+{
+    _=ContainmentActuationBindingFactory.Create(
+        Guid.NewGuid().ToString("N"),
+        "case-factory-lifetime",
+        now,
+        ContainmentActuationPolicy.MaxAuthorizationLifetime+TimeSpan.FromTicks(1),
+        actuationProcess,
+        actuationPath,
+        actuationHash,
+        containmentProtected,
+        containmentEligibleDecision);
+}
+catch(InvalidDataException){rejected=true;}
+Check(rejected,"capability factory refuses authorization lifetime beyond the qualified bound");
+
+rejected=false;try
+{
+    _=ContainmentActuationBindingFactory.Create(
+        Guid.NewGuid().ToString("N"),
+        "case-factory-image",
+        now,
+        TimeSpan.FromSeconds(5),
+        actuationProcess,
+        actuationPath,
+        "not-a-sha256",
+        containmentProtected,
+        containmentEligibleDecision);
+}
+catch(InvalidDataException){rejected=true;}
+Check(rejected,"capability factory refuses an invalid image SHA-256");
+
+var factoryDegradedMachine=new ProtectionStateMachine("Enforce");
+factoryDegradedMachine.MarkRollbackReady();
+factoryDegradedMachine.BeginKernelStartup();
+factoryDegradedMachine.MarkKernelConnected();
+factoryDegradedMachine.MarkProtected();
+factoryDegradedMachine.MarkDegraded("factory-test");
+rejected=false;try
+{
+    _=ContainmentActuationBindingFactory.Create(
+        Guid.NewGuid().ToString("N"),
+        "case-factory-protection",
+        now,
+        TimeSpan.FromSeconds(5),
+        actuationProcess,
+        actuationPath,
+        actuationHash,
+        factoryDegradedMachine.Snapshot(),
+        containmentEligibleDecision);
+}
+catch(InvalidDataException){rejected=true;}
+Check(rejected,"capability factory refuses a non-Protected lifecycle snapshot");
+
 var actuationDecision=ContainmentActuationPolicy.Evaluate(ActuationInput());
 Check(actuationDecision.Ready&&actuationDecision.State=="Ready"&&actuationDecision.Reasons.Length==0,
     "actuation binding becomes Ready only for the same short-lived process/image/protection snapshot");

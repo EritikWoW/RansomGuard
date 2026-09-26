@@ -61,7 +61,7 @@ if($workflow -notmatch [regex]::Escape('if: ${{ inputs.phase == ''arm'' }}')){
 foreach($required in @(
     "ValidateSet('arm','resume','verify')",
     'containment-reboot-recovery-campaign.json',
-    "Get-FileHash -LiteralPath $Path -Algorithm SHA256",
+    'Get-FileHash -LiteralPath $Path -Algorithm SHA256',
     'Campaign state SHA-256 mismatch.',
     'LastBootUpTime',
     'No real VM reboot was observed between ARM and RESUME.',

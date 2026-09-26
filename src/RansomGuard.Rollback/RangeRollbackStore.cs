@@ -178,9 +178,24 @@ public sealed class RangeRollbackStore
     /// The digest is derived before output creation from the current live base plus every
     /// verified committed original block, and therefore detects source drift during copy-out.
     /// </summary>
-    public async Task<RangeRollbackRecoveryExpectation> ComputeExpectedRecoveryAsync(
+    public Task<RangeRollbackRecoveryExpectation> ComputeExpectedRecoveryAsync(
         string damagedPath,
+        CancellationToken cancellationToken = default) =>
+        ComputeExpectedRecoveryCoreAsync(damagedPath, null, cancellationToken);
+
+    public Task<RangeRollbackRecoveryExpectation> ComputeExpectedRecoveryAsync(
+        string damagedPath,
+        DurableFileIdentity expectedIdentity,
         CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(expectedIdentity);
+        return ComputeExpectedRecoveryCoreAsync(damagedPath, expectedIdentity, cancellationToken);
+    }
+
+    private async Task<RangeRollbackRecoveryExpectation> ComputeExpectedRecoveryCoreAsync(
+        string damagedPath,
+        DurableFileIdentity? expectedIdentity,
+        CancellationToken cancellationToken)
     {
         var full = NormalizeSource(damagedPath);
         if (!_baselines.TryGetValue(full, out var baseline))
@@ -193,6 +208,13 @@ public sealed class RangeRollbackStore
             full, FileMode.Open, FileAccess.Read,
             FileShare.Read | FileShare.Write | FileShare.Delete,
             _blockSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        if (expectedIdentity is not null)
+        {
+            var actualIdentity = FileIdentityStore.QueryHandleIdentity(input.SafeFileHandle);
+            if (actualIdentity != expectedIdentity)
+                throw new InvalidDataException(
+                    "Range recovery source handle identity does not match the expected incident identity.");
+        }
         if (input.Length < baseline.OriginalLength)
             throw new InvalidDataException(
                 "Damaged source is shorter than the recorded original length. Use a full pre-image/transaction recovery path.");
@@ -243,7 +265,7 @@ public sealed class RangeRollbackStore
         string damagedPath,
         string outputDirectory,
         CancellationToken cancellationToken = default) =>
-        RestoreToNewCopyCoreAsync(damagedPath, outputDirectory, null, cancellationToken);
+        RestoreToNewCopyCoreAsync(damagedPath, outputDirectory, null, null, cancellationToken);
 
     public Task<string> RestoreToNewCopyAsync(
         string damagedPath,
@@ -252,12 +274,26 @@ public sealed class RangeRollbackStore
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(expectation);
-        return RestoreToNewCopyCoreAsync(damagedPath, outputDirectory, expectation, cancellationToken);
+        return RestoreToNewCopyCoreAsync(damagedPath, outputDirectory, null, expectation, cancellationToken);
+    }
+
+    public Task<string> RestoreToNewCopyAsync(
+        string damagedPath,
+        string outputDirectory,
+        DurableFileIdentity expectedIdentity,
+        RangeRollbackRecoveryExpectation expectation,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(expectedIdentity);
+        ArgumentNullException.ThrowIfNull(expectation);
+        return RestoreToNewCopyCoreAsync(
+            damagedPath, outputDirectory, expectedIdentity, expectation, cancellationToken);
     }
 
     private async Task<string> RestoreToNewCopyCoreAsync(
         string damagedPath,
         string outputDirectory,
+        DurableFileIdentity? expectedIdentity,
         RangeRollbackRecoveryExpectation? expectation,
         CancellationToken cancellationToken)
     {
@@ -266,10 +302,6 @@ public sealed class RangeRollbackStore
             throw new InvalidOperationException("No range rollback baseline exists for this path.");
         if (!File.Exists(full)) throw new FileNotFoundException("Damaged source is missing; range reconstruction cannot use it as the base.", full);
         RejectReparse(full);
-
-        var damagedLength = new FileInfo(full).Length;
-        if (damagedLength < baseline.OriginalLength)
-            throw new InvalidDataException("Damaged source is shorter than the recorded original length. Use a full pre-image/transaction recovery path.");
 
         var destinationRoot = Path.GetFullPath(outputDirectory);
         Directory.CreateDirectory(destinationRoot);
@@ -288,6 +320,17 @@ public sealed class RangeRollbackStore
             using (var output = new FileStream(temp, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None,
                        _blockSize, FileOptions.Asynchronous | FileOptions.WriteThrough))
             {
+                if (expectedIdentity is not null)
+                {
+                    var actualIdentity = FileIdentityStore.QueryHandleIdentity(input.SafeFileHandle);
+                    if (actualIdentity != expectedIdentity)
+                        throw new InvalidDataException(
+                            "Range recovery source handle identity does not match the expected incident identity.");
+                }
+                if (input.Length < baseline.OriginalLength)
+                    throw new InvalidDataException(
+                        "Damaged source is shorter than the recorded original length. Use a full pre-image/transaction recovery path.");
+
                 await input.CopyToAsync(output, _blockSize, cancellationToken).ConfigureAwait(false);
 
                 var blocks = _blocks.Values

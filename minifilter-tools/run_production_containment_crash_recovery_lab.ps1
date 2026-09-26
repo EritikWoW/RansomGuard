@@ -319,16 +319,18 @@ $root=Join-Path $RootBase "containment-recovery-$stamp"
 New-Item -ItemType Directory -Path $root -Force | Out-Null
 Assert-NoReparsePath $root 'ProtectedRoot'
 $cancelCanary=Join-Path $root 'cancel-canary.bin'
+$faultCanary=Join-Path $root 'journal-io-fault-canary.bin'
 $crashCanary=Join-Path $root 'crash-canary.bin'
 $blockedCanary=Join-Path $root 'post-restart-canary.bin'
 [IO.File]::WriteAllText($cancelCanary,'ransomguard-cancel-canary-original',[Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText($faultCanary,'ransomguard-journal-io-fault-canary-original',[Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText($crashCanary,'ransomguard-crash-canary-original',[Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText($blockedCanary,'ransomguard-restart-canary-original',[Text.UTF8Encoding]::new($false))
 
 $config=Get-Content -LiteralPath $appSettings -Raw | ConvertFrom-Json
 $config.Mode='Enforce'
 $config.ProtectedRoots=@($root)
-$config.CanaryFiles=@($cancelCanary,$crashCanary,$blockedCanary)
+$config.CanaryFiles=@($cancelCanary,$faultCanary,$crashCanary,$blockedCanary)
 $config.Enforce.RequireSignedDriver=$true
 $config.Enforce.AutomaticContainment=$true
 $config.Enforce.ContainmentHoldMilliseconds=5000
@@ -374,6 +376,23 @@ $summary=[ordered]@{
     cancellationDriverUnloaded=$false
     cancellationRestarted=$false
     cancellationAutomaticContainmentReady=$false
+    journalIoFaultFixturePid=0
+    journalIoFaultFixtureCreationFileTimeUtc=0
+    journalIoFaultRequestId=$null
+    journalIoFaultSuspendApplied=$false
+    journalIoFaultLockHeld=$false
+    journalIoFaultAdmissionTripped=$false
+    journalIoFaultFailedClosed=$false
+    journalIoFaultExplicitResumeApplied=$false
+    journalIoFaultCompletedAbsent=$false
+    journalIoFaultHeartbeatRecovered=$false
+    journalIoFaultFixtureCompleted=$false
+    journalIoFaultMaintenanceStop=$false
+    journalIoFaultDriverUnloaded=$false
+    journalIoFaultEvidenceCaptured=$false
+    journalIoFaultStateQuarantine=$null
+    journalIoFaultRestarted=$false
+    journalIoFaultAutomaticContainmentReady=$false
     crashFixturePid=0
     crashFixtureCreationFileTimeUtc=0
     crashRequestId=$null
@@ -532,6 +551,161 @@ try{
     $summary.cancellationRestarted=$true
     $summary.cancellationAutomaticContainmentReady=$true
     $summary.gatePid=[int]$cancelActivation.GateClientPid
+
+    # Fault-injection case 2: after the exact malicious process is durably
+    # recorded as SuspendApplied, hold the real journal open with sharing that
+    # denies writers. The production coordinator must still physically resume
+    # the exact process instance, fail closed when ExplicitResumeApplied cannot
+    # be persisted, trip future automatic-containment admission, and never
+    # fabricate Completed. No service/test bypass is used.
+    $faultBaselineCases=@(Get-ChildItem -LiteralPath $casesRoot -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+    $faultHeartbeat=Join-Path $fixtureRoot 'journal-io-fault-heartbeat.txt'
+    $faultReadyPath=Join-Path $fixtureRoot 'journal-io-fault-ready.json'
+    $faultResult=Join-Path $fixtureRoot 'journal-io-fault-result.json'
+    $faultFixture=Start-Process -FilePath $FixtureExecutable -ArgumentList @(
+        '--malicious',$faultCanary,$faultHeartbeat,$faultReadyPath,$faultResult
+    ) -PassThru -WindowStyle Hidden
+    $faultReady=Wait-JsonFile $faultReadyPath 10
+    if([int]$faultReady.pid -ne $faultFixture.Id -or [long]$faultReady.creationFileTimeUtc -le 0){
+        throw 'Journal-I/O fault fixture ready identity mismatch.'
+    }
+    $summary.journalIoFaultFixturePid=[int]$faultReady.pid
+    $summary.journalIoFaultFixtureCreationFileTimeUtc=[long]$faultReady.creationFileTimeUtc
+
+    $faultSuspend=Wait-JournalPhaseForProcess $journalPath ([int]$faultReady.pid) ([long]$faultReady.creationFileTimeUtc) 2 20
+    $summary.journalIoFaultSuspendApplied=$true
+    $summary.journalIoFaultRequestId=[string]$faultSuspend.requestId
+
+    $faultHeartbeatBefore=''
+    if(Test-Path -LiteralPath $faultHeartbeat -PathType Leaf){
+        try{$faultHeartbeatBefore=Get-Content -LiteralPath $faultHeartbeat -Raw}catch{}
+    }
+
+    Assert-NoReparsePath $journalPath 'Containment journal fault target'
+    $faultStarted=[DateTimeOffset]::UtcNow
+    $journalLock=$null
+    try{
+        $journalLock=[IO.File]::Open(
+            $journalPath,
+            [IO.FileMode]::Open,
+            [IO.FileAccess]::Read,
+            [IO.FileShare]::Read)
+        $summary.journalIoFaultLockHeld=$true
+
+        $faultCase=Find-IncidentForProcess ([int]$faultReady.pid) ([long]$faultReady.creationFileTimeUtc) $faultBaselineCases 10
+        if($null -eq $faultCase){throw 'Journal-I/O fault process did not persist its production incident.'}
+
+        # Keep the writer-denying handle alive until response.json exists.
+        # At that point AttemptAsync has already returned, so the failed durable
+        # resume transition and its abnormal-evidence attempt have both occurred.
+        $faultResponse=Wait-JsonFile (Join-Path $faultCase.Directory 'response.json') 15
+        if([string]$faultResponse.Action -ne 'FailedClosed' -or
+           $faultResponse.ActuationAttempted -ne $true -or
+           $null -eq $faultResponse.ProductionContainment){
+            throw 'Journal-I/O fault did not return a production FailedClosed response.'
+        }
+        if($faultResponse.ProductionContainment.Suspended -ne $true -or
+           $faultResponse.ProductionContainment.ExplicitResumeApplied -ne $true -or
+           $faultResponse.ProductionContainment.Completed -eq $true){
+            throw 'Journal-I/O fault did not preserve physical explicit-resume safety after SuspendApplied.'
+        }
+        if([string]$faultResponse.ProductionContainment.Reason -ne 'IOException'){
+            throw "Journal-I/O fault returned unexpected containment reason '$($faultResponse.ProductionContainment.Reason)'."
+        }
+        $summary.journalIoFaultFailedClosed=$true
+        $summary.journalIoFaultExplicitResumeApplied=$true
+
+        $faultTrip=Wait-Audit 'Event' 'AutomaticContainmentAdmissionTripped' $faultStarted 5
+        if([string]$faultTrip.Reason -ne 'ExplicitResumeEvidenceFailed'){
+            throw "Journal-I/O fault tripped admission for unexpected reason '$($faultTrip.Reason)'."
+        }
+        $summary.journalIoFaultAdmissionTripped=$true
+    }finally{
+        if($null -ne $journalLock){$journalLock.Dispose()}
+    }
+
+    [void](Wait-HeartbeatAdvance $faultHeartbeat $faultHeartbeatBefore 8)
+    $summary.journalIoFaultHeartbeatRecovered=$true
+    if(-not $faultFixture.WaitForExit(20000)){
+        try{$faultFixture.Kill($true)}catch{}
+        throw 'Journal-I/O fault fixture did not finish after physical explicit resume.'
+    }
+    if($faultFixture.ExitCode -ne 0){throw "Journal-I/O fault fixture failed exit=$($faultFixture.ExitCode)."}
+    [void](Wait-JsonFile $faultResult 3)
+    $summary.journalIoFaultFixtureCompleted=$true
+
+    $faultRecords=@(Get-JournalRecordsForProcess $journalPath ([int]$faultReady.pid) ([long]$faultReady.creationFileTimeUtc))
+    $faultPhases=@($faultRecords | ForEach-Object {[int]$_.phase})
+    foreach($requiredPhase in @(1,2)){
+        if($faultPhases -notcontains $requiredPhase){
+            throw "Journal-I/O fault request is missing durable pre-fault journal phase $requiredPhase."
+        }
+    }
+    foreach($forbiddenPhase in @(3,4,5)){
+        if($faultPhases -contains $forbiddenPhase){
+            throw "Journal-I/O fault unexpectedly persisted post-fault phase $forbiddenPhase while the journal writer was denied."
+        }
+    }
+    $summary.journalIoFaultCompletedAbsent=$true
+
+    $faultStopUtc=[DateTimeOffset]::UtcNow
+    Invoke-Sc @('stop',$serviceName) | Out-Null
+    Wait-ServiceState $serviceName 'Stopped' 60
+    $faultMaintenance=Wait-Audit 'Type' 'ProductionProtectionMaintenanceStop' $faultStopUtc 20 -AllowStopped
+    if([string]$faultMaintenance.Protection.State -ne 'Maintenance'){
+        throw 'Journal-I/O fault service stop did not publish Maintenance.'
+    }
+    $summary.journalIoFaultMaintenanceStop=$true
+
+    $filtersAfterFault=(& fltmc filters 2>$null | Out-String)
+    if($LASTEXITCODE -ne 0 -or $filtersAfterFault -match '(?m)^\s*RansomGuardMinifilter\b'){
+        throw 'Journal-I/O fault clean stop left RansomGuardMinifilter loaded.'
+    }
+    $summary.journalIoFaultDriverUnloaded=$true
+
+    # Preserve the fault generation before resetting only qualification state.
+    $preResetAudit=@(Get-AuditEntries $startedUtc)
+    ConvertTo-Json -InputObject $preResetAudit -Depth 20 |
+        Set-Content -LiteralPath (Join-Path $ResultsDirectory 'journal-io-fault-pre-reset-audit.json') -Encoding utf8
+    Copy-Item -LiteralPath $journalPath -Destination (Join-Path $ResultsDirectory 'journal-io-fault-journal.jsonl') -Force
+    $faultHead=Join-Path (Split-Path -Parent $journalPath) 'containment-state-change-journal.head.json'
+    if(Test-Path -LiteralPath $faultHead -PathType Leaf){
+        Copy-Item -LiteralPath $faultHead -Destination (Join-Path $ResultsDirectory 'journal-io-fault-journal.head.json') -Force
+    }
+    $faultIncidentEvidence=Join-Path $ResultsDirectory 'journal-io-fault-incident'
+    Copy-Item -LiteralPath $faultCase.Directory -Destination $faultIncidentEvidence -Recurse -Force
+    $summary.journalIoFaultEvidenceCaptured=$true
+
+    $summary.journalIoFaultStateQuarantine=Quarantine-ExistingQualificationState $stateRoot 'JOURNAL-IO-FAULT-EVIDENCE'
+
+    $faultResetUtc=[DateTimeOffset]::UtcNow
+    Invoke-Sc @('start',$serviceName) | Out-Null
+    Wait-ServiceState $serviceName 'Running' 30
+
+    $faultGenerationMarker=Join-Path $stateRoot '.ransomguard-state-v1'
+    $faultMarkerDeadline=(Get-Date).AddSeconds(10)
+    while((Get-Date) -lt $faultMarkerDeadline -and -not(Test-Path -LiteralPath $faultGenerationMarker -PathType Leaf)){
+        Start-Sleep -Milliseconds 100
+    }
+    if(-not(Test-Path -LiteralPath $faultGenerationMarker -PathType Leaf)){
+        throw 'Fresh state generation marker was not recreated after journal-I/O fault quarantine.'
+    }
+
+    $faultRollbackReady=Wait-Audit 'Type' 'RollbackStoreReady' $faultResetUtc 75
+    if([string]$faultRollbackReady.RequestedMode -ne 'Enforce' -or
+       $faultRollbackReady.ProtectionPackage.ReadyForLifecycle -ne $true){
+        throw 'Fresh post-fault state generation was not admitted in Enforce mode.'
+    }
+    $faultActivation=Wait-Audit 'Type' 'ProductionProtectionActivated' $faultResetUtc 90
+    $faultReadyAudit=Wait-Audit 'Type' 'AutomaticContainmentReady' $faultResetUtc 30
+    if([string]$faultActivation.Protection.State -ne 'Protected' -or
+       $faultActivation.Protection.KernelEnforcementActive -ne $true -or
+       $faultReadyAudit.Protection.AutomaticContainmentActive -ne $true){
+        throw 'Fresh post-fault state generation did not restore active production containment.'
+    }
+    $summary.journalIoFaultRestarted=$true
+    $summary.journalIoFaultAutomaticContainmentReady=$true
+    $summary.gatePid=[int]$faultActivation.GateClientPid
 
     $crashHeartbeat=Join-Path $fixtureRoot 'crash-heartbeat.txt'
     $crashReadyPath=Join-Path $fixtureRoot 'crash-ready.json'

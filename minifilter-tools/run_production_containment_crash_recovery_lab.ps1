@@ -381,6 +381,9 @@ $summary=[ordered]@{
     postRestartAuthorizationDenied=$false
     postRestartNoContainment=$false
     cleanMaintenanceStop=$false
+    journalCorruptionRejected=$false
+    journalExactRestoreApplied=$false
+    restoredJournalFailClosed=$false
     driverUnloaded=$false
     cleanupPassed=$false
     cleanupError=$null
@@ -571,7 +574,76 @@ try{
 
     $filters=(& fltmc filters 2>$null | Out-String)
     if($LASTEXITCODE -ne 0 -or $filters -match '(?m)^\s*RansomGuardMinifilter\b'){
-        throw 'RansomGuardMinifilter remained loaded after clean recovery-campaign shutdown.'
+        throw 'RansomGuardMinifilter remained loaded before journal-corruption qualification.'
+    }
+
+    # Prove that a truncated durable containment journal cannot be silently repaired or
+    # bypassed during service startup. Preserve exact bytes, truncate only the journal,
+    # require startup to fail before kernel lifecycle activation, then restore exact bytes
+    # and prove the original incomplete-session fail-closed decision is recovered.
+    $journalHead=Join-Path (Split-Path -Parent $journalPath) 'containment-state-change-journal.head.json'
+    foreach($path in @($journalPath,$journalHead)){
+        if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Journal corruption qualification input missing: $path"}
+        Assert-NoReparsePath $path 'Containment journal corruption input'
+    }
+    $journalBackup=Join-Path $ResultsDirectory 'containment-state-change-journal.pre-corruption.jsonl'
+    $headBackup=Join-Path $ResultsDirectory 'containment-state-change-journal.head.pre-corruption.json'
+    Copy-Item -LiteralPath $journalPath -Destination $journalBackup -Force
+    Copy-Item -LiteralPath $journalHead -Destination $headBackup -Force
+
+    $journalStream=[IO.File]::Open($journalPath,[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::None)
+    try{
+        if($journalStream.Length -lt 2){throw 'Containment journal is too small for deterministic truncation qualification.'}
+        $journalStream.SetLength($journalStream.Length-1)
+        $journalStream.Flush($true)
+    }finally{$journalStream.Dispose()}
+
+    $corruptStart=Invoke-Sc @('start',$serviceName) -AllowNonZero
+    $corruptStart.Output | Set-Content -LiteralPath (Join-Path $ResultsDirectory 'corrupt-journal-start.txt') -Encoding utf8
+    Wait-ServiceState $serviceName 'Stopped' 20
+    $filtersAfterCorruption=(& fltmc filters 2>$null | Out-String)
+    if($LASTEXITCODE -ne 0 -or $filtersAfterCorruption -match '(?m)^\s*RansomGuardMinifilter\b'){
+        throw 'Truncated containment journal allowed production kernel lifecycle activation.'
+    }
+    $summary.journalCorruptionRejected=$true
+
+    $journalBytes=[IO.File]::ReadAllBytes($journalBackup)
+    $journalRestore=[IO.File]::Open($journalPath,[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::None)
+    try{
+        $journalRestore.SetLength(0)
+        $journalRestore.Write($journalBytes,0,$journalBytes.Length)
+        $journalRestore.Flush($true)
+    }finally{$journalRestore.Dispose()}
+    $headBytes=[IO.File]::ReadAllBytes($headBackup)
+    $headRestore=[IO.File]::Open($journalHead,[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::None)
+    try{
+        $headRestore.SetLength(0)
+        $headRestore.Write($headBytes,0,$headBytes.Length)
+        $headRestore.Flush($true)
+    }finally{$headRestore.Dispose()}
+    $summary.journalExactRestoreApplied=$true
+
+    $restoreUtc=[DateTimeOffset]::UtcNow
+    Invoke-Sc @('start',$serviceName) | Out-Null
+    Wait-ServiceState $serviceName 'Running' 30
+    $restoredBlocked=Wait-Audit 'Type' 'AutomaticContainmentUnavailable' $restoreUtc 90
+    if([string]$restoredBlocked.Reason -ne 'IncompleteStateChangeSessionsRequireReview' -or
+       [int]$restoredBlocked.IncompleteSessions -lt 1 -or
+       $restoredBlocked.Protection.AutomaticContainmentActive -eq $true){
+        throw 'Exact journal restoration did not recover the original incomplete-session fail-closed state.'
+    }
+    $summary.restoredJournalFailClosed=$true
+
+    Invoke-Sc @('stop',$serviceName) | Out-Null
+    Wait-ServiceState $serviceName 'Stopped' 60
+    $maintenanceAfterRestore=Wait-Audit 'Type' 'ProductionProtectionMaintenanceStop' $restoreUtc 20 -AllowStopped
+    if([string]$maintenanceAfterRestore.Protection.State -ne 'Maintenance'){
+        throw 'Final restored-journal shutdown did not publish Maintenance state.'
+    }
+
+    $filters=(& fltmc filters 2>$null | Out-String)
+    if($LASTEXITCODE -ne 0 -or $filters -match '(?m)^\s*RansomGuardMinifilter\b'){
+        throw 'RansomGuardMinifilter remained loaded after journal-corruption recovery qualification.'
     }
     $summary.driverUnloaded=$true
     $summary.passed=$true

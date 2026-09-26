@@ -100,6 +100,7 @@ $expectedPins=@{
     'actions/setup-dotnet'='a98b56852c35b8e3190ac28c8c2271da59106c68'
     'actions/upload-artifact'='043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'
     'actions/cache'='55cc8345863c7cc4c66a329aec7e433d2d1c52a9'
+    'actions/attest'='1e69f48acb82d1966a394da916b4c1698aa569d6'
     'microsoft/setup-msbuild'='30375c66a4eea26614e0d39710365f22f8b0af57'
     'NuGet/setup-nuget'='fd55a6f3b34392fa83fde1454582407d8c714123'
 }

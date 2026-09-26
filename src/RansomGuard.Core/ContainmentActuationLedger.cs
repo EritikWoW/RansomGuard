@@ -172,6 +172,7 @@ public sealed class ContainmentActuationLedger
             var prepared = RequirePrepared(requestId);
             EnsureNoPhase(requestId, ContainmentActuationLedgerPhase.ResumeCompleted, "RequestAlreadyResumed");
             EnsureNoPhase(requestId, ContainmentActuationLedgerPhase.Failed, "RequestAlreadyFailed");
+            EnsureNoPhase(requestId, ContainmentActuationLedgerPhase.SuspendCompleted, "SuspendAlreadyCompleted");
 
             var existing = _records.FirstOrDefault(x =>
                 x.Phase == ContainmentActuationLedgerPhase.SuspendOwned &&
@@ -214,6 +215,10 @@ public sealed class ContainmentActuationLedger
                 x.Phase == ContainmentActuationLedgerPhase.SuspendOwned &&
                 RequestEquals(x, requestId)))
                 throw new InvalidOperationException("NoOwnedSuspendIncrement");
+            if (_records.Any(x =>
+                x.Phase == ContainmentActuationLedgerPhase.ResumeOwned &&
+                RequestEquals(x, requestId)))
+                throw new InvalidOperationException("ResumeAlreadyStarted");
 
             return Append(
                 ContainmentActuationLedgerPhase.SuspendCompleted,
@@ -234,6 +239,12 @@ public sealed class ContainmentActuationLedger
         {
             var prepared = RequirePrepared(requestId);
             EnsureNoPhase(requestId, ContainmentActuationLedgerPhase.ResumeCompleted, "RequestAlreadyResumed");
+
+            var mayResume =
+                _records.Any(x => x.Phase == ContainmentActuationLedgerPhase.SuspendCompleted && RequestEquals(x, requestId)) ||
+                _records.Any(x => x.Phase == ContainmentActuationLedgerPhase.Failed && RequestEquals(x, requestId));
+            if (!mayResume)
+                throw new InvalidOperationException("ResumeNotAuthorizedBySuspendCompletionOrFailure");
 
             var owned = _records.FirstOrDefault(x =>
                 x.Phase == ContainmentActuationLedgerPhase.SuspendOwned &&
@@ -274,6 +285,11 @@ public sealed class ContainmentActuationLedger
                 RequestEquals(x, requestId)).Select(x => x.ThreadId).Distinct().ToArray();
             if (owned.Length == 0)
                 throw new InvalidOperationException("NoOwnedSuspendIncrement");
+            var mayCompleteResume =
+                _records.Any(x => x.Phase == ContainmentActuationLedgerPhase.SuspendCompleted && RequestEquals(x, requestId)) ||
+                _records.Any(x => x.Phase == ContainmentActuationLedgerPhase.Failed && RequestEquals(x, requestId));
+            if (!mayCompleteResume)
+                throw new InvalidOperationException("ResumeNotAuthorizedBySuspendCompletionOrFailure");
 
             var resumed = _records.Where(x =>
                 x.Phase == ContainmentActuationLedgerPhase.ResumeOwned &&
@@ -566,12 +582,17 @@ public sealed class ContainmentActuationLedger
                         suspendCompleted = true;
                         break;
                     case ContainmentActuationLedgerPhase.ResumeOwned:
-                        if (!owned.Contains(record.ThreadId) || !resumed.Add(record.ThreadId) ||
+                        if ((!suspendCompleted && !failed) ||
+                            !owned.Contains(record.ThreadId) ||
+                            !resumed.Add(record.ThreadId) ||
                             !string.Equals(record.ReasonCode, ResumeOwnedReason, StringComparison.Ordinal))
                             throw new InvalidDataException("Invalid ResumeOwned transition.");
                         break;
                     case ContainmentActuationLedgerPhase.ResumeCompleted:
-                        if (owned.Count == 0 || owned.Any(x => !resumed.Contains(x)) || record.ThreadId != 0 ||
+                        if ((!suspendCompleted && !failed) ||
+                            owned.Count == 0 ||
+                            owned.Any(x => !resumed.Contains(x)) ||
+                            record.ThreadId != 0 ||
                             !string.Equals(record.ReasonCode, ResumeCompletedReason, StringComparison.Ordinal))
                             throw new InvalidDataException("Invalid ResumeCompleted transition.");
                         resumeCompleted = true;

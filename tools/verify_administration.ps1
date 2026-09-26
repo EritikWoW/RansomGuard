@@ -8,6 +8,7 @@ $rules=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\Rul
 $service=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\ServiceAdministration.cs') -Raw
 $core=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Core\AdminContract.cs') -Raw
 $recovery=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\ProductionRecoveryAdministration.cs') -Raw
+$recoveryExecution=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Management\ProductionRecoveryExecutionAdministration.cs') -Raw
 $recoveryPane=Get-Content -LiteralPath (Join-Path $root 'src\RansomGuard.Ui\Administration\RecoveryReviewPane.cs') -Raw
 foreach($required in @('Environment.ProcessPath','Verb = "runas"','AdminContract.ValidateIntent','child.WaitForExitAsync','1223')) {
  if(-not$launch.Contains($required)){throw "Missing elevation boundary: $required"}
@@ -77,6 +78,48 @@ if($recovery -notmatch 'Rollback Sessions directory does not exist; read-only re
  throw 'Production recovery administration must refuse a missing Sessions directory instead of creating state.'
 }
 Write-Host 'Production recovery administration source gate PASSED: UAC/admin-only, fixed private store, stopped-service boundary, terminal-session deterministic planning, bounded summaries, no execution verbs.'
+
+foreach($required in @(
+ 'RuleAdministration.DemandAdministrator',
+ 'StateMaintenanceGate.Acquire',
+ 'ProductionRecoveryAdministration.EnsureIdle',
+ 'ProductionRecoveryAdministration.ValidateStateAndGetRollbackRoot',
+ 'RollbackSessionLifecycleState.Completed',
+ 'RollbackSessionLifecycleState.Faulted',
+ 'LifecycleRecordSha256',
+ 'RollbackRecoveryPlanner.Build',
+ 'createIfMissing: false',
+ 'verifyRepositoryAll: false',
+ 'RollbackRecoveryExecutor.ExecuteReadyAsync',
+ 'RecoveryActionKind.RestoreFullPreimageCopy',
+ 'RecoveryActionKind.RestoreRangeCowCopy',
+ 'MaxExecutionActions = 200',
+ 'Path.IsPathFullyQualified',
+ 'Network recovery destinations are not supported',
+ 'Recovery output root already exists',
+ 'Recovery output root must remain outside RansomGuard private state',
+ 'FileMode.CreateNew',
+ 'production-recovery-execution.json',
+ 'SourceOrTopologyMutationPerformed: false'
+)) {
+ if(-not $recoveryExecution.Contains($required)){throw "Missing production recovery execution invariant: $required"}
+}
+foreach($pattern in @(
+ 'File\.Delete\s*\(',
+ 'File\.Move\s*\(',
+ 'Directory\.Delete\s*\(',
+ 'Directory\.Move\s*\(',
+ 'FileMode\.Create\b',
+ 'FileMode\.OpenOrCreate',
+ 'FileMode\.Truncate',
+ 'ServiceAdministration\.Execute',
+ 'Process\.Kill\s*\(',
+ 'fltmc',
+ 'sc\.exe'
+)) {
+ if($recoveryExecution -match $pattern){throw "Production recovery execution boundary contains forbidden mutation/control primitive '$pattern'"}
+}
+Write-Host 'Production recovery execution source gate PASSED: explicit UAC/admin boundary, exact plan/evidence/lifecycle binding, local create-new copy-out only, bounded manifest, no source/topology/service mutation.'
 
 foreach($required in @(
  'recovery-review',

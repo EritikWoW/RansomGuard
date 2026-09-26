@@ -175,6 +175,13 @@ public static class ProductionRecoveryExecutionAdministration
             throw new ArgumentException("Recovery output root must already be canonical.", nameof(requested));
         if (outputFull.StartsWith(@"\\", StringComparison.Ordinal))
             throw new ArgumentException("Network recovery destinations are not supported.", nameof(requested));
+
+        var driveRoot = Path.GetPathRoot(outputFull)
+            ?? throw new ArgumentException("Recovery output root has no local drive.", nameof(requested));
+        var drive = new DriveInfo(driveRoot);
+        if (drive.DriveType is DriveType.Network or DriveType.NoRootDirectory)
+            throw new ArgumentException("Network or unavailable recovery destinations are not supported.", nameof(requested));
+
         if (Directory.Exists(outputFull) || File.Exists(outputFull))
             throw new IOException("Recovery output root already exists: " + outputFull);
         if (IsSameOrUnder(outputFull, rollbackRoot) ||

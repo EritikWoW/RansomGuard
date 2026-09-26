@@ -181,6 +181,10 @@ if(-not [string]::Equals([string]$provenance.commit,$ExpectedSha,[StringComparis
 
 if(-not $ResultsDirectory){$ResultsDirectory=Join-Path ([IO.Path]::GetTempPath()) ('RansomGuard-MappedAdversarial-'+(Get-Date -Format 'yyyyMMdd-HHmmss'))}
 $ResultsDirectory=[IO.Path]::GetFullPath($ResultsDirectory)
+if(Test-Path -LiteralPath $ResultsDirectory){
+    Assert-NoReparsePath $ResultsDirectory 'ResultsDirectory'
+    Remove-Item -LiteralPath $ResultsDirectory -Recurse -Force
+}
 New-Item -ItemType Directory -Path $ResultsDirectory,$RootBase -Force | Out-Null
 Assert-NoReparsePath $ResultsDirectory 'ResultsDirectory'
 Assert-NoReparsePath $RootBase 'RootBase'

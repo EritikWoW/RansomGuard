@@ -174,10 +174,13 @@ public static partial class ServiceAdministration
             });
 
             ChangeServiceImage(service, targetImage);
+            // A successful ChangeServiceConfigW is the irreversible external commit point
+            // for this transaction. From this instruction onward every failure must take
+            // the rollback path, even if the read-back or durable journal write fails.
+            scmCommitted = true;
             var committedRegistration = Configuration(service);
             if (!WinPaths.Equal(committedRegistration.ImagePath, targetImage))
                 throw new IOException("SCM did not retain the staged update image path.");
-            scmCommitted = true;
             record = PersistUpdate(store, journalPath, record, "ScmCommitted", null);
             store.Audit(new
             {

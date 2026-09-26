@@ -19,6 +19,7 @@ internal sealed class AdminWindow : Window
     private readonly string? _initialId;
     private readonly bool _preview;
     internal SetupWizardPane? SetupPane { get; private set; }
+    internal RecoveryReviewPane? RecoveryPane { get; private set; }
     private readonly TextBox _technical = new() { IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MaxHeight = 150, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
     private RuleList? _list;
     private PreparedRule? _prepared;
@@ -56,6 +57,18 @@ internal sealed class AdminWindow : Window
         SetResourceReference(BackgroundProperty, "PageBrush"); SetResourceReference(ForegroundProperty, "TextBrush");
         Icon = System.Windows.Media.Imaging.BitmapFrame.Create(new Uri("pack://application:,,,/RansomGuard.Ui;component/Assets/ransomguard.ico"));
         UseLayoutRounding = true;
+        if (action == "recovery-review")
+        {
+            Width = Math.Min(900, work.Width - 32);
+            Height = Math.Min(780, work.Height - 32);
+            var pane = new RecoveryReviewPane(preview);
+            RecoveryPane = pane;
+            Content = pane;
+            pane.CloseRequested += (_, _) => { if (!pane.IsBusy) Close(); };
+            Closing += (_, e) => { if (pane.IsBusy) e.Cancel = true; };
+            Loaded += async (_, _) => await pane.LoadAsync();
+            return;
+        }
         if (action is "install" or "start" or "stop" or "restart" or "uninstall" or "state-repair")
         {
             Width = Math.Min(780, work.Width - 32); Height = Math.Min(action is "install" or "state-repair" ? 720 : 540, work.Height - 32);

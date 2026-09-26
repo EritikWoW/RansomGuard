@@ -138,7 +138,7 @@ internal static class UiSmokeTest
                 Save(window,Path.Combine(directory,$"{theme}-overview-1335.png"));
                 captures.Add($"{language}/{theme}-overview-1335.png");
                 window.Width=1600; window.Height=910;
-                foreach(string action in new[]{"add","edit","disable","remove","install","start","stop","restart","uninstall","state-repair"})
+                foreach(string action in new[]{"add","edit","disable","remove","install","start","stop","restart","uninstall","state-repair","recovery-review"})
                 {
                     string? id=RansomGuard.Core.AdminContract.NeedsRuleId(action) ? new string('a',32) : null;
                     var dialog=new Administration.AdminWindow(action,id,preview:true) { ShowInTaskbar=false };
@@ -167,6 +167,24 @@ internal static class UiSmokeTest
                             Save(dialog,Path.Combine(directory,$"{theme}-setup-reset-compact.png"));
                             captures.Add(language+"/"+$"{theme}-setup-reset-compact.png");
                         }
+                    }
+                    if(dialog.RecoveryPane is { } recovery)
+                    {
+                        recovery.SetPreviewScenario("sessions");
+                        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle); dialog.UpdateLayout();
+                        refinements[$"{language}-{theme}-recovery-review-sessions"] = recovery.AssertPreviewLayout();
+                        Save(dialog,Path.Combine(directory,$"{theme}-recovery-review-sessions.png"));
+                        captures.Add(language+"/"+$"{theme}-recovery-review-sessions.png");
+
+                        recovery.SetPreviewScenario("plan");
+                        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle); dialog.UpdateLayout();
+                        refinements[$"{language}-{theme}-recovery-review-plan"] = recovery.AssertPreviewLayout();
+                        Save(dialog,Path.Combine(directory,$"{theme}-recovery-review-plan.png"));
+                        captures.Add(language+"/"+$"{theme}-recovery-review-plan.png");
+
+                        recovery.SetPreviewScenario("active");
+                        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle); dialog.UpdateLayout();
+                        refinements[$"{language}-{theme}-recovery-review-active"] = recovery.AssertPreviewLayout();
                     }
                     dialog.Close();
                 }

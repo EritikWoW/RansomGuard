@@ -406,6 +406,7 @@
            <Button Content="{loc:Loc T311}" Click="Admin_Click" Tag="uninstall" IsEnabled="{Binding CanUninstallService}" Margin="0,0,8,8"/>
            <Button Content="{loc:Loc T312}" Click="ServiceRefresh_Click" IsEnabled="{Binding CanAdminister}" Margin="0,0,8,8"/>
            <Button Content="{loc:Loc Setup.ReviewSettings}" Tag="state-repair" Click="Admin_Click" IsEnabled="{Binding CanAdminister}" Margin="0,0,8,8"/>
+           <Button Content="{loc:Loc RecoveryReview.Open}" Tag="recovery-review" Click="Admin_Click" IsEnabled="{Binding CanAdminister}" Margin="0,0,8,8"/>
           </WrapPanel>
          </StackPanel>
         </Expander>

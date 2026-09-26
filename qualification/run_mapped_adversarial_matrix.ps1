@@ -256,6 +256,10 @@ function Start-Scenario([string]$Name,[int]$Salt){
     # Start-Scenario must emit exactly one scenario object so StrictMode property access is deterministic.
     Cleanup-Scenario | Write-Host
     $root=Join-Path $RootBase $Name
+    if(Test-Path -LiteralPath $root){
+        Assert-NoReparsePath $root "Scenario root '$Name'"
+        Remove-Item -LiteralPath $root -Recurse -Force
+    }
     New-Item -ItemType Directory -Path $root -Force | Out-Null
     $target=Join-Path $root 'target.bin'
     New-TestFile $target $Salt

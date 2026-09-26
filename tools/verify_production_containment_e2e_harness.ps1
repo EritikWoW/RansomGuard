@@ -183,6 +183,9 @@ foreach($required in @(
     'StopUtc',
     'EtwLifetimeSnapshot',
     'eventUtc<=x.StopUtc.Value',
+    'MaybeSweepLifetimes',
+    '(_lifecycleOperations & 0xFF)!=0',
+    'if(list.Count==0)_lifetimes.Remove(pid)',
     'new ProcessKey(pid,0)',
     'ExactIdentity:false',
     'TimeSpan.FromSeconds(30)'

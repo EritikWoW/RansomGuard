@@ -12,5 +12,6 @@
     <ProjectReference Include="../../src/RansomGuard.Core/RansomGuard.Core.csproj" />
     <Compile Include="../../src/RansomGuard.Service/Native.cs" Link="Service/Native.cs" />
     <Compile Include="../../src/RansomGuard.Service/WindowsContainmentActuator.cs" Link="Service/WindowsContainmentActuator.cs" />
+    <Compile Include="../../src/RansomGuard.Service/WindowsProcessStateChangeLease.cs" Link="Service/WindowsProcessStateChangeLease.cs" />
   </ItemGroup>
 </Project>

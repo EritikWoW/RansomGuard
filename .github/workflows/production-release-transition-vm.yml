@@ -1,0 +1,174 @@
+name: RansomGuard production release transition VM qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact source SHA to qualify through Enforce install, forward update, deterministic rollback and uninstall.
+        required: true
+        type: string
+      root_base:
+        description: Disposable VM-only transition root. Must contain RansomGuard.
+        required: true
+        default: C:\RansomGuard-VM-ProductionReleaseTransition
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ransomguard-production-release-transition-vm
+  cancel-in-progress: false
+
+jobs:
+  transition:
+    environment: ransomguard-lab-vm
+    runs-on: [self-hosted, Windows, X64, ransomguard-lab-vm]
+    timeout-minutes: 60
+    env:
+      RANSOMGUARD_LAB_VM: I_UNDERSTAND
+      RANSOMGUARD_LAB_CERT_THUMBPRINT: ${{ secrets.RANSOMGUARD_LAB_CERT_THUMBPRINT }}
+      RG_EXPECTED_SHA: ${{ inputs.expected_sha }}
+      RG_ROOT_BASE: ${{ inputs.root_base }}
+
+    steps:
+      - name: Checkout exact qualification source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
+        with:
+          ref: ${{ inputs.expected_sha }}
+          fetch-depth: 1
+
+      - name: Checkout protected-main orchestration policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
+        with:
+          ref: main
+          path: orchestrator
+          fetch-depth: 1
+
+      - name: Verify exact source and release-transition gates
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $actual=(git rev-parse HEAD).Trim()
+          if(-not [string]::Equals($actual,$env:RG_EXPECTED_SHA,[StringComparison]::OrdinalIgnoreCase)){
+            throw "Exact checkout mismatch. expected=$env:RG_EXPECTED_SHA actual=$actual"
+          }
+          if([string]::IsNullOrWhiteSpace($env:RANSOMGUARD_LAB_CERT_THUMBPRINT)){
+            throw 'Environment secret RANSOMGUARD_LAB_CERT_THUMBPRINT is required.'
+          }
+          .\tools\verify_threat_model.ps1
+          .\orchestrator\tools\verify_production_release_transition_vm_harness.ps1 -RepositoryRoot $PWD
+          .\tools\verify_production_release_transition_vm_harness.ps1 -RepositoryRoot $PWD
+
+      - name: Verify disposable VM runner readiness
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          .\minifilter-tools\verify_runtime_runner_readiness.ps1 -CertificateThumbprint $env:RANSOMGUARD_LAB_CERT_THUMBPRINT
+          $filters=(& fltmc filters 2>$null | Out-String)
+          if($LASTEXITCODE -ne 0){throw 'Unable to query Filter Manager.'}
+          if($filters -match '(?m)^\s*RansomGuardMinifilter\b'){
+            throw 'REFUSED: RansomGuardMinifilter is already loaded. Revert/clean the disposable VM.'
+          }
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0 node24 pinned
+        with:
+          dotnet-version: 10.0.401
+
+      - name: Build exact-source normal and LAB release outputs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          .\build_lab.cmd
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          $lab=Get-ChildItem .\release -Directory -Filter 'RansomGuard-Lab-v*' | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+          $normal=Get-ChildItem .\release -Directory -Filter 'RansomGuard-v*' | Where-Object { $_.Name -notlike 'RansomGuard-Lab-v*' } | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+          if(-not $lab -or -not $normal){throw 'Normal/LAB release directories were not produced.'}
+          "RG_LAB_RELEASE=$($lab.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RG_NORMAL_RELEASE=$($normal.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build and sign exact-source driver package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $package=Join-Path $env:RUNNER_TEMP 'ransomguard-release-transition-driver'
+          if(Test-Path -LiteralPath $package){Remove-Item -LiteralPath $package -Recurse -Force}
+          .\minifilter-tools\prepare_runtime_driver_package.ps1 -CertificateThumbprint $env:RANSOMGUARD_LAB_CERT_THUMBPRINT -OutputDirectory $package
+          $prov=Get-Content -LiteralPath (Join-Path $package 'runtime-package.json') -Raw | ConvertFrom-Json
+          if(-not [string]::Equals([string]$prov.commit,$env:RG_EXPECTED_SHA,[StringComparison]::OrdinalIgnoreCase)){
+            throw "Runtime driver package commit '$($prov.commit)' does not match '$env:RG_EXPECTED_SHA'."
+          }
+          "RG_DRIVER_PACKAGE=$package" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Prepare version-bound transition packages
+        id: packages
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $out=Join-Path $env:RUNNER_TEMP 'ransomguard-production-release-transition-packages'
+          if(Test-Path -LiteralPath $out){Remove-Item -LiteralPath $out -Recurse -Force}
+          .\qualification\prepare_production_release_transition_packages.ps1 -ExpectedCommit $env:RG_EXPECTED_SHA -CertificateThumbprint $env:RANSOMGUARD_LAB_CERT_THUMBPRINT -CurrentNormalReleaseDirectory $env:RG_NORMAL_RELEASE -CurrentLabReleaseDirectory $env:RG_LAB_RELEASE -DriverPackageDirectory $env:RG_DRIVER_PACKAGE -OutputRoot $out
+          $summaryPath=Join-Path $out 'production-release-transition-packages.json'
+          $summary=Get-Content -LiteralPath $summaryPath -Raw | ConvertFrom-Json -Depth 50
+          if([int]$summary.schema -ne 1 -or $summary.qualificationOnly -ne $true){
+            throw 'Release-transition package summary is invalid.'
+          }
+          if(-not [string]::Equals([string]$summary.commit,$env:RG_EXPECTED_SHA,[StringComparison]::OrdinalIgnoreCase)){
+            throw "Release-transition package source '$($summary.commit)' does not match '$env:RG_EXPECTED_SHA'."
+          }
+          "summary=$summaryPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "old_package=$($summary.old.package)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "old_helper=$($summary.old.helper)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "current_package=$($summary.current.package)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "current_helper=$($summary.current.helper)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "future_package=$($summary.future.package)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "future_helper=$($summary.future.helper)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "RG_TRANSITION_PACKAGES=$out" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run combined production release-transition qualification
+        shell: pwsh
+        env:
+          RG_PACKAGE_SUMMARY: ${{ steps.packages.outputs.summary }}
+          RG_OLD_PACKAGE: ${{ steps.packages.outputs.old_package }}
+          RG_OLD_HELPER: ${{ steps.packages.outputs.old_helper }}
+          RG_CURRENT_PACKAGE: ${{ steps.packages.outputs.current_package }}
+          RG_CURRENT_HELPER: ${{ steps.packages.outputs.current_helper }}
+          RG_FUTURE_PACKAGE: ${{ steps.packages.outputs.future_package }}
+          RG_FUTURE_HELPER: ${{ steps.packages.outputs.future_helper }}
+        run: |
+          $ErrorActionPreference='Stop'
+          $results=Join-Path $env:RUNNER_TEMP 'ransomguard-production-release-transition-results'
+          if(Test-Path -LiteralPath $results){Remove-Item -LiteralPath $results -Recurse -Force}
+          .\qualification\run_production_release_transition_vm.ps1 -OldAdminHelper $env:RG_OLD_HELPER -CurrentAdminHelper $env:RG_CURRENT_HELPER -FutureAdminHelper $env:RG_FUTURE_HELPER -OldPackage $env:RG_OLD_PACKAGE -CurrentPackage $env:RG_CURRENT_PACKAGE -FailurePackage $env:RG_FUTURE_PACKAGE -PackageSummary $env:RG_PACKAGE_SUMMARY -ExpectedCommit $env:RG_EXPECTED_SHA -RootBase $env:RG_ROOT_BASE -ResultsDirectory $results
+          $summary=Get-Content -LiteralPath (Join-Path $results 'production-release-transition-result.json') -Raw | ConvertFrom-Json
+          foreach($name in @(
+            'initialServiceAbsent','oldInstallEnforce','oldProtectionReady','oldCleanStop',
+            'forwardReviewPassed','forwardUpdateCompleted','forwardProtectionTransitionVerified',
+            'completedJournalTerminal','completionAuditObserved','postCommitFailureObserved',
+            'previousImageRestored','rollbackJournalTerminal','rollbackAuditObserved',
+            'rollbackProtectionRestored','finalUninstallPassed','driverCleanupPassed',
+            'cleanupPassed','passed'
+          )){
+            if($summary.$name -ne $true){throw "Production release-transition invariant '$name' was not true."}
+          }
+
+      - name: Upload production release-transition evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 node24 pinned
+        with:
+          name: ransomguard-production-release-transition-${{ inputs.expected_sha }}
+          path: ${{ runner.temp }}/ransomguard-production-release-transition-results/**
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Remove qualification signing/package copies
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Continue'
+          foreach($path in @($env:RG_DRIVER_PACKAGE,$env:RG_TRANSITION_PACKAGES)){
+            if($path -and (Test-Path -LiteralPath $path)){
+              Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
+            }
+          }

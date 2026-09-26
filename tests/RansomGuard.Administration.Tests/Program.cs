@@ -8,7 +8,7 @@ void Reject(Action action, string name)
     Check(rejected, name);
 }
 string id = Guid.NewGuid().ToString("N"), hash = new string('A', 64);
-foreach (var action in new[] { "rules", "add", "edit", "disable", "remove", "install", "start", "stop", "restart", "uninstall", "state-repair" })
+foreach (var action in new[] { "rules", "add", "edit", "disable", "remove", "install", "start", "stop", "restart", "uninstall", "state-repair", "recovery-review" })
 {
     Check(AdminContract.IsAction(action), "recognized UI action " + action);
     AdminContract.ValidateIntent(action, AdminContract.NeedsRuleId(action) ? id : null);
@@ -22,7 +22,7 @@ foreach (var action in new[] { "edit", "disable", "remove" })
     Reject(() => AdminContract.ValidateIntent(action, "../rules.json"), action + " rejects path");
     Reject(() => AdminContract.ValidateIntent(action, "RansomGuardV03"), action + " rejects service-name-as-id");
 }
-foreach (var action in new[] { "rules", "add", "install", "start", "stop", "restart", "uninstall", "state-repair" })
+foreach (var action in new[] { "rules", "add", "install", "start", "stop", "restart", "uninstall", "state-repair", "recovery-review" })
     Reject(() => AdminContract.ValidateIntent(action, id), action + " rejects unrelated id");
 foreach (var action in new[] { "install", "start", "stop", "restart", "uninstall", "state-repair", "disable", "remove" })
 {
@@ -36,6 +36,8 @@ Reject(() => AdminContract.Confirmation("add", new string('A', 32)), "MD5 cannot
 Reject(() => AdminContract.Confirmation("add", null), "missing hash cannot approve rule");
 Reject(() => AdminContract.CheckConfirmation("edit", "TRUST BBBBBBBBBBBB", hash), "mismatched hash confirmation rejected");
 Check(AdminContract.ServiceName == "RansomGuardV03", "single fixed own service name");
+Check(!AdminContract.NeedsRuleId("recovery-review"), "recovery review never accepts a rule id");
+Reject(() => AdminContract.Confirmation("recovery-review"), "recovery review has no mutation confirmation verb");
 
 var ready = new SetupReview(true, false, "NotInstalled", true, true, SetupStorage.Private, true, "revision-1");
 Check(SetupReviewPolicy.CanInstall(ready, false), "reviewed folder plan permits install click");

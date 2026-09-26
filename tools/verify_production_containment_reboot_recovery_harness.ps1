@@ -131,4 +131,17 @@ if($windowsCi -notmatch [regex]::Escape('.\tools\verify_production_containment_r
     throw 'Windows required CI must execute the containment reboot-recovery source gate.'
 }
 
+
+if($harness -match [regex]::Escape('Test-Path -LiteralPath $driverKey -or')){
+    throw 'Containment reboot ARM driver preflight must parenthesize Test-Path before boolean -or; otherwise PowerShell binds -or as a cmdlet parameter.'
+}
+foreach($required in @(
+    '$publishedInfNames=@(Get-RansomGuardPublishedInfNames)',
+    'if((Test-Path -LiteralPath $driverKey) -or $publishedInfNames.Count -gt 0)'
+)){
+    if($harness -notmatch [regex]::Escape($required)){
+        throw "Containment reboot ARM driver-preflight expression invariant missing: $required"
+    }
+}
+
 Write-Host 'Production containment reboot-recovery source gate PASSED: exact-SHA three-phase real reboot campaign, durable incomplete journal, first- and second-boot fail-closed readiness, AuditOnly denial and final cleanup.'

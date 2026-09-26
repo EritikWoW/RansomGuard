@@ -1,0 +1,162 @@
+name: RansomGuard production installer VM qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact source SHA to qualify through the production ServiceAdministration installer.
+        required: true
+        type: string
+      root_base:
+        description: Disposable VM-only protected-root base. Must contain RansomGuard.
+        required: true
+        default: C:\RansomGuard-VM-ProductionInstaller
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ransomguard-production-installer-vm
+  cancel-in-progress: false
+
+jobs:
+  installer:
+    environment: ransomguard-lab-vm
+    runs-on: [self-hosted, Windows, X64, ransomguard-lab-vm]
+    timeout-minutes: 50
+    env:
+      RANSOMGUARD_LAB_VM: I_UNDERSTAND
+      RANSOMGUARD_LAB_CERT_THUMBPRINT: ${{ secrets.RANSOMGUARD_LAB_CERT_THUMBPRINT }}
+      RG_EXPECTED_SHA: ${{ inputs.expected_sha }}
+      RG_ROOT_BASE: ${{ inputs.root_base }}
+
+    steps:
+      - name: Checkout exact qualification source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
+        with:
+          ref: ${{ inputs.expected_sha }}
+          fetch-depth: 1
+
+      - name: Checkout protected-main orchestration policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 node24 pinned
+        with:
+          ref: main
+          path: orchestrator
+          fetch-depth: 1
+
+      - name: Verify exact source and installer qualification gates
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $actual=(git rev-parse HEAD).Trim()
+          if(-not [string]::Equals($actual,$env:RG_EXPECTED_SHA,[StringComparison]::OrdinalIgnoreCase)){
+            throw "Exact checkout mismatch. expected=$env:RG_EXPECTED_SHA actual=$actual"
+          }
+          if([string]::IsNullOrWhiteSpace($env:RANSOMGUARD_LAB_CERT_THUMBPRINT)){
+            throw 'Environment secret RANSOMGUARD_LAB_CERT_THUMBPRINT is required.'
+          }
+          .\tools\verify_threat_model.ps1
+          .\orchestrator\tools\verify_production_installer_vm_harness.ps1 -RepositoryRoot $PWD
+
+      - name: Verify disposable VM runner readiness
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          .\minifilter-tools\verify_runtime_runner_readiness.ps1 -CertificateThumbprint $env:RANSOMGUARD_LAB_CERT_THUMBPRINT
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0 node24 pinned
+        with:
+          dotnet-version: 10.0.401
+
+      - name: Build exact-source userspace bundles
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          .\build_lab.cmd
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          $lab=Get-ChildItem .\release -Directory -Filter 'RansomGuard-Lab-v*' | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+          $normal=Get-ChildItem .\release -Directory -Filter 'RansomGuard-v*' | Where-Object { $_.Name -notlike 'RansomGuard-Lab-v*' } | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+          if(-not $lab -or -not $normal){throw 'Normal/LAB release directories were not produced.'}
+          "RG_LAB_RELEASE=$($lab.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RG_NORMAL_RELEASE=$($normal.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build and sign exact-source driver package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $package=Join-Path $env:RUNNER_TEMP 'ransomguard-installer-runtime-driver'
+          if(Test-Path -LiteralPath $package){Remove-Item -LiteralPath $package -Recurse -Force}
+          .\minifilter-tools\prepare_runtime_driver_package.ps1 -CertificateThumbprint $env:RANSOMGUARD_LAB_CERT_THUMBPRINT -OutputDirectory $package
+          $provenance=Get-Content -LiteralPath (Join-Path $package 'runtime-package.json') -Raw | ConvertFrom-Json
+          if(-not [string]::Equals([string]$provenance.commit,$env:RG_EXPECTED_SHA,[StringComparison]::OrdinalIgnoreCase)){
+            throw "Runtime driver package commit '$($provenance.commit)' does not match '$env:RG_EXPECTED_SHA'."
+          }
+          "RG_DRIVER_PACKAGE=$package" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Prepare version-bound production installer package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $package=Join-Path $env:RUNNER_TEMP 'RansomGuard-ProductionInstaller-Qualification'
+          if(Test-Path -LiteralPath $package){Remove-Item -LiteralPath $package -Recurse -Force}
+          .\minifilter-tools\prepare_production_lifecycle_qualification_package.ps1 -NormalReleaseDirectory $env:RG_NORMAL_RELEASE -LabReleaseDirectory $env:RG_LAB_RELEASE -DriverPackageDirectory $env:RG_DRIVER_PACKAGE -CertificateThumbprint $env:RANSOMGUARD_LAB_CERT_THUMBPRINT -OutputDirectory $package
+          $summary=Get-Content -LiteralPath (Join-Path $package 'qualification-package.json') -Raw | ConvertFrom-Json
+          if([int]$summary.schema -ne 1 -or $summary.qualificationOnly -ne $true){throw 'Installer qualification package provenance is invalid.'}
+          if(-not [string]::Equals([string]$summary.commit,$env:RG_EXPECTED_SHA,[StringComparison]::OrdinalIgnoreCase)){
+            throw "Installer package commit '$($summary.commit)' does not match '$env:RG_EXPECTED_SHA'."
+          }
+          "RG_INSTALL_PACKAGE=$package" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Publish exact-source administration helper
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $project='.\qualification\RansomGuard.UpdaterQualification\RansomGuard.UpdaterQualification.csproj'
+          dotnet restore $project --locked-mode -r win-x64 -p:BaseIntermediateOutputPath=obj\installer\
+          if($LASTEXITCODE -ne 0){throw 'Installer administration helper restore failed.'}
+          $out=Join-Path $env:RUNNER_TEMP 'ransomguard-production-installer-helper'
+          if(Test-Path -LiteralPath $out){Remove-Item -LiteralPath $out -Recurse -Force}
+          dotnet publish $project -c Release -r win-x64 --self-contained true --no-restore -p:BaseIntermediateOutputPath=obj\installer\ -p:BaseOutputPath=bin\installer\ -o $out
+          if($LASTEXITCODE -ne 0){throw 'Installer administration helper publish failed.'}
+          $exe=Join-Path $out 'RansomGuard.UpdaterQualification.exe'
+          if(-not(Test-Path -LiteralPath $exe -PathType Leaf)){throw 'Installer administration helper executable missing.'}
+          "RG_ADMIN_HELPER=$exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run real production installer lifecycle qualification
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $results=Join-Path $env:RUNNER_TEMP 'ransomguard-production-installer-results'
+          if(Test-Path -LiteralPath $results){Remove-Item -LiteralPath $results -Recurse -Force}
+          .\qualification\run_production_installer_vm.ps1 -AdminHelper $env:RG_ADMIN_HELPER -QualificationDirectory $env:RG_INSTALL_PACKAGE -ExpectedCommit $env:RG_EXPECTED_SHA -RootBase $env:RG_ROOT_BASE -ResultsDirectory $results
+          $summary=Get-Content -LiteralPath (Join-Path $results 'production-installer-result.json') -Raw | ConvertFrom-Json
+          foreach($name in @(
+            'initialServiceAbsent','installReviewEnforce','productionPackageStaged','installAuditBound',
+            'serviceStarted','productionProtected','automaticContainmentReady','cleanMaintenanceStop',
+            'driverUnloaded','serviceUnregistered','cleanupPassed','passed'
+          )){
+            if($summary.$name -ne $true){throw "Production installer qualification invariant '$name' was not true."}
+          }
+
+      - name: Upload production installer evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 node24 pinned
+        with:
+          name: ransomguard-production-installer-${{ inputs.expected_sha }}
+          path: ${{ runner.temp }}/ransomguard-production-installer-results/**
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Remove qualification signing material copies
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Continue'
+          foreach($path in @(
+            (Join-Path $env:RUNNER_TEMP 'ransomguard-installer-runtime-driver'),
+            (Join-Path $env:RUNNER_TEMP 'RansomGuard-ProductionInstaller-Qualification')
+          )){
+            if(Test-Path -LiteralPath $path){Remove-Item -LiteralPath $path -Recurse -Force}
+          }
